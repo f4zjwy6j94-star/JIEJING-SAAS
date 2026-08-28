@@ -105,6 +105,29 @@ def task(identity: dict[str, str] = IDENTITY, *, task_id: str = "task-incense", 
     }
 
 
+def product_bound_task(*, task_id: str = "task-incense-product") -> dict[str, Any]:
+    item = task(task_id=task_id)
+    item["task_type"] = "ebay_draft_save_intake"
+    item["title"] = "eBay draft save intake · 禅意佛手托莲花倒流香炉"
+    item["input"] = {
+        "listing_project_identity": {
+            **IDENTITY,
+            "product": "禅意佛手托莲花倒流香炉",
+        }
+    }
+    return item
+
+
+def ai_attempt_task(*, task_id: str, bound: bool) -> dict[str, Any]:
+    item = task(task_id=task_id)
+    item["task_type"] = "merchant_ceo_chat_attempt"
+    item["title"] = "AI CEO model request attempt"
+    item["created_at"] = "2026-08-27T23:56:32Z"
+    item["updated_at"] = "2026-08-27T23:58:30Z"
+    item["input"] = {"listing_project_identity": IDENTITY} if bound else {"route": "ebay_workflow"}
+    return item
+
+
 def market_report() -> dict[str, Any]:
     return {
         "report_id": IDENTITY["source_report_id"],
@@ -324,6 +347,34 @@ def main() -> None:
     assert all(
         item["target_view"] in {"cockpit", "activity", "product", "media", "confirm", "service"}
         for item in record_index["items"]
+    )
+
+    technical_tasks_do_not_relabel_product = build(
+        FixtureRepository(
+            tasks=[
+                product_bound_task(),
+                ai_attempt_task(task_id="task-bound-ai-attempt", bound=True),
+                ai_attempt_task(task_id="task-unbound-ai-attempt", bound=False),
+            ],
+            reports=[market_report()],
+        )
+    )
+    assert technical_tasks_do_not_relabel_product["project"]["product_name"] == "禅意佛手托莲花倒流香炉"
+    technical_record_ids = {
+        item["record_id"] for item in technical_tasks_do_not_relabel_product["work_record_index"]["items"]
+    }
+    assert "task-bound-ai-attempt" in technical_record_ids
+    assert "task-unbound-ai-attempt" not in technical_record_ids
+    bound_attempt_record = next(
+        item
+        for item in technical_tasks_do_not_relabel_product["work_record_index"]["items"]
+        if item["record_id"] == "task-bound-ai-attempt"
+    )
+    assert bound_attempt_record["title"] == "AI CEO 处理记录"
+    assert bound_attempt_record["summary"] == "AI CEO 本轮处理留痕。"
+    assert all(
+        item["title"] != "AI CEO model request attempt"
+        for item in technical_tasks_do_not_relabel_product["work_record_index"]["items"]
     )
 
     legacy_media_ready = build(

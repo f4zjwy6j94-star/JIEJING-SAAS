@@ -541,7 +541,7 @@ def _build_work_record_index(
             item.get("task_id"),
             record_type="customer_task" if "customer" in task_type else "task",
             status=item.get("status"),
-            title=item.get("title") or "工作任务",
+            title=_work_record_task_title(task_type, item.get("title")),
             summary=_work_record_task_summary(task_type),
             occurred_at=item.get("updated_at") or item.get("created_at"),
             target_view="service" if "customer" in task_type else "activity",
@@ -608,11 +608,25 @@ def _build_work_record_index(
     }
 
 
+def _work_record_task_title(task_type: str, raw_title: Any) -> str:
+    return {
+        "merchant_ceo_chat_attempt": "AI CEO 处理记录",
+        "merchant_ceo_chat": "AI CEO 分析",
+        "merchant_product_facts": "商品资料",
+        "listing_draft_generation": "AI Listing 草稿生成",
+        "ebay_draft_save_intake": "保存 eBay 未发布草稿准备",
+        "existing_ebay_draft_publish_intake": "eBay 正式发布确认准备",
+    }.get(task_type, _safe_text(raw_title, limit=180) or "工作任务")
+
+
 def _work_record_task_summary(task_type: str) -> str:
     return {
+        "merchant_ceo_chat_attempt": "AI CEO 本轮处理留痕。",
         "merchant_ceo_chat": "AI CEO 已完成本轮分析。",
         "merchant_product_facts": "商品资料已保存。",
         "listing_draft_generation": "AI Listing 草稿生成任务。",
+        "ebay_draft_save_intake": "未发布草稿保存准备记录。",
+        "existing_ebay_draft_publish_intake": "正式发布前的确认与预检记录。",
     }.get(task_type, "当前商品项目的工作任务。")
 
 
@@ -673,13 +687,33 @@ def _project_product_name(reports: list[dict[str, Any]], tasks: list[dict[str, A
     for report in sorted(reports, key=_timestamp_order, reverse=True):
         payload = report.get("report") if isinstance(report.get("report"), dict) else {}
         packet = payload.get("merchant_product_fact_packet") if isinstance(payload.get("merchant_product_fact_packet"), dict) else {}
-        value = packet.get("product_name") or payload.get("product")
-        if _safe_text(value, limit=160):
-            return _safe_text(value, limit=160)
+        candidates = (
+            packet.get("product_name"),
+            payload.get("product"),
+            _nested(payload, "selected_product_candidate", "name"),
+            _nested(payload, "listing_project_identity", "product"),
+        )
+        for value in candidates:
+            if _safe_text(value, limit=160):
+                return _safe_text(value, limit=160)
     for task in sorted(tasks, key=_timestamp_order, reverse=True):
-        value = _nested(task, "input", "product") or task.get("title")
-        if _safe_text(value, limit=160):
-            return _safe_text(value, limit=160)
+        # Task titles describe technical work (model attempt, retry, publish
+        # intake), not merchant products.  They remain useful audit records but
+        # must never relabel the current Listing project.  Only explicit product
+        # fields carried by project-bound evidence are eligible here.
+        candidates = (
+            _nested(task, "input", "merchant_product_fact_packet", "product_name"),
+            _nested(task, "input", "listing_project_identity", "product"),
+            _nested(task, "input", "product_name"),
+            _nested(task, "input", "product"),
+            _nested(task, "output", "merchant_product_fact_packet", "product_name"),
+            _nested(task, "output", "listing_project_identity", "product"),
+            _nested(task, "output", "product_name"),
+            _nested(task, "output", "product"),
+        )
+        for value in candidates:
+            if _safe_text(value, limit=160):
+                return _safe_text(value, limit=160)
     return ""
 
 
