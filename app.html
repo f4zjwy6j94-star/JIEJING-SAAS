@@ -2549,8 +2549,16 @@
                   <p>不知道的字段可以留空。捷境会标记缺口，不会用示例价格、重量、发货地或供应能力冒充真实资料。</p>
                 </div>
                 <div class="source-form-grid">
+                  <label><span>商品名称</span><input type="text" data-source-manual-field="product_name" value="" placeholder="填写你实际准备销售的商品" aria-label="商品名称"></label>
                   <label><span>货源链接</span><input type="text" data-source-manual-field="source_link" value="" placeholder="粘贴真实商品链接" aria-label="货源链接"></label>
                   <label><span>实际成本</span><input type="text" data-source-manual-field="purchase_price" value="" placeholder="按真实报价填写" aria-label="实际成本"></label>
+                  <label>
+                    <span>成本币种</span>
+                    <select data-source-manual-field="currency" aria-label="成本币种">
+                      <option value="CNY">人民币 CNY</option>
+                      <option value="USD">美元 USD</option>
+                    </select>
+                  </label>
                   <label><span>最小起订量</span><input type="text" data-source-manual-field="moq" value="" placeholder="不知道可留空" aria-label="最小起订量"></label>
                   <label><span>发货地</span><input type="text" data-source-manual-field="source_location" value="" placeholder="按真实履约地填写" aria-label="发货地"></label>
                   <label><span>包裹重量</span><input type="text" data-source-manual-field="package_weight" value="" placeholder="按实测或供应商资料填写" aria-label="包裹重量"></label>

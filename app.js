@@ -9965,6 +9965,41 @@ function renderSaasListingSourceIntake({
         </div>
         <em>不用先整理格式</em>
       </div>
+      <section class="source-manual-form is-active saas-listing-source-facts-starter" aria-label="建立商品项目">
+        <div>
+          <span>建立商品项目</span>
+          <strong>先保存已经确认的商品事实</strong>
+          <p>不知道的字段可以留空；保存后会进入当前账号的工作记录，刷新或换设备不会丢失。AI 只整理和补文案，不会猜材质、重量、成本或发货地。</p>
+        </div>
+        <div class="source-form-grid">
+          <label><span>商品名称</span><input type="text" data-source-manual-field="product_name" value="" placeholder="填写实际准备销售的商品" aria-label="商品名称"></label>
+          <label><span>货源或自有商品链接</span><input type="url" data-source-manual-field="source_link" value="" placeholder="有链接就粘贴，没有可留空" aria-label="货源链接"></label>
+          <label><span>实际成本</span><input type="number" min="0" step="0.01" data-source-manual-field="purchase_price" value="" placeholder="按真实报价填写" aria-label="实际成本"></label>
+          <label>
+            <span>成本币种</span>
+            <select data-source-manual-field="currency" aria-label="成本币种">
+              <option value="CNY">人民币 CNY</option>
+              <option value="USD">美元 USD</option>
+            </select>
+          </label>
+          <label><span>发货地</span><input type="text" data-source-manual-field="source_location" value="" placeholder="按真实履约地填写" aria-label="发货地"></label>
+          <label><span>包裹重量</span><input type="text" data-source-manual-field="package_weight" value="" placeholder="例如：451 g" aria-label="包裹重量"></label>
+          <label><span>包装尺寸</span><input type="text" data-source-manual-field="package_dimensions" value="" placeholder="例如：16.2 x 7.7 x 17.9 cm" aria-label="包装尺寸"></label>
+          <label><span>材质 / 规格</span><input type="text" data-source-manual-field="material" value="" placeholder="只填能够确认的事实" aria-label="材质规格"></label>
+          <label>
+            <span>履约方式</span>
+            <select data-source-manual-field="dropship_rule" aria-label="履约方式">
+              <option value="">待补充</option>
+              <option value="owned_inventory">自有库存</option>
+              <option value="supplier_fulfilled">供应商发货</option>
+            </select>
+          </label>
+        </div>
+        <div class="source-panel-actions">
+          <button class="primary-action" type="button" data-saas-action="save-new-product-facts">保存并建立商品项目</button>
+          <button class="secondary-action" type="button" data-saas-action="open-media">去素材工坊补图片</button>
+        </div>
+      </section>
       <label class="saas-listing-composer-input saas-listing-v2-input">
         <span>商品资料</span>
         <textarea id="saasListingComposerInput" rows="6" placeholder="例如：1688 链接、商品名、采购价、建议售价、材质、尺寸重量、发货地、图片说明和主卖点。可以混在一起写。">${escapeHtml(inputValue)}</textarea>
@@ -30730,6 +30765,11 @@ function handleSaasAction(button) {
     saveSaasMerchantProductFacts();
     return;
   }
+  if (action === "save-new-product-facts") {
+    if (!requireSaasProtectedSessionForAction()) return;
+    persistSaasManualSourceFacts(collectManualSourceFacts());
+    return;
+  }
   if (action === "mark-product-fact-unknown") {
     markSaasMerchantProductFactUnknown(button);
     return;
@@ -37735,7 +37775,122 @@ function focusSourceIntakeMode(mode, options = {}) {
   }
 }
 
-function handleSourceIntakeAction(action) {
+function saasListingDraftFromManualSourceFacts(facts = {}) {
+  const productName = sanitizeSaasWorkflowFeedbackText(facts.product_name || "", 120).trim();
+  if (!saasIsConcreteProductLabel(productName)) return null;
+  const intake = buildSaasAiCeoSupplierFactIntake(facts);
+  const dimensions = intake.supplier_facts.package_dimensions_cm || {};
+  const unitCost = String(intake.supplier_facts.unit_cost || "").split(/\s+/).pop() || "";
+  const currency = sanitizeSaasWorkflowFeedbackText(facts.currency || "CNY", 8).toUpperCase();
+  const merchantConfirmed = {
+    product_name: productName,
+    ...(isFilledOperationalValue(facts.source_link) ? { source_url: String(facts.source_link).trim() } : {}),
+    ...(intake.supplier_facts.material ? { material: String(intake.supplier_facts.material) } : {}),
+    ...(intake.supplier_facts.package_weight_g ? { package_weight_g: String(intake.supplier_facts.package_weight_g) } : {}),
+    ...(dimensions.length ? { package_length_cm: String(dimensions.length) } : {}),
+    ...(dimensions.width ? { package_width_cm: String(dimensions.width) } : {}),
+    ...(dimensions.height ? { package_height_cm: String(dimensions.height) } : {}),
+    ...(intake.supplier_facts.item_location ? { item_location: String(intake.supplier_facts.item_location) } : {}),
+    ...(unitCost ? { unit_cost: unitCost, currency: ["CNY", "USD"].includes(currency) ? currency : "CNY" } : {}),
+  };
+  const sourceLines = [
+    productName,
+    merchantConfirmed.source_url || "",
+    merchantConfirmed.material ? `材质: ${merchantConfirmed.material}` : "",
+    merchantConfirmed.unit_cost ? `成本: ${merchantConfirmed.currency} ${merchantConfirmed.unit_cost}` : "",
+    merchantConfirmed.item_location ? `发货地: ${merchantConfirmed.item_location}` : "",
+    merchantConfirmed.package_weight_g ? `包装重量: ${merchantConfirmed.package_weight_g} g` : "",
+    dimensions.length && dimensions.width && dimensions.height
+      ? `包装尺寸: ${dimensions.length} x ${dimensions.width} x ${dimensions.height} cm`
+      : "",
+  ].filter(Boolean);
+  const draft = saasListingComposerDraftFromText(sourceLines.join("\n"));
+  draft.source_type = "merchant_source_form";
+  draft.source_label = "商家商品资料";
+  draft.product = productName;
+  draft.title = productName;
+  draft.merchant_product_fact_packet = {
+    contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
+    source_mode: merchantConfirmed.source_url ? "merchant_source_supplied" : "merchant_owned_product",
+    product_name: productName,
+    source_confirmed_facts: {},
+    merchant_confirmed_facts: merchantConfirmed,
+    derived_listing_suggestions: {},
+    unknown_facts: saasMerchantProductFactRequiredKeys().filter(
+      (key) => !saasMerchantProductFactValuePresent(key, merchantConfirmed[key]),
+    ),
+    source_records: merchantConfirmed.source_url
+      ? [{ type: "merchant_product_link", url: merchantConfirmed.source_url, rights_status: "not_applicable" }]
+      : [],
+    secret_exposed: false,
+  };
+  const identity = saasCurrentListingProjectIdentity(draft);
+  draft.listing_project_key = identity.key;
+  draft.listing_project_identity = identity.key
+    ? { key: identity.key, source_report_id: "", candidate_id: "" }
+    : null;
+  return applySaasMerchantProductFactPacketToDraft(draft, draft.merchant_product_fact_packet);
+}
+
+async function persistSaasManualSourceFacts(facts = {}) {
+  const draft = saasListingDraftFromManualSourceFacts(facts);
+  if (!draft) {
+    document.querySelector('[data-source-manual-field="product_name"]')?.focus();
+    showActionToast("请先填写实际准备销售的商品名称；没有商品名称就无法建立项目记录。");
+    return false;
+  }
+  state.manualSourceFacts = facts;
+  state.saasListingComposerDraft = draft;
+  state.saasListingComposerInput = [facts.product_name, facts.source_link].filter(Boolean).join("\n");
+  state.saasListingSourceMode = "merchant_source_form";
+  const store = activeSaasStore();
+  if (!state.saasConnected || !store?.store_id) {
+    saveSaasProtectedStateSnapshot();
+    showActionToast("商品资料尚未写入账号；请先登录后重试。");
+    return false;
+  }
+  try {
+    state.saasListingProductFactSaveStatus = "saving";
+    const response = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/product-facts`, {
+      method: "POST",
+      body: JSON.stringify({
+        listing_project_identity: draft.listing_project_identity,
+        merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet),
+      }),
+    });
+    const serverIdentity = saasNormalizeListingProjectIdentity(response.listing_project_identity);
+    if (response.merchant_product_fact_packet) {
+      state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft(
+        draft,
+        response.merchant_product_fact_packet,
+      );
+    }
+    if (serverIdentity) {
+      state.saasListingComposerDraft.listing_project_key = serverIdentity.key;
+      state.saasListingComposerDraft.listing_project_identity = serverIdentity;
+    }
+    if (response.task) {
+      state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
+    }
+    if (response.report) {
+      state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
+    }
+    state.sourceManualStatus = "saved";
+    state.saasListingProductFactSaveStatus = "saved";
+    saveSaasProtectedStateSnapshot();
+    renderSourceIntakePanel();
+    renderProductListingCenter();
+    showActionToast("商品资料已保存到当前账号；可以到 Listing 继续补充和生成草稿。");
+    return true;
+  } catch (error) {
+    state.saasListingProductFactSaveStatus = "local_only";
+    saveSaasProtectedStateSnapshot();
+    showActionToast("商品资料未写入账号，页面内容仍保留；请稍后重试。");
+    return false;
+  }
+}
+
+async function handleSourceIntakeAction(action) {
   if (action === "run_ai_search") {
     focusSourceIntakeMode("ai_search", { shouldScroll: false });
     showActionToast("请让 AI CEO 先给出选品建议；找到真实货源后再导入商品资料。");
@@ -37751,9 +37906,7 @@ function handleSourceIntakeAction(action) {
     const missing = manualSourceMissingLabels(facts);
     const draft = activeListingDraft();
     if (!draft) {
-      state.manualSourceFacts = facts;
-      focusSourceIntakeMode("manual", { shouldScroll: false });
-      showActionToast("商品资料已暂存；请先创建或导入商品项目。");
+      await persistSaasManualSourceFacts(facts);
       return;
     }
     state.manualSourceFacts = facts;
