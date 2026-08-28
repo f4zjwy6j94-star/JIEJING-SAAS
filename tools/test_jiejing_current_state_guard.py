@@ -29,6 +29,7 @@ def main() -> int:
         [
             sys.executable,
             str(ROOT / "tools" / "jiejing_current_state_guard.py"),
+            "--offline",
             "--json",
         ],
         cwd=str(ROOT),
@@ -61,6 +62,12 @@ def main() -> int:
         artifact_root.mkdir(parents=True)
         oauth_path = artifact_root / "staging_oauth_status_latest.json"
         sync_path = artifact_root / "staging_readonly_sync_latest.json"
+        deploy_path = workspace / "output" / "jiejing-deploy-channel-doctor" / "latest.json"
+        deploy_path.parent.mkdir(parents=True)
+        deploy_path.write_text(
+            json.dumps({"deploy_channel_ready": True, "ssh": {"status": "usable"}}),
+            encoding="utf-8",
+        )
         oauth_path.write_text(
             json.dumps(
                 {
@@ -110,6 +117,55 @@ def main() -> int:
             return fail("stale account evidence must never recommend consuming an old secret reference")
         if not any("Do not start OAuth" in item for item in stale.get("no_repeat_actions", [])):
             return fail("stale evidence must still prevent automatic repeat OAuth before active-state verification")
+
+        current_public_readiness = {
+            "status": "ready",
+            "latest_ebay_packet_status": "packet_cached_sanitized",
+            "latest_ebay_packet_source_mode": "official_api",
+            "latest_ebay_packet_present_resource_keys": [
+                "store_profile",
+                "account_business_policies",
+                "inventory_and_offers",
+                "orders_and_fulfillment",
+                "finances",
+                "taxonomy_listing_metadata",
+            ],
+            "latest_ebay_packet_missing_resource_keys": [],
+            "latest_ebay_packet_current_connection": True,
+            "ebay_token_refresh_success_count": 3,
+            "secret_exposed": False,
+        }
+        current = build_state(workspace, public_readiness=current_public_readiness)
+        if current.get("status") != "ready_to_continue":
+            return fail("current public readiness must supersede stale local account evidence")
+        if current.get("evidence_source") != "public_readiness":
+            return fail("guard must identify public readiness as the current account evidence source")
+        if not all(
+            current.get(key) is True
+            for key in ("callback_completed", "can_queue_sync", "sync_completed", "live_read_completed", "official_packet")
+        ):
+            return fail("current official 6/6 public readiness must prove the existing eBay connection and packet")
+        if current.get("missing_resource_keys"):
+            return fail("current official 6/6 public readiness must not report missing resources")
+        if any("Historical eBay account evidence" in item for item in current.get("blockers", [])):
+            return fail("stale local evidence must not block a verified current public connection")
+        if not any("Do not run OAuth prepare" in item for item in current.get("no_repeat_actions", [])):
+            return fail("current public readiness must prevent repeated OAuth")
+        if not any("Do not run a fresh eBay read-only sync" in item for item in current.get("no_repeat_actions", [])):
+            return fail("current public readiness must prevent a progress-check sync")
+
+        unsafe_public_readiness = dict(current_public_readiness, secret_exposed=True)
+        unsafe = build_state(workspace, public_readiness=unsafe_public_readiness)
+        if unsafe.get("callback_completed") is not False or unsafe.get("status") != "partial_evidence":
+            return fail("unsafe public readiness input must never override stale local evidence")
+
+        unproven_public_connection = dict(
+            current_public_readiness,
+            ebay_token_refresh_success_count=0,
+        )
+        unproven = build_state(workspace, public_readiness=unproven_public_connection)
+        if unproven.get("callback_completed") is not False or unproven.get("status") != "partial_evidence":
+            return fail("a public current-connection marker without refresh proof must fail closed")
     print("PASS jiejing_current_state_guard")
     return 0
 

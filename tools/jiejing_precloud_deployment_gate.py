@@ -30,6 +30,10 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("frontend_js_syntax", ["node", "--check", "app.js"]),
     ("operations_console_js_syntax", ["node", "--check", "ops.js"]),
     ("current_state_guard", [sys.executable, "tools/test_jiejing_current_state_guard.py"]),
+    (
+        "phase2_response_boundary_hardening",
+        [sys.executable, "tools/test_jiejing_phase2_response_boundary_hardening.py"],
+    ),
     ("frontend_staging_config", [sys.executable, "tools/test_jiejing_frontend_staging_config.py"]),
     ("frontend_wechat_zero_charge_rehearsal", [sys.executable, "tools/test_jiejing_frontend_wechat_zero_charge_rehearsal.py"]),
     ("frontend_read_only_oauth_confirmation", [sys.executable, "tools/test_jiejing_frontend_oauth_confirmation_flow.py"]),

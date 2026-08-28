@@ -52,6 +52,25 @@ def canonical_launch() -> dict[str, Any]:
             "secret_exposed": False,
         },
         "controlled_acceptance_proven": True,
+        "provider_runtime_activation_enabled": True,
+        "provider_connection_evidence": {
+            "contract_version": "2026-08-21-wechat-pay-provider-connection-evidence-v1",
+            "provider": "wechat_pay_native",
+            "proof_kind": "signed_read_only_order_query",
+            "verified_proof_count": 0,
+            "provider_connection_proof_ready": False,
+            "latest_verified_at": "",
+            "freshness_window_seconds": 24 * 60 * 60,
+            "proof_query_called_external_api": False,
+            "calls_external_payment_api": False,
+            "creates_payable_order": False,
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        },
         "provider_checkout_ready": True,
         "production_environment": True,
         "refund_now_allowed": True,
@@ -237,6 +256,7 @@ def main() -> int:
         return fail("merchant and readiness boundaries must share canonical counts")
 
     private_beta_launch = copy.deepcopy(ready)
+    private_beta_launch["provider_runtime_activation_enabled"] = False
     private_beta_launch["provider_checkout_ready"] = False
     private_beta_launch["mainland_payment_ready_for_owner_approval"] = False
     private_beta_readiness = isolated_product_readiness(
@@ -488,8 +508,8 @@ def main() -> int:
         "billing_incident_runbook",
         "customer_billing_trust_packet",
     ):
-        if key not in safe_plan:
-            return fail(f"merchant Settings summary missing: {key}")
+        if key in safe_plan:
+            return fail(f"merchant Settings summary exposed internal launch evidence: {key}")
     for legacy_key in (
         "external_paid_provider_configured",
         "test_billing_provider_configured",
