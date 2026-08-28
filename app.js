@@ -6159,6 +6159,7 @@ function readSaasPublishIntakeForm() {
   const sku = value("sku") || `JJ-FRESH-${Date.now()}`;
   const listingProjectIdentity = saasCurrentListingProjectIdentity();
   return {
+    simulation_only: state.saasListingComposerDraft?.merchant_product_fact_packet?.simulation_only === true,
     product: value("product") || title || sku,
     listing_project_identity: {
       key: listingProjectIdentity.key,
@@ -8861,10 +8862,6 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
       ? existing.derived_listing_suggestions
       : {}),
   };
-  const explicitUnknownFacts = new Set(
-    Array.isArray(existing.unknown_facts) ? existing.unknown_facts.map((key) => String(key || "").trim()).filter(Boolean) : [],
-  );
-  explicitUnknownFacts.forEach((key) => delete derivedSuggestions[key]);
   const values = { ...derivedSuggestions, ...sourceConfirmed, ...merchantConfirmed };
   const requiredKeys = saasMerchantProductFactRequiredKeys();
   const unknownFacts = requiredKeys.filter((key) => !saasMerchantProductFactValuePresent(key, {
@@ -8881,6 +8878,8 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
     source_mode: existing.source_mode || (values.source_url ? "merchant_source_supplied" : "merchant_owned_product"),
     product_name: values.product_name || draft.product || draft.title || "",
+    simulation_only: existing.simulation_only === true,
+    fact_scope: existing.simulation_only === true ? "simulation_rehearsal" : "merchant_product",
     source_confirmed_facts: sourceConfirmed,
     merchant_confirmed_facts: merchantConfirmed,
     derived_listing_suggestions: derivedSuggestions,
@@ -8893,9 +8892,16 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
       completion_percent: total ? Math.round((ready / total) * 100) : 0,
       ready_for_listing_generation: unknownFacts.length === 0,
       ready_for_real_publish: false,
-      reason: unknownFacts.length ? "仍有商品事实待商家确认" : "商品事实已补齐，仍需 eBay 体检和发布确认",
+      reason: existing.simulation_only === true
+        ? "模拟演练资料仅供内部 Listing 与素材流程，不可写入 eBay"
+        : unknownFacts.length
+          ? "仍有商品事实待商家确认"
+          : "商品事实已补齐，仍需 eBay 体检和发布确认",
     },
-    blocked_by: unknownFacts.map((key) => `merchant_product_fact_missing:${key}`),
+    blocked_by: [
+      ...unknownFacts.map((key) => `merchant_product_fact_missing:${key}`),
+      ...(existing.simulation_only === true ? ["simulation_only_product_facts"] : []),
+    ],
     secret_exposed: false,
   };
   return normalizedPacket;
@@ -8958,6 +8964,12 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
           <small>${missingLabels.length ? "仍有商品资料待确认" : "商品事实已补齐"}</small>
         </div>
       </div>
+      ${packet.simulation_only === true ? `
+        <div class="saas-product-facts-simulation-note" role="note">
+          <strong>模拟演练资料</strong>
+          <span>带入值仅用于本轮内部 Listing 与素材测试；可以修改或确认，但不能保存到 eBay 或正式发布。</span>
+        </div>
+      ` : ""}
       <div class="saas-product-fact-legend" aria-label="字段来源说明">
         <span class="is-green">来源资料</span><span class="is-green">商家确认</span><span class="is-amber">AI 建议</span><span>待补资料</span>
       </div>
@@ -14499,7 +14511,12 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
   };
   const dimensions = [facts.package_length_cm, facts.package_width_cm, facts.package_height_cm].filter(Boolean);
   const listingCopy = packet.listing_copy && typeof packet.listing_copy === "object" ? packet.listing_copy : {};
-  const projected = { ...draft, merchant_product_fact_packet: packet };
+  const projected = {
+    ...draft,
+    merchant_product_fact_packet: packet,
+    simulation_only: packet.simulation_only === true,
+    safe_local_only: packet.simulation_only === true ? true : draft.safe_local_only,
+  };
   projected.product = facts.product_name || packet.product_name || projected.product || projected.title;
   projected.publish_prefill = {
     ...(projected.publish_prefill || {}),
@@ -14546,7 +14563,10 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
   projected.merchant_required_answers = Array.isArray(packet.unknown_facts)
     ? packet.unknown_facts.map(saasMerchantProductFactLabel)
     : [];
-  projected.publish_preflight_gaps = projected.merchant_required_answers.map((label) => `待确认：${label}`);
+  projected.publish_preflight_gaps = [
+    ...projected.merchant_required_answers.map((label) => `待确认：${label}`),
+    ...(packet.simulation_only === true ? ["模拟演练数据不可用于 eBay 草稿或正式发布"] : []),
+  ];
   return projected;
 }
 
@@ -14605,6 +14625,8 @@ function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
     source_mode: publicRuntimeText(packet.source_mode || "").slice(0, 80),
     product_name: publicRuntimeText(packet.product_name || "").slice(0, 120),
+    simulation_only: packet.simulation_only === true,
+    fact_scope: packet.simulation_only === true ? "simulation_rehearsal" : "merchant_product",
     source_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.source_confirmed_facts),
     merchant_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.merchant_confirmed_facts),
     derived_listing_suggestions: sanitizeSaasMerchantProductFactValues(packet.derived_listing_suggestions),
@@ -29307,6 +29329,8 @@ async function saveSaasMerchantProductFacts() {
   if (!draft) return false;
   const current = saasMerchantProductFactPacket(draft);
   const collected = collectSaasMerchantProductFacts();
+  const retainedDerivedSuggestions = { ...(current.derived_listing_suggestions || {}) };
+  collected.unknownFacts.forEach((key) => delete retainedDerivedSuggestions[key]);
   const sourceRecords = Array.isArray(current.source_records) ? current.source_records.slice(0, 12) : [];
   const sourceUrl = collected.merchantConfirmed.source_url || "";
   if (sourceUrl && !sourceRecords.some((item) => item?.url === sourceUrl)) {
@@ -29316,9 +29340,11 @@ async function saveSaasMerchantProductFacts() {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
     source_mode: sourceUrl ? "merchant_source_supplied" : "merchant_owned_product",
     product_name: collected.merchantConfirmed.product_name || current.product_name || draft.product || draft.title || "",
+    simulation_only: current.simulation_only === true,
+    fact_scope: current.simulation_only === true ? "simulation_rehearsal" : "merchant_product",
     source_confirmed_facts: current.source_confirmed_facts || {},
     merchant_confirmed_facts: collected.merchantConfirmed,
-    derived_listing_suggestions: current.derived_listing_suggestions || {},
+    derived_listing_suggestions: retainedDerivedSuggestions,
     unknown_facts: collected.unknownFacts,
     source_records: sourceRecords,
     saved_at: new Date().toISOString(),
@@ -29512,6 +29538,8 @@ function captureSaasListingFactsForAiGeneration(draft = state.saasListingCompose
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
     source_mode: sourceUrl ? "merchant_source_supplied" : "merchant_owned_product",
     product_name: productName,
+    simulation_only: current.simulation_only === true,
+    fact_scope: current.simulation_only === true ? "simulation_rehearsal" : "merchant_product",
     source_confirmed_facts: current.source_confirmed_facts || {},
     merchant_confirmed_facts: collected.merchantConfirmed,
     derived_listing_suggestions: current.derived_listing_suggestions || {},
@@ -29600,7 +29628,8 @@ async function generateSaasListingDraftFromCurrentProject() {
     const serverIdentity = saasNormalizeListingProjectIdentity(response.listing_project_identity) || listingProjectIdentity;
     restored.listing_project_key = serverIdentity.key;
     restored.listing_project_identity = serverIdentity;
-    restored.safe_local_only = false;
+    restored.safe_local_only = packet?.simulation_only === true;
+    restored.simulation_only = packet?.simulation_only === true;
     restored.model_generated = true;
     state.saasListingComposerDraft = restored;
     state.saasListingSourceMode = "listing_ai_generation";

@@ -17299,6 +17299,7 @@ def normalize_merchant_product_fact_packet(
 
     raw = value if isinstance(value, dict) else {}
     trusted_merchant_request = str(source or "") == "authenticated_merchant_request"
+    simulation_only = raw.get("simulation_only") is True
     submitted = raw.get("merchant_confirmed_facts") if isinstance(raw.get("merchant_confirmed_facts"), dict) else {}
     derived_submitted = raw.get("derived_listing_suggestions") if isinstance(raw.get("derived_listing_suggestions"), dict) else {}
 
@@ -17365,6 +17366,9 @@ def normalize_merchant_product_fact_packet(
         )
     total = len(MERCHANT_PRODUCT_FACT_REQUIRED_KEYS)
     ready_count = total - len(unknown)
+    blocked_by = [f"merchant_product_fact_missing:{key}" for key in unknown]
+    if simulation_only:
+        blocked_by.append("simulation_only_product_facts")
     return {
         "contract_version": MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION,
         "source": "authenticated_merchant_request" if trusted_merchant_request else "untrusted_input",
@@ -17375,6 +17379,8 @@ def normalize_merchant_product_fact_packet(
         "source_confirmed_facts": {},
         "merchant_confirmed_facts": merchant_confirmed,
         "derived_listing_suggestions": derived,
+        "simulation_only": simulation_only,
+        "fact_scope": "simulation_rehearsal" if simulation_only else "merchant_product",
         "unknown_facts": unknown,
         "source_records": source_records,
         "listing_readiness": {
@@ -17383,9 +17389,15 @@ def normalize_merchant_product_fact_packet(
             "completion_percent": round((ready_count / total) * 100) if total else 0,
             "ready_for_listing_generation": not unknown,
             "ready_for_real_publish": False,
-            "reason": "商品事实已补齐，仍需 eBay 体检和发布确认" if not unknown else "仍有商品事实待商家确认",
+            "reason": (
+                "模拟演练资料仅供内部 Listing 与素材流程，不可写入 eBay"
+                if simulation_only
+                else "商品事实已补齐，仍需 eBay 体检和发布确认"
+                if not unknown
+                else "仍有商品事实待商家确认"
+            ),
         },
-        "blocked_by": [f"merchant_product_fact_missing:{key}" for key in unknown],
+        "blocked_by": blocked_by,
         "real_platform_writes_enabled": False,
         "secret_exposed": False,
     }
@@ -18255,6 +18267,23 @@ def _ai_ceo_listing_handoff_fields(
         message=message,
         product=clean_product,
     )
+    rehearsal_suggestions = _ai_ceo_simulation_fact_suggestions(
+        message=message,
+        answer=clean_answer,
+        product=clean_product,
+    )
+    if rehearsal_suggestions:
+        fact_conflicts = list(merchant_product_fact_packet.get("fact_conflicts") or [])
+        merchant_product_fact_packet = normalize_merchant_product_fact_packet(
+            {
+                "merchant_confirmed_facts": merchant_product_fact_packet.get("merchant_confirmed_facts") or {},
+                "derived_listing_suggestions": rehearsal_suggestions,
+                "simulation_only": True,
+            },
+            source="authenticated_merchant_request",
+        )
+        merchant_product_fact_packet["fact_conflicts"] = fact_conflicts
+        merchant_product_fact_packet["intake_contract"] = "ai_ceo_simulation_rehearsal_fact_suggestions_v1"
     publish_gaps = _ai_ceo_listing_publish_gaps(
         item_specifics=item_specifics,
         price_band=price_band,
@@ -18445,6 +18474,103 @@ def _ai_ceo_logistics_plan(*, answer: str) -> dict[str, str]:
         "payment_policy_id": "",
         "return_policy_id": "",
     }
+
+
+def _ai_ceo_simulation_fact_suggestions(*, message: str, answer: str, product: str) -> dict[str, Any]:
+    """Extract clearly labelled rehearsal values as unconfirmed AI suggestions."""
+
+    request = _sanitize_merchant_ceo_text(message, limit=2400)
+    if not re.search(r"模拟演练|流程演练|受控处理演练|simulation\s+(?:rehearsal|drill)", request, flags=re.IGNORECASE):
+        return {}
+    if not re.search(r"不(?:保存|公开|真实)?[^。；;\n]{0,30}(?:eBay\s*)?(?:草稿|发布|写入)|不得[^。；;\n]{0,30}(?:发布|写入)", request, flags=re.IGNORECASE):
+        return {}
+
+    text = _sanitize_merchant_ceo_text(answer, limit=12000)
+
+    def table_value(label_pattern: str, *, limit: int = 240) -> str:
+        match = re.search(
+            rf"(?:^|\n)\s*\|\s*(?:{label_pattern})\s*\|\s*([^|\n]+?)\s*\|",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return ""
+        value = re.sub(r"\s*[（(](?:演练用|模拟演练|仅供演练)[)）]\s*$", "", match.group(1).strip(), flags=re.IGNORECASE)
+        if re.search(r"待定|待补|待确认|unknown|todo|n/?a|虚拟仓", value, flags=re.IGNORECASE):
+            return ""
+        return _sanitize_merchant_ceo_text(value, limit=limit)
+
+    def numeric(value: str) -> str:
+        match = re.search(r"\d+(?:\.\d+)?", value or "")
+        return match.group(0) if match else ""
+
+    suggestions: dict[str, Any] = {}
+    if product and product != "待选择商品方向":
+        suggestions["product_name"] = product
+
+    sku_match = re.search(r"(?:^|\n)\s*SKU(?:\s*[（(][^）)\n]{0,24}[)）])?\s*[:：]\s*([A-Za-z0-9][A-Za-z0-9._-]{2,80})", text, flags=re.IGNORECASE)
+    if sku_match:
+        suggestions["sku"] = sku_match.group(1)
+
+    direct_fields = {
+        "brand": r"品牌|Brand",
+        "mpn": r"MPN",
+        "condition": r"商品状态|Condition",
+        "material": r"材质|Material",
+        "product_origin": r"商品产地|产地|Origin",
+        "packaging_type": r"包装方式|包装类型|Packaging",
+        "item_location": r"实际\s*Item\s*location|实际发货地",
+    }
+    for key, label_pattern in direct_fields.items():
+        value = table_value(label_pattern)
+        if value:
+            suggestions[key] = value
+
+    product_dimensions = table_value(r"商品尺寸|尺寸|Product\s*(?:dimensions?|size)")
+    dimension_match = re.search(
+        r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm",
+        product_dimensions,
+        flags=re.IGNORECASE,
+    )
+    if dimension_match:
+        suggestions["product_dimensions_cm"] = " x ".join(dimension_match.groups())
+
+    package_dimensions = table_value(r"包装尺寸|Package\s*(?:dimensions?|size)")
+    package_match = re.search(
+        r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm",
+        package_dimensions,
+        flags=re.IGNORECASE,
+    )
+    if package_match:
+        suggestions["package_length_cm"], suggestions["package_width_cm"], suggestions["package_height_cm"] = package_match.groups()
+
+    numeric_fields = {
+        "net_weight_g": r"净重|商品净重|Net\s*weight",
+        "package_weight_g": r"包装重量|Package\s*weight",
+        "unit_cost": r"采购成本|单件成本|Unit\s*cost",
+        "selling_price": r"建议售价|计划售价|Selling\s*price",
+        "quantity": r"建议库存|库存数量|真实可售数量|Quantity",
+        "handling_time_days": r"处理时间|Handling\s*time",
+    }
+    raw_numeric_values: dict[str, str] = {}
+    for key, label_pattern in numeric_fields.items():
+        value = table_value(label_pattern)
+        raw_numeric_values[key] = value
+        clean_number = numeric(value)
+        if clean_number:
+            suggestions[key] = clean_number
+
+    price_text = " ".join([raw_numeric_values.get("unit_cost", ""), raw_numeric_values.get("selling_price", "")])
+    if re.search(r"\bUSD\b|\$", price_text, flags=re.IGNORECASE):
+        suggestions["currency"] = "USD"
+    elif re.search(r"\bCNY\b|人民币|¥|￥", price_text, flags=re.IGNORECASE):
+        suggestions["currency"] = "CNY"
+
+    normalized = normalize_merchant_product_fact_packet(
+        {"derived_listing_suggestions": suggestions},
+        source="untrusted_input",
+    )
+    return normalized.get("derived_listing_suggestions") or {}
 
 
 def _ai_ceo_listing_intake_fact_packet(*, message: str, product: str) -> dict[str, Any]:

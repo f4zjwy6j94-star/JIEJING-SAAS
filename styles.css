@@ -31097,6 +31097,23 @@ body.saas-public-mvp .saas-product-fact-legend {
   gap: 7px;
 }
 
+body.saas-public-mvp .saas-product-facts-simulation-note {
+  display: grid;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px solid rgba(180, 83, 9, 0.24);
+  border-radius: 9px;
+  background: #fff8e8;
+  color: #714516;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+body.saas-public-mvp .saas-product-facts-simulation-note strong {
+  color: #9a4f08;
+  font-size: 13px;
+}
+
 body.saas-public-mvp .saas-product-fact-legend span,
 body.saas-public-mvp .saas-product-fact-label em {
   padding: 4px 7px;

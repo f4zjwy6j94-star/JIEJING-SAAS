@@ -23,7 +23,11 @@ def main() -> None:
     assert "saasListingSafeItemSpecifics(handoffFields.item_specifics" in app_js
     assert "merchant_product_fact_packet: merchantProductFactPacket" in app_js
     assert "applySaasMerchantProductFactPacketToDraft(importedDraft, handoffFields.merchant_product_fact_packet)" in app_js
-    assert "explicitUnknownFacts.forEach((key) => delete derivedSuggestions[key])" in app_js
+    assert "explicitUnknownFacts.forEach((key) => delete derivedSuggestions[key])" not in app_js
+    assert "const retainedDerivedSuggestions" in app_js
+    assert "collected.unknownFacts.forEach((key) => delete retainedDerivedSuggestions[key])" in app_js
+    assert "模拟演练资料" in app_js
+    assert "simulation_only: state.saasListingComposerDraft?.merchant_product_fact_packet?.simulation_only === true" in app_js
     assert "function saasListingEbayTitleFromProduct" in app_js
     assert 'const marketResearchHandoff = ["ai_ceo.market_research", "market.report"]' in app_js
     assert "selling_points: marketResearchHandoff ? [] : legacySellingPoints" in app_js
@@ -132,6 +136,92 @@ def main() -> None:
     assert "craft" not in merchant_facts, packet
     conflicts = {item["field"] for item in packet["fact_conflicts"]}
     assert {"material", "craft"}.issubset(conflicts), packet
+
+    rehearsal_message = (
+        "第二轮无货源模拟演练：请新建独立商品项目。"
+        "可以生成一组明确标记为模拟演练的商品规格，用于测试 Listing 与素材流程；"
+        "不得保存 eBay 草稿、公开发布或写入 eBay。"
+    )
+    rehearsal_answer = (
+        "最终候选：复古黄铜书签（做旧工艺）\n"
+        "SKU（演练用）：JJ-BOOKMARK-DRILL20260828-01\n"
+        "| 字段 | 模拟演练值 |\n"
+        "|---|---|\n"
+        "| 品牌 | Unbranded |\n"
+        "| 材质 | 做旧黄铜 |\n"
+        "| 商品尺寸 | 12 x 3 x 0.1 cm |\n"
+        "| 净重 | 18 g |\n"
+        "| 包装重量 | 30 g |\n"
+        "| 包装尺寸 | 15 x 5 x 0.5 cm |\n"
+        "| 商品产地 | 中国 |\n"
+        "| 单件成本 | 1.2 USD |\n"
+        "| 建议售价 | 9.99 USD |\n"
+        "| 建议库存 | 50 |\n"
+        "| 实际 Item location | 待补（虚拟仓不可用） |\n"
+    )
+    rehearsal_fields = _ai_ceo_listing_handoff_fields(
+        product="复古黄铜书签（做旧工艺）",
+        message=rehearsal_message,
+        answer=rehearsal_answer,
+        source_records=[],
+        selected_candidate={
+            "candidate_id": "candidate_bookmark",
+            "name": "复古黄铜书签（做旧工艺）",
+            "score": 86,
+            "selected": True,
+        },
+        product_candidates=[],
+    )
+    rehearsal_packet = rehearsal_fields["merchant_product_fact_packet"]
+    assert rehearsal_packet["simulation_only"] is True, rehearsal_packet
+    assert rehearsal_packet["fact_scope"] == "simulation_rehearsal", rehearsal_packet
+    suggestions = rehearsal_packet["derived_listing_suggestions"]
+    expected_suggestions = {
+        "product_name": "复古黄铜书签（做旧工艺）",
+        "sku": "JJ-BOOKMARK-DRILL20260828-01",
+        "brand": "Unbranded",
+        "material": "做旧黄铜",
+        "product_dimensions_cm": "12 x 3 x 0.1",
+        "net_weight_g": "18",
+        "package_weight_g": "30",
+        "package_length_cm": "15",
+        "package_width_cm": "5",
+        "package_height_cm": "0.5",
+        "product_origin": "中国",
+        "unit_cost": "1.2",
+        "selling_price": "9.99",
+        "currency": "USD",
+        "quantity": "50",
+    }
+    for key, value in expected_suggestions.items():
+        assert suggestions.get(key) == value, (key, suggestions, rehearsal_packet)
+    assert "item_location" not in suggestions, suggestions
+    assert not rehearsal_packet["source_confirmed_facts"], rehearsal_packet
+    assert set(rehearsal_packet["merchant_confirmed_facts"]) == {"product_name"}, rehearsal_packet
+    assert "sku" in rehearsal_packet["unknown_facts"], rehearsal_packet
+    assert "simulation_only_product_facts" in rehearsal_packet["blocked_by"], rehearsal_packet
+    assert rehearsal_packet["listing_readiness"]["ready_for_real_publish"] is False, rehearsal_packet
+
+    ordinary_fields = _ai_ceo_listing_handoff_fields(
+        product="复古黄铜书签（做旧工艺）",
+        message="请调研这个商品并生成 Listing 建议。",
+        answer=rehearsal_answer,
+        source_records=[],
+        selected_candidate={
+            "candidate_id": "candidate_bookmark",
+            "name": "复古黄铜书签（做旧工艺）",
+            "score": 86,
+            "selected": True,
+        },
+        product_candidates=[],
+    )
+    assert ordinary_fields["merchant_product_fact_packet"]["derived_listing_suggestions"] == {}, ordinary_fields
+
+    api_server = (ROOT / "jiejing_saas" / "api_server.py").read_text(encoding="utf-8")
+    assert 'if body.get("simulation_only") is True:' in api_server
+    assert "simulation_only_listing_cannot_create_ebay_confirmation" in api_server
+    assert "simulation_only_listing_cannot_execute_ebay_write" in api_server
+    assert 'confirmation_item.get("simulation_only") is True' in api_server
     print("PASS jiejing_ai_ceo_listing_fact_boundary")
 
 

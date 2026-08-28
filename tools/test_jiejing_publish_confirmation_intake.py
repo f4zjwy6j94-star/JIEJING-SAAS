@@ -97,6 +97,28 @@ def main() -> int:
         )
         if not packet_result.get("data_packet", {}).get("packet_id"):
             return fail("publish intake setup should create a sanitized data packet")
+        with sqlite3.connect(SAAS_DB) as conn:
+            confirmations_before_simulation_guard = conn.execute("select count(*) from confirmations").fetchone()[0]
+        for route in (
+            "publish-confirmation",
+            "ebay-draft-confirmation",
+            "existing-draft-publish-confirmation",
+        ):
+            status, guarded = post_json_status(
+                f"{base_url}/stores/{store['store_id']}/{route}",
+                {
+                    "simulation_only": True,
+                    "product": "Simulation-only bookmark",
+                    "listing_project_identity": {"key": "simulation-only-bookmark"},
+                },
+                token=token,
+            )
+            if status != 409 or guarded.get("error") != "simulation_only_listing_cannot_create_ebay_confirmation":
+                return fail(f"{route} must reject simulation-only product data before any eBay confirmation: {status} {guarded}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            confirmations_after_simulation_guard = conn.execute("select count(*) from confirmations").fetchone()[0]
+        if confirmations_after_simulation_guard != confirmations_before_simulation_guard:
+            return fail("simulation-only requests must not create any eBay confirmation record")
         result = post_json(
             f"{base_url}/stores/{store['store_id']}/publish-confirmation",
             {
@@ -330,6 +352,21 @@ def post_json(url: str, payload: dict[str, Any], *, token: str | None = None) ->
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise AssertionError(f"HTTP {exc.code} for {url}: {detail}") from exc
+
+
+def post_json_status(url: str, payload: dict[str, Any], *, token: str | None = None) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_headers(token),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        return exc.code, json.loads(detail)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:

@@ -4841,6 +4841,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "existing-draft-publish-confirmation",
         }:
             body = self._read_json_body()
+            if body.get("simulation_only") is True:
+                self._send_error(
+                    HTTPStatus.CONFLICT,
+                    "simulation_only_listing_cannot_create_ebay_confirmation",
+                )
+                return
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=parts[1])
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found")
@@ -5187,6 +5193,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "publish_payload": publish_payload,
                     "publish_payload_summary": _publish_payload_summary(publish_payload),
                     "listing_project_identity": listing_project_identity,
+                    "simulation_only": body.get("simulation_only") is True,
                     "publish_readiness": readiness,
                     "account_health": account_health,
                     "preflight_status": preflight.get("status"),
@@ -10078,6 +10085,19 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
             live_ebay_write_actions = {"publish_listing", "save_ebay_listing_draft", "cleanup_test_listing"}
+            confirmation_item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            if (
+                confirmation["action_type"] in live_ebay_write_actions
+                and (
+                    confirmation_item.get("simulation_only") is True
+                    or payload.get("simulation_only") is True
+                )
+            ):
+                self._send_error(
+                    HTTPStatus.CONFLICT,
+                    "simulation_only_listing_cannot_execute_ebay_write",
+                )
+                return
             draft_save_live = bool(
                 confirmation["action_type"] == "save_ebay_listing_draft"
                 and self.settings.effective_ebay_draft_save_enabled
