@@ -217,6 +217,39 @@ def main() -> None:
     )
     assert ordinary_fields["merchant_product_fact_packet"]["derived_listing_suggestions"] == {}, ordinary_fields
 
+    inline_rehearsal_message = (
+        "继续当前复古黄铜书签（做旧工艺）模拟演练项目，不新建重复项目、商品、SKU 或 Listing。"
+        "品牌 Unbranded、材质 做旧黄铜、商品尺寸 12 x 3 x 0.1 cm、净重 18 g、"
+        "包装重量 30 g、包装尺寸 15 x 5 x 0.5 cm、商品产地 中国、单件成本 1.2 USD、"
+        "建议售价 9.99 USD、建议库存 50、SKU JJ-BOOKMARK-DRILL20260828-01、商品状态 NEW。"
+        "实际 Item location 继续待补。以上仅为内部模拟演练资料，不得保存 eBay 草稿、公开发布或写入 eBay。"
+    )
+    inline_fields = _ai_ceo_listing_handoff_fields(
+        product="复古黄铜书签（做旧工艺）",
+        message=inline_rehearsal_message,
+        answer=(
+            "### 继续当前复古黄铜书签（做旧工艺）受控处理演练项目\n"
+            "收到，本轮继续现有项目，不新建重复项目。\n"
+            "### 受控处理演练规格\n|"
+        ),
+        source_records=[],
+        selected_candidate={
+            "candidate_id": "candidate_bookmark",
+            "name": "复古黄铜书签（做旧工艺）",
+            "score": 86,
+            "selected": True,
+        },
+        product_candidates=[],
+    )
+    inline_packet = inline_fields["merchant_product_fact_packet"]
+    assert inline_packet["simulation_only"] is True, inline_packet
+    assert set(inline_packet["merchant_confirmed_facts"]) == {"product_name"}, inline_packet
+    inline_suggestions = inline_packet["derived_listing_suggestions"]
+    for key, value in expected_suggestions.items():
+        assert inline_suggestions.get(key) == value, (key, inline_suggestions, inline_packet)
+    assert "item_location" not in inline_suggestions, inline_suggestions
+    assert inline_suggestions["product_origin"] == "中国", inline_suggestions
+
     certificate_gap_fields = _ai_ceo_listing_handoff_fields(
         product="复古黄铜书签（做旧工艺）",
         message="请整理当前商品 Listing，但不编造缺失资料。",

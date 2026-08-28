@@ -5007,15 +5007,23 @@ class SaaSRepository:
         chat: dict[str, Any],
         command_id: str | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
+        listing_project_identity: dict[str, Any] | None = None,
+        active_listing_product_name: str = "",
     ) -> dict[str, Any] | None:
         """Persist a merchant-facing AI CEO market research chat turn as a report."""
 
         self.initialize()
-        if not _looks_like_ai_ceo_market_research_turn(message=message, chat=chat):
+        safe_listing_project_identity = normalize_listing_project_identity(listing_project_identity)
+        if not _looks_like_ai_ceo_market_research_turn(message=message, chat=chat) and not safe_listing_project_identity:
             return None
         answer = _sanitize_merchant_ceo_text(chat.get("answer"), limit=5000)
         if not answer:
             return None
+        active_listing_product = (
+            _clean_ai_ceo_market_candidate_name(active_listing_product_name)
+            if safe_listing_project_identity
+            else ""
+        )
         created_at = now_iso()
         report_id = _id("report")
         runtime_run_id = str(task.get("runtime_run_id") or "ai_ceo_chat")
@@ -5035,6 +5043,7 @@ class SaaSRepository:
             else str(chat.get("status") or "") not in rejected_statuses
         )
         product_candidates = _ai_ceo_market_product_candidates(message=message, answer=answer) if answer_accepted else []
+        has_current_turn_product_candidates = bool(product_candidates)
         if answer_accepted and not product_candidates and _ai_ceo_market_context_reset_requested(message):
             return None
         selection_mode = "current_turn" if product_candidates else "none"
@@ -5053,6 +5062,30 @@ class SaaSRepository:
                 selected_id = str(selected_candidate.get("candidate_id") or "")
                 for candidate in product_candidates:
                     candidate["selected"] = str(candidate.get("candidate_id") or "") == selected_id
+        if (
+            answer_accepted
+            and safe_listing_project_identity
+            and active_listing_product
+            and not has_current_turn_product_candidates
+        ):
+            candidate_id = (
+                str(safe_listing_project_identity.get("candidate_id") or "").strip()
+                or str(selected_candidate.get("candidate_id") or "").strip()
+                or "current_project_candidate"
+            )
+            selected_candidate = {
+                "candidate_id": candidate_id,
+                "name": active_listing_product,
+                "score": int(selected_candidate.get("score") or 88),
+                "reasons": ["继续当前商品项目；不得按本轮回复标题新建重复项目。"],
+                "price_band": str(selected_candidate.get("price_band") or ""),
+                "source": "authenticated_active_listing_context",
+                "selected": True,
+                "missing_facts": ["SKU", "图片 URL", "采购成本", "重量尺寸", "eBay 类目", "店铺政策"],
+                "ready_for_listing_draft": True,
+            }
+            product_candidates = [selected_candidate]
+            selection_mode = "active_listing_context"
         product = ""
         if answer_accepted:
             product = _clean_ai_ceo_market_candidate_name(selected_candidate.get("name")) or _infer_ai_ceo_market_product(
@@ -5173,6 +5206,7 @@ class SaaSRepository:
             "merchant_product_source_required": merchant_product_source_required,
             "source_type": "ai_ceo_chat",
             "source_command_id": command_id or "",
+            "listing_project_identity": safe_listing_project_identity or None,
             "product": product,
             "product_candidates": product_candidates,
             "candidate_products": product_candidates,
@@ -17745,6 +17779,12 @@ def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
         return True
     if re.fullmatch(r"e?bay\s*(us|美国站)?", compact, flags=re.IGNORECASE):
         return True
+    if re.match(
+        r"^(?:继续|接着)(?:当前|现有|这个|该).{0,70}(?:项目|演练|listing|商品|产品)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return True
     if len(text) > 70 and re.search(r"帮我|应该|卖什么|不知道|你觉得|市场调研|报告", text):
         return True
     return False
@@ -18274,9 +18314,14 @@ def _ai_ceo_listing_handoff_fields(
     )
     if rehearsal_suggestions:
         fact_conflicts = list(merchant_product_fact_packet.get("fact_conflicts") or [])
+        confirmed_product_name = str(
+            (merchant_product_fact_packet.get("merchant_confirmed_facts") or {}).get("product_name")
+            or rehearsal_suggestions.get("product_name")
+            or ""
+        ).strip()
         merchant_product_fact_packet = normalize_merchant_product_fact_packet(
             {
-                "merchant_confirmed_facts": merchant_product_fact_packet.get("merchant_confirmed_facts") or {},
+                "merchant_confirmed_facts": {"product_name": confirmed_product_name} if confirmed_product_name else {},
                 "derived_listing_suggestions": rehearsal_suggestions,
                 "simulation_only": True,
             },
@@ -18496,14 +18541,28 @@ def _ai_ceo_simulation_fact_suggestions(*, message: str, answer: str, product: s
     if not re.search(r"不(?:保存|公开|真实)?[^。；;\n]{0,30}(?:eBay\s*)?(?:草稿|发布|写入)|不得[^。；;\n]{0,30}(?:发布|写入)", request, flags=re.IGNORECASE):
         return {}
 
-    text = _sanitize_merchant_ceo_text(answer, limit=12000)
+    answer_text = _sanitize_merchant_ceo_text(answer, limit=12000)
+    value_sources = (answer_text, request)
 
     def table_value(label_pattern: str, *, limit: int = 240) -> str:
-        match = re.search(
-            rf"(?:^|\n)\s*\|\s*(?:{label_pattern})\s*\|\s*([^|\n]+?)\s*\|",
-            text,
-            flags=re.IGNORECASE,
-        )
+        match = None
+        for source in value_sources:
+            match = re.search(
+                rf"(?:^|\n)\s*\|\s*(?:{label_pattern})\s*\|\s*([^|\n]+?)\s*\|",
+                source,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                break
+        if not match:
+            for source in value_sources:
+                match = re.search(
+                    rf"(?:^|[\n\r、，,；;。])\s*(?:{label_pattern})(?=\s|[:：])\s*(?:[:：]\s*|\s+)([^|\n\r、，,；;。]+)",
+                    source,
+                    flags=re.IGNORECASE,
+                )
+                if match:
+                    break
         if not match:
             return ""
         value = re.sub(r"\s*[（(](?:演练用|模拟演练|仅供演练)[)）]\s*$", "", match.group(1).strip(), flags=re.IGNORECASE)
@@ -18519,9 +18578,26 @@ def _ai_ceo_simulation_fact_suggestions(*, message: str, answer: str, product: s
     if product and product != "待选择商品方向":
         suggestions["product_name"] = product
 
-    sku_match = re.search(r"(?:^|\n)\s*SKU(?:\s*[（(][^）)\n]{0,24}[)）])?\s*[:：]\s*([A-Za-z0-9][A-Za-z0-9._-]{2,80})", text, flags=re.IGNORECASE)
-    if sku_match:
-        suggestions["sku"] = sku_match.group(1)
+    sku_value = ""
+    for source in value_sources:
+        sku_match = re.search(
+            r"(?:^|\n)\s*\|\s*SKU(?:\s*[（(][^）)\n]{0,24}[)）])?\s*\|\s*"
+            r"([A-Za-z0-9][A-Za-z0-9._-]{2,80})\s*\|",
+            source,
+            flags=re.IGNORECASE,
+        )
+        if not sku_match:
+            sku_match = re.search(
+                r"(?:^|[\n\r、，,；;。])\s*SKU(?:\s*[（(][^）)\n]{0,24}[)）])?(?=\s|[:：])\s*"
+                r"(?:[:：]\s*|\s+)([A-Za-z0-9][A-Za-z0-9._-]{2,80})(?=$|[\s|\n\r、，,；;。])",
+                source,
+                flags=re.IGNORECASE,
+            )
+        if sku_match:
+            sku_value = sku_match.group(1)
+            break
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{2,80}", sku_value):
+        suggestions["sku"] = sku_value
 
     direct_fields = {
         "brand": r"品牌|Brand",
@@ -18628,7 +18704,7 @@ def _ai_ceo_listing_intake_fact_packet(*, message: str, product: str) -> dict[st
             net_weight *= 1000
         merchant_facts["net_weight_g"] = str(int(net_weight) if net_weight.is_integer() else net_weight)
 
-    origin_match = re.search(r"(?:商品)?产地\s*[:：]?\s*([^，,；;。\n]{2,80})", text)
+    origin_match = re.search(r"(?:商品)?产地\s*[:：]?\s*([^、，,；;。\n]{2,80})", text)
     if origin_match:
         origin = re.split(r"\s*(?:不是|不等于|≠)\s*eBay", origin_match.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip()
         if origin:
@@ -18637,14 +18713,14 @@ def _ai_ceo_listing_intake_fact_packet(*, message: str, product: str) -> dict[st
     if "纸盒安全包装" in text:
         merchant_facts["packaging_type"] = "纸盒安全包装"
     else:
-        packaging_match = re.search(r"(?:包装方式|供应商包装)\s*[:：]?\s*([^，,；;。\n]{2,80})", text)
+        packaging_match = re.search(r"(?:包装方式|供应商包装)\s*[:：]?\s*([^、，,；;。\n]{2,80})", text)
         if packaging_match:
             merchant_facts["packaging_type"] = packaging_match.group(1).strip()
 
     if re.search(r"东南亚[^，,；;。\n]{0,12}禅意", text):
         merchant_facts["style"] = "东南亚禅意"
     else:
-        style_match = re.search(r"(?:风格)\s*[:：]?\s*([^，,；;。\n]{2,80})", text)
+        style_match = re.search(r"(?:风格)\s*[:：]?\s*([^、，,；;。\n]{2,80})", text)
         if style_match:
             merchant_facts["style"] = style_match.group(1).strip()
 
@@ -18663,7 +18739,7 @@ def _ai_ceo_listing_intake_fact_packet(*, message: str, product: str) -> dict[st
             }
         )
     else:
-        material_match = re.search(r"(?:材质|Material)\s*[:：]\s*([^，,；;。\n]{2,80})", text, flags=re.IGNORECASE)
+        material_match = re.search(r"(?:材质|Material)\s*[:：]\s*([^、，,；;。\n]{2,80})", text, flags=re.IGNORECASE)
         if material_match:
             merchant_facts["material"] = material_match.group(1).strip()
 
@@ -18681,7 +18757,7 @@ def _ai_ceo_listing_intake_fact_packet(*, message: str, product: str) -> dict[st
             }
         )
     else:
-        craft_match = re.search(r"工艺\s*[:：]\s*([^，,；;。\n]{2,80})", text)
+        craft_match = re.search(r"工艺\s*[:：]\s*([^、，,；;。\n]{2,80})", text)
         if craft_match:
             merchant_facts["craft"] = craft_match.group(1).strip()
 

@@ -459,7 +459,7 @@ def _build_billing_test_rehearsal_summary(
             "key": "test_subscription_lifecycle_events",
             "status": "ready" if required_events.issubset(event_types) else "blocked",
             "evidence_summary": _compact_billing_evidence(required_events_present=required_events.issubset(event_types)),
-            "next_action": "Use POST /billing/test-event to rehearse activate, invoice_paid, payment_failed and cancel states.",
+            "next_action": "Use POST /owner/billing/test-event from the operations console to rehearse activate, invoice_paid, payment_failed and cancel states.",
         },
         {
             "key": "test_provider_order_query_or_signed_webhook",

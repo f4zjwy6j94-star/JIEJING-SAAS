@@ -156,9 +156,12 @@ def post_json(
     *,
     token: str | None = None,
     expected_status: int | tuple[int, ...] | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=body, headers=_headers(token=token), method="POST")
+    headers = _headers(token=token)
+    headers.update(extra_headers or {})
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             parsed = json.loads(response.read().decode("utf-8"))
@@ -349,6 +352,9 @@ def main() -> int:
     env["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(OUT / "local-model-secrets.json")
     env["JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP"] = "0"
     env["JIEJING_BILLING_PROVIDER"] = "stripe_test_mock"
+    env["JIEJING_INTERNAL_ADMIN_EMAILS"] = (
+        "ai-ceo-chat@example.com,ai-ceo-legacy-account-model@example.com"
+    )
     env["JIEJING_QUOTA_ENFORCEMENT_ENABLED"] = "1"
     env["JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED"] = "1"
     env["JIEJING_AI_CEO_REALTIME_MODEL_SYNTHESIS_ENABLED"] = "1"
@@ -412,9 +418,10 @@ def main() -> int:
         if billing_trial.get("triggers_real_charge") is not False or billing_trial.get("calls_stripe_api") is not False:
             return fail(f"registration trial must not call Stripe or trigger a real charge: {billing_trial}")
         billing_activation = post_json(
-            f"{base_url}/billing/test-event",
+            f"{base_url}/owner/billing/test-event",
             {"plan_key": "operator", "action": "activate"},
             token=token,
+            extra_headers={"Host": "ops.jiejing.shop"},
         ).get("billing_test_event", {})
         if billing_activation.get("ok") is not True:
             return fail(f"test billing activation should unlock multi-store test quota without real charge: {billing_activation}")
@@ -690,9 +697,10 @@ def main() -> int:
         if not legacy_token or not legacy_company_id or not legacy_user_id:
             return fail("legacy registration should return token, company id and user id")
         legacy_activation = post_json(
-            f"{base_url}/billing/test-event",
+            f"{base_url}/owner/billing/test-event",
             {"plan_key": "operator", "action": "activate"},
             token=legacy_token,
+            extra_headers={"Host": "ops.jiejing.shop"},
         ).get("billing_test_event", {})
         if legacy_activation.get("ok") is not True:
             return fail(f"legacy test billing activation should unlock multi-store test quota: {legacy_activation}")

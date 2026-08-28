@@ -3985,6 +3985,22 @@ def _active_listing_answer_contradictions(*, answer: str, context: dict[str, Any
     return list(dict.fromkeys(blockers))
 
 
+def _ai_ceo_answer_completeness_blockers(answer: str) -> list[str]:
+    """Detect transport-like truncation before a workflow answer becomes an artifact."""
+
+    text = _safe_text(answer, limit=12000).rstrip()
+    if not text:
+        return ["empty_model_answer"]
+    blockers: list[str] = []
+    if re.search(r"(?:^|\n)\s*\|\s*$", text):
+        blockers.append("model_answer_truncated_table")
+    if text.count("```") % 2:
+        blockers.append("model_answer_unclosed_code_fence")
+    if re.search(r"(?:[:：、，,；;（(]|(?:并且|以及|然后|包括|如下))\s*$", text):
+        blockers.append("model_answer_incomplete_ending")
+    return list(dict.fromkeys(blockers))
+
+
 def validate_ai_ceo_answer_quality(
     *,
     message: str,
@@ -3995,6 +4011,14 @@ def validate_ai_ceo_answer_quality(
 ) -> dict[str, Any]:
     """Reject workflow answers that cannot become the merchant's requested work item."""
 
+    completeness_blockers = _ai_ceo_answer_completeness_blockers(answer)
+    if completeness_blockers:
+        return {
+            "accepted": False,
+            "quality_gate": "answer_completeness_v1",
+            "blocked_by": completeness_blockers,
+            "secret_exposed": False,
+        }
     active_listing_blockers = (
         []
         if _explicit_new_listing_project_request(message)

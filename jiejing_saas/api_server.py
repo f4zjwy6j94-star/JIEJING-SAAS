@@ -7488,6 +7488,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 route=str(route_meta.get("route") or ""),
                 message=message,
             )
+            active_listing_context = (
+                body.get("active_listing_context")
+                if isinstance(body.get("active_listing_context"), dict)
+                else {}
+            )
+            active_listing_product_name = (
+                str(active_listing_context.get("product_name") or "")[:120]
+                if listing_project_identity
+                else ""
+            )
             supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
                 supplier_facts=body.get("supplier_facts"),
                 supplier_facts_verified=body.get("supplier_facts_verified"),
@@ -7653,6 +7663,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     chat=fast_chat,
                     command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
                     conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
+                    listing_project_identity=listing_project_identity,
+                    active_listing_product_name=active_listing_product_name,
                 )
                 ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
                 send_chat_payload(
@@ -8527,7 +8539,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 usage_consumed=usage_consumed,
                 summary="AI CEO attempt is validating the authoritative backend artifact outcome.",
             )
-            artifact_requested = ai_ceo_market_artifact_eligible(message=message, chat=chat)
+            artifact_requested = bool(listing_project_identity) or ai_ceo_market_artifact_eligible(
+                message=message,
+                chat=chat,
+            )
             try:
                 ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
                     task=task,
@@ -8535,6 +8550,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     chat=chat,
                     command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
                     conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
+                    listing_project_identity=listing_project_identity,
+                    active_listing_product_name=active_listing_product_name,
                 )
             except Exception as exc:
                 update_model_attempt(

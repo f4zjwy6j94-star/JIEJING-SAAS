@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -12,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.api_server import _ai_ceo_listing_project_identity_for_turn  # noqa: E402
+from jiejing_saas.repository import SaaSRepository  # noqa: E402
 
 
 IDENTITY = {
@@ -81,6 +83,43 @@ def main() -> None:
         app_js.index("function renderProductListingCenter")
     ]
     assert 'commitSaasActiveListingProjectContext("product");' in render_body
+
+    with tempfile.TemporaryDirectory(prefix="jiejing-current-project-report-", ignore_cleanup_errors=True) as temp:
+        repository = SaaSRepository(Path(temp) / "saas.sqlite")
+        task = repository.create_task(
+            company_id="company_current_project",
+            store_id="store_current_project",
+            user_id="user_current_project",
+            task_type="ai_ceo.chat",
+            title="AI CEO current project continuation",
+            input_data={"message": "继续当前复古黄铜书签项目。"},
+        )
+        saved = repository.save_ai_ceo_market_research_report(
+            task=task,
+            message=(
+                "继续当前复古黄铜书签（做旧工艺）模拟演练项目，不新建重复项目、商品、SKU 或 Listing。"
+                "品牌 Unbranded、材质 做旧黄铜、商品尺寸 12 x 3 x 0.1 cm、净重 18 g。"
+                "不得保存 eBay 草稿、公开发布或写入 eBay。"
+            ),
+            chat={
+                "answer": (
+                    "### 继续当前复古黄铜书签（做旧工艺）受控处理演练项目\n"
+                    "收到，本轮继续现有项目，不新建重复项目。\n"
+                    "### 受控处理演练规格\n|"
+                ),
+                "route": "confirmation_required",
+                "status": "model_answered",
+                "source_records": [{"title": "Current project", "url": "https://example.com/current"}],
+            },
+            listing_project_identity=IDENTITY,
+            active_listing_product_name="复古黄铜书签（做旧工艺）",
+        )
+        assert saved is not None
+        report = saved["report"]
+        assert report["listing_project_identity"] == IDENTITY, report
+        assert report["product"] == "复古黄铜书签（做旧工艺）", report
+        assert report["selected_product_candidate"]["name"] == "复古黄铜书签（做旧工艺）", report
+        assert report["conversation_context"]["selection_mode"] == "active_listing_context", report
     print("PASS jiejing_ai_ceo_project_trace")
 
 

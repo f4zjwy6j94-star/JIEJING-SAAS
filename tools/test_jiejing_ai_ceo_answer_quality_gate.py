@@ -130,6 +130,16 @@ def main() -> None:
         "适合 eBay/轻小件：低售后、无电池。\n主要风险：图案权利待核。\nListing 草稿字段建议：Material / Shape / Set Includes。"
     )
 
+    incomplete_quality = validate_ai_ceo_answer_quality(
+        message="继续当前复古黄铜书签模拟演练项目，不新建重复项目。",
+        route="confirmation_required",
+        answer="### 受控处理演练规格\n|",
+        context={},
+    )
+    assert incomplete_quality["accepted"] is False, incomplete_quality
+    assert incomplete_quality["quality_gate"] == "answer_completeness_v1", incomplete_quality
+    assert "model_answer_truncated_table" in incomplete_quality["blocked_by"], incomplete_quality
+
     context = build_ai_ceo_chat_context(
         repository=MinimalRepository(),
         company_id="company_quality",
@@ -651,6 +661,28 @@ def main() -> None:
         assert repaired["answer_quality"]["accepted"] is True, repaired
         assert repaired["answer_quality"]["repair_retry_count"] == 1, repaired
         assert repaired_model.calls == 2, repaired_model.calls
+
+        incomplete_listing_model = SequenceModel(
+            [
+                "### 受控处理演练规格\n|",
+                "已继续当前复古黄铜书签项目并更新内部 Listing；本轮未执行任何 eBay 写入。",
+            ]
+        )
+        incomplete_listing_repaired = run_ai_ceo_chat(
+            repository=MinimalRepository(),
+            company_id="company_quality",
+            store_id="store_quality",
+            user_id="user_quality",
+            message=(
+                "继续当前复古黄铜书签模拟演练项目，请更新当前内部 Listing；"
+                "不得保存 eBay 草稿、公开发布或写入 eBay。"
+            ),
+            model_client=incomplete_listing_model,
+        )
+        assert incomplete_listing_repaired["status"] == "model_answered", incomplete_listing_repaired
+        assert incomplete_listing_repaired["answer_quality"]["accepted"] is True, incomplete_listing_repaired
+        assert incomplete_listing_repaired["answer_quality"]["repair_retry_count"] == 1, incomplete_listing_repaired
+        assert incomplete_listing_model.calls == 2, incomplete_listing_model.calls
 
         strict_repaired_model = SequenceModel([repeated_candidate_answer, accepted_acceptance_answer])
         strict_repaired = run_ai_ceo_chat(
