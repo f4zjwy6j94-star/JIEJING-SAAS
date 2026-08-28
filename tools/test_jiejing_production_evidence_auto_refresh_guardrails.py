@@ -354,6 +354,37 @@ def current_public_readiness_payload() -> dict[str, object]:
     }
 
 
+def public_launch_readiness_payload() -> dict[str, object]:
+    payload = copy.deepcopy(current_public_readiness_payload())
+    readiness = payload["readiness"]
+    readiness["production_ready"] = True
+    readiness["can_accept_real_customers"] = True
+    readiness["warning_count"] = 0
+    readiness["items"] = []
+
+    billing = readiness["provider_status"]["billing"]
+    billing["payment_path_status"] = "public_checkout_available"
+    billing["mainland_payment_ready_for_owner_approval"] = True
+    billing["billing_ready_for_paid_launch"] = True
+    billing["paid_launch_blocker_count"] = 0
+    billing["next_paid_launch_blocker"] = ""
+    billing["public_charging_allowed"] = True
+    billing["charge_now_allowed"] = True
+
+    launch_path = billing["merchant_launch_path"]
+    launch_path["contract_version"] = "2026-08-22-public-commercial-release-v1"
+    launch_path["current_stage"] = "public_checkout_available"
+    launch_path["current_charge_status"] = "checkout_available"
+    launch_path["public_paid_launch_allowed"] = True
+    launch_path["charge_now_allowed"] = True
+
+    domestic_payment = billing["domestic_payment"]
+    domestic_payment["status"] = "public_checkout_available"
+    domestic_payment["public_charging_allowed"] = True
+    domestic_payment["charge_now_allowed"] = True
+    return payload
+
+
 def mutated_public_readiness(path: tuple[str | int, ...], value: object) -> dict[str, object]:
     payload = current_public_readiness_payload()
     cursor: Any = payload
@@ -966,6 +997,63 @@ def main() -> int:
                 "current public readiness summary without internal backup details must pass: "
                 f"exit_{readiness_fixture.returncode}"
             )
+        public_launch_fixture = run_public_readiness_fixture(
+            bash, public_launch_readiness_payload()
+        )
+        if public_launch_fixture.returncode != 0:
+            return fail(
+                "exact public checkout readiness summary must pass: "
+                f"exit_{public_launch_fixture.returncode}"
+            )
+        for label, path, invalid_value in (
+            (
+                "public launch without charge-now capability",
+                ("readiness", "provider_status", "billing", "charge_now_allowed"),
+                False,
+            ),
+            (
+                "public launch that triggers a charge during evidence refresh",
+                ("readiness", "provider_status", "billing", "triggers_real_charge"),
+                True,
+            ),
+            (
+                "public launch with broad platform writes enabled",
+                ("readiness", "real_platform_writes_enabled"),
+                True,
+            ),
+            (
+                "public launch without a verified paid order",
+                ("readiness", "provider_status", "billing", "verified_paid_order_count"),
+                0,
+            ),
+        ):
+            invalid_public_launch = public_launch_readiness_payload()
+            cursor: Any = invalid_public_launch
+            for segment in path[:-1]:
+                cursor = cursor[segment]
+            cursor[path[-1]] = invalid_value
+            invalid_public_launch_fixture = run_public_readiness_fixture(
+                bash, invalid_public_launch
+            )
+            if invalid_public_launch_fixture.returncode == 0:
+                return fail(f"public checkout contract must reject {label}")
+        public_launch_warning = public_launch_readiness_payload()
+        public_launch_warning["readiness"]["items"] = [  # type: ignore[index]
+            {
+                "key": "billing_quota",
+                "label": "Billing and quota",
+                "status": "private_beta_ready_paid_launch_pending",
+                "severity": "warning",
+                "detail": "Public charging remains closed.",
+                "next_action": "Complete the controlled payment gate.",
+            }
+        ]
+        public_launch_warning["readiness"]["warning_count"] = 1  # type: ignore[index]
+        public_launch_warning_fixture = run_public_readiness_fixture(
+            bash, public_launch_warning
+        )
+        if public_launch_warning_fixture.returncode == 0:
+            return fail("public checkout contract must reject stale billing warnings")
         delayed_readiness_fixture = run_public_readiness_wait_fixture(bash, becomes_ready=True)
         if delayed_readiness_fixture.returncode != 0:
             return fail("public readiness wait must tolerate bounded asynchronous evidence convergence")

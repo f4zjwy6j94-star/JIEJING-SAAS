@@ -494,6 +494,7 @@ private_beta_payment_statuses = {
     "controlled_acceptance_pending",
 }
 payment_contract = payment_status_contracts.get(billing.get("payment_path_status"))
+public_launch_mode = billing.get("payment_path_status") == "public_checkout_available"
 expected_ebay_resource_keys = {
     "store_profile", "account_business_policies", "inventory_and_offers",
     "orders_and_fulfillment", "finances", "taxonomy_listing_metadata",
@@ -503,11 +504,18 @@ top_level_contract_ready = (
     and readiness.get("authenticated_summary") is False
 )
 item_contract_ready = (
-    billing_item.get("key") == "billing_quota"
-    and billing_item.get("label") == "Billing and quota"
-    and billing_item.get("severity") == "warning"
-    and strict_text(billing_item.get("detail"))
-    and strict_text(billing_item.get("next_action"))
+    (
+        public_launch_mode
+        and item_by_key == {}
+    )
+    or (
+        not public_launch_mode
+        and billing_item.get("key") == "billing_quota"
+        and billing_item.get("label") == "Billing and quota"
+        and billing_item.get("severity") == "warning"
+        and strict_text(billing_item.get("detail"))
+        and strict_text(billing_item.get("next_action"))
+    )
 )
 product_evidence_ready = (
     product_evidence.get("latest_ebay_packet_status") == "packet_cached_sanitized"
@@ -626,8 +634,12 @@ billing_counts_ready = (
     and strict_nonnegative_int(billing.get("required_component_count"))
     and billing.get("required_component_count") == 9
     and strict_nonnegative_int(billing.get("verified_paid_order_count"))
+    and (
+        not public_launch_mode
+        or billing.get("verified_paid_order_count") > 0
+    )
     and type(billing.get("paid_launch_blocker_count")) is int
-    and billing.get("paid_launch_blocker_count") == 1
+    and billing.get("paid_launch_blocker_count") == (0 if public_launch_mode else 1)
     and domestic_payment.get("configured_component_count") == billing.get("configured_component_count")
     and type(domestic_payment.get("configured_component_count")) is int
     and domestic_payment.get("required_component_count") == billing.get("required_component_count")
@@ -636,29 +648,47 @@ billing_counts_ready = (
     and type(domestic_payment.get("verified_paid_order_count")) is int
 )
 billing_status_ready = (
-    payment_contract is not None
-    and billing.get("provider") == "wechat_pay_native"
+    billing.get("provider") == "wechat_pay_native"
     and billing.get("checkout_mode") == "native_qr"
     and billing.get("billing_mode") == "one_time_30_day_plan"
-    and billing.get("provider_configured") is payment_contract[3]
     and domestic_payment.get("provider") == "wechat_pay_native"
     and domestic_payment.get("checkout_mode") == "native_qr"
     and domestic_payment.get("billing_mode") == "one_time_30_day_plan"
-    and domestic_payment.get("status") == payment_contract[0]
-    and billing.get("next_paid_launch_blocker") == payment_contract[1]
-    and billing.get("mainland_payment_ready_for_owner_approval") is payment_contract[2]
     and (
         (
-            launch_path.get("contract_version") == "2026-07-27-merchant-mainland-payment-path-v1"
-            and launch_path.get("current_stage") == billing.get("payment_path_status")
+            public_launch_mode
+            and billing.get("provider_configured") is True
+            and billing.get("next_paid_launch_blocker") == ""
+            and billing.get("mainland_payment_ready_for_owner_approval") is True
+            and domestic_payment.get("status") == "public_checkout_available"
+            and launch_path.get("contract_version")
+            == "2026-08-22-public-commercial-release-v1"
+            and launch_path.get("current_stage") == "public_checkout_available"
+            and launch_path.get("current_charge_status") == "checkout_available"
         )
         or (
-            billing_item.get("status") == "private_beta_ready_paid_launch_pending"
-            and launch_path.get("contract_version") == "2026-07-03-merchant-billing-launch-path-v1"
-            and launch_path.get("current_stage") == "invited_beta_no_real_charge"
+            not public_launch_mode
+            and payment_contract is not None
+            and billing.get("provider_configured") is payment_contract[3]
+            and domestic_payment.get("status") == payment_contract[0]
+            and billing.get("next_paid_launch_blocker") == payment_contract[1]
+            and billing.get("mainland_payment_ready_for_owner_approval") is payment_contract[2]
+            and (
+                (
+                    launch_path.get("contract_version")
+                    == "2026-07-27-merchant-mainland-payment-path-v1"
+                    and launch_path.get("current_stage") == billing.get("payment_path_status")
+                )
+                or (
+                    billing_item.get("status") == "private_beta_ready_paid_launch_pending"
+                    and launch_path.get("contract_version")
+                    == "2026-07-03-merchant-billing-launch-path-v1"
+                    and launch_path.get("current_stage") == "invited_beta_no_real_charge"
+                )
+            )
+            and launch_path.get("current_charge_status") == "no_real_charge_now"
         )
     )
-    and launch_path.get("current_charge_status") == "no_real_charge_now"
     and launch_path.get("quota_grant_source") == "backend_subscription_state"
 )
 billing_safety_ready = (
@@ -666,10 +696,10 @@ billing_safety_ready = (
         billing,
         {
             "billing_ready_for_private_beta": True,
-            "billing_ready_for_paid_launch": False,
+            "billing_ready_for_paid_launch": public_launch_mode,
             "quota_enforcement_enabled": True,
-            "public_charging_allowed": False,
-            "charge_now_allowed": False,
+            "public_charging_allowed": public_launch_mode,
+            "charge_now_allowed": public_launch_mode,
             "triggers_real_charge": False,
             "triggers_real_refund": False,
             "calls_external_payment_api": False,
@@ -682,8 +712,8 @@ billing_safety_ready = (
     and exact_boolean_fields(
         launch_path,
         {
-            "public_paid_launch_allowed": False,
-            "charge_now_allowed": False,
+            "public_paid_launch_allowed": public_launch_mode,
+            "charge_now_allowed": public_launch_mode,
             "triggers_real_charge": False,
             "backend_confirmation_required_before_entitlement": True,
             "frontend_can_grant_entitlement": False,
@@ -694,8 +724,8 @@ billing_safety_ready = (
     and exact_boolean_fields(
         domestic_payment,
         {
-            "public_charging_allowed": False,
-            "charge_now_allowed": False,
+            "public_charging_allowed": public_launch_mode,
+            "charge_now_allowed": public_launch_mode,
             "triggers_real_charge": False,
             "triggers_real_refund": False,
             "calls_external_payment_api": False,
@@ -705,7 +735,8 @@ billing_safety_ready = (
     )
 )
 item_payment_projection_ready = (
-    (
+    (public_launch_mode and item_by_key == {})
+    or (
         billing_item.get("status") == "private_beta_ready_paid_launch_pending"
         and billing.get("payment_path_status") in private_beta_payment_statuses
     )
@@ -716,13 +747,59 @@ item_payment_projection_ready = (
     )
 )
 owner_verified_order_ready = (
-    billing_item.get("status") != "mainland_payment_ready_for_owner_approval"
+    (
+        public_launch_mode
+        and type(billing.get("verified_paid_order_count")) is int
+        and billing.get("verified_paid_order_count") > 0
+        and type(domestic_payment.get("verified_paid_order_count")) is int
+        and domestic_payment.get("verified_paid_order_count")
+        == billing.get("verified_paid_order_count")
+    )
+    or billing_item.get("status") != "mainland_payment_ready_for_owner_approval"
     or (
         type(billing.get("verified_paid_order_count")) is int
         and billing.get("verified_paid_order_count") > 0
         and type(domestic_payment.get("verified_paid_order_count")) is int
         and domestic_payment.get("verified_paid_order_count")
         == billing.get("verified_paid_order_count")
+    )
+)
+readiness_projection_ready = (
+    (
+        public_launch_mode
+        and set(item_by_key) == set()
+        and warning_count == 0
+        and readiness.get("production_ready") is True
+        and readiness.get("beta_ready") is True
+        and readiness.get("can_accept_real_customers") is True
+        and billing.get("billing_ready_for_paid_launch") is True
+        and billing.get("public_charging_allowed") is True
+        and billing.get("charge_now_allowed") is True
+    )
+    or (
+        not public_launch_mode
+        and set(item_by_key) == {"billing_quota"}
+        and readiness.get("beta_ready") is True
+        and readiness.get("production_ready") is False
+        and readiness.get("can_accept_real_customers") is False
+        and billing_item.get("status") in {
+            "private_beta_ready_paid_launch_pending",
+            "mainland_payment_ready_for_owner_approval",
+        }
+        and (
+            (
+                billing_item.get("status") == "private_beta_ready_paid_launch_pending"
+                and billing.get("mainland_payment_ready_for_owner_approval") is False
+            )
+            or (
+                billing_item.get("status") == "mainland_payment_ready_for_owner_approval"
+                and billing.get("mainland_payment_ready_for_owner_approval") is True
+            )
+        )
+        and billing_item.get("severity") == "warning"
+        and billing.get("billing_ready_for_paid_launch") is False
+        and billing.get("public_charging_allowed") is False
+        and billing.get("charge_now_allowed") is False
     )
 )
 ready = (
@@ -735,10 +812,7 @@ ready = (
     and blocker_count == len(blockers) == 0
     and type(warning_count) is int
     and warning_count == len(warnings)
-    and set(item_by_key) == {"billing_quota"}
-    and readiness.get("beta_ready") is True
-    and readiness.get("production_ready") is False
-    and readiness.get("can_accept_real_customers") is False
+    and readiness_projection_ready
     and readiness.get("real_platform_writes_enabled") is False
     and readiness.get("requested_real_platform_writes") is False
     and readiness.get("secret_exposed") is False
@@ -746,28 +820,10 @@ ready = (
     and model_value.get("status") == "ready"
     and "backup_restore" not in item_by_key
     and "monitoring_alerting" not in item_by_key
-    and billing_item.get("status") in {
-        "private_beta_ready_paid_launch_pending",
-        "mainland_payment_ready_for_owner_approval",
-    }
-    and (
-        (
-            billing_item.get("status") == "private_beta_ready_paid_launch_pending"
-            and billing.get("mainland_payment_ready_for_owner_approval") is False
-        )
-        or (
-            billing_item.get("status") == "mainland_payment_ready_for_owner_approval"
-            and billing.get("mainland_payment_ready_for_owner_approval") is True
-        )
-    )
-    and billing_item.get("severity") == "warning"
     and "backup" not in providers
     and billing.get("billing_ready_for_private_beta") is True
-    and billing.get("billing_ready_for_paid_launch") is False
     and billing.get("quota_enforcement_enabled") is True
     and public_search.get("runtime_gets_search_api_key") is False
-    and billing.get("public_charging_allowed") is False
-    and billing.get("charge_now_allowed") is False
     and billing.get("triggers_real_charge") is False
     and billing.get("triggers_real_refund") is False
     and billing.get("real_platform_writes_enabled") is False
