@@ -672,6 +672,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
 
     def test_ai_ceo_report_import_creates_a_structured_listing_project_identity(self) -> None:
         import_function = function_body(APP_JS, "saasListingDraftFromReport")
+        normalize_identity = function_body(APP_JS, "saasNormalizeListingProjectIdentity")
         result = run_node_json(
             "\n".join(
                 [
@@ -697,6 +698,8 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const saasListingSafeItemSpecifics = (value) => value;",
                     "const applySaasMerchantProductFactPacketToDraft = (draft) => draft;",
                     "const saasCurrentListingProjectIdentity = (draft) => ({ key: `project-${draft.source_report_id}-${draft.selected_product_candidate.candidate_id}`, source_report_id: draft.source_report_id, source_id: draft.source_report_id, candidate_id: draft.selected_product_candidate.candidate_id });",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    normalize_identity,
                     import_function,
                     "const draft = saasListingDraftFromReport({ report_id: 'report-a', report_type: 'ai_ceo.market_research', report: {} }, 'ai_ceo_market_report');",
                     "console.log(JSON.stringify(draft));",

@@ -34,6 +34,7 @@ def build_merchant_project_status(
     company_id: str,
     store_id: str,
     project_id: str,
+    user_id: str = "",
     account_health: dict[str, Any] | None = None,
     evidence_cutoff: str | None = None,
 ) -> dict[str, Any]:
@@ -83,8 +84,22 @@ def build_merchant_project_status(
         for item in _before_cutoff(repository.list_execution_results(company_id=company_id, limit=500), cutoff)
         if str(item.get("confirmation_id") or "") in confirmation_ids
     ]
+    chat_turns = []
+    if user_id and callable(getattr(repository, "list_ai_ceo_chat_history", None)):
+        chat_turns = [
+            item
+            for item in _before_cutoff(
+                repository.list_ai_ceo_chat_history(
+                    company_id=company_id,
+                    user_id=user_id,
+                    limit=50,
+                ),
+                cutoff,
+            )
+            if not str(item.get("store_id") or "") or str(item.get("store_id") or "") == store_id
+        ]
 
-    identity_records = [*tasks, *reports, *media_jobs, *confirmations]
+    identity_records = [*tasks, *reports, *media_jobs, *confirmations, *chat_turns]
     project_identities = [
         identity
         for identity in (_artifact_identity(item) for item in identity_records)
@@ -110,6 +125,9 @@ def build_merchant_project_status(
     matching_confirmation_ids = {str(item.get("confirmation_id") or "") for item in matching_confirmations}
     matching_executions = [
         item for item in executions if str(item.get("confirmation_id") or "") in matching_confirmation_ids
+    ]
+    matching_chat_turns = [
+        item for item in chat_turns if _identity_matches(_artifact_identity(item), canonical_identity)
     ]
 
     product_name = _project_product_name(matching_reports, matching_tasks)
@@ -307,6 +325,14 @@ def build_merchant_project_status(
         blocker=blocker,
         next_action=next_action,
         overall_status=overall_status,
+        work_record_index=_build_work_record_index(
+            chats=matching_chat_turns,
+            tasks=matching_tasks,
+            reports=matching_reports,
+            media=matching_media,
+            confirmations=matching_confirmations,
+            executions=matching_executions,
+        ),
     )
 
 
@@ -325,6 +351,7 @@ def _snapshot(
     next_action: dict[str, str],
     overall_status: str,
     stage_details: dict[str, str] | None = None,
+    work_record_index: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     details = stage_details or {}
     stages = [
@@ -357,6 +384,7 @@ def _snapshot(
         "stages": stages,
         "blocker": blocker,
         "next_action": next_action,
+        "work_record_index": work_record_index or _empty_work_record_index(),
         "source": "tenant_scoped_backend_evidence",
         "frontend_can_write_progress": False,
         "secret_exposed": False,
@@ -392,8 +420,13 @@ def _artifact_identity(item: Any) -> dict[str, str]:
     ]
     for candidate in legacy_keys:
         key = _safe_identifier(candidate, limit=160)
-        if key:
-            return {"key": key, "source_report_id": "", "candidate_id": ""}
+        if key and _legacy_identity_compatible(item):
+            return {
+                "key": key,
+                "source_report_id": "",
+                "candidate_id": "",
+                "identity_contract": "legacy_compatible",
+            }
     return {}
 
 
@@ -426,10 +459,188 @@ def _merge_identities(project_id: str, identities: list[dict[str, str]]) -> tupl
 def _identity_matches(identity: dict[str, str], canonical: dict[str, str]) -> bool:
     if not identity or identity.get("key") != canonical.get("key"):
         return False
+    if identity.get("identity_contract") == "legacy_compatible":
+        return True
     return all(
-        not canonical.get(field) or not identity.get(field) or identity.get(field) == canonical.get(field)
+        identity.get(field) == canonical.get(field)
         for field in ("source_report_id", "candidate_id")
     )
+
+
+def _legacy_identity_compatible(item: dict[str, Any]) -> bool:
+    candidates = (
+        item.get("legacy_project_identity_compatible"),
+        _nested(item, "input", "legacy_project_identity_compatible"),
+        _nested(item, "output", "legacy_project_identity_compatible"),
+        _nested(item, "report", "legacy_project_identity_compatible"),
+        _nested(item, "item", "legacy_project_identity_compatible"),
+        _nested(item, "job", "legacy_project_identity_compatible"),
+    )
+    return any(value is True for value in candidates)
+
+
+def _empty_work_record_index() -> dict[str, Any]:
+    return {
+        "contract_version": "merchant_project_work_record_index_v1",
+        "current_project_only": True,
+        "items": [],
+        "counts": {},
+        "secret_exposed": False,
+    }
+
+
+def _build_work_record_index(
+    *,
+    chats: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    reports: list[dict[str, Any]],
+    media: list[dict[str, Any]],
+    confirmations: list[dict[str, Any]],
+    executions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    rows: list[dict[str, str]] = []
+
+    def add(
+        record_id: Any,
+        *,
+        record_type: str,
+        status: Any,
+        title: Any,
+        summary: Any,
+        occurred_at: Any,
+        target_view: str,
+    ) -> None:
+        safe_id = _safe_identifier(record_id, limit=160)
+        if not safe_id:
+            return
+        rows.append(
+            {
+                "record_id": safe_id,
+                "record_type": record_type,
+                "status": _safe_text(status, limit=60),
+                "title": _safe_text(title, limit=180),
+                "summary": _safe_text(summary, limit=320),
+                "occurred_at": str(occurred_at or "")[:80],
+                "target_view": target_view,
+            }
+        )
+
+    for item in chats:
+        add(
+            item.get("assistant_id"),
+            record_type="ai_ceo_chat",
+            status=item.get("status"),
+            title=item.get("user_text") or "AI CEO 对话",
+            summary=item.get("assistant_text") or "",
+            occurred_at=item.get("updated_at") or item.get("created_at"),
+            target_view="cockpit",
+        )
+    for item in tasks:
+        task_type = str(item.get("task_type") or "task")
+        add(
+            item.get("task_id"),
+            record_type="customer_task" if "customer" in task_type else "task",
+            status=item.get("status"),
+            title=item.get("title") or "工作任务",
+            summary=_work_record_task_summary(task_type),
+            occurred_at=item.get("updated_at") or item.get("created_at"),
+            target_view="service" if "customer" in task_type else "activity",
+        )
+    for item in reports:
+        report_type = str(item.get("report_type") or "report")
+        record_type, target_view = _work_record_report_route(report_type)
+        payload = item.get("report") if isinstance(item.get("report"), dict) else {}
+        add(
+            item.get("report_id"),
+            record_type=record_type,
+            status=item.get("status"),
+            title=item.get("title") or _work_record_report_title(report_type),
+            summary=(
+                _nested(payload, "merchant_product_fact_packet", "product_name")
+                or _nested(payload, "sections", "title")
+                or payload.get("summary")
+                or "已保存到当前商品项目。"
+            ),
+            occurred_at=item.get("updated_at") or item.get("created_at"),
+            target_view=target_view,
+        )
+    for item in media:
+        add(
+            item.get("media_job_id"),
+            record_type="media_job",
+            status=item.get("status"),
+            title="商品素材任务",
+            summary="素材生成与商家审核记录。",
+            occurred_at=item.get("updated_at") or item.get("created_at"),
+            target_view="media",
+        )
+    for item in confirmations:
+        add(
+            item.get("confirmation_id"),
+            record_type="confirmation",
+            status=item.get("status"),
+            title=_work_record_action_title(item.get("action_type")),
+            summary="高风险动作确认记录。",
+            occurred_at=item.get("updated_at") or item.get("created_at"),
+            target_view="confirm",
+        )
+    for item in executions:
+        add(
+            item.get("execution_id"),
+            record_type="execution",
+            status=item.get("status"),
+            title=_work_record_action_title(item.get("action_type")),
+            summary="平台执行结果已归档。",
+            occurred_at=item.get("updated_at") or item.get("created_at"),
+            target_view="activity",
+        )
+
+    rows.sort(key=lambda item: (_parse_instant(item["occurred_at"]) or datetime.min.replace(tzinfo=timezone.utc), item["record_id"]), reverse=True)
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["record_type"]] = counts.get(row["record_type"], 0) + 1
+    return {
+        "contract_version": "merchant_project_work_record_index_v1",
+        "current_project_only": True,
+        "items": rows[:80],
+        "counts": counts,
+        "secret_exposed": False,
+    }
+
+
+def _work_record_task_summary(task_type: str) -> str:
+    return {
+        "merchant_ceo_chat": "AI CEO 已完成本轮分析。",
+        "merchant_product_facts": "商品资料已保存。",
+        "listing_draft_generation": "AI Listing 草稿生成任务。",
+    }.get(task_type, "当前商品项目的工作任务。")
+
+
+def _work_record_report_route(report_type: str) -> tuple[str, str]:
+    if report_type == "merchant.product_facts":
+        return "product_facts", "product"
+    if report_type in {"listing.package", "product.listing"}:
+        return "listing_draft", "product"
+    if "customer" in report_type:
+        return "customer_report", "service"
+    return "report", "activity"
+
+
+def _work_record_report_title(report_type: str) -> str:
+    return {
+        "merchant.product_facts": "商品资料",
+        "listing.package": "Listing 草稿",
+        "product.listing": "Listing 草稿",
+        "ai_ceo.market_research": "市场调研报告",
+    }.get(report_type, "项目报告")
+
+
+def _work_record_action_title(action_type: Any) -> str:
+    return {
+        "save_ebay_listing_draft": "保存 eBay 未发布草稿",
+        "publish_listing": "正式发布 eBay Listing",
+        "send_customer_reply": "发送客服回复",
+    }.get(str(action_type or ""), "受控执行动作")
 
 
 def _project_value_candidates(

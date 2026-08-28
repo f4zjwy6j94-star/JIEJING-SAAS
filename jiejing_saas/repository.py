@@ -6012,8 +6012,15 @@ class SaaSRepository:
                 ).fetchone()
                 if existing_row:
                     existing_turn = self._ai_ceo_chat_turn_row_to_dict(existing_row)
-                    if _ai_ceo_chat_turn_merge_score(existing_turn) >= _ai_ceo_chat_turn_merge_score(turn):
-                        continue
+                    if _ai_ceo_chat_turn_content_score(existing_turn) >= _ai_ceo_chat_turn_content_score(turn):
+                        enriched_identity = _merge_ai_ceo_chat_listing_identity(existing_turn, turn)
+                        if not enriched_identity:
+                            continue
+                        turn = {
+                            **existing_turn,
+                            "listing_project_identity": enriched_identity,
+                            "updated_at": str(turn.get("updated_at") or now_iso())[:80],
+                        }
                 payload = json.dumps(turn, ensure_ascii=False, default=json_default)
                 merge_score = _ai_ceo_chat_turn_merge_score(turn)
                 conn.execute(
@@ -17474,6 +17481,7 @@ def _normalize_ai_ceo_chat_history_turn(
         return cleaned
 
     delivery = value.get("market_report_delivery") if isinstance(value.get("market_report_delivery"), dict) else {}
+    listing_project_identity = normalize_listing_project_identity(value.get("listing_project_identity"))
     normalized = {
         "assistant_id": raw_assistant_id,
         "store_id": re.sub(r"[^A-Za-z0-9_-]", "", str(value.get("store_id") or ""))[:120],
@@ -17504,6 +17512,7 @@ def _normalize_ai_ceo_chat_history_turn(
         }
         if delivery
         else None,
+        "listing_project_identity": listing_project_identity or None,
         "blocked_by": [str(item)[:80] for item in value.get("blocked_by", [])[:8]] if isinstance(value.get("blocked_by"), list) else [],
         "source_records": clean_records(value.get("source_records"), record_type="source"),
         "work_records": clean_records(value.get("work_records"), record_type="work"),
@@ -17520,6 +17529,15 @@ def _normalize_ai_ceo_chat_history_turn(
 
 
 def _ai_ceo_chat_turn_merge_score(turn: Any) -> int:
+    content_score = _ai_ceo_chat_turn_content_score(turn)
+    if content_score < 0:
+        return -1
+    identity = normalize_listing_project_identity(turn.get("listing_project_identity"))
+    identity_evidence = 1_000 if identity.get("key") else 0
+    return content_score + identity_evidence
+
+
+def _ai_ceo_chat_turn_content_score(turn: Any) -> int:
     if not isinstance(turn, dict):
         return -1
     status = str(turn.get("status") or "")
@@ -17531,6 +17549,32 @@ def _ai_ceo_chat_turn_merge_score(turn: Any) -> int:
         evidence += len(records) * 250
     report = 5_000 if isinstance(turn.get("market_report_delivery"), dict) and turn["market_report_delivery"].get("report_id") else 0
     return completion + answer + evidence + report
+
+
+def _merge_ai_ceo_chat_listing_identity(existing: Any, incoming: Any) -> dict[str, str]:
+    existing_identity = normalize_listing_project_identity(
+        existing.get("listing_project_identity") if isinstance(existing, dict) else None
+    )
+    incoming_identity = normalize_listing_project_identity(
+        incoming.get("listing_project_identity") if isinstance(incoming, dict) else None
+    )
+    if not incoming_identity:
+        return {}
+    if not existing_identity:
+        return incoming_identity
+    if existing_identity.get("key") != incoming_identity.get("key"):
+        return {}
+    merged = dict(existing_identity)
+    changed = False
+    for field in ("source_report_id", "candidate_id"):
+        current = existing_identity.get(field, "")
+        candidate = incoming_identity.get(field, "")
+        if current and candidate and current != candidate:
+            return {}
+        if not current and candidate:
+            merged[field] = candidate
+            changed = True
+    return merged if changed else {}
 
 
 def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any]) -> bool:

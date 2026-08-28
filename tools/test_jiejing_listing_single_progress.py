@@ -33,6 +33,7 @@ class FixtureRepository:
     confirmations: list[dict[str, Any]] = field(default_factory=list)
     executions: list[dict[str, Any]] = field(default_factory=list)
     media: list[dict[str, Any]] = field(default_factory=list)
+    chats: list[dict[str, Any]] = field(default_factory=list)
 
     def list_tasks(self, *, company_id: str, store_id: str | None = None, limit: int | None = None):
         del limit
@@ -84,6 +85,10 @@ class FixtureRepository:
             and (not store_id or item.get("store_id") == store_id)
             and (not status or item.get("status") == status)
         ]
+
+    def list_ai_ceo_chat_history(self, *, company_id: str, user_id: str, limit: int = 30):
+        del company_id, user_id, limit
+        return list(self.chats)
 
 
 def task(identity: dict[str, str] = IDENTITY, *, task_id: str = "task-incense", store_id: str = "store-a") -> dict[str, Any]:
@@ -169,7 +174,28 @@ def legacy_keyed_media_job(*, status: str = "approved_for_listing") -> dict[str,
     item["media_job_id"] = "media-incense-legacy-key"
     item["status"] = status
     item["job"] = {"listing_project_key": IDENTITY["key"]}
+    item["legacy_project_identity_compatible"] = True
     return item
+
+
+def unsafe_key_only_media_job() -> dict[str, Any]:
+    item = media_job()
+    item["media_job_id"] = "media-incense-key-only-unsafe"
+    item["job"] = {"listing_project_key": IDENTITY["key"]}
+    return item
+
+
+def chat_turn(identity: dict[str, str] = IDENTITY, *, assistant_id: str = "chat-incense") -> dict[str, Any]:
+    return {
+        "assistant_id": assistant_id,
+        "store_id": "store-a",
+        "listing_project_identity": identity,
+        "user_text": "继续处理这个禅意倒流香炉。",
+        "assistant_text": "商品事实已保存，可以继续生成 Listing 草稿。",
+        "status": "model_answered",
+        "route": "ebay_workflow",
+        "created_at": "2026-08-27T01:01:30Z",
+    }
 
 
 def draft_confirmation(identity: dict[str, str] = IDENTITY) -> dict[str, Any]:
@@ -251,6 +277,7 @@ def build(repo: FixtureRepository, *, account_health: dict[str, Any] | None = No
         repository=repo,
         company_id="company-a",
         store_id="store-a",
+        user_id="user-a",
         project_id=IDENTITY["key"],
         account_health=account_health or {"status": "healthy"},
         evidence_cutoff="2026-08-28T00:00:00Z",
@@ -282,12 +309,22 @@ def main() -> None:
         FixtureRepository(
             tasks=[task()],
             reports=[market_report(), fact_report(unknown=["package_weight_g", "selling_price"])],
+            chats=[chat_turn()],
         )
     )
     assert_single_progress(facts_blocked)
     assert facts_blocked["current_stage"] == "facts"
     assert facts_blocked["blocker"]["key"] == "product_facts_missing"
     assert facts_blocked["next_action"]["action"] == "complete_product_facts"
+    record_index = facts_blocked["work_record_index"]
+    assert record_index["contract_version"] == "merchant_project_work_record_index_v1"
+    assert record_index["current_project_only"] is True
+    indexed_ids = {item["record_id"] for item in record_index["items"]}
+    assert {"chat-incense", "report-incense-facts", "task-incense"}.issubset(indexed_ids)
+    assert all(
+        item["target_view"] in {"cockpit", "activity", "product", "media", "confirm", "service"}
+        for item in record_index["items"]
+    )
 
     legacy_media_ready = build(
         FixtureRepository(
@@ -299,6 +336,18 @@ def main() -> None:
     assert_single_progress(legacy_media_ready)
     assert legacy_media_ready["stages"][3]["status"] == "completed"
     assert legacy_media_ready["current_stage"] == "ebay_draft"
+
+    unsafe_key_only = build(
+        FixtureRepository(
+            tasks=[task()],
+            reports=[market_report(), fact_report(), listing_report()],
+            media=[unsafe_key_only_media_job()],
+        )
+    )
+    assert unsafe_key_only["stages"][3]["status"] == "waiting"
+    assert "media-incense-key-only-unsafe" not in {
+        item["record_id"] for item in unsafe_key_only["work_record_index"]["items"]
+    }
 
     draft_saved = build(
         FixtureRepository(

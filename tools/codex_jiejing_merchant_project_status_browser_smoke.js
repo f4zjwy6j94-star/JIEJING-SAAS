@@ -126,6 +126,13 @@ async function main() {
   if (expectedSnapshot?.snapshot_version !== "merchant_project_status_v1") {
     throw new Error("backend did not return merchant_project_status_v1");
   }
+  if (expectedSnapshot?.work_record_index?.contract_version !== "merchant_project_work_record_index_v1") {
+    throw new Error("backend did not return the project-scoped work record index");
+  }
+  const expectedWorkRecordIds = new Set((expectedSnapshot.work_record_index.items || []).map((item) => item.record_id));
+  if (!expectedWorkRecordIds.has(savedFacts.task?.task_id) || !expectedWorkRecordIds.has(savedFacts.report?.report_id)) {
+    throw new Error("saved product facts task/report were not indexed under the current project");
+  }
   if (expectedSnapshot.blocker?.key === "project_evidence_missing") {
     const taskPayload = await api("/tasks?limit=20", { token });
     const taskDiagnostics = (taskPayload.tasks || []).map((item) => ({
@@ -293,6 +300,22 @@ async function main() {
       { view, projectId, expectedStage: expectedSnapshot.current_stage },
     );
   }
+  await page.evaluate(() => setView("activity"));
+  await page.waitForSelector(
+    '#view-activity.is-active [data-work-record-index="merchant_project_work_record_index_v1"]',
+    { timeout: 20000 },
+  );
+  const workRecordUi = await page.evaluate(() => {
+    const root = document.querySelector('[data-work-record-index="merchant_project_work_record_index_v1"]');
+    return {
+      present: Boolean(root),
+      rows: Array.from(root?.querySelectorAll("[data-work-record-id]") || []).map((row) => ({
+        id: row.getAttribute("data-work-record-id") || "",
+        text: row.textContent || "",
+        target: row.querySelector("[data-global-flow-view]")?.getAttribute("data-global-flow-view") || "",
+      })),
+    };
+  });
 
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForSelector('#view-cockpit.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 60000 });
@@ -368,6 +391,9 @@ async function main() {
     afterReload.strip_present &&
     afterReload.project_match &&
     statusRequests.some((item) => item.status === 200 && item.url.includes(encodeURIComponent(projectId))) &&
+    workRecordUi.present &&
+    workRecordUi.rows.some((item) => item.id === savedFacts.task?.task_id && item.target === "activity") &&
+    workRecordUi.rows.some((item) => item.id === savedFacts.report?.report_id && item.target === "product") &&
     pageErrors.length === 0 &&
     badResponses.length === 0;
   const result = {
@@ -378,6 +404,7 @@ async function main() {
     initial_diagnostic: initialDiagnostic,
     view_results: viewResults,
     after_reload: afterReload,
+    work_record_ui: workRecordUi,
     responsive_results: responsiveResults,
     status_requests: statusRequests,
     page_errors: pageErrors,

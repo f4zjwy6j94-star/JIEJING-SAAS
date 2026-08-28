@@ -406,6 +406,17 @@ def build_ai_ceo_pre_model_attempt_input(
     }
 
 
+def _ai_ceo_listing_project_identity_for_turn(body: Any, *, route: str) -> dict[str, str]:
+    """Bind only Jiejing workflow turns to the authenticated current Listing project."""
+
+    if route not in {"ebay_workflow", "confirmation_required"} or not isinstance(body, dict):
+        return {}
+    context = body.get("active_listing_context")
+    if not isinstance(context, dict) or context.get("contract_version") != "active_listing_context_v1":
+        return {}
+    return normalize_listing_project_identity(context.get("listing_project_identity"))
+
+
 AI_CEO_ARTIFACT_OUTCOMES = {
     "not_requested",
     "not_eligible",
@@ -3139,6 +3150,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         company_id=identity["company_id"],
                         store_id=store_id,
                         project_id=project_id,
+                        user_id=identity["user_id"],
                         account_health=account_health,
                     )
                 }
@@ -7456,6 +7468,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 route=str(turn_plan.get("route") or ""),
                 realtime_kind=str(turn_plan.get("realtime_kind") or ""),
             )
+            listing_project_identity = _ai_ceo_listing_project_identity_for_turn(
+                body,
+                route=str(route_meta.get("route") or ""),
+            )
             supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
                 supplier_facts=body.get("supplier_facts"),
                 supplier_facts_verified=body.get("supplier_facts_verified"),
@@ -7478,6 +7494,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
             def send_chat_payload(payload: dict[str, Any], status: HTTPStatus) -> None:
                 nonlocal stream_started
+                chat_payload = payload.get("ai_ceo_chat") if isinstance(payload.get("ai_ceo_chat"), dict) else None
+                if chat_payload is not None and listing_project_identity:
+                    payload = {
+                        **payload,
+                        "ai_ceo_chat": {
+                            **chat_payload,
+                            "listing_project_identity": listing_project_identity,
+                        },
+                    }
                 if not stream_requested:
                     self._send_json(payload, status=status)
                     return
@@ -7579,6 +7604,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "turn_plan": _redact_secret_like(turn_plan),
                         "memory_policy": fast_chat.get("memory_policy"),
                         "decision_center_required": bool(fast_chat.get("decision_center_required")),
+                        **(
+                            {"listing_project_identity": listing_project_identity}
+                            if listing_project_identity
+                            else {}
+                        ),
                         "model_secret_ref": "",
                         "provider_key": "fast_route",
                         "model_usage_required": False,
@@ -7639,11 +7669,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 user_id=identity["user_id"],
                 task_type="merchant_ceo_chat_attempt",
                 title="AI CEO model request attempt",
-                input_data=build_ai_ceo_pre_model_attempt_input(
-                    command_id=str(command_id or ""),
-                    route=str(route_meta.get("route") or ""),
-                    route_label=str(route_meta.get("route_label") or ""),
-                ),
+                input_data={
+                    **build_ai_ceo_pre_model_attempt_input(
+                        command_id=str(command_id or ""),
+                        route=str(route_meta.get("route") or ""),
+                        route_label=str(route_meta.get("route_label") or ""),
+                    ),
+                    **(
+                        {"listing_project_identity": listing_project_identity}
+                        if listing_project_identity
+                        else {}
+                    ),
+                },
             )
             attempt_recovery_state: dict[str, Any] = {
                 "terminal": False,
@@ -8177,6 +8214,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "turn_plan": _redact_secret_like(turn_plan),
                         "memory_policy": chat_for_task.get("memory_policy") or "transient_no_long_term_memory",
                         "decision_center_required": bool(chat_for_task.get("decision_center_required")),
+                        **(
+                            {"listing_project_identity": listing_project_identity}
+                            if listing_project_identity
+                            else {}
+                        ),
                         "model_secret_ref": model_secret_resolution.get("secret_ref"),
                         "model_resolution_mode": model_secret_resolution.get("mode"),
                         "model_secret_ref_scope": model_secret_resolution.get("secret_ref_scope"),

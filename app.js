@@ -22836,6 +22836,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
         answer_quality: answerQuality,
         market_report_id: aiCeoMarketReport?.report_id || aiCeoMarketReportDelivery?.report_id || "",
         market_report_delivery: aiCeoMarketReportDelivery,
+        listing_project_identity: chat?.listing_project_identity || null,
         performance,
         pending_stage: "",
         pending: false,
@@ -22904,6 +22905,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
         answer_quality: answerQuality,
         market_report_id: aiCeoMarketReport?.report_id || aiCeoMarketReportDelivery?.report_id || "",
         market_report_delivery: aiCeoMarketReportDelivery,
+        listing_project_identity: chat?.listing_project_identity || null,
         performance,
         pending_stage: "",
         pending: false,
@@ -37126,6 +37128,81 @@ function renderSaasHistoricalProjectArchive(reports = [], executions = []) {
   `;
 }
 
+function saasMerchantProjectWorkRecordItems(snapshot = state.saasMerchantProjectStatus) {
+  const index = snapshot?.work_record_index && typeof snapshot.work_record_index === "object"
+    ? snapshot.work_record_index
+    : {};
+  if (
+    index.contract_version !== "merchant_project_work_record_index_v1" ||
+    index.current_project_only !== true ||
+    !Array.isArray(index.items)
+  ) return [];
+  const allowedViews = new Set(["cockpit", "activity", "product", "media", "confirm", "service"]);
+  return index.items
+    .filter((item) => item && typeof item === "object")
+    .slice(0, 80)
+    .map((item) => ({
+      recordId: String(item.record_id || "").replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 160),
+      recordType: publicRuntimeText(item.record_type || "record").slice(0, 80),
+      status: publicRuntimeText(item.status || "").slice(0, 60),
+      title: publicRuntimeText(item.title || "工作记录").slice(0, 180),
+      summary: publicRuntimeText(item.summary || "已保存到当前商品项目。").slice(0, 320),
+      occurredAt: publicRuntimeText(item.occurred_at || "").slice(0, 80),
+      targetView: allowedViews.has(item.target_view) ? item.target_view : "activity",
+    }))
+    .filter((item) => item.recordId);
+}
+
+function saasMerchantWorkRecordTypeLabel(type = "") {
+  return {
+    ai_ceo_chat: "AI CEO 对话",
+    task: "工作任务",
+    report: "项目报告",
+    product_facts: "商品资料",
+    listing_draft: "Listing 草稿",
+    media_job: "素材任务",
+    confirmation: "确认记录",
+    execution: "平台执行",
+    customer_task: "客服任务",
+    customer_report: "客服记录",
+  }[String(type || "")] || "工作记录";
+}
+
+function renderSaasMerchantWorkRecordIndex(snapshot = state.saasMerchantProjectStatus) {
+  const items = saasMerchantProjectWorkRecordItems(snapshot);
+  return `
+    <section class="saas-activity-simple-list" data-work-record-index="merchant_project_work_record_index_v1" aria-label="当前商品完整工作留痕">
+      <div class="saas-activity-simple-head">
+        <div>
+          <span>完整工作留痕</span>
+          <strong>${items.length ? `${items.length} 条记录属于当前商品` : "当前商品还没有工作记录"}</strong>
+          <p>对话、调研、商品资料、素材、Listing、确认和平台执行按同一个商品项目归档；同名商品和旧演示记录不会自动混入。</p>
+        </div>
+      </div>
+      <div class="saas-activity-simple-grid">
+        ${
+          items.length
+            ? items
+                .map(
+                  (item) => `
+                    <article data-work-record-id="${escapeHtml(item.recordId)}">
+                      <span>${escapeHtml(saasMerchantWorkRecordTypeLabel(item.recordType))}${item.status ? ` · ${escapeHtml(item.status)}` : ""}</span>
+                      <strong>${escapeHtml(item.title)}</strong>
+                      <p>${escapeHtml(item.summary)}</p>
+                      <div class="button-row">
+                        <button class="secondary-action compact-action" type="button" data-global-flow-view="${escapeHtml(item.targetView)}">查看原页面</button>
+                      </div>
+                    </article>
+                  `,
+                )
+                .join("")
+            : `<article class="is-empty"><span>等待运行</span><strong>从 AI CEO 或 Listing 开始</strong><p>系统只展示真实保存的当前项目记录，不用示例内容填充空状态。</p></article>`
+        }
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasActivityCenter(view) {
   if (!view) return;
   const ctx = saasMerchantWorkbenchContext();
@@ -37186,33 +37263,7 @@ function renderSaasActivityCenter(view) {
 
       ${renderSaasActivityExecutionRecords(executions)}
 
-      <section class="saas-activity-simple-list" aria-label="当前项目报告">
-        <div class="saas-activity-simple-head">
-          <div>
-            <span>当前项目报告</span>
-            <strong>${reports.length ? "当前商品的工作记录" : "还没有当前项目报告"}</strong>
-            <p>报告按账号和商品项目隔离；没有当前项目报告时不借用其他商品或旧演示记录。</p>
-          </div>
-        </div>
-        <div class="saas-activity-simple-grid">
-          ${
-            reports.length
-              ? reports
-                  .slice(0, 8)
-                  .map(
-                    (record) => `
-                      <article>
-                        <span>${escapeHtml(saasReportTypeLabel(record.report_type))}</span>
-                        <strong>${escapeHtml(saasTitleWithProduct(record.title || saasReportTypeLabel(record.report_type), saasProductLabelForRecord(record)))}</strong>
-                        <p>${escapeHtml(saasReportSummary(record))}</p>
-                      </article>
-                    `,
-                  )
-                  .join("")
-              : `<article class="is-empty"><span>等待运行</span><strong>先生成市场报告和 Listing 草稿</strong><p>没有报告时，页面保持干净空状态。</p></article>`
-          }
-        </div>
-      </section>
+      ${renderSaasMerchantWorkRecordIndex()}
       ${renderSaasHistoricalProjectArchive(historicalReports, historicalExecutions)}
     </section>
   `;
@@ -39762,6 +39813,7 @@ function normalizeSaasAiCeoLatestTurn(turn = {}) {
         : null;
   const modelConnection = turn.model_connection && typeof turn.model_connection === "object" ? turn.model_connection : null;
   const performance = turn.performance && typeof turn.performance === "object" ? turn.performance : null;
+  const listingProjectIdentity = saasNormalizeListingProjectIdentity(turn.listing_project_identity);
   const blockedBy = [
     ...(Array.isArray(turn.blocked_by) ? turn.blocked_by : []),
     ...(Array.isArray(modelResolution?.blocked_by) ? modelResolution.blocked_by : []),
@@ -39788,6 +39840,7 @@ function normalizeSaasAiCeoLatestTurn(turn = {}) {
     decision_center_required: Boolean(turn.decision_center_required),
     market_report_id: String(turn.market_report_id || turn.marketReportId || "").replace(/[^A-Za-z0-9_-]/g, ""),
     market_report_delivery: normalizeSaasAiCeoMarketReportDelivery(turn.market_report_delivery || turn.marketReportDelivery || null),
+    listing_project_identity: listingProjectIdentity,
     blocked_by: Array.from(new Set(blockedBy)).slice(0, 8),
     model_resolution: modelResolution,
     model_connection: modelConnection,
@@ -40208,7 +40261,12 @@ async function syncSaasAiCeoThreadWithBackend() {
       }),
     },
   )
-    .then((payload) => mergeSaasAiCeoHistoryFromBackend(payload))
+    .then(async (payload) => {
+      const merged = mergeSaasAiCeoHistoryFromBackend(payload);
+      await refreshSaasMerchantProjectStatus();
+      if (state.view === "activity") renderActivities();
+      return merged;
+    })
     .finally(() => {
       state.saasAiCeoThreadSyncPromise = null;
     });
