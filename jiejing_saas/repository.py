@@ -18419,9 +18419,20 @@ def _ai_ceo_item_specifics(*, product: str, answer: str) -> dict[str, str]:
         match = re.search(rf"(?:{label})\s*[:：]\s*([A-Za-z0-9\u4e00-\u9fff /_.-]{{2,60}})", answer, flags=re.IGNORECASE)
         if match:
             specifics[key] = _sanitize_merchant_ceo_text(match.group(1), limit=60)
-    material_match = re.search(r"(?:Material|材质)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{2,60})", answer, flags=re.IGNORECASE)
+    material_match = re.search(
+        r"(?:^|\n)\s*(?:Material|材质)\s*[:：]\s*([^|\n]{2,60})"
+        r"|(?:^|\n)\s*\|\s*(?:Material|材质)\s*\|\s*([^|\n]{2,60})\s*\|",
+        answer,
+        flags=re.IGNORECASE,
+    )
     if material_match:
-        specifics["Material"] = _sanitize_merchant_ceo_text(material_match.group(1), limit=60)
+        material_value = _sanitize_merchant_ceo_text(material_match.group(1) or material_match.group(2), limit=60)
+        if not re.search(
+            r"^(?:证书|认证|声明|冲突|待补|待确认|未知|certificate|certification|declaration|unknown|todo)\b",
+            material_value,
+            flags=re.IGNORECASE,
+        ):
+            specifics["Material"] = material_value
     pack_match = re.search(r"(?:Pack(?:age)? Quantity|数量|件数|pack)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{1,40})", answer, flags=re.IGNORECASE)
     if pack_match:
         specifics["Pack Quantity"] = _sanitize_merchant_ceo_text(pack_match.group(1), limit=40)

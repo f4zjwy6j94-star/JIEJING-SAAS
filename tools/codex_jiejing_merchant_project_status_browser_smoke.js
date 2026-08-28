@@ -425,7 +425,7 @@ async function runSmoke() {
   });
 
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.waitForSelector('#view-cockpit.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 60000 });
+  await page.waitForSelector('#view-service.is-active [data-service-trace-contract="customer_service_trace_v1"]', { timeout: 60000 });
   await page.waitForFunction(
     () => typeof state !== "undefined" && state.saasLoading === false && state.saasProtectedStateReady === true,
     null,
@@ -433,11 +433,15 @@ async function runSmoke() {
   );
   const afterReload = await page.evaluate((expectedProjectId) => {
     const url = new URL(window.location.href);
-    const strip = document.querySelector('#view-cockpit.is-active [data-merchant-project-status="merchant_project_status_v1"]');
+    const serviceTrace = document.querySelector('#view-service.is-active [data-service-trace-contract="customer_service_trace_v1"]');
     return {
-      strip_present: Boolean(strip),
+      service_trace_present: Boolean(serviceTrace),
+      snapshot_project: state.saasMerchantProjectStatus?.project?.project_id || "",
       route_project: url.searchParams.get("project") || "",
+      route_view: url.searchParams.get("view") || "",
       project_match: (url.searchParams.get("project") || "") === expectedProjectId,
+      snapshot_match: (state.saasMerchantProjectStatus?.project?.project_id || "") === expectedProjectId,
+      view_match: (url.searchParams.get("view") || "") === "service",
     };
   }, projectId);
 
@@ -495,8 +499,10 @@ async function runSmoke() {
   const ok =
     viewChecksPass &&
     responsiveChecksPass &&
-    afterReload.strip_present &&
+    afterReload.service_trace_present &&
     afterReload.project_match &&
+    afterReload.snapshot_match &&
+    afterReload.view_match &&
     statusRequests.some((item) => item.status === 200 && item.url.includes(encodeURIComponent(projectId))) &&
     workRecordUi.present &&
     workRecordUi.rows.some((item) => item.id === savedFacts.task?.task_id && item.target === "activity") &&

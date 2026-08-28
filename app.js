@@ -583,7 +583,11 @@ function rememberSaasStartupRequestedView(view = "") {
 }
 
 function activeSaasRefreshView(fallback = "cockpit") {
-  return normalizeSaasProtectedView(state.view || state.saasStartupRequestedView || fallback);
+  const currentView = normalizeSaasProtectedView(state.view || fallback);
+  const startupView = state.saasStartupRequestedView
+    ? normalizeSaasProtectedView(state.saasStartupRequestedView)
+    : "";
+  return startupView && currentView === "cockpit" ? startupView : currentView || startupView || normalizeSaasProtectedView(fallback);
 }
 
 function redirectToSaasLogin(reason = "login_required") {

@@ -217,6 +217,25 @@ def main() -> None:
     )
     assert ordinary_fields["merchant_product_fact_packet"]["derived_listing_suggestions"] == {}, ordinary_fields
 
+    certificate_gap_fields = _ai_ceo_listing_handoff_fields(
+        product="复古黄铜书签（做旧工艺）",
+        message="请整理当前商品 Listing，但不编造缺失资料。",
+        answer=(
+            "内部 Listing 草稿已建立。\n"
+            "待补字段：材质证书、包装实拍、实际发货地、真实采购成本、最终售价、库存数量。\n"
+            "这些字段仍需商家确认。"
+        ),
+        source_records=[],
+        selected_candidate={
+            "candidate_id": "candidate_bookmark",
+            "name": "复古黄铜书签（做旧工艺）",
+            "score": 86,
+            "selected": True,
+        },
+        product_candidates=[],
+    )
+    assert certificate_gap_fields["item_specifics"]["Material"] == "待补", certificate_gap_fields
+
     api_server = (ROOT / "jiejing_saas" / "api_server.py").read_text(encoding="utf-8")
     assert 'if body.get("simulation_only") is True:' in api_server
     assert "simulation_only_listing_cannot_create_ebay_confirmation" in api_server

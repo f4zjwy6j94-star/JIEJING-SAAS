@@ -60,6 +60,11 @@ def main() -> None:
     assert "listing_project_identity: listingProjectIdentity" in app_js
     assert "await refreshSaasMerchantProjectStatus();" in app_js
     assert "function commitSaasActiveListingProjectContext" in app_js
+    refresh_view_body = app_js[
+        app_js.index("function activeSaasRefreshView") :
+        app_js.index("function redirectToSaasLogin")
+    ]
+    assert 'startupView && currentView === "cockpit" ? startupView : currentView' in refresh_view_body
     commit_body = app_js[
         app_js.index("function commitSaasActiveListingProjectContext") :
         app_js.index("function renderSaasMerchantProjectStatusStrip")
