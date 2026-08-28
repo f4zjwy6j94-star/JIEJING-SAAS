@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
 
-const base = process.env.JIEJING_TEST_BASE || "https://app.jiejing.shop";
+const base = process.env.JIEJING_TEST_BASE || "http://127.0.0.1:8788";
 const browserChannel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
 const localStaticRoot = process.env.JIEJING_LOCAL_STATIC_ROOT ? path.resolve(process.env.JIEJING_LOCAL_STATIC_ROOT) : "";
 const viewportWidth = Number(process.env.JIEJING_SMOKE_VIEWPORT_WIDTH || 1440);
@@ -59,18 +59,6 @@ async function makeSession() {
   }
   const user = registered.json.user || {};
   const company = registered.json.company || {};
-  const activatedBilling = await api("/billing/test-event", {
-    token,
-    cookie: sessionCookie,
-    method: "POST",
-    body: {
-      plan_key: "operator",
-      action: "activate",
-    },
-  });
-  if (!activatedBilling.ok) {
-    throw new Error(`billing test activation failed before store create: ${activatedBilling.status} ${JSON.stringify(activatedBilling.json).slice(0, 300)}`);
-  }
   const created = await api("/stores", {
     token,
     cookie: sessionCookie,
@@ -651,7 +639,8 @@ async function main() {
           has_listing_status_rail: sectionHas(".saas-listing-v2-status-bar"),
           has_listing_first_run_strip:
             sectionHas(".saas-first-run-strip") && text.includes("不用完整") && text.includes("缺口会停住"),
-          has_listing_workflow_action: sectionHas('[data-saas-action="listing-start-backend-workflow"]') && text.includes("生成经营链路"),
+          has_listing_project_start_action:
+            sectionHas('[data-saas-action="save-new-product-facts"]') && text.includes("保存并建立商品项目"),
           has_listing_ai_handoff: sectionHas(".saas-listing-ai-handoff") && text.includes("来自 AI CEO"),
           has_listing_ai_handoff_input: String(section?.querySelector("#saasListingComposerInput")?.value || "").includes("不要触发真实 eBay 写入"),
           has_listing_draft_editor: sectionHas(".saas-listing-v2-draft-editor"),
@@ -1037,7 +1026,7 @@ async function main() {
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
-      await page.locator('.saas-settings-clean-nav [data-saas-settings-tab="general"]').click();
+      await page.locator('.saas-settings-clean-nav [data-saas-settings-tab="account"]').click();
       await page.waitForTimeout(250);
     }
     moduleChecks.push(check);
@@ -1088,7 +1077,7 @@ async function main() {
   if (!product.has_listing_ai_handoff || !product.has_listing_ai_handoff_input) failures.push("product AI CEO to Listing handoff missing");
   if (!product.has_listing_source_grid) failures.push("product Listing source choices missing");
   if (!product.has_listing_draft_editor && !product.has_listing_first_run_strip) failures.push("product first-run assurance strip missing");
-  if (!product.has_listing_draft_editor && !product.has_listing_workflow_action) failures.push("product C+ listing backend workflow action missing");
+  if (!product.has_listing_draft_editor && !product.has_listing_project_start_action) failures.push("product Listing project start action missing");
   if (product.has_listing_draft_editor && !product.has_listing_source_collapsed_after_draft) {
     failures.push("product existing draft must collapse raw source intake by default");
   }

@@ -9379,7 +9379,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             safe_model_resolution = {
                 key: value
                 for key, value in model_resolution.items()
-                if key not in {"model_client", "secret_value", "secret_ref"}
+                if key not in {"model_client", "secret_value", "secret_ref", "requested_secret_ref"}
             }
             if model_resolution.get("status") != "resolved" or not model_resolution.get("model_client"):
                 self._send_json(
