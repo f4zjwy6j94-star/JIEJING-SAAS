@@ -48,6 +48,12 @@ def main() -> int:
     for marker in required_html:
         if marker not in app_html:
             raise AssertionError(f"media quality UI is missing {marker}")
+    count_select = app_html.split('id="mediaCountSelect"', 1)[1].split("</select>", 1)[0]
+    tier_select = app_html.split('id="mediaGenerationTierSelect"', 1)[1].split("</select>", 1)[0]
+    if '<option selected>1 张</option>' not in count_select or '<option selected>4 张</option>' in count_select:
+        raise AssertionError("first media run must default to one image instead of silently quoting four")
+    if '<option selected>草稿图 · 20 点/张</option>' not in tier_select or '<option selected>标准图（推荐） · 80 点/张</option>' in tier_select:
+        raise AssertionError("first media run must default to the low-cost draft tier")
     if 'data-template-video="15 秒产品展示视频"' in app_html:
         raise AssertionError("image templates must not silently enable a video")
     if "<option>15 秒产品展示视频</option>" in app_html or "<option>30 秒产品短视频脚本</option>" in app_html:
@@ -73,6 +79,9 @@ def main() -> int:
         'groundingGate.conceptOnly ? "concept_reference_only" : "reference_grounded_listing_draft"',
         "const mediaPointsByGenerationTier = { draft: 20, standard: 80, high_quality: 250 }",
         'setText("#mediaGenerationPointQuote"',
+        'if (/草稿|快速|低成本/.test(String(value))) return "draft"',
+        "function saasMediaAssetJobRequestedImageCount",
+        "const plannedCount = saasMediaAssetJobRequestedImageCount(manifestJob || {}, config.count)",
     )
     for marker in required_js:
         if marker not in app_js:
@@ -87,6 +96,9 @@ def main() -> int:
         raise AssertionError("active media project must replace the legacy static gap with current product gaps")
     if "是否含香粒" in active_media_sync:
         raise AssertionError("active media project must not inherit incense-demo facts")
+    for status_marker in ("概念参考图已返回 · 不可用于刊登", "真实素材已返回 · 等待审核", "素材正在后台生成"):
+        if status_marker not in active_media_sync:
+            raise AssertionError(f"media project refresh must derive current status from backend jobs: {status_marker}")
     if (
         'optionalSaasFetchFast("/media/capabilities"' not in app_js
         or "state.saasMediaCapabilities = mediaCapabilities.media_capabilities" not in app_js

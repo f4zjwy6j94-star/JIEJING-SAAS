@@ -166,7 +166,11 @@ from .product_feedback import (
     ProductFeedbackStatusConflict,
     ProductFeedbackValidationError,
 )
-from .readiness import build_degraded_product_readiness, build_product_readiness_or_degraded
+from .readiness import (
+    build_degraded_product_readiness,
+    build_media_generation_capability_status,
+    build_product_readiness_or_degraded,
+)
 from .repository import (
     ACTIVE_SECRET_REF_STATUSES,
     CONTROLLED_MEDIA_CREDIT_SOURCE,
@@ -2511,6 +2515,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 {
                     "media_capabilities": {
                         "product_image_recognition": build_product_vision_capability_status(),
+                        "image_generation": build_media_generation_capability_status(),
                         "secret_exposed": False,
                     }
                 }

@@ -55,10 +55,20 @@ def main() -> None:
         if false_signal in recognition:
             raise AssertionError(f"图片生成能力不能冒充图片识别已连接: {false_signal}")
 
+    generation = function_scope(app_js, "saasMediaGenerationState", "saasImageRecognitionState")
+    for marker in (
+        "state.saasMediaCapabilities?.image_generation",
+        "capability.live_image_generation_enabled === true",
+        "capability.live_provider_calls_allowed === true",
+        "capability.live_video_generation_enabled === true",
+    ):
+        if marker not in generation:
+            raise AssertionError(f"图片生成状态必须优先读取当前后端能力，而不是等待历史成功任务: {marker}")
+
     if '"/independence/status"' in app_js or "saasIndependence" in app_js:
         raise AssertionError("商家端不能读取内部独立运行与部署诊断")
     if '"/media/capabilities"' not in app_js:
-        raise AssertionError("商家端没有读取最小图片识别能力投影")
+        raise AssertionError("商家端没有读取最小图片识别与生成能力投影")
 
     capability_markup = panel[panel.index('data-ai-media-capability-grid="') : panel.index('</div>', panel.index('data-ai-media-capability-grid="'))]
     for forbidden in ("provider_cost", "secret_ref", "contract_version", "api_key", "美元", "USD"):

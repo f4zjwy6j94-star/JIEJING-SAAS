@@ -253,7 +253,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
             "model_value": _public_model_value_status(settings, repository),
             "ai_ceo_platform_model": _ai_ceo_platform_model_status(platform_model_status),
             "public_search": _public_search_status(),
-            "media_generation": _public_media_generation_status(),
+            "media_generation": build_media_generation_capability_status(),
             "operational_health": _public_operational_health_status(operational_health),
         },
         "operational_health": operational_health,
@@ -322,7 +322,7 @@ def build_degraded_product_readiness(*, settings: SaaSSettings, exc: Exception) 
             "model_value": {"ready": False, "status": "unknown_readiness_degraded"},
             "ai_ceo_platform_model": _ai_ceo_platform_model_status(),
             "public_search": _public_search_status(),
-            "media_generation": _public_media_generation_status(),
+            "media_generation": build_media_generation_capability_status(),
         },
         "next_minimum_actions": [database_item.next_action],
         "secret_exposed": False,
@@ -1786,7 +1786,7 @@ def _public_operational_health_status(health: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _public_media_generation_status() -> dict[str, Any]:
+def build_media_generation_capability_status() -> dict[str, Any]:
     provider = (os.environ.get("JIEJING_MEDIA_GENERATION_PROVIDER") or "fal").strip() or "fal"
     status = MediaGenerationAdapter().provider_status(provider)
     driver_configured = bool(status.get("configured"))
@@ -1828,6 +1828,12 @@ def _public_media_generation_status() -> dict[str, Any]:
         "raw_provider_response_stored": False,
         "secret_exposed": False,
     }
+
+
+def _public_media_generation_status() -> dict[str, Any]:
+    """Backward-compatible alias for older readiness callers and tests."""
+
+    return build_media_generation_capability_status()
 
 
 def _public_search_status() -> dict[str, Any]:

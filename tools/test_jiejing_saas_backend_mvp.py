@@ -602,6 +602,16 @@ def main() -> int:
             return fail("merchant media capabilities must expose a boolean image-recognition state")
         if image_recognition.get("status") not in {"ready", "not_configured"}:
             return fail("merchant media capabilities must expose a bounded status")
+        image_generation = media_capabilities.get("image_generation", {})
+        for key in ("configured", "live_generation_enabled", "live_image_generation_enabled", "live_provider_calls_allowed"):
+            if not isinstance(image_generation.get(key), bool):
+                return fail(f"merchant media capabilities must expose boolean image-generation state: {key}")
+        if image_generation.get("status") not in {
+            "live_generation_ready_waiting_asset_review",
+            "dry_run_review_chain_ready_live_generation_disabled",
+            "dry_run_review_chain_ready_missing_media_driver",
+        }:
+            return fail("merchant media capabilities must expose a bounded image-generation status")
         if image_recognition.get("secret_exposed") is not False or "credential" in json.dumps(media_capabilities).lower():
             return fail("merchant media capabilities must not expose provider credentials")
         independence_status, independence_error = fetch_json_expect_error(

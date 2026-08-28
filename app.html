@@ -1952,10 +1952,10 @@
                     <label>
                       <span>生成张数</span>
                       <select id="mediaCountSelect">
-                        <option>1 张</option>
+                        <option selected>1 张</option>
                         <option>2 张</option>
                         <option>3 张</option>
-                        <option selected>4 张</option>
+                        <option>4 张</option>
                       </select>
                       <small>先用 1 张草稿图确认方向，再增加候选；结果不直接发布</small>
                     </label>
@@ -1996,12 +1996,12 @@
                     <label>
                       <span>生成质量</span>
                       <select id="mediaGenerationTierSelect">
-                        <option>草稿图 · 20 点/张</option>
-                        <option selected>标准图（推荐） · 80 点/张</option>
+                        <option selected>草稿图 · 20 点/张</option>
+                        <option>标准图（推荐） · 80 点/张</option>
                         <option>高清图（最终候选） · 250 点/张</option>
                       </select>
-                      <small id="mediaGenerationTierNote">标准图适合大多数商品；先确认方向，再决定是否生成高清候选</small>
-                      <small id="mediaGenerationPointQuote">标准图 80 点/张 · 当前 4 张预计 320 点；提交时由服务端再次校验</small>
+                      <small id="mediaGenerationTierNote">草稿图用于确认构图和场景方向，不建议直接作为最终刊登素材</small>
+                      <small id="mediaGenerationPointQuote">草稿图 20 点/张 · 当前 1 张预计 20 点；提交时由服务端再次校验，失败自动退点</small>
                     </label>
                     <label>
                       <span>文字规则</span>
@@ -3048,6 +3048,6 @@
       })();
     </script>
     <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
-    <script src="./app.js?v=20260829-project-restore-35d0e8a93d7c"></script>
+    <script src="./app.js?v=20260829-media-truth-7cf8c791fab8"></script>
 </body>
 </html>

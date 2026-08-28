@@ -4010,6 +4010,20 @@ function saasMediaAssetJobMatchesListingProject(job = {}, draft = state.saasList
   return Boolean(jobProjectKey && jobProjectKey === current.key);
 }
 
+function saasMediaAssetJobRequestedImageCount(job = {}, fallback = 0) {
+  const payload = job?.job && typeof job.job === "object" ? job.job : {};
+  const jobSpec = payload.job_spec && typeof payload.job_spec === "object"
+    ? payload.job_spec
+    : job?.job_spec && typeof job.job_spec === "object"
+      ? job.job_spec
+      : {};
+  const inputs = jobSpec.inputs && typeof jobSpec.inputs === "object" ? jobSpec.inputs : {};
+  const requested = Number.parseInt(String(inputs.image_count || ""), 10);
+  if (Number.isFinite(requested) && requested > 0) return Math.min(requested, 4);
+  const safeFallback = Number.parseInt(String(fallback || ""), 10);
+  return Number.isFinite(safeFallback) && safeFallback > 0 ? Math.min(safeFallback, 4) : 0;
+}
+
 function latestSaasMediaAssetJobWithManifest(options = {}) {
   const jobs = Array.isArray(state.saasMediaAssetJobs) ? state.saasMediaAssetJobs : [];
   const currentProject = saasCurrentListingProjectIdentity();
@@ -4746,6 +4760,10 @@ function renderSaasMediaGenerationReadinessPanel() {
   `;
 }
 
+function saasMediaAssetJobIsProcessing(job = {}) {
+  return ["running", "queued", "pending", "provider_returned"].includes(String(job?.status || ""));
+}
+
 function syncSaasMediaProjectDraft(button) {
   const ctx = saasMerchantWorkbenchContext();
   state.mediaTaskEntry = "project";
@@ -4783,8 +4801,38 @@ function syncSaasMediaProjectDraft(button) {
   setText("#mediaRouteStatus", "流程导入");
   setText("#mediaEntryStatus", "流程导入");
   setText("#mediaEntryNote", "接收商品草稿和图片需求，展示结果、预览和待补项。");
-  setText("#mediaRunStatus strong", title ? "等待素材生成" : "等待商品草稿或来源图");
-  setText("#mediaRunStatus p", title ? "可以生成本轮素材草稿，生成后先预览再回写 Listing。" : "也可以切到独立上传，先处理一张来源图。");
+  const currentMediaJob = saasMediaAssetJobsForDisplay()[0] || null;
+  const currentManifestJob = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+  const currentAssetCount = saasMediaManifestAssetCards(currentManifestJob).length;
+  const currentConceptOnly = Boolean(currentManifestJob && saasMediaAssetJobIsConceptOnly(currentManifestJob));
+  const currentMediaStatus = String(currentMediaJob?.status || "");
+  const currentMediaProcessing = saasMediaAssetJobIsProcessing(currentMediaJob);
+  setText(
+    "#mediaRunStatus strong",
+    !title
+      ? "等待商品草稿或来源图"
+      : currentAssetCount
+        ? currentConceptOnly
+          ? "概念参考图已返回 · 不可用于刊登"
+          : currentMediaStatus === "approved_for_listing"
+            ? "素材已审核 · 可以回写 Listing 草稿"
+            : "真实素材已返回 · 等待审核"
+        : currentMediaProcessing
+          ? "素材正在后台生成"
+          : "等待素材生成",
+  );
+  setText(
+    "#mediaRunStatus p",
+    !title
+      ? "也可以切到独立上传，先处理一张来源图。"
+      : currentAssetCount
+        ? currentConceptOnly
+          ? "当前结果只用于讨论构图；上传真实来源图后重新生成，才能进入 Listing 审核。"
+          : "先核对实物一致性、图片权利和平台规则，再决定是否回写 Listing 草稿。"
+        : currentMediaProcessing
+          ? "任务会在后台继续；完成后自动进入素材清单，不需要重复提交。"
+          : "可以生成本轮素材草稿，生成后先预览再回写 Listing。",
+  );
   setText("#mediaLocalPath", "当前使用商品草稿");
   setText("#mediaLocalPathNote", "如果要处理一张新的货源图，切到独立上传后选择图片。");
   const config = readMediaGenerationConfig({ entry: "project" });
@@ -12232,7 +12280,7 @@ const MEDIA_FACT_LOCKS = Object.freeze([
 ]);
 
 function mediaGenerationTierKey(value = "") {
-  if (/快速|低成本/.test(String(value))) return "draft";
+  if (/草稿|快速|低成本/.test(String(value))) return "draft";
   if (/高清|精细|最终候选/.test(String(value))) return "high_quality";
   return "standard";
 }
@@ -12325,7 +12373,9 @@ function ensureMediaQualityBoard() {
 }
 
 function mediaQualityItems(config = readMediaGenerationConfig()) {
-  const deliveredCount = saasMediaManifestAssetCards().length;
+  const manifestJob = latestSaasMediaAssetJobWithManifest();
+  const deliveredCount = saasMediaManifestAssetCards(manifestJob).length;
+  const plannedCount = saasMediaAssetJobRequestedImageCount(manifestJob || {}, config.count);
   const generated = deliveredCount > 0 || state.mediaGenerationStatus === "generated" || state.mediaGenerationStatus === "done";
   const submitted = state.mediaGenerationStatus === "submitted" || state.mediaGenerationStatus === "queued";
   const confirmed = state.mediaGenerationStatus === "done";
@@ -12345,7 +12395,7 @@ function mediaQualityItems(config = readMediaGenerationConfig()) {
       tone: generated ? "green" : "amber",
       body: generated
         ? deliveredCount
-          ? `素材清单实际返回 ${deliveredCount} 个结果，可逐个点开审核。${String(config.count) !== String(deliveredCount) ? ` 本轮原计划 ${config.count}，未返回的部分不计为已生成。` : ""}`
+          ? `素材清单实际返回 ${deliveredCount} 个结果，可逐个点开审核。${plannedCount && plannedCount !== deliveredCount ? ` 本轮原计划 ${plannedCount} 张，未返回的部分不计为已生成。` : ""}`
           : "素材草稿已生成到预览区；还没有后端素材清单时，不计为真实文件。"
         : submitted
           ? "后端正在处理素材任务；如果通道未配置，只会形成素材清单和待补资料，不会冒充已出图。"
@@ -24867,9 +24917,19 @@ function saasPublicSearchState() {
 function saasMediaGenerationState() {
   const latestManifestJob = latestSaasMediaAssetJobWithManifest();
   const liveImageObserved = Boolean(latestManifestJob && latestManifestJob.live_provider_called === true);
-  const configured = Boolean(latestManifestJob || (state.saasMediaAssetJobs || []).length);
-  const liveReady = liveImageObserved;
-  const videoReady = Boolean(latestManifestJob && latestManifestJob.resource_type === "video" && liveImageObserved);
+  const capability = state.saasMediaCapabilities?.image_generation && typeof state.saasMediaCapabilities.image_generation === "object"
+    ? state.saasMediaCapabilities.image_generation
+    : null;
+  const backendStateKnown = Boolean(capability && typeof capability.live_image_generation_enabled === "boolean");
+  const configured = backendStateKnown
+    ? capability.configured === true
+    : Boolean(latestManifestJob || (state.saasMediaAssetJobs || []).length);
+  const liveReady = backendStateKnown
+    ? capability.live_image_generation_enabled === true && capability.live_provider_calls_allowed === true
+    : liveImageObserved;
+  const videoReady = backendStateKnown
+    ? capability.live_video_generation_enabled === true && capability.live_provider_calls_allowed === true
+    : Boolean(latestManifestJob && latestManifestJob.resource_type === "video" && liveImageObserved);
   if (liveReady) {
     return {
       configured: true,
