@@ -397,6 +397,19 @@ async function runSmoke() {
     '#view-activity.is-active [data-work-record-index="merchant_project_work_record_index_v1"]',
     { timeout: 20000 },
   );
+  await page.waitForFunction(
+    ({ taskId, reportId }) => {
+      const root = document.querySelector('[data-work-record-index="merchant_project_work_record_index_v1"]');
+      const rows = Array.from(root?.querySelectorAll("[data-work-record-id]") || []);
+      const routeFor = (recordId) =>
+        rows.find((row) => row.getAttribute("data-work-record-id") === recordId)
+          ?.querySelector("[data-global-flow-view]")
+          ?.getAttribute("data-global-flow-view") || "";
+      return routeFor(taskId) === "activity" && routeFor(reportId) === "product";
+    },
+    { taskId: savedFacts.task?.task_id || "", reportId: savedFacts.report?.report_id || "" },
+    { timeout: 20000 },
+  );
   const workRecordUi = await page.evaluate(() => {
     const root = document.querySelector('[data-work-record-index="merchant_project_work_record_index_v1"]');
     return {
@@ -413,6 +426,21 @@ async function runSmoke() {
     '#view-service.is-active [data-service-trace-contract="customer_service_trace_v1"]',
     { timeout: 20000 },
   );
+  await page.waitForFunction(
+    () => {
+      const root = document.querySelector('[data-service-trace-contract="customer_service_trace_v1"]');
+      const labels = Array.from(root?.querySelectorAll(".saas-service-lane-grid article strong") || []).map((item) =>
+        item.textContent.trim(),
+      );
+      return (
+        ["买家原消息", "AI 建议", "商家已修改", "已发送", "演练记录"].every((label) => labels.includes(label)) &&
+        root?.textContent?.includes("当前没有买家消息或回复记录") === true &&
+        root?.textContent?.includes("订单数据不等于买家消息") === true
+      );
+    },
+    null,
+    { timeout: 20000 },
+  );
   const serviceTraceUi = await page.evaluate(() => {
     const root = document.querySelector('[data-service-trace-contract="customer_service_trace_v1"]');
     return {
@@ -427,8 +455,12 @@ async function runSmoke() {
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForSelector('#view-service.is-active [data-service-trace-contract="customer_service_trace_v1"]', { timeout: 60000 });
   await page.waitForFunction(
-    () => typeof state !== "undefined" && state.saasLoading === false && state.saasProtectedStateReady === true,
-    null,
+    (expectedProjectId) =>
+      typeof state !== "undefined" &&
+      state.saasLoading === false &&
+      state.saasProtectedStateReady === true &&
+      (state.saasMerchantProjectStatus?.project?.project_id || "") === expectedProjectId,
+    projectId,
     { timeout: 60000 },
   );
   const afterReload = await page.evaluate((expectedProjectId) => {
@@ -514,8 +546,31 @@ async function runSmoke() {
     ["买家原消息", "AI 建议", "商家已修改", "已发送", "演练记录"].every((label) => serviceTraceUi.state_labels.includes(label)) &&
     pageErrors.length === 0 &&
     badResponses.length === 0;
+  const failedChecks = Object.entries({
+    view_checks: viewChecksPass,
+    responsive_checks: responsiveChecksPass,
+    reload_service_trace: afterReload.service_trace_present,
+    reload_project_route: afterReload.project_match,
+    reload_project_snapshot: afterReload.snapshot_match,
+    reload_view_route: afterReload.view_match,
+    project_status_200: statusRequests.some((item) => item.status === 200 && item.url.includes(encodeURIComponent(projectId))),
+    work_record_root: workRecordUi.present,
+    work_record_task_route: workRecordUi.rows.some((item) => item.id === savedFacts.task?.task_id && item.target === "activity"),
+    work_record_report_route: workRecordUi.rows.some((item) => item.id === savedFacts.report?.report_id && item.target === "product"),
+    service_trace_root: serviceTraceUi.present,
+    service_trace_empty: serviceTraceUi.record_count === 0 && serviceTraceUi.empty_state,
+    service_trace_order_boundary: serviceTraceUi.honest_order_boundary,
+    service_trace_state_labels: ["买家原消息", "AI 建议", "商家已修改", "已发送", "演练记录"].every((label) =>
+      serviceTraceUi.state_labels.includes(label),
+    ),
+    page_errors: pageErrors.length === 0,
+    bad_responses: badResponses.length === 0,
+  })
+    .filter(([, passed]) => !passed)
+    .map(([key]) => key);
   const result = {
     ok,
+    failed_checks: failedChecks,
     project_id: projectId,
     backend_current_stage: expectedSnapshot.current_stage,
     backend_blocker: expectedSnapshot.blocker?.key || "",

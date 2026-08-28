@@ -54,6 +54,13 @@ def main() -> int:
         raise AssertionError("first media run must default to one image instead of silently quoting four")
     if '<option selected>草稿图 · 20 点/张</option>' not in tier_select or '<option selected>标准图（推荐） · 80 点/张</option>' in tier_select:
         raise AssertionError("first media run must default to the low-cost draft tier")
+    for truthful_default in (
+        '<strong id="mediaOutputStatus">1 张草稿 · 默认不生成视频</strong>',
+        'data-media-template="standard" data-template-size="平台推荐自动匹配" data-template-count="1 张"',
+        '<strong id="mediaChoiceCount">1 张 · 平台推荐自动匹配</strong>',
+    ):
+        if truthful_default not in app_html:
+            raise AssertionError(f"media package summary must agree with the one-image draft default: {truthful_default}")
     if 'data-template-video="15 秒产品展示视频"' in app_html:
         raise AssertionError("image templates must not silently enable a video")
     if "<option>15 秒产品展示视频</option>" in app_html or "<option>30 秒产品短视频脚本</option>" in app_html:
@@ -82,10 +89,16 @@ def main() -> int:
         'if (/草稿|快速|低成本/.test(String(value))) return "draft"',
         "function saasMediaAssetJobRequestedImageCount",
         "const plannedCount = saasMediaAssetJobRequestedImageCount(manifestJob || {}, config.count)",
+        'asset.duration_seconds || "规格待确认"',
     )
     for marker in required_js:
         if marker not in app_js:
             raise AssertionError(f"media generation payload is missing {marker}")
+    manifest_card_scope = app_js.split("function saasMediaManifestAssetCards", 1)[1].split(
+        "function saasMediaSourceImageForReview", 1
+    )[0]
+    if '|| "provider_returned"' in manifest_card_scope:
+        raise AssertionError("merchant media cards must not expose an internal provider lifecycle code as dimensions")
     approval_block = app_js.split("async function approveLatestSaasMediaAssetJobForListingDraft", 1)[1].split(
         "async function retrySaasMediaAssetJob", 1
     )[0]
