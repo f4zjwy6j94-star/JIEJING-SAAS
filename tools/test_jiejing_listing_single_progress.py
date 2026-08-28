@@ -339,6 +339,16 @@ def main() -> None:
     assert facts_blocked["current_stage"] == "facts"
     assert facts_blocked["blocker"]["key"] == "product_facts_missing"
     assert facts_blocked["next_action"]["action"] == "complete_product_facts"
+    mismatched_fact_report = fact_report(unknown=["package_weight_g", "selling_price", "material"])
+    mismatched_fact_report["report"]["merchant_product_fact_packet"]["blocked_by"].append(
+        "merchant_product_fact_missing:source_rights"
+    )
+    mismatched_fact_counts = build(
+        FixtureRepository(tasks=[task()], reports=[market_report(), mismatched_fact_report])
+    )
+    current_fact_stage = next(stage for stage in mismatched_fact_counts["stages"] if stage["key"] == "facts")
+    assert current_fact_stage["detail"] == "4 项待补"
+    assert mismatched_fact_counts["blocker"]["detail"] == "还有 4 项商品资料待商家确认。"
     record_index = facts_blocked["work_record_index"]
     assert record_index["contract_version"] == "merchant_project_work_record_index_v1"
     assert record_index["current_project_only"] is True

@@ -89,7 +89,10 @@ def main() -> int:
         'if (/草稿|快速|低成本/.test(String(value))) return "draft"',
         "function saasMediaAssetJobRequestedImageCount",
         "const plannedCount = saasMediaAssetJobRequestedImageCount(manifestJob || {}, config.count)",
-        'asset.duration_seconds || "规格待确认"',
+        "function saasMerchantAssetSpecification",
+        'return "规格待确认"',
+        "const estimatedPoints = Number(quote.estimated_points)",
+        "实际扣点以设置中的素材点记录为准",
     )
     for marker in required_js:
         if marker not in app_js:
@@ -99,6 +102,12 @@ def main() -> int:
     )[0]
     if '|| "provider_returned"' in manifest_card_scope:
         raise AssertionError("merchant media cards must not expose an internal provider lifecycle code as dimensions")
+    cost_label_scope = app_js.split("function saasMediaAssetJobCostLabel", 1)[1].split(
+        "function saasMediaAssetJobCanRework", 1
+    )[0]
+    for internal_cost_marker in ("estimated_max_cost_cents", "actual_cost_cents", "实际素材用量约 $", "本次上限估算 $"):
+        if internal_cost_marker in cost_label_scope:
+            raise AssertionError(f"merchant media records must use points instead of provider cost: {internal_cost_marker}")
     approval_block = app_js.split("async function approveLatestSaasMediaAssetJobForListingDraft", 1)[1].split(
         "async function retrySaasMediaAssetJob", 1
     )[0]

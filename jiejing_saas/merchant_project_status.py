@@ -165,6 +165,7 @@ def build_merchant_project_status(
     fact_packet = _fact_packet(latest_fact_report)
     unknown_facts = _string_list(fact_packet.get("unknown_facts"))
     fact_blockers = _string_list(fact_packet.get("blocked_by"))
+    fact_gap_count = max(len(unknown_facts), len(fact_blockers))
     research_ready = any(
         str(item.get("report_type") or "") in {"ai_ceo.market_research", "market.report", "market.data_packet"}
         for item in matching_reports
@@ -253,7 +254,7 @@ def build_merchant_project_status(
         blocker = _blocker(
             "product_facts_missing",
             "商品事实还没有补齐",
-            f"还有 {max(len(unknown_facts), len(fact_blockers))} 项商品资料待商家确认。",
+            f"还有 {fact_gap_count} 项商品资料待商家确认。",
         )
         next_action = _next_action("complete_product_facts", "补齐商品资料", "product")
         overall_status = "blocked"
@@ -292,7 +293,7 @@ def build_merchant_project_status(
             if facts_ready
             else "未发布草稿已保存，早期事实快照保留在记录中"
             if downstream_platform_ready
-            else f"{len(unknown_facts) or len(fact_blockers)} 项待补"
+            else f"{fact_gap_count} 项待补"
             if latest_fact_report
             else "等待商品事实"
         ),

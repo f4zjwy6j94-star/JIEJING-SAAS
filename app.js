@@ -4085,7 +4085,9 @@ function saasMediaManifestAssetCards(job = latestSaasMediaAssetJobWithManifest()
       const isVideo = /video/i.test(assetType) || /\.(mp4|webm|mov)(\?|$)/i.test(url);
       const assetId = String(asset.asset_id || asset.id || `asset-${index + 1}`).replace(/[^a-z0-9_-]/gi, "-");
       const label = conceptOnly ? (isVideo ? "概念视频" : "概念参考图") : isVideo ? "视频素材" : index === 0 ? "主图候选" : `图片 ${index + 1}`;
-      const dimensions = String(asset.dimensions_or_duration || asset.dimensions || asset.duration_seconds || "规格待确认");
+      const dimensions = saasMerchantAssetSpecification(
+        asset.dimensions_or_duration || asset.dimensions || asset.duration_seconds,
+      );
       const reviewStatus = String(asset.listing_use_status || asset.review_status || job.status || "waiting_review");
       return {
         key: `manifest:${jobId}:${assetId}:${index}`,
@@ -4106,6 +4108,14 @@ function saasMediaManifestAssetCards(job = latestSaasMediaAssetJobWithManifest()
       };
     })
     .filter(Boolean);
+}
+
+function saasMerchantAssetSpecification(value) {
+  const text = String(value || "").trim();
+  if (!text || /^(?:provider[_ -]?returned|waiting[_ -]?review|queued|running|pending|generated|completed)$/i.test(text)) {
+    return "规格待确认";
+  }
+  return publicRuntimeText(text);
 }
 
 function saasMediaSourceImageForReview(job = latestSaasMediaAssetJobWithManifest()) {
@@ -4645,12 +4655,14 @@ function saasMediaAssetJobVersionLabel(job = {}) {
 }
 
 function saasMediaAssetJobCostLabel(job = {}) {
-  const guard = job.cost_guard && typeof job.cost_guard === "object" ? job.cost_guard : {};
-  const estimate = Number(guard.estimated_max_cost_cents);
-  const actual = Number(guard.actual_cost_cents);
-  if (guard.actual_cost_cents != null && Number.isFinite(actual) && actual >= 0) return `实际素材用量约 $${(actual / 100).toFixed(2)}`;
-  if (Number.isFinite(estimate) && estimate > 0) return `本次上限估算 $${(estimate / 100).toFixed(2)}，实际用量待服务记录`;
-  return "实际素材用量待服务记录";
+  const payload = job.job && typeof job.job === "object" ? job.job : {};
+  const mediaCredits = payload.media_credits && typeof payload.media_credits === "object" ? payload.media_credits : {};
+  const quote = mediaCredits.quote && typeof mediaCredits.quote === "object" ? mediaCredits.quote : {};
+  const estimatedPoints = Number(quote.estimated_points);
+  if (Number.isFinite(estimatedPoints) && estimatedPoints > 0) {
+    return `本次最多预计 ${Math.round(estimatedPoints).toLocaleString("zh-CN")} 素材点；实际扣点以设置中的素材点记录为准`;
+  }
+  return "本次按素材点计费；生成前会显示预估，实际扣点以设置中的素材点记录为准";
 }
 
 function saasMediaAssetJobCanRework(job = {}) {
