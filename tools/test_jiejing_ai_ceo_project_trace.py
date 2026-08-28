@@ -59,6 +59,23 @@ def main() -> None:
     assert "listing_project_identity: chat?.listing_project_identity || null" in app_js
     assert "listing_project_identity: listingProjectIdentity" in app_js
     assert "await refreshSaasMerchantProjectStatus();" in app_js
+    assert "function commitSaasActiveListingProjectContext" in app_js
+    commit_body = app_js[
+        app_js.index("function commitSaasActiveListingProjectContext") :
+        app_js.index("function renderSaasMerchantProjectStatusStrip")
+    ]
+    for marker in [
+        "saveSaasProtectedStateSnapshot();",
+        "syncSaasProjectRoute(normalizedView)",
+        "refreshSaasMerchantProjectStatus({ projectId })",
+        "mountSaasMerchantProjectStatusStrip(normalizedView)",
+    ]:
+        assert marker in commit_body, marker
+    render_body = app_js[
+        app_js.index("function renderSaasProductListingCenter") :
+        app_js.index("function renderProductListingCenter")
+    ]
+    assert 'commitSaasActiveListingProjectContext("product");' in render_body
     print("PASS jiejing_ai_ceo_project_trace")
 
 

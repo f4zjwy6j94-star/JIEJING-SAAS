@@ -10209,6 +10209,7 @@ function renderSaasProductListingCenter(view) {
     state.saasListingComposerDraft = null;
     state.saasListingSourceMode = "";
   }
+  commitSaasActiveListingProjectContext("product");
   const ctx = saasMerchantWorkbenchContext();
   const listingReport = latestSaasActionableProductReportByTypes(["listing.package", "product.listing"]);
   const safeListingReportDraft = listingReport
@@ -25997,6 +25998,34 @@ function syncSaasProjectRoute(view = state.view || "cockpit") {
   } catch (error) {
     return false;
   }
+}
+
+function commitSaasActiveListingProjectContext(view = state.view || "product") {
+  const normalizedView = normalizeSaasProtectedView(view);
+  if (
+    !isSaasPublicMvpMode() ||
+    !isProtectedSaasAppRoute() ||
+    state.view !== normalizedView ||
+    !["product", "media", "confirm", "activity"].includes(normalizedView)
+  ) {
+    return false;
+  }
+  const identity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
+  const projectId = String(identity?.key || "").trim();
+  if (!/^[A-Za-z0-9._:-]{1,160}$/.test(projectId) || saasMerchantProjectRouteId() === projectId) return false;
+  const snapshotProjectId = String(state.saasMerchantProjectStatus?.project?.project_id || "").trim();
+  if (snapshotProjectId && snapshotProjectId !== projectId) state.saasMerchantProjectStatus = null;
+  saveSaasProtectedStateSnapshot();
+  const routeSynced = syncSaasProjectRoute(normalizedView);
+  if (routeSynced) {
+    void refreshSaasMerchantProjectStatus({ projectId }).then(() => {
+      const currentIdentity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
+      if (state.view === normalizedView && currentIdentity?.key === projectId) {
+        mountSaasMerchantProjectStatusStrip(normalizedView);
+      }
+    });
+  }
+  return routeSynced;
 }
 
 function renderSaasMerchantProjectStatusStrip(snapshot = state.saasMerchantProjectStatus) {
