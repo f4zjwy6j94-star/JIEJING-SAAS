@@ -1290,13 +1290,20 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     service_html_start = app_html.index('<section class="view" id="view-service"')
     service_html_end = app_html.index('<section class="view" id="view-connect"', service_html_start)
     service_html = app_html[service_html_start:service_html_end]
-    service_dynamic_start = app_js.index("function renderSaasServiceCenter")
+    service_dynamic_start = app_js.index("function saasServiceTraceStateLabel")
     service_dynamic_end = app_js.index("function renderConversations", service_dynamic_start)
     service_dynamic_body = app_js[service_dynamic_start:service_dynamic_end]
     for expected in [
         "service_order_plain_workbench_v2",
+        "customer_service_trace_v1",
         "今日客服与订单",
         "客服、物流和售后放在一页",
+        "订单数据不等于买家消息",
+        "买家原消息",
+        "AI 建议",
+        "商家已修改",
+        "已发送",
+        "演练记录",
         "没有真实订单时不显示虚构买家",
         "当前没有待处理订单",
         "当前没有待处理内容",

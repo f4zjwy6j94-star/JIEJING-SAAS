@@ -37553,6 +37553,111 @@ function renderServiceKnowledgeSync() {
   `;
 }
 
+function saasServiceTraceStateLabel(stateKey = "") {
+  return {
+    buyer_message: "买家原消息",
+    ai_suggested: "AI 建议",
+    merchant_edited: "商家已修改",
+    sent: "已发送",
+    simulated: "演练记录",
+  }[String(stateKey || "")] || "客服记录";
+}
+
+function saasServiceTraceRecords() {
+  const buyerActions = new Set(["buyer_message_send", "sensitive_buyer_commitment", "send_customer_reply"]);
+  const confirmations = (Array.isArray(state.saasConfirmations) ? state.saasConfirmations : [])
+    .filter((card) => buyerActions.has(String(card?.action_type || card?.item?.action_type || "")))
+    .map((card) => {
+      const item = card?.item && typeof card.item === "object" ? card.item : {};
+      const explicitState = String(item.reply_state || item.customer_service_state || "");
+      const stateKey = explicitState === "merchant_edited" ? "merchant_edited" : "ai_suggested";
+      return {
+        recordId: String(card.confirmation_id || "").replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 160),
+        stateKey,
+        title: publicRuntimeText(card.title || item.title || "买家回复草稿").slice(0, 160),
+        summary: publicRuntimeText(item.reply_text || item.message || card.summary || "发送前等待商家核对事实和承诺。").slice(0, 320),
+        occurredAt: publicRuntimeText(card.updated_at || card.created_at || "").slice(0, 80),
+        targetView: "confirm",
+      };
+    });
+  const executions = (Array.isArray(state.saasExecutionResults) ? state.saasExecutionResults : [])
+    .filter((record) => buyerActions.has(String(record?.action_type || "")))
+    .map((record) => {
+      const result = record?.result && typeof record.result === "object" ? record.result : {};
+      const platform = result.platform_result && typeof result.platform_result === "object" ? result.platform_result : {};
+      const status = String(record.status || result.status || "").toLowerCase();
+      const simulated = status === "simulated_no_platform_write" || result.simulated === true;
+      const sent = !simulated && platform.message_sent === true && ["sent", "completed", "success"].includes(status);
+      if (!simulated && !sent) return null;
+      return {
+        recordId: String(record.execution_id || "").replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 160),
+        stateKey: simulated ? "simulated" : "sent",
+        title: simulated ? "客服演练" : "买家回复",
+        summary: simulated ? "仅记录演练结果，没有向买家发送消息。" : "平台已确认消息发送成功。",
+        occurredAt: publicRuntimeText(record.updated_at || record.created_at || "").slice(0, 80),
+        targetView: "activity",
+      };
+    })
+    .filter(Boolean);
+  return [...confirmations, ...executions]
+    .filter((item) => item.recordId)
+    .sort((left, right) => String(right.occurredAt).localeCompare(String(left.occurredAt)))
+    .slice(0, 30);
+}
+
+function renderSaasServiceTrace(records = saasServiceTraceRecords()) {
+  const items = Array.isArray(records) ? records : [];
+  const states = ["buyer_message", "ai_suggested", "merchant_edited", "sent", "simulated"];
+  return `
+    <section class="saas-activity-simple-list saas-service-trace" data-service-trace-contract="customer_service_trace_v1" aria-label="客服消息状态记录">
+      <div class="saas-activity-simple-head">
+        <div>
+          <span>消息状态</span>
+          <strong>原消息、建议、修改和发送结果分开记录</strong>
+          <p>订单数据不等于买家消息；没有接入官方消息时保持空状态，也不会把 AI 草稿或演练记录标成已发送。</p>
+        </div>
+      </div>
+      <div class="saas-service-lane-grid" aria-label="客服消息五种状态">
+        ${states
+          .map(
+            (stateKey, index) => `
+              <article>
+                <span>${index + 1}</span>
+                <strong>${escapeHtml(saasServiceTraceStateLabel(stateKey))}</strong>
+                <p>${escapeHtml({
+                  buyer_message: "只代表从官方消息来源读取的买家原文。",
+                  ai_suggested: "AI 起草但商家尚未修改或确认。",
+                  merchant_edited: "商家已编辑，仍未代表已经发送。",
+                  sent: "只有平台返回成功证据才显示已发送。",
+                  simulated: "演练或模拟，不会形成真实买家承诺。",
+                }[stateKey])}</p>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-activity-simple-grid">
+        ${
+          items.length
+            ? items
+                .map(
+                  (item) => `
+                    <article data-service-trace-id="${escapeHtml(item.recordId)}" data-service-trace-state="${escapeHtml(item.stateKey)}">
+                      <span>${escapeHtml(saasServiceTraceStateLabel(item.stateKey))}</span>
+                      <strong>${escapeHtml(item.title)}</strong>
+                      <p>${escapeHtml(item.summary)}</p>
+                      <div class="button-row"><button class="secondary-action compact-action" type="button" data-global-flow-view="${escapeHtml(item.targetView)}">查看原记录</button></div>
+                    </article>
+                  `,
+                )
+                .join("")
+            : `<article class="is-empty"><span>真实空状态</span><strong>当前没有买家消息或回复记录</strong><p>没有官方消息、确认草稿或发送证据时，这里不显示虚构会话。</p></article>`
+        }
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasServiceCenter(view = document.querySelector("#view-service")) {
   if (!view) return;
   const ctx = saasMerchantWorkbenchContext();
@@ -37564,10 +37669,12 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
   const opsSnapshot = saasEbayOperationsSnapshot(ctx.packetBody || {});
   const hasOfficialOrders = ctx.presentKeys.includes("orders_and_fulfillment") && opsSnapshot.orderCount > 0;
   const hasListings = ctx.presentKeys.includes("inventory_and_offers") && opsSnapshot.listingCount > 0;
+  const serviceTraceRecords = saasServiceTraceRecords();
+  const hasOfficialBuyerMessages = serviceTraceRecords.some((item) => item.stateKey === "buyer_message");
   const serviceNextAction = !ctx.connection
     ? "连接店铺后自动接收订单与买家消息"
     : hasOfficialOrders
-      ? "先看需要回复或物流异常的订单"
+      ? "先处理订单履约；买家消息需等待官方消息来源"
       : "当前没有待处理订单";
   const serviceActionButtons = (() => {
     if (!ctx.connection) {
@@ -37592,7 +37699,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
           <h2>今日客服与订单</h2>
           <p class="section-note">买家消息、订单状态和回复草稿集中处理；退款、补偿、重发、地址修改和明确到货日会进入决策中心。</p>
         </div>
-        <span class="pill ${ctx.official && hasOfficialOrders ? "green" : "amber"}">${ctx.official && hasOfficialOrders ? "可处理" : "等真实订单"}</span>
+        <span class="pill ${hasOfficialBuyerMessages ? "green" : "amber"}">${hasOfficialBuyerMessages ? "有买家消息" : "没有官方消息"}</span>
       </header>
 
       <section class="saas-readable-page-head saas-service-readable-head" aria-label="客服与订单说明">
@@ -37612,7 +37719,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
         <article class="${hasOfficialOrders ? "is-green" : "is-amber"}">
           <span>1</span>
           <strong>买家消息</strong>
-          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · 待回复、催单、售前问题优先整理` : "没有真实消息时保持空状态，不显示虚构买家。"}</p>
+          <p>${hasOfficialBuyerMessages ? "已读取官方买家原消息，按时间和风险处理。" : "订单数据不等于买家消息；没有官方消息来源时保持空状态。"}</p>
         </article>
         <article class="${hasListings ? "is-green" : "is-amber"}">
           <span>2</span>
@@ -37630,8 +37737,8 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
         [
           {
             label: "不造假",
-            title: "没有订单就保持安静",
-            copy: "客服页不显示虚构买家、虚构订单或虚构物流。",
+            title: "没有真实消息就保持安静",
+            copy: "客服页不把订单当消息，也不显示虚构买家、虚构订单或虚构物流。",
           },
           {
             label: "按事实回复",
@@ -37649,9 +37756,9 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
 
       <section class="saas-service-simple-workspace" aria-label="客服与订单工作区">
         <article class="${hasOfficialOrders ? "is-green" : "is-empty"}">
-          <span>订单与消息</span>
-          <strong>${hasOfficialOrders ? "可以开始处理" : "当前没有待处理内容"}</strong>
-          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · ${escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "按订单状态核对"))}` : "没有真实数据时，客服页保持空状态，不显示虚构订单。"}</p>
+          <span>订单状态</span>
+          <strong>${hasOfficialOrders ? "可以核对履约" : "当前没有待处理内容"}</strong>
+          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · ${escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "按订单状态核对"))}` : "没有真实订单时不显示虚构买家或虚构物流。"}</p>
         </article>
         <article class="${hasListings ? "is-green" : "is-amber"}">
           <span>回复草稿</span>
@@ -37664,6 +37771,8 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
           <p>退款、补偿、重发、地址修改、明确到货日和敏感承诺会进入决策中心。</p>
         </article>
       </section>
+
+      ${renderSaasServiceTrace(serviceTraceRecords)}
 
       <div class="saas-service-action-strip">
         <strong>当前重点</strong>

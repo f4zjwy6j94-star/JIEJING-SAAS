@@ -316,6 +316,21 @@ async function main() {
       })),
     };
   });
+  await page.evaluate(() => setView("service"));
+  await page.waitForSelector(
+    '#view-service.is-active [data-service-trace-contract="customer_service_trace_v1"]',
+    { timeout: 20000 },
+  );
+  const serviceTraceUi = await page.evaluate(() => {
+    const root = document.querySelector('[data-service-trace-contract="customer_service_trace_v1"]');
+    return {
+      present: Boolean(root),
+      state_labels: Array.from(root?.querySelectorAll(".saas-service-lane-grid article strong") || []).map((item) => item.textContent.trim()),
+      record_count: root?.querySelectorAll("[data-service-trace-id]").length || 0,
+      empty_state: root?.textContent?.includes("当前没有买家消息或回复记录") === true,
+      honest_order_boundary: root?.textContent?.includes("订单数据不等于买家消息") === true,
+    };
+  });
 
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForSelector('#view-cockpit.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 60000 });
@@ -394,6 +409,11 @@ async function main() {
     workRecordUi.present &&
     workRecordUi.rows.some((item) => item.id === savedFacts.task?.task_id && item.target === "activity") &&
     workRecordUi.rows.some((item) => item.id === savedFacts.report?.report_id && item.target === "product") &&
+    serviceTraceUi.present &&
+    serviceTraceUi.record_count === 0 &&
+    serviceTraceUi.empty_state &&
+    serviceTraceUi.honest_order_boundary &&
+    ["买家原消息", "AI 建议", "商家已修改", "已发送", "演练记录"].every((label) => serviceTraceUi.state_labels.includes(label)) &&
     pageErrors.length === 0 &&
     badResponses.length === 0;
   const result = {
@@ -405,6 +425,7 @@ async function main() {
     view_results: viewResults,
     after_reload: afterReload,
     work_record_ui: workRecordUi,
+    service_trace_ui: serviceTraceUi,
     responsive_results: responsiveResults,
     status_requests: statusRequests,
     page_errors: pageErrors,

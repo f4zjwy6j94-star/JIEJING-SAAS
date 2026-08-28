@@ -35,10 +35,18 @@ def main() -> None:
 
     activity_scope = (
         function_scope(app_js, "renderSaasHistoricalProjectArchive")
+        + function_scope(app_js, "saasMerchantProjectWorkRecordItems")
+        + function_scope(app_js, "renderSaasMerchantWorkRecordIndex")
         + function_scope(app_js, "renderSaasActivityCenter")
     )
     confirm_scope = function_scope(app_js, "renderSaasConfirmPanel")
     service_scope = function_scope(app_js, "renderSaasServiceCenter")
+    service_scope = (
+        function_scope(app_js, "saasServiceTraceStateLabel")
+        + function_scope(app_js, "saasServiceTraceRecords")
+        + function_scope(app_js, "renderSaasServiceTrace")
+        + service_scope
+    )
     settings_scope = (
         function_scope(app_js, "renderSaasSettingsReadableMap")
         + function_scope(app_js, "renderSaasSettingsGeneralPanel")
@@ -58,10 +66,10 @@ def main() -> None:
 
     for marker in [
         "默认只显示当前项目的报告、确认和平台结果",
-        "当前项目报告",
-        "报告按账号和商品项目隔离",
+        "完整工作留痕",
+        "merchant_project_work_record_index_v1",
+        "同名商品和旧演示记录不会自动混入",
         "saas-activity-simple-list",
-        "不借用其他商品或旧演示记录",
         "历史项目归档",
     ]:
         require(activity_scope, marker, "AI CEO report center simplified surface")
@@ -82,14 +90,21 @@ def main() -> None:
 
     for marker in [
         "service_order_plain_workbench_v2",
+        "customer_service_trace_v1",
         "今日客服与订单",
         "客服、物流和售后放在一页",
-        "订单与消息",
-        "回复草稿",
+        "订单状态",
+        "买家原消息",
+        "AI 建议",
+        "商家已修改",
+        "已发送",
+        "演练记录",
+        "订单数据不等于买家消息",
+        "没有接入官方消息时保持空状态",
         "确认事项",
         "当前没有待处理内容",
         "不造假",
-        "没有订单就保持安静",
+        "没有真实消息就保持安静",
         "只引用已知事实",
         "承诺停住",
         "退款、补偿、重发、地址修改、明确到货日和敏感承诺进决策中心",
@@ -97,6 +112,9 @@ def main() -> None:
         "连接 eBay 店铺",
     ]:
         require(service_scope, marker, "service and orders simplified surface")
+
+    if "待回复、催单、售前问题优先整理" in service_scope:
+        raise AssertionError("orders must not be presented as buyer messages")
 
     for marker in [
         "5 项设置，集中管理",
