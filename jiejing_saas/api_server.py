@@ -294,6 +294,95 @@ def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[s
     }
 
 
+_MERCHANT_INTERNAL_REPORT_TYPES = frozenset({"owner.review"})
+
+
+def _merchant_safe_reports(value: Any) -> list[dict[str, Any]]:
+    """Project report history to merchant-visible business artifacts only."""
+
+    reports: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        body = item.get("report") if isinstance(item.get("report"), dict) else {}
+        report_type = str(item.get("report_type") or body.get("task_type") or "").strip()
+        if report_type in _MERCHANT_INTERNAL_REPORT_TYPES:
+            continue
+        reports.append(item)
+    return reports
+
+
+_MERCHANT_AUDIT_DETAIL_KEYS = frozenset(
+    {
+        "action_type",
+        "candidate_id",
+        "command_id",
+        "confirmation_id",
+        "context_labels_present",
+        "detail_length",
+        "detail_present",
+        "duplicate_request",
+        "evidence_type",
+        "execution_id",
+        "external_provider_action_triggered",
+        "feedback_type",
+        "listing_project_key",
+        "module_key",
+        "previous_status",
+        "product",
+        "ready_for_listing_draft",
+        "ready_for_listing_generation",
+        "real_platform_write_performed",
+        "real_platform_writes_enabled",
+        "reason",
+        "report_type",
+        "reports",
+        "confirmations",
+        "source_record_count",
+        "stage",
+        "status",
+        "step",
+        "task_id",
+        "unknown_fact_count",
+        "verified_at",
+    }
+)
+
+
+def _merchant_safe_audit_logs(value: Any, *, include_internal: bool) -> list[dict[str, Any]]:
+    """Return an allowlisted business trace; never expose audit identities or raw payloads."""
+
+    projected: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        internal = str(item.get("actor_type") or "") == "platform_internal_admin"
+        if internal and not include_internal:
+            continue
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        safe_details: dict[str, Any] = {}
+        for key in _MERCHANT_AUDIT_DETAIL_KEYS:
+            raw = details.get(key)
+            if isinstance(raw, (str, int, float, bool)) or raw is None:
+                safe = _redact_secret_like(raw)
+                safe_details[key] = safe[:500] if isinstance(safe, str) else safe
+        projected.append(
+            {
+                "audit_id": str(item.get("audit_id") or "")[:120],
+                "store_id": str(item.get("store_id") or "")[:120],
+                "actor_type": "platform_internal_admin" if internal else str(item.get("actor_type") or "system")[:80],
+                "action_type": str(item.get("action_type") or "")[:160],
+                "target_type": str(item.get("target_type") or "")[:120],
+                "target_id": str(item.get("target_id") or "")[:180],
+                "summary": str(_redact_secret_like(str(item.get("summary") or "")))[:600],
+                "created_at": str(item.get("created_at") or "")[:80],
+                "details": safe_details,
+                **({"internal_actor": True} if internal else {}),
+            }
+        )
+    return projected
+
+
 def build_ai_ceo_pre_model_attempt_input(
     *,
     command_id: str,
@@ -3288,7 +3377,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if path == "reports":
             task_id = query.get("task_id", [None])[0]
             limit = _query_limit(query, default=None, maximum=100)
-            self._send_json({"reports": self.repository.list_reports(company_id=identity["company_id"], task_id=task_id, limit=limit)})
+            reports = self.repository.list_reports(
+                company_id=identity["company_id"],
+                task_id=task_id,
+                limit=limit,
+                exclude_report_types=_MERCHANT_INTERNAL_REPORT_TYPES,
+            )
+            self._send_json({"reports": _merchant_safe_reports(reports)})
             return
 
         if path == "confirmations":
@@ -3303,8 +3398,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "audit-logs":
-            limit = int(query.get("limit", ["100"])[0] or 100)
-            self._send_json({"audit_logs": self.repository.list_audit_logs(company_id=identity["company_id"], limit=limit)})
+            limit = _query_limit(query, default=100, maximum=100) or 100
+            audits = self.repository.list_audit_logs(company_id=identity["company_id"], limit=limit)
+            self._send_json(
+                {
+                    "audit_logs": _merchant_safe_audit_logs(
+                        audits,
+                        include_internal=self._is_platform_internal_admin(identity),
+                    )
+                }
+            )
             return
 
         self._send_error(HTTPStatus.NOT_FOUND, "endpoint not found")

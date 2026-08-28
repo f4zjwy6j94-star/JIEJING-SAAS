@@ -5457,13 +5457,24 @@ class SaaSRepository:
             rows = conn.execute(f"select * from tasks where {where} order by created_at desc {limit_clause}", tuple(params)).fetchall()
         return [self._task_row_to_dict(row) for row in rows]
 
-    def list_reports(self, *, company_id: str, task_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    def list_reports(
+        self,
+        *,
+        company_id: str,
+        task_id: str | None = None,
+        limit: int | None = None,
+        exclude_report_types: set[str] | frozenset[str] | None = None,
+    ) -> list[dict[str, Any]]:
         self.initialize()
         params: list[Any] = [company_id]
         where = "t.company_id = ?"
         if task_id:
             where += " and r.task_id = ?"
             params.append(task_id)
+        excluded = sorted({str(item).strip() for item in (exclude_report_types or set()) if str(item).strip()})
+        if excluded:
+            where += f" and r.report_type not in ({','.join('?' for _ in excluded)})"
+            params.extend(excluded)
         order_direction = "desc" if limit and limit > 0 else "asc"
         limit_clause = ""
         if limit and limit > 0:
