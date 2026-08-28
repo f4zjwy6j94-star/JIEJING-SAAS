@@ -29,7 +29,7 @@ def main() -> int:
         'trustedJiejingHtml(renderSaasCeoRoutingTaskCard(command), "ai_ceo.route_task_card")',
         'trustedJiejingHtml(renderSaasAiCeoLatestReplyMarkup(latest), "ai_ceo.latest_reply")',
         "replaceJiejingTrustedHtml(consoleNode, trustedJiejingHtml(renderSaasCeoCommandConsole",
-        'trustedJiejingHtml(renderSaasAiCeoChatTurnMarkup({ assistant_text: productizeJiejingProductCopy(text) }), "ai_ceo.chat_turn.assistant_only")',
+        'trustedJiejingHtml(renderSaasAiCeoChatTurnMarkup({ assistant_text: merchantConversationText(text) }), "ai_ceo.chat_turn.assistant_only")',
         '"ai_ceo.chat_turn.user_and_assistant"',
         '"ai_ceo.chat_turn.recovery_and_detail"',
         '"ai_ceo.chat_turn.pending_status"',

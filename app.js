@@ -2216,6 +2216,18 @@ function productizeJiejingProductCopy(value = "") {
   return output;
 }
 
+function merchantConversationText(value = "") {
+  return String(value ?? "")
+    .replace(legacyExecutionPairPattern, "捷境系统")
+    .replace(legacyExecutionBrandPattern, "捷境系统")
+    .replace(legacyExecutionBrandLowerPattern, "internal-runtime")
+    .replace(/patch_work\/internal-runtime-skills/gi, "内部技能包")
+    .replace(/patch_work\/[^\s`'"]+/gi, "内部资料")
+    .replace(/output\/JIEJING_[^\s`'"]+/gi, "内部运行记录")
+    .replace(/[A-Z]:\\Users\\[^\\]+\\Documents\\Codex\\[^\\]+\\/gi, "")
+    .replace(/\/mnt\/c\/Users\/[^/]+\/Documents\/Codex\/[^/]+\//gi, "");
+}
+
 function showActionToast(text) {
   const toast = document.querySelector("#actionToast");
   if (!toast) return;
@@ -13594,17 +13606,7 @@ function runtimeSectionTitle(key = "") {
 }
 
 function publicRuntimeText(value = "") {
-  return productizeJiejingProductCopy(
-    String(value || "")
-    .replace(legacyExecutionPairPattern, "捷境系统")
-    .replace(legacyExecutionBrandPattern, "捷境系统")
-    .replace(legacyExecutionBrandLowerPattern, "internal-runtime")
-    .replace(/patch_work\/internal-runtime-skills/gi, "内部技能包")
-    .replace(/patch_work\/[^\\s`'"]+/gi, "内部资料")
-    .replace(/output\/JIEJING_[^\\s`'"]+/gi, "内部运行记录")
-    .replace(/[A-Z]:\\Users\\[^\\]+\\Documents\\Codex\\[^\\]+\\/gi, "")
-      .replace(/\/mnt\/c\/Users\/[^/]+\/Documents\/Codex\/[^/]+\//gi, ""),
-  );
+  return productizeJiejingProductCopy(merchantConversationText(value));
 }
 
 function runtimeConfirmationCopy(card = {}) {
@@ -22498,7 +22500,7 @@ function saasAiCeoMerchantSafeFailureText(error) {
 }
 
 function saasAiCeoProductizedAnswerText(text = "", status = "") {
-  const safeText = productizeJiejingProductCopy(text || "AI CEO 暂时没有返回可展示内容。");
+  const safeText = merchantConversationText(text || "AI CEO 暂时没有返回可展示内容。");
   const raw = `${status || ""} ${safeText}`.toLowerCase();
   if (
     raw.includes("402") ||
@@ -26108,7 +26110,7 @@ async function refreshSaasState(options = {}) {
       Promise.resolve(corePermissions),
       Promise.resolve(coreStores),
       Promise.resolve(coreConnections),
-      optionalSaasFetchFast(`/secret-refs?store_id=${encodeURIComponent(store.store_id)}`, { secret_refs: [] }),
+      Promise.resolve(coreSecretRefs),
       optionalSaasFetchFast("/billing/plans", { billing_plan: null }),
       optionalSaasFetchFast("/billing/usage", { billing_usage: null }),
       optionalSaasFetchFast("/billing/checkout-contract", { billing_checkout: null }),
@@ -26117,9 +26119,9 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/billing/manual-beta/orders", { manual_beta_payment_orders: [] }),
       optionalSaasFetchFast("/model/value-gate", { model_value_gate: null }),
       optionalSaasFetchFast("/model/providers/catalog", { model_provider_catalog: null }),
-      optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/model/settings`, { model_settings: state.saasModelSettings || null }, 10000),
+      Promise.resolve(coreModelSettings),
       optionalSaasFetchFast("/post-publish/cockpit", { post_publish_cockpit: state.saasPostPublishCockpit || null }, 12000),
-      optionalSaasFetchFast(`/data-packets?platform=ebay&limit=5`, { data_packets: state.saasDataPackets || [] }, 12000),
+      Promise.resolve(coreDataPackets),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/account-health`, {
         account_health: state.saasAccountHealth || null,
       }, 10000),
@@ -26157,7 +26159,7 @@ async function refreshSaasState(options = {}) {
         source_record: null,
         secret_exposed: false,
       }),
-      optionalSaasFetchFast("/execution-results?limit=20", { execution_results: state.saasExecutionResults || [] }, 12000),
+      Promise.resolve(coreExecutions),
       optionalSaasFetchFast("/audit-logs?limit=80", { audit_logs: state.saasAuditLogs || [] }, 12000),
     ]);
     if (!isCurrentRefresh()) return;
@@ -34072,7 +34074,7 @@ function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchCon
           .join("")}
       </div>
       <div class="saas-merchant-billing-continuity-note">
-        <strong>商家能理解的一句话</strong>
+        <strong>停用后的影响</strong>
         <p>基础订阅管工作台；AI、联网和素材生成按用量另算。停用时先停会继续花钱的执行能力，经营资料和操作记录保留。</p>
       </div>
       <div class="saas-merchant-billing-continuity-safety" hidden aria-hidden="true">
@@ -34542,7 +34544,7 @@ function renderSaasCockpitRealWorkbench() {
               <form class="chat-compose saas-ai-ceo-composer" id="ceoForm">
                 <button type="button" class="saas-ai-ceo-attachment-button" id="ceoAttachmentButton" aria-label="添加商品图片" title="添加商品图片">＋</button>
                 <input id="ceoAttachmentInput" class="saas-ai-ceo-attachment-input" type="file" multiple accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true" />
-                <input id="ceoInput" type="text" placeholder="比如：帮我调研这个商品，整理 Listing 草稿" autocomplete="off" />
+                <input id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 AI CEO 的问题或商品任务" placeholder="比如：帮我调研这个商品，整理 Listing 草稿…" autocomplete="off" />
                 <button type="submit" class="primary-action" aria-label="发送给 AI CEO">发送</button>
               </form>
               ${
@@ -38706,7 +38708,7 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
     ["店铺", isSaasAuthorizedConnectionStatus(connectionStatus) ? "已连接" : "未连接", ctx.connection ? saasStoreDisplayName(ctx.store, ctx.connection) : "需要时再连接 eBay"],
     ["数据", ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "待读取", ctx.hasPacket ? "店铺资料可用" : "连接后读取商品、订单、政策和费用"],
     ["AI", modelReady ? "可用" : "待设置", modelReady ? "凭证留在后端" : "保存后只显示可用状态"],
-    ["订阅", billing.entitlementActive ? "可用" : "待开通", billing.entitlementActive ? "当前权益有效" : "内测阶段不会真实扣费"],
+    ["订阅", billing.entitlementActive ? "可用" : "待开通", billing.entitlementActive ? "当前权益有效" : "在线付款未开放，不会自动扣费"],
   ];
   const items = [
     ["account", "账号与店铺", "登录、eBay 连接、账号健康"],
@@ -38727,8 +38729,8 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
       <div class="saas-settings-simple-map-head">
         <div>
           <span>设置总览</span>
-          <strong>普通商家只看 5 个入口</strong>
-          <p>这里处理账号、店铺数据、AI、权限、套餐付款与安全；只显示商家需要知道的设置，不展示技术排查和部署细节。</p>
+          <strong>5 项设置，集中管理</strong>
+          <p>在这里管理账号、店铺数据、AI、团队权限、套餐与付款；商品和订单工作回到对应工作台继续。</p>
         </div>
       </div>
       <div class="saas-settings-home-status" aria-label="当前设置状态">
@@ -38794,7 +38796,7 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
     data: [
       ["官方只读", "商品、订单、政策、费用", "读到什么用什么，缺口会明确显示。"],
       ["来源记录", "公开来源和商家补充", "报告和 Listing 判断都要能追溯来源。"],
-      ["不造假", "不用旧商品旧素材冒充", "没有真实数据时保持缺口，不填旧 demo。"],
+      ["资料真实性", "缺少的内容保持待补", "没有真实资料时不自动填入其他商品的信息。"],
     ],
     governance: [
       ["谁能点头", "发布、退款、广告、采购付款", "确认中心按岗位权限放行，不让所有人共用老板权限。"],
@@ -39270,8 +39272,8 @@ function normalizeSaasAiCeoMarketReportDelivery(delivery = null) {
 
 function normalizeSaasAiCeoLatestTurn(turn = {}) {
   if (!turn || typeof turn !== "object") return null;
-  const userText = productizeJiejingProductCopy(turn.user_text || turn.userText || turn.user || "");
-  const assistantText = productizeJiejingProductCopy(turn.assistant_text || turn.assistantText || turn.assistant || "");
+  const userText = merchantConversationText(turn.user_text || turn.userText || turn.user || "");
+  const assistantText = merchantConversationText(turn.assistant_text || turn.assistantText || turn.assistant || "");
   const status = String(turn.status || "");
   const assistantId = String(turn.assistant_id || turn.assistantId || "").replace(/[^A-Za-z0-9_-]/g, "");
   const modelResolution =
@@ -40070,13 +40072,13 @@ function renderSaasAiCeoInlineMarkdown(value = "") {
 }
 
 function saasAiCeoHeadingIsMeaningful(value = "") {
-  const normalized = publicRuntimeText(value).replace(/[*_`#]/g, "").trim();
+  const normalized = merchantConversationText(value).replace(/[*_`#]/g, "").trim();
   if (!normalized) return false;
   return !/^(?:[一二三四五六七八九十百]+|\d+)[、.．]?$/.test(normalized);
 }
 
 function renderSaasAiCeoAnswerMarkup(text = "") {
-  const raw = productizeJiejingProductCopy(String(text || "")).replace(/\r\n/g, "\n").trim();
+  const raw = merchantConversationText(String(text || "")).replace(/\r\n/g, "\n").trim();
   if (!raw) return "<p>正在处理...</p>";
   const parts = [];
   let paragraph = [];
@@ -40218,7 +40220,7 @@ function addAiMessage(text) {
   insertJiejingTrustedHtml(
     chat,
     "beforeend",
-    trustedJiejingHtml(renderSaasAiCeoChatTurnMarkup({ assistant_text: productizeJiejingProductCopy(text) }), "ai_ceo.chat_turn.assistant_only"),
+    trustedJiejingHtml(renderSaasAiCeoChatTurnMarkup({ assistant_text: merchantConversationText(text) }), "ai_ceo.chat_turn.assistant_only"),
   );
   syncSaasAiCeoFixedChatViewportState();
   restoreSaasAiCeoScrollState(chat, scrollSnapshot);
@@ -40350,7 +40352,7 @@ function ensureCeoAssistantAnswerBody(node) {
 
 function updateCeoAssistantStreamingMessage(messageId, text) {
   const node = messageId ? document.getElementById(messageId) : null;
-  const safeText = productizeJiejingProductCopy(String(text || "").slice(0, 120000));
+  const safeText = merchantConversationText(String(text || "").slice(0, 120000));
   if (!node || !safeText) return;
   const chat = document.querySelector("#ceoChat");
   const scrollSnapshot = captureSaasAiCeoScrollState(chat);

@@ -99,15 +99,15 @@ def main() -> None:
         require(service_scope, marker, "service and orders simplified surface")
 
     for marker in [
-        "普通商家只看 5 个入口",
+        "5 项设置，集中管理",
         "账号与店铺",
         "店铺数据",
         "AI 与素材",
         "团队权限",
         "套餐与付款",
         "什么时候需要打开设置",
-        "只显示商家需要知道的设置",
-        "不展示技术排查和部署细节",
+        "在这里管理账号、店铺数据、AI、团队权限、套餐与付款",
+        "商品和订单工作回到对应工作台继续",
         "账号边界",
         "AI 边界",
         "数据边界",
@@ -116,8 +116,8 @@ def main() -> None:
         "data-saas-settings-map-tab",
         "凭证安全",
         "保存后不回显",
-        "不造假",
-        "不用旧商品旧素材冒充",
+        "资料真实性",
+        "缺少的内容保持待补",
         "普通聊天不进长期经营记忆",
     ]:
         require(settings_scope, marker, "settings readable map")

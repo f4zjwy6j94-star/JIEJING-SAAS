@@ -1845,6 +1845,11 @@ button {
   outline: none;
 }
 
+.source-form-grid label:focus-within {
+  border-color: rgba(8, 118, 110, 0.42);
+  box-shadow: 0 0 0 3px rgba(8, 118, 110, 0.12);
+}
+
 .source-upload-strip {
   display: flex;
   justify-content: space-between;

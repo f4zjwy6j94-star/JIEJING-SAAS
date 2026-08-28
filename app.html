@@ -119,7 +119,7 @@
       }
     </style>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css?v=20260828-merchant-workflow-maturity-0ad18de142aa" />
+    <link rel="stylesheet" href="./styles.css?v=20260828-merchant-experience-0430e35c41e8" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -352,37 +352,6 @@
             </aside>
           </section>
 
-          <section class="entry-story-block">
-            <p class="eyebrow">为什么要做捷境</p>
-            <h2>不要一开始做“大而全”，先把 eBay 商家的经营闭环跑顺。</h2>
-            <p>
-            eBay 不是上传一个商品就结束，而是一条重复链：调研选品、IP 风险、商品资料、图片视频、标题参数、业务政策、费用、物流、退货和客服承诺。捷境先把官方只读数据、商家补充资料和 AI CEO 工作记录汇总到同一条可追溯记录里，让商家看得懂、补得上、确认得了。
-            </p>
-          </section>
-
-          <section class="entry-logic">
-            <div>
-              <p class="eyebrow">底层逻辑</p>
-            <h2>一个入口，只推进当前流程的下一步。</h2>
-            </div>
-            <div class="entry-logic-grid">
-              <article>
-                <span>01</span>
-                <strong>AI CEO 接指令</strong>
-            <p>商家只需要说明目标并提供商品资料。捷境先整理来源和缺口，再推进市场信息、Listing、素材、客服、财务和决策任务。</p>
-              </article>
-              <article>
-                <span>02</span>
-                <strong>市场 / 批量 / 风险</strong>
-                <p>市场调研、批量候选、侵权风险初筛、价格带、供应商信息和退货风险按真实来源推进，最终仍由商家核对。</p>
-              </article>
-              <article>
-                <span>03</span>
-                <strong>Listing / 素材 / 决策复盘</strong>
-            <p>Listing、素材工坊、客服学习、财务统计和确认结果回传 AI CEO；发布、广告、退款、物流承诺和授权由商家确认。</p>
-              </article>
-            </div>
-          </section>
         </main>
       </section>
 
@@ -844,7 +813,7 @@
                 </article>
               </div>
               <form class="chat-compose" id="ceoForm">
-                <input id="ceoInput" type="text" placeholder="输入你要交给 AI CEO 处理的商品、链接或订单问题" />
+                <input id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 AI CEO 的问题或商品任务" placeholder="输入你要交给 AI CEO 处理的商品、链接或订单问题…" autocomplete="off" />
                 <button type="submit" class="primary-action">发送</button>
               </form>
               <div class="ceo-home-boundary" aria-label="AI CEO 自动化边界">
@@ -3071,6 +3040,6 @@
       })();
     </script>
     <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
-    <script src="./app.js?v=20260828-merchant-workflow-maturity-c4a05fd81890"></script>
+    <script src="./app.js?v=20260828-merchant-experience-99cfbf0c6a8d"></script>
 </body>
 </html>
