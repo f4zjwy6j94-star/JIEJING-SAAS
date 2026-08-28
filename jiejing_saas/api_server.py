@@ -120,6 +120,7 @@ from .merchant_onboarding import (
 )
 from .ip_risk_screening import build_ip_logo_brand_screening
 from .json_safe import json_default
+from .listing_draft_generation import generate_listing_draft, listing_draft_core_missing_fields
 from .model_value_gate import build_model_value_gate
 from .model_value_rehearsal import run_model_value_rehearsal
 from .model_provider_catalog import (
@@ -9335,6 +9336,111 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json(response_payload, status=HTTPStatus.CREATED)
             return
 
+        if len(parts) == 4 and parts[0] == "stores" and parts[2:] == ["listing-drafts", "generate"]:
+            if not self._require_permission(identity, "create_task"):
+                return
+            body = self._read_json_body()
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            packet = normalize_merchant_product_fact_packet(
+                body.get("merchant_product_fact_packet"),
+                source="authenticated_merchant_request",
+            )
+            listing_project_identity = normalize_listing_project_identity(body.get("listing_project_identity"))
+            missing_core = listing_draft_core_missing_fields(packet)
+            if not listing_project_identity.get("key"):
+                missing_core.append("listing_project_identity")
+            if missing_core:
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": [f"listing_core_fact_missing:{key}" for key in missing_core],
+                        "missing_fields": missing_core,
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    }
+                )
+                return
+            if not self._require_quota(identity, "model_report_assist"):
+                return
+            model_resolution = self._resolve_model_client_for_store(
+                identity=identity,
+                store_id=store_id,
+                body=body,
+                task_scope="listing_draft_generation",
+            )
+            safe_model_resolution = {
+                key: value
+                for key, value in model_resolution.items()
+                if key not in {"model_client", "secret_value", "secret_ref"}
+            }
+            if model_resolution.get("status") != "resolved" or not model_resolution.get("model_client"):
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": model_resolution.get("blocked_by") or ["listing_model_not_ready"],
+                        "model_resolution": safe_model_resolution,
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.ACCEPTED,
+                )
+                return
+            packet_record = None
+            requested_packet_id = str(body.get("packet_id") or "").strip()
+            if requested_packet_id:
+                candidate = self.repository.get_platform_data_packet(
+                    company_id=identity["company_id"],
+                    packet_id=requested_packet_id,
+                )
+                if candidate and str(candidate.get("store_id") or "") == store_id:
+                    packet_record = candidate
+                else:
+                    self._send_error(HTTPStatus.NOT_FOUND, "eBay account data packet not found or not accessible")
+                    return
+            try:
+                result = generate_listing_draft(
+                    repository=self.repository,
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    listing_project_identity=listing_project_identity,
+                    merchant_product_fact_packet=packet,
+                    current_draft_fields=(
+                        body.get("current_draft_fields") if isinstance(body.get("current_draft_fields"), dict) else {}
+                    ),
+                    model_client=model_resolution["model_client"],
+                    model_resolution=safe_model_resolution,
+                    packet_record=packet_record,
+                )
+            except Exception:
+                self._send_json(
+                    {
+                        "status": "failed",
+                        "failure_code": "listing_model_generation_failed",
+                        "merchant_message": "AI 草稿生成暂时失败，商品资料已保留，请稍后重试。",
+                        "model_called": True,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.BAD_GATEWAY,
+                )
+                return
+            result["model_resolution"] = safe_model_resolution
+            self._send_json(result, status=HTTPStatus.CREATED)
+            return
+
         if path == "tasks/product-workflow":
             if not self._require_permission(identity, "create_task"):
                 return
@@ -11809,7 +11915,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         copied["metadata"] = metadata
         return copied
 
-    def _resolve_model_client_for_store(self, *, identity: dict[str, Any], store_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    def _resolve_model_client_for_store(
+        self,
+        *,
+        identity: dict[str, Any],
+        store_id: str,
+        body: dict[str, Any],
+        task_scope: str = "model_value_rehearsal",
+    ) -> dict[str, Any]:
         turn_plan = body.get("ai_ceo_turn_plan") if isinstance(body.get("ai_ceo_turn_plan"), dict) else {}
         model_tier = str(turn_plan.get("model_tier") or "fast").strip().lower()
         if model_tier not in {"fast", "thinking", "pro"}:
@@ -11934,8 +12047,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         resolver = VaultSecretResolver(self.settings)
         resolved = resolver.resolve_secret(
             secret_ref=selected,
-            requested_by="model_provider_client",
-            task_scope="model_value_rehearsal",
+            requested_by=f"{task_scope}_model_client",
+            task_scope=task_scope,
             allowed_purposes=[MODEL_SECRET_PURPOSE],
         )
         if not resolved.get("ok"):

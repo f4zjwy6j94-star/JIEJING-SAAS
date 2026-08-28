@@ -945,8 +945,10 @@ def _test_http_safe_unhandled_error_log() -> str:
             token = str(merchant.get("token") or "")
             try:
                 _request_json(
-                    f"{base_url}/audit-logs?limit={query_secret}",
+                    f"{base_url}/queue-jobs/recover-stale",
+                    method="POST",
                     token=token,
+                    body={"limit": query_secret},
                     ip=raw_ip,
                 )
             except Exception:

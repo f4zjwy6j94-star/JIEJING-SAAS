@@ -5423,6 +5423,138 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def save_listing_draft_report(
+        self,
+        *,
+        task: dict[str, Any],
+        listing_project_identity: dict[str, Any],
+        listing_handoff: dict[str, Any],
+        merchant_product_fact_packet: dict[str, Any],
+        missing_fields: list[str],
+        model_metadata: dict[str, Any],
+        version: int,
+    ) -> dict[str, Any]:
+        """Persist one immutable Listing draft version in the existing report store."""
+
+        self.initialize()
+        identity = normalize_listing_project_identity(listing_project_identity)
+        safe_handoff = _redact_secret_like(listing_handoff if isinstance(listing_handoff, dict) else {})
+        safe_packet = _redact_secret_like(
+            merchant_product_fact_packet if isinstance(merchant_product_fact_packet, dict) else {}
+        )
+        safe_model = {
+            "provider_key": str((model_metadata or {}).get("provider_key") or "provider_neutral")[:80],
+            "model": str((model_metadata or {}).get("model") or "")[:160],
+            "mode": str((model_metadata or {}).get("mode") or "")[:80],
+            "model_tier": str((model_metadata or {}).get("model_tier") or "fast")[:40],
+            "secret_exposed": False,
+        }
+        product = _sanitize_merchant_ceo_text(safe_packet.get("product_name"), limit=120) or "待确认商品"
+        created_at = now_iso()
+        report_id = _id("report")
+        title = f"Listing 草稿 v{max(1, int(version))}：{product}"[:180]
+        safe_missing = [str(item)[:120] for item in missing_fields[:80] if str(item).strip()]
+        report_payload = {
+            "contract_version": "listing_ai_draft_generation_v1",
+            "artifact_type": "listing.package",
+            "version": max(1, int(version)),
+            "product": product,
+            "merchant_readable_summary": (
+                f"“{product}”的 AI Listing 草稿已保存；发布前仍有 {len(safe_missing)} 项需要补充或复核。"
+                if safe_missing
+                else f"“{product}”的 AI Listing 草稿已保存；仍需 eBay 体检和发布确认。"
+            ),
+            "listing_project_identity": identity,
+            "merchant_product_fact_packet": safe_packet,
+            "listing_handoff": {
+                "ready_for_listing_draft": True,
+                "source_mode": "project_scoped_live_model",
+                "target_report_type": "listing.package",
+                "listing_fields": safe_handoff,
+                "blocked_by": [f"listing_field_missing:{item}" for item in safe_missing],
+                "requires_human_review_before_publish": True,
+                "triggers_real_platform_write": False,
+                "real_platform_writes_enabled": False,
+            },
+            "missing_fields": safe_missing,
+            "model": safe_model,
+            "requires_human_review_before_publish": True,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into reports (
+                  report_id, task_id, runtime_run_id, report_type, title, status, created_at, report_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    task["task_id"],
+                    "listing_draft_generation",
+                    "listing.package",
+                    title,
+                    "saved",
+                    created_at,
+                    json.dumps(report_payload, ensure_ascii=False, default=json_default),
+                ),
+            )
+            self._insert_merchant_memory(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                memory_type="listing_package",
+                source_type="report",
+                source_id=report_id,
+                title=title,
+                summary=report_payload["merchant_readable_summary"],
+                importance=85,
+                tags=["listing.package", "listing_draft", f"version:{max(1, int(version))}"],
+                memory={
+                    "report_id": report_id,
+                    "task_id": task["task_id"],
+                    "report_type": "listing.package",
+                    "version": max(1, int(version)),
+                    "listing_project_identity": identity,
+                    "missing_field_count": len(safe_missing),
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+                created_by=task.get("user_id"),
+            )
+            self._insert_audit(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                user_id=task.get("user_id"),
+                actor_type="system",
+                action_type="listing.draft.generated",
+                target_type="report",
+                target_id=report_id,
+                summary="Project-scoped AI Listing draft saved without an eBay write.",
+                details={
+                    "task_id": task["task_id"],
+                    "report_type": "listing.package",
+                    "listing_project_key": identity.get("key"),
+                    "version": max(1, int(version)),
+                    "missing_field_count": len(safe_missing),
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            "report_id": report_id,
+            "task_id": task["task_id"],
+            "runtime_run_id": "listing_draft_generation",
+            "report_type": "listing.package",
+            "title": title,
+            "status": "saved",
+            "created_at": created_at,
+            "report": report_payload,
+            "secret_exposed": False,
+        }
+
     def list_task_steps(self, *, company_id: str, task_id: str) -> list[dict[str, Any]]:
         self.initialize()
         with self._connect() as conn:
