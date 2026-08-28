@@ -3411,7 +3411,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "audit-logs":
-            limit = _query_limit(query, default=100, maximum=100) or 100
+            limit = _query_limit(query, default=100, maximum=500) or 100
             audits = self.repository.list_audit_logs(company_id=identity["company_id"], limit=limit)
             self._send_json(
                 {
@@ -12089,7 +12089,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         resolver = VaultSecretResolver(self.settings)
         resolved = resolver.resolve_secret(
             secret_ref=selected,
-            requested_by=f"{task_scope}_model_client",
+            requested_by="model_provider_client",
             task_scope=task_scope,
             allowed_purposes=[MODEL_SECRET_PURPOSE],
         )

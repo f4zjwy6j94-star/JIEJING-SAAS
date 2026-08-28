@@ -142,6 +142,7 @@ FILES=(
   "jiejing_saas/billing_wechat_pay.py"
   "jiejing_saas/billing_wechat_pay_rehearsal.py"
   "jiejing_saas/ai_ceo_chat.py"
+  "jiejing_saas/listing_draft_generation.py"
   "jiejing_saas/commercial_launch_gate.py"
   "jiejing_saas/controlled_bridges.py"
   "jiejing_saas/domain_readiness.py"
