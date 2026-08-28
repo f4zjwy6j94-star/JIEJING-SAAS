@@ -243,7 +243,15 @@ def _run_local_secret_resolver_callback(*, local_secret_path: Path) -> str:
             ],
             "missing_resource_keys": [],
             "sections": [
-                {"key": "store_profile", "data": {"seller_account_status": "active"}},
+                {
+                    "key": "store_profile",
+                    "data": {
+                        "seller_account_status": "active",
+                        "kyc_check_status": "clear",
+                        "kyc_check_count": 0,
+                        "kyc_checks": [],
+                    },
+                },
                 {
                     "key": "account_business_policies",
                     "data": {
@@ -336,7 +344,15 @@ def _run_local_secret_resolver_callback(*, local_secret_path: Path) -> str:
             ],
             "missing_resource_keys": [],
             "sections": [
-                {"key": "store_profile", "data": {"seller_account_status": "active"}},
+                {
+                    "key": "store_profile",
+                    "data": {
+                        "seller_account_status": "active",
+                        "kyc_check_status": "clear",
+                        "kyc_check_count": 0,
+                        "kyc_checks": [],
+                    },
+                },
                 {
                     "key": "account_business_policies",
                     "data": {

@@ -36,6 +36,7 @@ EBAY_READ_ROUTES = [
         "method": "GET",
         "path_templates": [
             "/sell/account/v1/privilege",
+            "/sell/account/v1/kyc",
         ],
         "query_template": {},
         "required_scope_hints": ["sell.account.readonly"],

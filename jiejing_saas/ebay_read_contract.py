@@ -7,8 +7,17 @@ from typing import Any
 
 RESOURCE_FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "store_profile": {
-        "required_fields": ["marketplace_id", "seller_account_status", "selling_limits"],
-        "recommended_fields": ["store_name", "registered_country", "seller_level", "policy_setup_status"],
+        "required_fields": ["marketplace_id", "seller_account_status", "selling_limits", "kyc_check_status"],
+        "recommended_fields": [
+            "store_name",
+            "registered_country",
+            "seller_level",
+            "policy_setup_status",
+            "kyc_check_count",
+            "kyc_checks",
+            "verification_status",
+            "payout_status",
+        ],
         "sensitive_fields": ["seller_username", "email", "phone", "address", "registration_name"],
         "used_by": ["ai_ceo_home", "ai_report", "connected_accounts"],
     },

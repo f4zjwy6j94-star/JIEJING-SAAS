@@ -309,6 +309,8 @@ def main() -> int:
             return 200, {"content-type": "application/json"}, json.dumps(
                 {"offers": [{"offerId": OFFER_ID, "marketplaceId": "EBAY_US", "status": "UNPUBLISHED"}]}
             ).encode()
+        if http_request.full_url.endswith("/sell/account/v1/kyc"):
+            return 204, {"content-type": "application/json"}, b""
         if http_request.full_url.endswith(f"/offer/{OFFER_ID}/publish"):
             return 200, {"content-type": "application/json"}, json.dumps({"listingId": "listing_987"}).encode()
         return 500, {"content-type": "application/json"}, b"{}"
@@ -328,6 +330,49 @@ def main() -> int:
     if any(item[1].endswith("/offer") or "/inventory_item/" in item[1] for item in ebay_calls):
         return fail(f"controlled publish must never create another offer or replace inventory: {ebay_calls}")
 
+    kyc_blocked_calls: list[tuple[str, str]] = []
+
+    def kyc_blocked_transport(http_request: Request, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        del timeout
+        kyc_blocked_calls.append((http_request.get_method(), http_request.full_url))
+        if http_request.full_url.startswith("https://vault.test/"):
+            return 200, {"content-type": "application/json"}, json.dumps(
+                {"data": {"data": {"refresh_token": "TEST_REFRESH_TOKEN"}}}
+            ).encode()
+        if http_request.full_url.endswith("/identity/v1/oauth2/token"):
+            return 200, {"content-type": "application/json"}, json.dumps(
+                {"access_token": "TEST_ACCESS_TOKEN", "expires_in": 7200}
+            ).encode()
+        if http_request.full_url.endswith("/sell/account/v1/kyc"):
+            return 200, {"content-type": "application/json"}, json.dumps(
+                {
+                    "kycChecks": [
+                        {
+                            "alert": "Update account information",
+                            "detailMessage": "Payouts are on hold until the account information is updated.",
+                            "dueDate": "2026-08-31T00:00:00.000Z",
+                            "remedyUrl": "https://www.ebay.com/sellerhub/private-remedy",
+                        }
+                    ]
+                }
+            ).encode()
+        return 500, {"content-type": "application/json"}, b"{}"
+
+    kyc_blocked = EbayWriteHttpAdapter(settings, transport=kyc_blocked_transport).publish_existing_listing_draft(
+        request=request,
+        preflight=preflight,
+        credential_boundary=credential_boundary(),
+        marketplace_id="EBAY_US",
+        expected_offer_id=OFFER_ID,
+    )
+    if kyc_blocked.get("status") != "controlled_publish_account_verification_required":
+        return fail(f"an active eBay KYC check must block publishOffer: {kyc_blocked}")
+    if any(method == "POST" and url.endswith("/publish") for method, url in kyc_blocked_calls):
+        return fail(f"KYC incident mode must stop before publishOffer: {kyc_blocked_calls}")
+    serialized_kyc_block = json.dumps(kyc_blocked, ensure_ascii=False)
+    if "private-remedy" in serialized_kyc_block or "TEST_ACCESS_TOKEN" in serialized_kyc_block:
+        return fail(f"KYC preflight must not persist remedy URLs or access tokens: {kyc_blocked}")
+
     mismatch_calls: list[tuple[str, str]] = []
 
     def mismatch_transport(http_request: Request, timeout: float) -> tuple[int, dict[str, str], bytes]:
@@ -341,6 +386,8 @@ def main() -> int:
             return 200, {"content-type": "application/json"}, json.dumps(
                 {"offers": [{"offerId": "different-offer", "marketplaceId": "EBAY_US", "status": "UNPUBLISHED"}]}
             ).encode()
+        if http_request.full_url.endswith("/sell/account/v1/kyc"):
+            return 204, {"content-type": "application/json"}, b""
         return 500, {"content-type": "application/json"}, b"{}"
 
     blocked = EbayWriteHttpAdapter(settings, transport=mismatch_transport).publish_existing_listing_draft(

@@ -76,6 +76,8 @@ def _create_store_with_packet(
     store_name: str,
     include_business_policies: bool = True,
     complete_business_policies: bool = True,
+    kyc_check_status: str = "clear",
+    kyc_checks: list[dict] | None = None,
 ) -> dict:
     record = repo.create_user_with_company(
         email=f"{store_name}@jiejing.local",
@@ -108,6 +110,9 @@ def _create_store_with_packet(
                 "marketplace_id": "EBAY_US",
                 "seller_account_status": status,
                 "selling_limits": {"used": 1, "limit": 35},
+                "kyc_check_status": kyc_check_status,
+                "kyc_check_count": len(kyc_checks or []),
+                "kyc_checks": kyc_checks or [],
             },
         }
     ]
@@ -165,6 +170,9 @@ class _RestrictedExecutionRepository:
                             "data": {
                                 "seller_account_status": "registration_completed",
                                 "selling_limits": {"used": 1, "limit": 35},
+                                "kyc_check_status": "clear",
+                                "kyc_check_count": 0,
+                                "kyc_checks": [],
                             },
                         },
                         {
@@ -232,6 +240,37 @@ def main() -> int:
     )
     if healthy_preflight.get("status") != "ready_for_platform_adapter":
         return fail(f"healthy account should allow publish preflight to continue: {healthy_preflight}")
+
+    kyc_ctx = _create_store_with_packet(
+        repo,
+        status="registration_completed",
+        store_name="kyc-review-store",
+        kyc_check_status="verification_required",
+        kyc_checks=[
+            {
+                "alert": "更新账户资料",
+                "detail": "更新前发放款项将被冻结。",
+                "due_date": "2026-08-31T00:00:00.000Z",
+                "remedy_available": True,
+            }
+        ],
+    )
+    kyc_blocked = build_account_health_snapshot(
+        repo,
+        company_id=kyc_ctx["company_id"],
+        store_id=kyc_ctx["store"]["store_id"],
+    )
+    if kyc_blocked.get("status") not in {"restricted", "payout_hold"} or kyc_blocked.get("incident_mode") is not True:
+        return fail(f"an active official KYC check must enter incident mode: {kyc_blocked}")
+    if kyc_blocked.get("can_execute_real_writes") is not False:
+        return fail(f"an active official KYC check must block real writes: {kyc_blocked}")
+    kyc_actions = " ".join(kyc_blocked.get("next_actions") or [])
+    for required in ("eBay 官方页面", "账户资料", "无需重新授权"):
+        if required not in kyc_actions:
+            return fail(f"KYC guidance should contain {required!r}: {kyc_blocked}")
+    kyc_evidence = kyc_blocked.get("evidence_package") or {}
+    if kyc_evidence.get("kyc_check_status") != "verification_required" or kyc_evidence.get("kyc_check_count") != 1:
+        return fail(f"KYC evidence must preserve the sanitized provider result: {kyc_blocked}")
 
     restricted_after_publish = build_account_health_snapshot(
         _RestrictedExecutionRepository(),

@@ -59,7 +59,13 @@ def build_account_health_snapshot(
         store_profile.get("status"),
     )
     selling_status = _first_text(store_profile.get("selling_status"), raw_status)
+    official_packet_present = bool(packet) and (
+        latest_packet.get("source_mode") == "official_api" or packet.get("source_label") == "official_api"
+    )
+    kyc_check_status = _first_text(store_profile.get("kyc_check_status"))
+    kyc_checks = store_profile.get("kyc_checks") if isinstance(store_profile.get("kyc_checks"), list) else []
     payout_status = _first_text(
+        store_profile.get("payout_status"),
         finances.get("payout_status"),
         finances.get("payment_status"),
         finances.get("payout_hold_status"),
@@ -71,11 +77,15 @@ def build_account_health_snapshot(
         store_profile.get("restriction"),
         store_profile.get("policy_warnings"),
         store_profile.get("verification_status"),
+        (
+            "kyc_status_unknown"
+            if official_packet_present and not kyc_check_status
+            else "kyc_verification_required"
+            if kyc_check_status == "verification_required"
+            else ""
+        ),
     )
 
-    official_packet_present = bool(packet) and (
-        latest_packet.get("source_mode") == "official_api" or packet.get("source_label") == "official_api"
-    )
     present_resource_keys = _packet_resource_keys(packet, "present_resource_keys")
     missing_resource_keys = _packet_resource_keys(packet, "missing_resource_keys")
     business_policies_present = _business_policies_ready(business_policies)
@@ -112,7 +122,7 @@ def build_account_health_snapshot(
         selling_limits=selling_limits,
     )
     return {
-        "contract_version": "2026-08-26-account-health-provider-rejection-v3",
+        "contract_version": "2026-08-28-account-health-kyc-preflight-v4",
         "platform": "ebay",
         "company_id": company_id,
         "store_id": store_id,
@@ -131,6 +141,7 @@ def build_account_health_snapshot(
             has_store_profile=has_store_profile,
             business_policies_present=business_policies_present,
             recent_platform_errors=recent_platform_errors,
+            restrictions=restrictions,
         ),
         "account_health": account_health_for_publish,
         "evidence_package": {
@@ -151,6 +162,9 @@ def build_account_health_snapshot(
             "restriction_count": len(restrictions),
             "restrictions": restrictions[:10],
             "recent_platform_errors": recent_platform_errors[:8],
+            "kyc_check_status": kyc_check_status or "unknown",
+            "kyc_check_count": len(kyc_checks),
+            "kyc_checks": _safe_kyc_evidence(kyc_checks),
             "frontend_gets_token": False,
             "runtime_gets_token": False,
             "raw_secret_stored": False,
@@ -167,6 +181,7 @@ def build_account_health_snapshot(
             status,
             business_policies_present=business_policies_present,
             recent_platform_errors=recent_platform_errors,
+            restrictions=restrictions,
         ),
         "secret_exposed": False,
     }
@@ -272,6 +287,7 @@ def _classify_status(
             "unverified",
             "policy violation",
             "verification required",
+            "kyc status unknown",
             "25019",
         )
     ):
@@ -486,6 +502,7 @@ def _merchant_summary(
     has_store_profile: bool,
     business_policies_present: bool,
     recent_platform_errors: list[dict[str, Any]] | None = None,
+    restrictions: list[str] | None = None,
 ) -> str:
     if status == "registration_incomplete":
         return "eBay 授权和安全凭证可以正常，但卖家注册尚未完成；无需重新授权，先在 eBay 完成身份、地址和收款验证。"
@@ -497,6 +514,8 @@ def _merchant_summary(
         return "账号存在需要关注的信号；发布前必须复核额度、政策警告和近期平台错误。"
     if not has_store_profile:
         return "当前没有可追溯的 eBay 账号健康快照；上线前默认进入事故模式，阻止真实写入。"
+    if status in {"restricted", "payout_hold"} and _has_kyc_restriction(restrictions or []):
+        return "eBay 官方仍有待处理的账户资料或 KYC 检查；捷境已在正式发布前进入事故模式并暂停真实写入。"
     if status == "restricted" and _has_ebay_verification_restriction(recent_platform_errors or []):
         return "eBay 拒绝了最近一次正式发布并暂时限制账号；Offer 仍未公开，捷境已暂停后续真实写入。"
     return "账号存在冻结、受限、付款冻结或额度风险；系统进入事故模式，只允许诊断、证据包和只读同步。"
@@ -507,6 +526,7 @@ def _next_actions(
     *,
     business_policies_present: bool,
     recent_platform_errors: list[dict[str, Any]] | None = None,
+    restrictions: list[str] | None = None,
 ) -> list[str]:
     if status == "registration_incomplete":
         return [
@@ -529,6 +549,12 @@ def _next_actions(
             "复核 seller limits、policy warnings、业务政策和最近 eBay 拒绝记录。",
             "降低测试发布价格/数量，必要时先跑只读同步和证据包。",
         ]
+    if status in {"restricted", "payout_hold"} and _has_kyc_restriction(restrictions or []):
+        return [
+            "在 eBay 官方页面打开账户资料或 KYC 待办，按 eBay 当前要求完成核验；无需重新授权。",
+            "等待 eBay 清除待办后回到捷境刷新官方只读数据；旧 Offer、Listing 草稿和素材无需重建。",
+            "捷境确认 KYC 状态为 clear 后，再生成新的精确发布确认单，并在动作时确认后提交一次。",
+        ]
     if status == "restricted" and _has_ebay_verification_restriction(recent_platform_errors or []):
         return [
             "在 eBay 站内信打开官方核验通知，并按要求提交一份有效且未修改的证明文件，完成资料核验；无需重新授权。",
@@ -544,6 +570,32 @@ def _next_actions(
 
 def _has_ebay_verification_restriction(errors: list[dict[str, Any]]) -> bool:
     return any(str(item.get("error_id") or "").strip() == "25019" for item in errors if isinstance(item, dict))
+
+
+def _has_kyc_restriction(restrictions: list[str]) -> bool:
+    text = " ".join(str(item or "") for item in restrictions).lower().replace("_", " ")
+    return "kyc verification required" in text or "kyc status unknown" in text
+
+
+def _safe_kyc_evidence(checks: list[Any]) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    for raw in checks[:10]:
+        if not isinstance(raw, dict):
+            continue
+        evidence.append(
+            {
+                key: value
+                for key, value in {
+                    "data_required": str(raw.get("data_required") or "").strip()[:80],
+                    "alert": str(raw.get("alert") or "").strip()[:240],
+                    "detail": str(raw.get("detail") or "").strip()[:480],
+                    "due_date": str(raw.get("due_date") or "").strip()[:80],
+                    "remedy_available": bool(raw.get("remedy_available")),
+                }.items()
+                if value not in ("", None)
+            }
+        )
+    return evidence
 
 
 def _onboarding_stage(*, status: str, business_policies_present: bool) -> str:

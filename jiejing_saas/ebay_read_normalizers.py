@@ -40,6 +40,11 @@ def normalize_read_resource(resource_key: str, raw: dict[str, Any]) -> dict[str,
             "registered_country": _first(raw, "registered_country", "country"),
             "seller_level": _first(raw, "seller_level", "seller_standing"),
             "policy_setup_status": _first(raw, "policy_setup_status", "policy_status"),
+            "kyc_check_status": _first(raw, "kyc_check_status"),
+            "kyc_check_count": _first(raw, "kyc_check_count"),
+            "kyc_checks": _first(raw, "kyc_checks"),
+            "verification_status": _first(raw, "verification_status"),
+            "payout_status": _first(raw, "payout_status"),
         }
     elif resource_key == "account_business_policies":
         normalized = {

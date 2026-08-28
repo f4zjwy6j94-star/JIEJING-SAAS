@@ -1150,6 +1150,37 @@ class EbayWriteHttpAdapter:
         access_token = str(token["access_token"])
         base_url = _base_url(self.settings)
         steps: list[dict[str, Any]] = []
+        kyc_path = "/sell/account/v1/kyc"
+        kyc_result = self._get_json(
+            url=f"{base_url}{kyc_path}",
+            access_token=access_token,
+            marketplace_id=marketplace_id,
+        )
+        steps.append(_step_summary("inspect_account_kyc", kyc_path, kyc_result))
+        if kyc_result.get("status") != "ok":
+            return _write_result(
+                "controlled_publish_account_verification_inspection_failed",
+                "The current eBay account verification state could not be checked, so publishOffer was not called.",
+                steps,
+                preflight=preflight,
+            )
+        kyc_json = kyc_result.get("json") if isinstance(kyc_result.get("json"), dict) else {}
+        kyc_checks = _safe_ebay_kyc_checks(kyc_json)
+        if kyc_checks:
+            return _write_result(
+                "controlled_publish_account_verification_required",
+                "eBay still has an account verification or KYC action item; publishOffer was not called.",
+                steps,
+                preflight=preflight,
+                platform_result={
+                    "account_verification_status": "verification_required",
+                    "kyc_check_count": len(kyc_checks),
+                    "kyc_checks": kyc_checks,
+                    "published_to_ebay": False,
+                    "raw_response_stored": False,
+                    "secret_exposed": False,
+                },
+            )
         offers_path = f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku, safe='')}"
         offers_result = self._get_json(
             url=f"{base_url}{offers_path}",
@@ -3035,12 +3066,21 @@ def _cleanup_write_result(
     }
 
 
-def _write_result(status: str, message: str, steps: list[dict[str, Any]], *, preflight: dict[str, Any]) -> dict[str, Any]:
+def _write_result(
+    status: str,
+    message: str,
+    steps: list[dict[str, Any]],
+    *,
+    preflight: dict[str, Any],
+    platform_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    safe_platform_result = platform_result or {}
     return {
         "status": status,
         "action_type": "publish_listing",
         "message": message,
         "steps": steps,
+        "platform_result": safe_platform_result,
         "audit": {
             "preflight": preflight,
             "real_execution": {
@@ -3053,9 +3093,27 @@ def _write_result(status: str, message: str, steps: list[dict[str, Any]], *, pre
             "access_token_returned_to_frontend": False,
             "access_token_returned_to_runtime": False,
             "raw_response_stored": False,
+            "platform_result": safe_platform_result,
         },
         "secret_exposed": False,
     }
+
+
+def _safe_ebay_kyc_checks(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_checks = payload.get("kycChecks") if isinstance(payload.get("kycChecks"), list) else []
+    checks: list[dict[str, Any]] = []
+    for raw in raw_checks[:10]:
+        if not isinstance(raw, dict):
+            continue
+        safe = {
+            "data_required": str(raw.get("dataRequired") or "").strip()[:80],
+            "alert": str(raw.get("alert") or "").strip()[:240],
+            "detail": str(raw.get("detailMessage") or "").strip()[:480],
+            "due_date": str(raw.get("dueDate") or "").strip()[:80],
+            "remedy_available": bool(raw.get("remedyUrl")),
+        }
+        checks.append({key: value for key, value in safe.items() if value not in ("", None)})
+    return checks
 
 
 def _draft_write_result(

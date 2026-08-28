@@ -82,7 +82,7 @@ def main() -> int:
             company_id="company_live_test",
             store=store,
             user_id="user_live_test",
-            requested_resources=["account_business_policies", "inventory_and_offers", "taxonomy_listing_metadata"],
+            requested_resources=["store_profile", "account_business_policies", "inventory_and_offers", "taxonomy_listing_metadata"],
             secret_refs=[{"secret_ref": "secret_live_ebay", "provider": "ebay", "purpose": "ebay_refresh_token", "status": "external_vault_required"}],
             connections=[{"connection_id": "conn_live_ebay", "platform": "ebay", "connection_type": "oauth", "status": "read_only_authorized", "scopes": ["sell.account.readonly", "sell.inventory.readonly"]}],
             token_refresh_plan=token_refresh_plan,
@@ -114,8 +114,11 @@ def main() -> int:
             for route in routed_root_plan.get("route_requests", [])
             if isinstance(route, dict)
         }
-        if routed_by_key.get("store_profile", {}).get("path_templates") != ["/sell/account/v1/privilege"]:
-            return fail("store profile route should use the official Account API privilege endpoint")
+        if routed_by_key.get("store_profile", {}).get("path_templates") != [
+            "/sell/account/v1/privilege",
+            "/sell/account/v1/kyc",
+        ]:
+            return fail("store profile route should use both official privilege and KYC endpoints")
         if routed_by_key.get("store_profile", {}).get("query_template") != {}:
             return fail("store profile privilege route should not send unsupported query params")
         if not str(routed_by_key.get("finances", {}).get("base_url") or "").startswith("https://apiz."):
@@ -128,7 +131,14 @@ def main() -> int:
             if auth == "Bearer FAKE-ACCESS-TOKEN-MUST-NOT-LEAK":
                 seen_authorized["value"] = True
             url = request.full_url
-            if "fulfillment_policy" in url:
+            if url.endswith("/sell/account/v1/privilege"):
+                body = {
+                    "sellerRegistrationCompleted": True,
+                    "sellingLimit": {"amount": {"value": "1000", "currency": "USD"}, "quantity": 100},
+                }
+            elif url.endswith("/sell/account/v1/kyc"):
+                body = {}
+            elif "fulfillment_policy" in url:
                 body = {"fulfillmentPolicies": [{"fulfillmentPolicyId": "FULFILL-1", "handlingTime": {"value": 2}, "shippingOptions": [{"shippingServices": [{"shippingServiceCode": "SpeedPAK Economy"}]}]}]}
             elif "payment_policy" in url:
                 body = {"paymentPolicies": [{"paymentPolicyId": "PAY-1"}]}
@@ -202,6 +212,12 @@ def main() -> int:
             return fail("official data packet should expose route-level health")
         if packet.get("retry_policy", {}).get("real_platform_writes_enabled") is not False:
             return fail("packet retry policy must not enable platform writes")
+        store_profile = next(
+            (section.get("data") for section in packet.get("sections", []) if section.get("key") == "store_profile"),
+            {},
+        )
+        if store_profile.get("kyc_check_status") != "clear" or store_profile.get("kyc_check_count") != 0:
+            return fail(f"official packet must preserve a completed KYC read as clear: {store_profile}")
 
         os.environ.pop("JIEJING_EBAY_ACCESS_TOKEN", None)
         os.environ["JIEJING_EBAY_TOKEN_REFRESH_LIVE"] = "true"
