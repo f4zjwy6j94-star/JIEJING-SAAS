@@ -36,6 +36,7 @@ def main() -> None:
     activity_scope = (
         function_scope(app_js, "renderSaasHistoricalProjectArchive")
         + function_scope(app_js, "saasMerchantProjectWorkRecordItems")
+        + function_scope(app_js, "saasMerchantWorkRecordStatusLabel")
         + function_scope(app_js, "renderSaasMerchantWorkRecordIndex")
         + function_scope(app_js, "renderSaasActivityCenter")
     )
@@ -69,10 +70,16 @@ def main() -> None:
         "完整工作留痕",
         "merchant_project_work_record_index_v1",
         "同名商品和旧演示记录不会自动混入",
+        "AI 已回复",
+        "待审核",
+        "受阻，等待处理",
         "saas-activity-simple-list",
         "历史项目归档",
     ]:
         require(activity_scope, marker, "AI CEO report center simplified surface")
+
+    if "${escapeHtml(item.status)}" in activity_scope:
+        raise AssertionError("AI CEO work records must not expose raw backend status codes")
 
     for marker in [
         "只让你处理真正要拍板的事",

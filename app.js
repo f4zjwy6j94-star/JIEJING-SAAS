@@ -37303,6 +37303,40 @@ function saasMerchantWorkRecordTypeLabel(type = "") {
   }[String(type || "")] || "工作记录";
 }
 
+function saasMerchantWorkRecordStatusLabel(status = "") {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const exact = {
+    model_answered: "AI 已回复",
+    waiting_review: "待审核",
+    needs_review: "待审核",
+    approved_for_listing: "已通过审核",
+    needs_revision: "待修改",
+    completed: "已完成",
+    completed_with_blocks: "已完成，有待补项",
+    success: "已完成",
+    partial_success: "部分完成",
+    saved: "已保存",
+    pending: "待处理",
+    queued: "排队中",
+    running: "处理中",
+    processing: "处理中",
+    provider_returned: "结果待整理",
+    approved: "已批准",
+    rejected: "已拒绝",
+    failed: "失败",
+    cancelled: "已取消",
+  }[normalized];
+  if (exact) return exact;
+  if (normalized.includes("block") || normalized.includes("restrict")) return "受阻，等待处理";
+  if (normalized.includes("fail") || normalized.includes("error")) return "失败";
+  if (normalized.includes("wait") || normalized.includes("pending") || normalized.includes("queue")) return "待处理";
+  if (normalized.includes("run") || normalized.includes("process")) return "处理中";
+  if (normalized.includes("complete") || normalized.includes("success")) return "已完成";
+  if (normalized.includes("save")) return "已保存";
+  return "已记录";
+}
+
 function renderSaasMerchantWorkRecordIndex(snapshot = state.saasMerchantProjectStatus) {
   const items = saasMerchantProjectWorkRecordItems(snapshot);
   return `
@@ -37321,7 +37355,7 @@ function renderSaasMerchantWorkRecordIndex(snapshot = state.saasMerchantProjectS
                 .map(
                   (item) => `
                     <article data-work-record-id="${escapeHtml(item.recordId)}">
-                      <span>${escapeHtml(saasMerchantWorkRecordTypeLabel(item.recordType))}${item.status ? ` · ${escapeHtml(item.status)}` : ""}</span>
+                      <span>${escapeHtml(saasMerchantWorkRecordTypeLabel(item.recordType))}${item.status ? ` · ${escapeHtml(saasMerchantWorkRecordStatusLabel(item.status))}` : ""}</span>
                       <strong>${escapeHtml(item.title)}</strong>
                       <p>${escapeHtml(item.summary)}</p>
                       <div class="button-row">
