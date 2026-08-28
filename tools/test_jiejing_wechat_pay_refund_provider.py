@@ -205,6 +205,23 @@ def main() -> int:
     if "must-not-leave" in json.dumps(processing, ensure_ascii=False):
         return fail("provider payout-account fields must not cross the backend boundary")
 
+    duplicate_processing = execute_approved_domestic_billing_refund(
+        repository,
+        company_id=company_id,
+        user_id=user_id,
+        order_id=order_id,
+        provider_refund=approved_provider_refund,
+    )
+    if (
+        duplicate_processing.get("status") != "refund_processing"
+        or duplicate_processing.get("duplicate_request") is not True
+        or duplicate_processing.get("provider_query_required") is not True
+        or duplicate_processing.get("calls_external_payment_api") is not False
+        or duplicate_processing.get("triggers_real_refund") is not False
+        or len(provider_calls) != 1
+    ):
+        return fail(f"a processing refund must be queried, never submitted to the provider twice: {duplicate_processing}, {provider_calls}")
+
     def query_transport(**request: Any) -> WeChatPayTransportResponse:
         response = {
             "refund_id": "wx-refund-provider-success",

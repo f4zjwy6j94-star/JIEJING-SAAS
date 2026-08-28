@@ -16520,6 +16520,58 @@ function openSaasReadOnlyOAuthConfirmationCenter() {
   renderConfirmations();
 }
 
+function isSaasDomesticBillingRefundConfirmation(card = {}) {
+  const item = card?.item && typeof card.item === "object" ? card.item : {};
+  const orderId = String(item.order_id || "").trim();
+  return Boolean(
+    orderId &&
+      String(card.action_type || item.action_type || "") === "refund" &&
+      !String(card.store_id || "").trim() &&
+      !String(card.task_id || "").trim() &&
+      String(card.runtime_run_id || "") === `billing_refund:${orderId}` &&
+      String(item.source || "") === "domestic_billing_refund_review" &&
+      String(item.scope || "") === "account" &&
+      item.full_refund_only === true &&
+      item.moves_money === true &&
+      item.approval_does_not_execute === true &&
+      item.provider_call_pending === true,
+  );
+}
+
+function saasDomesticRefundOrderForConfirmation(card = {}) {
+  if (!isSaasDomesticBillingRefundConfirmation(card)) return null;
+  const orderId = String(card.item?.order_id || "").trim();
+  return (state.saasDomesticBillingOrders || []).find((order) => String(order?.order_id || "") === orderId) || null;
+}
+
+function renderSaasDomesticRefundConfirmationAction(card = {}) {
+  const order = saasDomesticRefundOrderForConfirmation(card);
+  if (!order) {
+    return '<div class="runtime-confirm-actions"><small>正在读取对应付款订单；不会自动提交退款。</small></div>';
+  }
+  if (String(card.status || "") === "approved" && String(order.status || "") === "refund_review_requested") {
+    return `
+      <div class="runtime-confirm-actions">
+        <small>已批准但尚未提交微信退款；执行前会再次显示资金动作确认。</small>
+        <button class="primary-action" type="button" data-saas-action="domestic-billing-refund-execute" data-domestic-order-id="${escapeHtml(order.order_id || "")}">执行已批准退款</button>
+      </div>
+    `;
+  }
+  if (["refund_processing", "refund_failed"].includes(String(order.status || ""))) {
+    return `
+      <div class="runtime-confirm-actions">
+        <small>退款状态：${escapeHtml(saasDomesticBillingStatusLabel(order.status))}。状态刷新只查询微信支付，不会再次提交退款。</small>
+        <button class="secondary-action" type="button" data-saas-action="domestic-billing-refund-query" data-domestic-order-id="${escapeHtml(order.order_id || "")}">刷新退款状态</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="runtime-confirm-actions">
+      <small>退款状态：${escapeHtml(saasDomesticBillingStatusLabel(order.status))}</small>
+    </div>
+  `;
+}
+
 function saasConfirmationActionAttributes(card = {}) {
   if (isSaasControlledExistingDraftPublishConfirmation(card)) {
     return isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card, state.saasConfirmations || [])
@@ -17337,6 +17389,7 @@ function saasProductLabelForRecord(record = {}) {
 
 function saasProductLabelForConfirmation(card = {}) {
   const safeCard = card && typeof card === "object" ? card : {};
+  if (isSaasDomesticBillingRefundConfirmation(safeCard)) return "";
   const item = safeCard.item && typeof safeCard.item === "object" ? safeCard.item : {};
   const publishPayload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
   const listing = publishPayload.listing && typeof publishPayload.listing === "object" ? publishPayload.listing : {};
@@ -18944,6 +18997,9 @@ function saasWorkbenchActionLabel(action = "") {
 
 function saasConfirmationApproveButtonLabel(card = {}) {
   const actionType = card.action_type || card.item?.action_type || "";
+  if (isSaasDomesticBillingRefundConfirmation(card)) {
+    return "批准退款申请";
+  }
   if (actionType === "ebay_read_only_sync") {
     return "同意这次只读同步";
   }
@@ -18984,6 +19040,9 @@ function saasConfirmationApproveButtonLabel(card = {}) {
 function saasWorkbenchConfirmationTitle(card = {}) {
   const item = card.item && typeof card.item === "object" ? card.item : {};
   const actionType = card.action_type || item.action_type;
+  if (isSaasDomesticBillingRefundConfirmation(card)) {
+    return "订单全额退款";
+  }
   if (actionType === "cleanup_test_listing") {
     const listingId = item.listing_id || item.platform_result?.listing_id || card.platform_result?.listing_id || "";
     return `测试 Listing 清理${listingId ? ` · ${listingId}` : ""}`;
@@ -20314,7 +20373,9 @@ function renderSaasConfirmPanel() {
             ${visible
               .map((card) => {
                 const status = card.status || "pending";
-                const cardProduct = saasProductLabelForConfirmation(card) || productLabel;
+                const cardProduct = isSaasDomesticBillingRefundConfirmation(card)
+                  ? ""
+                  : saasProductLabelForConfirmation(card) || productLabel;
                 return `
                   <article class="runtime-confirm-card saas-confirm-card">
                     <div class="saas-confirm-card-top">
@@ -20362,6 +20423,8 @@ function renderSaasConfirmPanel() {
                                    <button class="primary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(card)}>${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>`
                             }
                           </div>`
+                        : status === "approved" && isSaasDomesticBillingRefundConfirmation(card)
+                          ? renderSaasDomesticRefundConfirmationAction(card)
                         : status === "external_execution_processing_manual_reconcile" &&
                             isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, allCards)
                           ? `<div class="runtime-confirm-actions">
@@ -27679,6 +27742,7 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
       confirmation,
       state.saasConfirmations || [],
     );
+    const isDomesticBillingRefund = isSaasDomesticBillingRefundConfirmation(confirmation);
     if (isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) && !isExactReadOnlyOAuth && !isExactUnpublishedDraftOAuth) {
       showActionToast("eBay 授权确认不唯一、格式异常或不属于当前店铺；系统没有执行批准，请刷新确认中心。");
       return;
@@ -27704,7 +27768,9 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
       method: "POST",
       body: JSON.stringify({
         decision: "approve",
-        note: isExactReadOnlyOAuth
+        note: isDomesticBillingRefund
+          ? "Merchant approved the exact account-scoped full refund review. Approval does not call the payment provider; refund execution remains a separate explicit action."
+          : isExactReadOnlyOAuth
           ? "Owner approved the exact current-store seller_read_only OAuth confirmation. No OAuth plan is created by this decision."
           : isExactUnpublishedDraftOAuth
             ? "Owner approved the exact current-store seller_unpublished_draft OAuth confirmation. This decision creates no OAuth plan and performs no platform write."
@@ -27755,6 +27821,12 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
       }
       renderSaasBackendPanel();
       showActionToast("库存位置确认已批准。返回 Listing 后再点一次“执行已批准的库存位置创建”，系统才会写入 eBay。");
+      return;
+    }
+    if (isDomesticBillingRefund) {
+      await refreshSaasState({ silent: true });
+      renderSaasBackendPanel();
+      showActionToast("退款申请已批准；这里不会自动退款。请再次点击“执行已批准退款”后，系统才会向微信支付提交退款。");
       return;
     }
     const preflight = await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/preflight`, {
@@ -30542,6 +30614,64 @@ async function runSaasDomesticBillingRefundRequest(button) {
   }
 }
 
+async function runSaasDomesticBillingExecuteRefund(button) {
+  const orderId = String(button?.dataset?.domesticOrderId || "").trim();
+  if (!orderId) return;
+  const confirmed = window.confirm(
+    `确认向微信支付提交订单 ${orderId} 的全额退款吗？这是资金动作；提交后可能立即进入退款处理中，不能在捷境内撤销。`,
+  );
+  if (!confirmed) return;
+  state.saasLoading = true;
+  renderSaasBillingActionSurfaces();
+  try {
+    const response = await saasFetch(`/billing/domestic/orders/${encodeURIComponent(orderId)}/refund-execute`, {
+      method: "POST",
+      body: "{}",
+    });
+    const result = response.domestic_billing_refund_execution || {};
+    await refreshSaasState({ silent: true });
+    if (result.status === "refunded") {
+      showActionToast("退款已由微信支付确认完成，订单与权益状态已经更新。");
+    } else if (result.status === "refund_processing" && result.triggers_real_refund === true) {
+      showActionToast("退款已提交微信支付，当前为退款处理中；不会自动重复提交。");
+    } else {
+      showActionToast("退款请求已受理，请按订单中的最新状态继续核对。");
+    }
+  } catch (error) {
+    showActionToast(`退款没有执行成功：${String(error.message || error)}。系统不会自动重试。`);
+  } finally {
+    state.saasLoading = false;
+    renderSaasBillingActionSurfaces();
+  }
+}
+
+async function runSaasDomesticBillingQueryRefund(button) {
+  const orderId = String(button?.dataset?.domesticOrderId || "").trim();
+  if (!orderId) return;
+  state.saasLoading = true;
+  renderSaasBillingActionSurfaces();
+  try {
+    const response = await saasFetch(`/billing/domestic/orders/${encodeURIComponent(orderId)}/refund-query`, {
+      method: "POST",
+      body: "{}",
+    });
+    const result = response.domestic_billing_refund_query || {};
+    await refreshSaasState({ silent: true });
+    if (result.status === "refunded") {
+      showActionToast("微信支付已确认退款完成，订单与对应权益已经更新。");
+    } else if (result.status === "refund_processing") {
+      showActionToast("退款仍在微信支付处理中；本次只刷新状态，不会重复提交退款。");
+    } else {
+      showActionToast("退款状态已刷新，请查看订单中的最新结果。");
+    }
+  } catch (error) {
+    showActionToast(`退款状态暂时无法刷新：${String(error.message || error)}。系统不会重复提交退款。`);
+  } finally {
+    state.saasLoading = false;
+    renderSaasBillingActionSurfaces();
+  }
+}
+
 function handleSaasAction(button) {
   const action = button.dataset.saasAction;
   if (action === "login-session") {
@@ -30690,6 +30820,8 @@ function handleSaasAction(button) {
     "domestic-billing-query-order",
     "domestic-billing-close-order",
     "domestic-billing-refund-request",
+    "domestic-billing-refund-execute",
+    "domestic-billing-refund-query",
     "media-credit-purchase",
   ]);
   if (protectedActions.has(action) && !requireSaasProtectedSessionForAction()) return;
@@ -30834,6 +30966,14 @@ function handleSaasAction(button) {
   }
   if (action === "domestic-billing-refund-request") {
     runSaasDomesticBillingRefundRequest(button);
+    return;
+  }
+  if (action === "domestic-billing-refund-execute") {
+    runSaasDomesticBillingExecuteRefund(button);
+    return;
+  }
+  if (action === "domestic-billing-refund-query") {
+    runSaasDomesticBillingQueryRefund(button);
     return;
   }
 }
@@ -33507,11 +33647,34 @@ function saasDomesticBillingStatusLabel(status) {
     closed: "已取消",
     payment_failed: "付款未完成",
     refund_review_requested: "退款审核中",
+    refund_processing: "退款处理中",
     refunded: "已退款",
     refund_failed: "退款处理失败",
     rehearsal_order_created: "在线付款未开放",
   };
   return labels[String(status || "")] || "处理中";
+}
+
+function renderSaasDomesticRefundOrderActions(order = {}) {
+  const orderId = String(order?.order_id || "").trim();
+  const orderStatus = String(order?.status || "");
+  if (!orderId) return "";
+  const confirmation = (state.saasConfirmations || []).find(
+    (card) => isSaasDomesticBillingRefundConfirmation(card) && String(card.item?.order_id || "") === orderId,
+  );
+  if (orderStatus === "refund_review_requested") {
+    if (String(confirmation?.status || "") === "approved") {
+      return `<button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-refund-execute" data-domestic-order-id="${escapeHtml(orderId)}">执行已批准退款</button>`;
+    }
+    if (String(confirmation?.status || "") === "pending") {
+      return '<button class="secondary-action compact-action" type="button" data-saas-action="open-confirm">去确认退款</button>';
+    }
+    return '<small>退款申请正在复核；尚未向微信支付提交。</small>';
+  }
+  if (["refund_processing", "refund_failed"].includes(orderStatus)) {
+    return `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-refund-query" data-domestic-order-id="${escapeHtml(orderId)}">刷新退款状态</button>`;
+  }
+  return "";
 }
 
 function renderSaasMerchantMediaCreditsPanel() {
@@ -33637,6 +33800,7 @@ function renderSaasMerchantMediaCreditsPanel() {
                   ${order.can_continue_payment ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-continue-order" data-domestic-order-id="${escapeHtml(order.order_id || "")}">继续付款</button>` : ""}
                   ${order.status === "pending_payment" ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-query-order" data-domestic-order-id="${escapeHtml(order.order_id || "")}">刷新状态</button>` : ""}
                   ${order.can_request_refund ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-refund-request" data-domestic-order-id="${escapeHtml(order.order_id || "")}">申请退款</button>` : ""}
+                  ${renderSaasDomesticRefundOrderActions(order)}
                 </div>
               </article>
             `).join("")}
@@ -33754,6 +33918,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
           ${orderStatus === "pending_payment" ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-query-order" data-domestic-order-id="${escapeHtml(order.order_id || "")}">刷新状态</button>` : ""}
           ${canClose ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-close-order" data-domestic-order-id="${escapeHtml(order.order_id || "")}">取消本次付款</button>` : ""}
           ${canRefund ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-refund-request" data-domestic-order-id="${escapeHtml(order.order_id || "")}">申请退款</button>` : ""}
+          ${renderSaasDomesticRefundOrderActions(order)}
         </div>
       </article>
     `;

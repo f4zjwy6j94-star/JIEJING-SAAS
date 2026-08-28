@@ -2748,6 +2748,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "billing/domestic/orders":
+            if not self._require_permission(identity, "manage_billing"):
+                return
             orders = self.repository.list_domestic_billing_orders(
                 company_id=identity["company_id"],
                 limit=_query_limit(query, default=20, maximum=100) or 20,
@@ -2774,6 +2776,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 4 and parts[:3] == ["billing", "domestic", "orders"]:
+            if not self._require_permission(identity, "manage_billing"):
+                return
             order = self.repository.get_domestic_billing_order(company_id=identity["company_id"], order_id=parts[3])
             if not order:
                 self._send_error(HTTPStatus.NOT_FOUND, "domestic billing order not found")
@@ -9425,6 +9429,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not confirmation:
                 self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
                 return
+            if _is_domestic_billing_refund_confirmation(confirmation):
+                self._send_error(HTTPStatus.CONFLICT, "domestic_billing_refund_requires_dedicated_execution")
+                return
             payload = _execution_payload_from_context(
                 repository=self.repository,
                 company_id=identity["company_id"],
@@ -9754,6 +9761,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             confirmation = self.repository.get_confirmation(company_id=identity["company_id"], confirmation_id=parts[1])
             if not confirmation:
                 self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
+                return
+            if _is_domestic_billing_refund_confirmation(confirmation):
+                self._send_error(HTTPStatus.CONFLICT, "domestic_billing_refund_requires_dedicated_execution")
                 return
             if (
                 confirmation["status"] == "external_execution_claimed_prewrite"
@@ -13192,6 +13202,24 @@ def _controlled_existing_draft_publish_readiness(
         "disclosed_missing_facts": disclosed,
         "secret_exposed": False,
     }
+
+
+def _is_domestic_billing_refund_confirmation(confirmation: dict[str, Any]) -> bool:
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    order_id = str(item.get("order_id") or "").strip()
+    return bool(
+        order_id
+        and confirmation.get("action_type") == "refund"
+        and confirmation.get("store_id") is None
+        and confirmation.get("task_id") is None
+        and str(confirmation.get("runtime_run_id") or "") == f"billing_refund:{order_id}"
+        and str(item.get("source") or "") == "domestic_billing_refund_review"
+        and str(item.get("scope") or "") == "account"
+        and item.get("full_refund_only") is True
+        and item.get("moves_money") is True
+        and item.get("approval_does_not_execute") is True
+        and item.get("provider_call_pending") is True
+    )
 
 
 def _is_controlled_existing_draft_publish_confirmation(confirmation: dict[str, Any]) -> bool:

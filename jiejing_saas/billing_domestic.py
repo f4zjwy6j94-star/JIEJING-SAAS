@@ -831,6 +831,19 @@ def execute_approved_domestic_billing_refund(
             "triggers_real_refund": False,
             "secret_exposed": False,
         }
+    if order.get("status") == "refund_processing":
+        return {
+            "ok": True,
+            "status": "refund_processing",
+            "order_id": normalized_order,
+            "duplicate_request": True,
+            "provider_query_required": True,
+            "confirmation_id": approval.get("confirmation_id"),
+            "calls_external_payment_api": False,
+            "triggers_real_refund": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        }
     if order.get("status") not in {"refund_review_requested", "refund_processing"}:
         return _blocked("domestic_billing_order_not_refundable", http_status=409)
     order_payload = order.get("order") if isinstance(order.get("order"), dict) else {}

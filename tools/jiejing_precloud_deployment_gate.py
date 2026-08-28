@@ -138,6 +138,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("domestic_billing_api", [sys.executable, "tools/test_jiejing_domestic_billing_api.py"]),
     ("domestic_billing_orders", [sys.executable, "tools/test_jiejing_domestic_billing_orders.py"]),
     ("domestic_billing_refund", [sys.executable, "tools/test_jiejing_domestic_billing_refund.py"]),
+    ("domestic_billing_refund_browser", [sys.executable, "tools/test_jiejing_domestic_billing_refund_browser.py"]),
     ("domestic_billing_production_completion", [sys.executable, "tools/test_jiejing_domestic_billing_production_completion.py"]),
     ("domestic_billing_merchant_ui", [sys.executable, "tools/test_jiejing_domestic_billing_merchant_ui.py"]),
     ("domestic_billing_operations", [sys.executable, "tools/test_jiejing_domestic_billing_operations.py"]),

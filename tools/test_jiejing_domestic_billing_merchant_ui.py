@@ -127,6 +127,81 @@ def main() -> int:
         if marker in app:
             print(f"FAIL app.js contains misleading auto-renew style price: {marker}")
             return 1
+    approval_start = app.index("async function approveFirstSaasConfirmation")
+    approval_end = app.index("\nasync function loginSaasBackendSession", approval_start)
+    approval_flow = app[approval_start:approval_end]
+    domestic_refund_guard = approval_flow.find("isSaasDomesticBillingRefundConfirmation")
+    generic_preflight = approval_flow.find("/preflight")
+    if domestic_refund_guard < 0 or generic_preflight < 0 or domestic_refund_guard > generic_preflight:
+        print("FAIL approved domestic refunds must stop before the generic eBay confirmation preflight")
+        return 1
+    if "执行已批准退款" not in approval_flow or "这里不会自动退款" not in approval_flow:
+        print("FAIL refund approval must explain the separate explicit money-moving step")
+        return 1
+    approval_label_start = app.index("function saasConfirmationApproveButtonLabel")
+    approval_label_end = app.index("\nfunction saasWorkbenchConfirmationTitle", approval_label_start)
+    approval_labels = app[approval_label_start:approval_label_end]
+    if "isSaasDomesticBillingRefundConfirmation" not in approval_labels or "批准退款申请" not in approval_labels:
+        print("FAIL a billing refund approval must not be mislabeled as if money moves immediately")
+        return 1
+    refund_execute_start = app.find("async function runSaasDomesticBillingExecuteRefund")
+    refund_execute_end = app.find("\nfunction handleSaasAction", refund_execute_start)
+    if refund_execute_start < 0 or refund_execute_end < 0:
+        print("FAIL approved refunds need a merchant-accessible explicit execution action")
+        return 1
+    refund_execute_flow = app[refund_execute_start:refund_execute_end]
+    for marker in [
+        "window.confirm",
+        "/refund-execute",
+        "domestic_billing_refund_execution",
+        "triggers_real_refund",
+        "退款处理中",
+    ]:
+        if marker not in refund_execute_flow:
+            print(f"FAIL explicit refund execution flow missing safety/result marker: {marker}")
+            return 1
+    for marker in [
+        '"domestic-billing-refund-execute"',
+        'data-saas-action="domestic-billing-refund-execute"',
+        "执行已批准退款",
+    ]:
+        if marker not in app:
+            print(f"FAIL approved refund execution is not wired into the confirmation center: {marker}")
+            return 1
+    refund_query_start = app.find("async function runSaasDomesticBillingQueryRefund")
+    refund_query_end = app.find("\nfunction handleSaasAction", refund_query_start)
+    if refund_query_start < 0 or refund_query_end < 0:
+        print("FAIL processing refunds need a read-safe merchant status refresh action")
+        return 1
+    refund_query_flow = app[refund_query_start:refund_query_end]
+    for marker in ["/refund-query", "domestic_billing_refund_query", "不会重复提交退款"]:
+        if marker not in refund_query_flow:
+            print(f"FAIL refund status refresh is missing its read-safe contract marker: {marker}")
+            return 1
+    for marker in ['"domestic-billing-refund-query"', 'data-saas-action="domestic-billing-refund-query"', "刷新退款状态"]:
+        if marker not in app:
+            print(f"FAIL processing refund status refresh is not wired into the merchant UI: {marker}")
+            return 1
+    refund_order_action_start = app.find("function renderSaasDomesticRefundOrderActions")
+    refund_order_action_end = app.find("\nfunction renderSaasMerchantMediaCreditsPanel", refund_order_action_start)
+    if refund_order_action_start < 0 or refund_order_action_end < 0:
+        print("FAIL billing order history needs one shared refund next-action renderer")
+        return 1
+    refund_order_actions = app[refund_order_action_start:refund_order_action_end]
+    for marker in ["refund_review_requested", "refund_processing", "refund_failed", "去确认退款", "执行已批准退款", "刷新退款状态"]:
+        if marker not in refund_order_actions:
+            print(f"FAIL billing order refund next-action renderer missing state: {marker}")
+            return 1
+    media_renderer_start = app.index("function renderSaasMerchantMediaCreditsPanel")
+    media_renderer_end = app.index("\nfunction renderSaasMerchantDomesticPaymentPanel", media_renderer_start)
+    payment_renderer_start = app.index("function renderSaasMerchantDomesticPaymentPanel")
+    payment_renderer_end = app.index("\nfunction renderSaasMerchantBillingEntitlementPathPanel", payment_renderer_start)
+    if "renderSaasDomesticRefundOrderActions(order)" not in app[media_renderer_start:media_renderer_end]:
+        print("FAIL media-point order history must expose the refund next action")
+        return 1
+    if "renderSaasDomesticRefundOrderActions(order)" not in app[payment_renderer_start:payment_renderer_end]:
+        print("FAIL subscription order history must expose the refund next action")
+        return 1
     customer_assets = {
         "app.js": app,
         "app.html": (ROOT / "app.html").read_text(encoding="utf-8"),
