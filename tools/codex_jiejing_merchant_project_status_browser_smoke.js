@@ -4,13 +4,105 @@
    trigger eBay OAuth, platform writes, charges, refunds, or media spend. */
 
 const fs = require("fs");
+const net = require("net");
+const os = require("os");
 const path = require("path");
+const { spawn } = require("child_process");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
 
-const base = process.env.JIEJING_TEST_BASE || "http://127.0.0.1:8788";
+let base = process.env.JIEJING_TEST_BASE || "";
 const localStaticRoot = path.resolve(process.env.JIEJING_LOCAL_STATIC_ROOT || path.join(__dirname, ".."));
 const browserChannel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
 const projectId = `project-incense-browser-${Date.now()}`;
+
+function reserveLocalPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = address && typeof address === "object" ? address.port : 0;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
+async function waitForOwnedBackend(backendBase, child) {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`isolated backend exited before health check: ${child.exitCode}`);
+    try {
+      const response = await fetch(`${backendBase}/health`, { cache: "no-store" });
+      if (response.ok) return;
+    } catch (_error) {
+      // The isolated backend may still be initializing its local schema.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error("isolated backend did not become healthy within 30 seconds");
+}
+
+async function startOwnedBackend() {
+  const tempParent = path.resolve(os.tmpdir());
+  const tempRoot = fs.mkdtempSync(path.join(tempParent, "jiejing-project-status-smoke-"));
+  const port = await reserveLocalPort();
+  const python = process.env.JIEJING_TEST_PYTHON || (process.platform === "win32" ? "python" : "python3");
+  const child = spawn(
+    python,
+    [
+      path.join(localStaticRoot, "tools", "jiejing_saas_backend_cli.py"),
+      "serve",
+      "--db",
+      path.join(tempRoot, "jiejing.sqlite3"),
+      "--runtime-db",
+      path.join(tempRoot, "runtime.sqlite3"),
+      "--output-root",
+      path.join(tempRoot, "runtime-output"),
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(port),
+    ],
+    {
+      cwd: localStaticRoot,
+      env: {
+        ...process.env,
+        JIEJING_ENVIRONMENT: "development",
+        JIEJING_ENABLE_REAL_PLATFORM_WRITES: "0",
+        JIEJING_EBAY_WRITE_ADAPTER_ENABLED: "0",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  );
+  child.stdout.resume();
+  child.stderr.resume();
+  const backendBase = `http://127.0.0.1:${port}`;
+  try {
+    await waitForOwnedBackend(backendBase, child);
+    return { child, tempRoot, tempParent, backendBase };
+  } catch (error) {
+    child.kill();
+    throw error;
+  }
+}
+
+async function stopOwnedBackend(owned) {
+  if (!owned) return;
+  if (owned.child.exitCode === null) {
+    owned.child.kill();
+    await Promise.race([
+      new Promise((resolve) => owned.child.once("exit", resolve)),
+      new Promise((resolve) => setTimeout(resolve, 5000)),
+    ]);
+    if (owned.child.exitCode === null) owned.child.kill("SIGKILL");
+  }
+  const resolvedRoot = path.resolve(owned.tempRoot);
+  if (path.dirname(resolvedRoot) === owned.tempParent && path.basename(resolvedRoot).startsWith("jiejing-project-status-smoke-")) {
+    fs.rmSync(resolvedRoot, { recursive: true, force: true });
+  }
+}
 
 async function api(pathname, { token = "", method = "GET", body } = {}) {
   const response = await fetch(`${base}${pathname}`, {
@@ -60,7 +152,7 @@ function contentTypeFor(filePath) {
   return "application/octet-stream";
 }
 
-async function main() {
+async function runSmoke() {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const email = `codex-project-status-${suffix}@local.invalid`;
   const registered = await api("/auth/register", {
@@ -436,6 +528,19 @@ async function main() {
   };
   console.log(JSON.stringify(result, null, 2));
   if (!ok) process.exitCode = 1;
+}
+
+async function main() {
+  let ownedBackend = null;
+  try {
+    if (!base) {
+      ownedBackend = await startOwnedBackend();
+      base = ownedBackend.backendBase;
+    }
+    await runSmoke();
+  } finally {
+    await stopOwnedBackend(ownedBackend);
+  }
 }
 
 main().catch((error) => {
