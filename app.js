@@ -4125,7 +4125,7 @@ function saasMediaManifestAssetPreview(key) {
     title: card.title,
     intro: conceptOnly
       ? "这张图没有真实商品来源图作为依据，只能帮助讨论构图和视觉方向；不能当作商品实拍，也不能审核通过后回写 Listing。"
-      : "这份素材来自后端素材生成通道，已经进入 AssetManifest。它现在是待审核素材，不会自动写入 eBay，也不会自动用于广告或发布。",
+      : "这份素材已经加入素材清单，目前仍需审核；不会自动写入 eBay，也不会自动用于广告或发布。",
     meta: card.reviewStatus === "not_ready_for_listing_until_review" ? "待审核后回写 Listing" : card.reviewStatus,
     productName,
     image: posterUrl,
@@ -4469,7 +4469,7 @@ function renderSaasMediaGeneratedAssetsPanel(ctx = saasMerchantWorkbenchContext(
         <div>
           <span>素材结果</span>
           <strong>${conceptOnly ? "概念参考图不可用于刊登" : "真实生成素材已进入审核清单"}</strong>
-          <p>${conceptOnly ? "当前任务没有真实商品来源图，这些结果只用于讨论构图；请上传实物图或有权使用的供应商图后重新生成。" : "这些图片来自后端素材生成通道，已经写入 AssetManifest。通过实物一致性、图片权利和平台规则审核后，才能回写 Listing 草稿。"}</p>
+          <p>${conceptOnly ? "当前任务没有真实商品来源图，这些结果只用于讨论构图；请上传实物图或有权使用的供应商图后重新生成。" : "这些图片已经加入素材清单。通过实物一致性、图片权利和平台规则审核后，才能回写 Listing 草稿。"}</p>
         </div>
         <em>${escapeHtml(saasMediaAssetJobStatusLabel(manifestJob))}</em>
       </div>
@@ -4653,7 +4653,7 @@ function renderSaasMediaAssetJobsPanel(ctx = saasMerchantWorkbenchContext()) {
         <div>
           <span>素材任务记录</span>
           <strong>${jobs.length ? "素材清单正在等待审核" : "等待商品草稿或来源图"}</strong>
-          <p>图片、详情页和视频脚本统一回到素材清单（AssetManifest）后再审核；没有清单就不能说已经可用于 Listing。</p>
+          <p>图片、详情页和视频脚本统一进入素材清单后再审核；没有完整清单就不能用于 Listing。</p>
         </div>
         <em>${jobs.length ? `${jobs.length} 个记录` : "未生成"}</em>
       </div>
@@ -6829,7 +6829,7 @@ function renderSaasBackendPublishPreflightPanel(readiness = {}, ctx = saasMercha
         <article class="is-${escapeHtml(summaryTone)}"><span>体检状态</span><strong>${escapeHtml(saasMerchantVisiblePublishCode(readiness.status || "ready", "已完成体检"))}</strong><small>${blocked ? "存在红项，禁止执行真实发布" : "无红项，但仍需商家确认"}</small></article>
         <article class="${readyForAdapter ? "is-green" : "is-amber"}"><span>发布交接</span><strong>${readyForAdapter ? "资料可交接" : "暂不可交接"}</strong><small>只有资料通过体检后，才会进入 eBay 发布交接。</small></article>
         <article class="${latestPublishConfirmation ? "is-green" : "is-red"}"><span>确认单</span><strong>${latestPublishConfirmation ? "已创建" : "待创建"}</strong><small>${latestPublishConfirmation?.confirmation_id ? `可核对编号：${latestPublishConfirmation.confirmation_id}` : "真实执行前必须创建确认项"}</small></article>
-        <article><span>资料来源</span><strong>${escapeHtml(ctx.latestPacket?.packet_id || "waiting")}</strong><small>只展示证据标识，不展示敏感凭证。</small></article>
+        <article><span>店铺资料</span><strong>${ctx.latestPacket?.packet_id ? "已关联" : "等待关联"}</strong><small>页面不展示店铺连接凭证。</small></article>
       </div>
       ${renderSaasBackendPreflightResolutionBoard(readiness)}
       <div class="saas-backend-preflight-list">
@@ -6881,7 +6881,7 @@ function renderSaasBackendPublishPreflightPanel(readiness = {}, ctx = saasMercha
                     <small>${escapeHtml(impact.detail)}</small>
                   </article>
                   <article class="is-${escapeHtml(gate.tone)}">
-                    <span>确认门禁</span>
+                    <span>确认要求</span>
                     <strong>${escapeHtml(gate.label)}</strong>
                     <small>${escapeHtml(gate.detail)}</small>
                   </article>
@@ -6960,7 +6960,7 @@ function renderSaasPublishConfirmationEvidencePanel(readiness = {}, ctx = saasMe
           <small>红项阻断，黄项复核，绿项只代表可送确认中心。</small>
         </article>
         <article class="${evidencePacket.checks_have_source_records ? "is-green" : "is-amber"}">
-          <span>体检证据包</span>
+          <span>体检依据</span>
           <strong>${evidencePacket.contract_version ? "已整理" : "等待生成"}</strong>
           <small>${evidencePacket.checks_have_source_records ? "已带来源记录" : "等待来源记录"}；${evidencePacket.checks_have_fix_actions ? "已带修复建议" : "等待修复建议"}</small>
         </article>
@@ -6971,11 +6971,11 @@ function renderSaasPublishConfirmationEvidencePanel(readiness = {}, ctx = saasMe
         </article>
         <article>
           <span>资料来源</span>
-          <strong>${escapeHtml(sourcePacket)}</strong>
-          <small>敏感连接信息不会显示在页面里</small>
+          <strong>${sourcePacket === "waiting" ? "等待店铺资料" : "已关联店铺资料"}</strong>
+          <small>页面不展示店铺连接凭证</small>
         </article>
         <article class="${writesAfterApproval ? "is-amber" : "is-green"}">
-          <span>真实动作门禁</span>
+          <span>发布确认</span>
           <strong>${writesAfterApproval ? "确认后才可交接" : "当前不执行平台动作"}</strong>
           <small>发布、改价、库存、退款、广告、付款和政策修改都在确认中心。</small>
         </article>
@@ -7113,7 +7113,7 @@ function renderSaasIncidentModeOpsPanel({ compact = false } = {}) {
       </div>
       <div class="saas-incident-mode-actions">
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !activeSaasStore() ? "disabled" : ""}>只读同步账号证据</button>
-        <button class="secondary-action" type="button" data-saas-action="open-activity">查看证据包</button>
+        <button class="secondary-action" type="button" data-saas-action="open-activity">查看检查详情</button>
         <button class="primary-action" type="button" data-saas-action="open-confirm">打开决策中心</button>
       </div>
     </section>
@@ -12458,7 +12458,7 @@ function recordMediaGeneration(sourceText = "商品图", options = {}) {
     ],
     result: returnedAssetCount
       ? `素材工坊实际返回 ${returnedAssetCount} 个素材文件并进入审核清单；未返回的图片或视频不计为已生成。发布、价格、广告、退款和买家消息发送仍按确认规则处理。`
-      : "素材工坊已整理素材草稿；真实文件以 AssetManifest 为准，未返回的图片或视频不计为已生成。发布、价格、广告、退款和买家消息发送仍按确认规则处理。",
+      : "素材工坊已整理素材草稿；只有素材清单中已返回的图片或视频才算生成成功。发布、价格、广告、退款和买家消息发送仍按确认规则处理。",
     status: "已完成",
     confidence: runNo > 1 ? "83%" : "79%",
   });
@@ -24505,7 +24505,6 @@ function renderSaasMerchantEvidencePanel(ctx = saasMerchantWorkbenchContext()) {
       detail: row?.detail || row?.summary || (status === "present" ? "店铺资料资源已可用" : "等待店铺资料证据"),
     };
   });
-  const packetId = ctx.latestPacket?.packet_id || "等待店铺资料";
   const reportTypes = new Set((ctx.reports || []).map((item) => String(item?.report_type || "")));
   const modelState = saasPrimaryTextAiState();
   const mediaState = saasMediaGenerationState();
@@ -24528,7 +24527,7 @@ function renderSaasMerchantEvidencePanel(ctx = saasMerchantWorkbenchContext()) {
         </article>
         <article class="${ctx.hasPacket ? "is-green" : "is-amber"}">
           <span>资料记录</span>
-          <strong>${escapeHtml(packetId)}</strong>
+          <strong>${ctx.hasPacket ? "已读取" : "等待读取"}</strong>
           <small>AI CEO 只读取整理后的店铺资料，不接触平台敏感凭证。</small>
         </article>
         <article class="is-${escapeHtml(modelState.tone)}">
@@ -25643,12 +25642,12 @@ function renderSaasWorkbenchTruthPanel() {
   const realBinding = saasRealBackendBindingStatus();
   const statusTitle = state.saasConnected
     ? realBinding.readyCount === realBinding.totalCount
-      ? "真实后端结果已进入工作台"
-      : "已登录，等待完整结果返回"
+      ? "经营数据已进入工作台"
+      : "已登录，部分经营数据仍在读取"
     : "先登录，再读取真实工作台结果";
   const statusCopy = state.saasConnected
-    ? "首页、同步面板、店铺资料、AI CEO 报告和确认中心会以捷境后端返回结果为准；AI CEO 只拿整理后的店铺资料。"
-    : "当前页面不会自动创建匿名账号。登录或注册后，前端会读取店铺、eBay 只读同步、店铺资料、AI CEO 报告和确认中心。";
+    ? "店铺资料、AI CEO 报告、Listing 草稿和待确认事项都会使用当前账号的最新记录；AI CEO 只读取整理后的店铺资料。"
+    : "登录或注册后，捷境会读取当前账号的店铺资料、经营报告、草稿和待确认事项。";
   return `
     <article class="saas-workbench-truth-panel ${state.saasConnected ? "is-connected" : "needs-login"}">
       <div class="saas-workbench-truth-head">
@@ -25658,7 +25657,7 @@ function renderSaasWorkbenchTruthPanel() {
           <p>${escapeHtml(statusCopy)}</p>
         </div>
         <div class="saas-workbench-truth-actions">
-          <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新真实结果</button>
+          <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新工作台</button>
           <button class="primary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>同步 eBay</button>
         </div>
       </div>
@@ -25675,23 +25674,23 @@ function renderSaasWorkbenchTruthPanel() {
         </article>
         <article class="${official ? "is-green" : "is-amber"}">
           <span>店铺资料</span>
-          <strong>${escapeHtml(packetId)}</strong>
-          <small>${escapeHtml(sourceMode)} · ${present.length} 类资源，${missing.length} 个缺口</small>
+          <strong>${escapeHtml(packetId === "等待登录读取" ? "等待读取" : "已读取")}</strong>
+          <small>${escapeHtml(saasMerchantSourceLabel(sourceMode))} · ${present.length} 类资料，${missing.length} 个缺口</small>
         </article>
         <article>
           <span>AI CEO 报告</span>
           <strong>${reportCount}</strong>
-          <small>${state.saasConnected ? "/reports 已读取" : "公开证据，不含私密数据"}</small>
+          <small>${state.saasConnected ? "已读取当前账号的经营报告" : "登录后查看经营报告"}</small>
         </article>
         <article>
           <span>确认中心</span>
           <strong>${confirmationCount}</strong>
-          <small>${state.saasConnected ? "/confirmations 已读取" : "发布、付款、退款仍需确认"}</small>
+          <small>${state.saasConnected ? "已读取当前账号的待确认事项" : "发布、付款、退款仍需确认"}</small>
         </article>
         <article>
-          <span>真实 API 来源</span>
+          <span>数据连接</span>
           <strong>${realBinding.readyCount}/${realBinding.totalCount}</strong>
-          <small>${escapeHtml(realBinding.endpoints.map((item) => `${item.path}:${item.ready ? "已读取" : "等待"}`).join(" · "))}</small>
+          <small>${realBinding.readyCount === realBinding.totalCount ? "店铺、报告和确认事项连接正常" : "部分经营数据仍在读取，请稍后刷新"}</small>
         </article>
       </div>
       <div class="saas-workbench-truth-links">
@@ -38032,15 +38031,26 @@ function renderSaasAccountHealthPanel() {
   const nextActions = Array.isArray(health.next_actions) ? health.next_actions : [];
   const onboardingGuidance = saasSellerOnboardingGuidance(health);
   const tone = saasAccountHealthTone(health);
+  const healthActionLabels = {
+    diagnostics: "检查账号",
+    evidence_package: "查看检查详情",
+    read_only_sync: "只读同步",
+    publish: "发布",
+    revise_price: "改价",
+    change_inventory: "改库存",
+    refund: "退款",
+    ads: "广告",
+    policy_change: "修改店铺政策",
+  };
   return `
     <section class="saas-settings-card saas-account-health-card">
       <div class="saas-settings-card-head">
         <div>
           <span>账号健康</span>
           <strong>${escapeHtml(health.label || "状态未知")}</strong>
-          <p>${escapeHtml(health.summary || "同步 eBay store_profile 后，捷境会显示账号是否正常、受限、冻结、付款冻结或额度不足。")}</p>
+          <p>${escapeHtml(health.summary || "同步 eBay 店铺资料后，捷境会显示账号是否正常、受限、冻结、付款冻结或额度不足。")}</p>
         </div>
-        <span class="pill ${tone}">${health.incident_mode ? "事故模式" : "可继续体检"}</span>
+        <span class="pill ${tone}">${health.incident_mode ? "保护模式" : "可继续检查"}</span>
       </div>
       <div class="saas-settings-status-list">
         <article class="is-${escapeHtml(tone)}">
@@ -38049,14 +38059,14 @@ function renderSaasAccountHealthPanel() {
           <small>${health.can_execute_real_writes ? "仍必须经过发布体检和决策中心。" : "发布、改价、库存、退款、广告、政策和敏感承诺全部停止。"}</small>
         </article>
         <article class="${evidence.official_packet_present ? "is-green" : "is-amber"}">
-          <span>账号快照来源</span>
-          <strong>${escapeHtml(evidence.packet_id || "等待同步")}</strong>
-          <small>${escapeHtml(evidence.official_packet_present ? "eBay 官方只读 packet" : "缺 store_profile 或官方 packet")}</small>
+          <span>店铺资料来源</span>
+          <strong>${evidence.packet_id ? "已读取" : "等待同步"}</strong>
+          <small>${evidence.official_packet_present ? "来自 eBay 官方只读数据" : "等待读取 eBay 店铺状态"}</small>
         </article>
         <article class="${evidence.store_profile_present ? "is-green" : "is-amber"}">
-          <span>Seller 状态</span>
-          <strong>${escapeHtml(evidence.seller_account_status || health.status || "unknown")}</strong>
-          <small>${escapeHtml(evidence.selling_limits ? `额度 ${saasCompactValue(evidence.selling_limits)}` : "未读取 selling limits")}</small>
+          <span>卖家账号</span>
+          <strong>${escapeHtml(saasMerchantVisiblePublishCode(evidence.seller_account_status || health.status, "等待账号状态"))}</strong>
+          <small>${escapeHtml(evidence.selling_limits ? `销售额度 ${saasCompactValue(evidence.selling_limits)}` : "等待读取销售额度")}</small>
         </article>
         <article class="${evidence.payout_status ? "is-amber" : "is-green"}">
           <span>付款/资金</span>
@@ -38079,9 +38089,9 @@ function renderSaasAccountHealthPanel() {
       ${
         health.incident_mode
           ? `<div class="saas-sync-failure-box">
-              <strong>事故模式处理</strong>
-              <p>允许：${escapeHtml(allowed.join(" / ") || "诊断 / 证据包 / 只读同步")}</p>
-              <p>停止：${escapeHtml(blocked.join(" / ") || "真实发布 / 改价 / 库存 / 退款 / 广告 / 政策")}</p>
+              <strong>账号保护模式</strong>
+              <p>当前可做：${escapeHtml(allowed.map((item) => healthActionLabels[item] || "安全检查").join(" / ") || "检查账号 / 查看检查详情 / 只读同步")}</p>
+              <p>暂时停止：${escapeHtml(blocked.map((item) => healthActionLabels[item] || "高风险操作").join(" / ") || "发布 / 改价 / 改库存 / 退款 / 广告 / 修改店铺政策")}</p>
             </div>`
           : ""
       }

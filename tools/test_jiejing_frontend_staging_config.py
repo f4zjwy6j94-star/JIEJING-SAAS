@@ -549,7 +549,7 @@ def main() -> int:
         "小批量实验目标已带入",
         "高风险动作已拦住",
         "saasRealBackendBindingStatus",
-        "真实 API 来源",
+        "数据连接",
         "saasWorkbenchReportDetailMarkup",
         "saasWorkbenchConfirmationDetailMarkup",
         "saas-ai-report-detail",
