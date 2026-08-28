@@ -150,8 +150,16 @@ def _create_store_with_packet(
 class _RestrictedExecutionRepository:
     """Minimal repository proving an exact provider rejection overrides a stale clear packet."""
 
-    def __init__(self, *, packet_created_at: str = "2026-08-26T03:00:00+00:00") -> None:
+    def __init__(
+        self,
+        *,
+        packet_created_at: str = "2026-08-26T03:00:00+00:00",
+        provider_restriction_resolution: dict | None = None,
+        provider_restriction_resolution_audit: dict | None = None,
+    ) -> None:
         self.packet_created_at = packet_created_at
+        self.provider_restriction_resolution = provider_restriction_resolution
+        self.provider_restriction_resolution_audit = provider_restriction_resolution_audit
 
     def get_store_for_company(self, *, company_id: str, store_id: str) -> dict:
         return {"store_id": store_id, "store_name": "restricted-execution-store", "marketplace": "EBAY_US"}
@@ -173,6 +181,11 @@ class _RestrictedExecutionRepository:
                                 "kyc_check_status": "clear",
                                 "kyc_check_count": 0,
                                 "kyc_checks": [],
+                                **(
+                                    {"provider_restriction_resolution": self.provider_restriction_resolution}
+                                    if self.provider_restriction_resolution is not None
+                                    else {}
+                                ),
                             },
                         },
                         {
@@ -215,6 +228,9 @@ class _RestrictedExecutionRepository:
                 },
             }
         ]
+
+    def find_latest_audit_log_by_target(self, **_kwargs: object) -> dict | None:
+        return self.provider_restriction_resolution_audit
 
 
 def main() -> int:
@@ -289,13 +305,87 @@ def main() -> int:
     if not restricted_errors or str(restricted_errors[0].get("error_id") or "") != "25019":
         return fail(f"merchant-safe account health evidence must preserve error_id 25019: {restricted_after_publish}")
 
-    recovered_after_new_packet = build_account_health_snapshot(
+    still_restricted_after_new_kyc_packet = build_account_health_snapshot(
         _RestrictedExecutionRepository(packet_created_at="2026-08-26T05:00:00+00:00"),
+        company_id="company_still_restricted_execution",
+        store_id="store_still_restricted_execution",
+    )
+    if (
+        still_restricted_after_new_kyc_packet.get("status") != "restricted"
+        or still_restricted_after_new_kyc_packet.get("incident_mode") is not True
+    ):
+        return fail(
+            "a newer KYC-clear packet must not retire an unresolved provider restriction: "
+            f"{still_restricted_after_new_kyc_packet}"
+        )
+
+    recovered_after_trusted_resolution = build_account_health_snapshot(
+        _RestrictedExecutionRepository(
+            packet_created_at="2026-08-26T05:00:00+00:00",
+            provider_restriction_resolution_audit={
+                "actor_type": "platform_internal_admin",
+                "action_type": "ebay.provider_restriction.resolution_verified",
+                "target_type": "store",
+                "target_id": "store_recovered_execution",
+                "created_at": "2026-08-26T04:30:00+00:00",
+                "details": {
+                    "status": "clear",
+                    "evidence_type": "ebay_message_resolution_notice",
+                    "verified_at": "2026-08-26T04:30:00+00:00",
+                    "restriction_error_id": "25019",
+                    "secret_exposed": False,
+                },
+            },
+        ),
         company_id="company_recovered_execution",
         store_id="store_recovered_execution",
     )
-    if recovered_after_new_packet.get("status") != "normal" or recovered_after_new_packet.get("incident_mode") is not False:
-        return fail(f"a newer clear official packet must retire an older provider rejection: {recovered_after_new_packet}")
+    if recovered_after_trusted_resolution.get("status") != "normal" or recovered_after_trusted_resolution.get("incident_mode") is not False:
+        return fail(f"trusted newer restriction-resolution evidence should retire error 25019: {recovered_after_trusted_resolution}")
+    resolution_evidence = (recovered_after_trusted_resolution.get("evidence_package") or {}).get(
+        "provider_restriction_resolution"
+    ) or {}
+    if resolution_evidence.get("trusted") is not True or resolution_evidence.get("evidence_type") != "ebay_message_resolution_notice":
+        return fail(f"merchant-safe evidence must preserve the trusted resolution type: {recovered_after_trusted_resolution}")
+
+    forged_packet_resolution = build_account_health_snapshot(
+        _RestrictedExecutionRepository(
+            packet_created_at="2026-08-26T05:00:00+00:00",
+            provider_restriction_resolution={
+                "status": "clear",
+                "evidence_type": "ebay_message_resolution_notice",
+                "verified_at": "2026-08-26T04:30:00+00:00",
+                "restriction_error_id": "25019",
+            },
+        ),
+        company_id="company_forged_packet_resolution",
+        store_id="store_forged_packet_resolution",
+    )
+    if forged_packet_resolution.get("status") != "restricted" or forged_packet_resolution.get("incident_mode") is not True:
+        return fail(f"packet-embedded merchant evidence must not clear provider restriction: {forged_packet_resolution}")
+
+    forged_user_audit_resolution = build_account_health_snapshot(
+        _RestrictedExecutionRepository(
+            packet_created_at="2026-08-26T05:00:00+00:00",
+            provider_restriction_resolution_audit={
+                "actor_type": "user",
+                "action_type": "ebay.provider_restriction.resolution_verified",
+                "target_type": "store",
+                "target_id": "store_forged_user_audit_resolution",
+                "created_at": "2026-08-26T04:30:00+00:00",
+                "details": {
+                    "status": "clear",
+                    "evidence_type": "ebay_message_resolution_notice",
+                    "verified_at": "2026-08-26T04:30:00+00:00",
+                    "restriction_error_id": "25019",
+                },
+            },
+        ),
+        company_id="company_forged_user_audit_resolution",
+        store_id="store_forged_user_audit_resolution",
+    )
+    if forged_user_audit_resolution.get("status") != "restricted" or forged_user_audit_resolution.get("incident_mode") is not True:
+        return fail(f"non-admin audit evidence must not clear provider restriction: {forged_user_audit_resolution}")
 
     frozen_ctx = _create_store_with_packet(repo, status="suspended", store_name="frozen-store")
     frozen = build_account_health_snapshot(

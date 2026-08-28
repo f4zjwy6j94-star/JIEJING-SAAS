@@ -25,7 +25,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 from jiejing_runtime.execution import ExecutionRequest, ExecutionService
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
 
-from .account_health import build_account_health_snapshot, merge_account_health_into_payload
+from .account_health import (
+    TRUSTED_PROVIDER_RESTRICTION_RESOLUTION_TYPES,
+    build_account_health_snapshot,
+    merge_account_health_into_payload,
+)
 from .ai_ceo_chat import (
     ai_ceo_route_metadata,
     build_ai_ceo_turn_plan,
@@ -3919,6 +3923,110 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         identity = self._require_auth()
         if identity is None:
+            return
+
+        if path == "owner/ebay/provider-restriction-resolution":
+            if not self._require_operations_console_request("eBay provider restriction resolution evidence"):
+                return
+            if not self._require_platform_internal_admin(identity, "eBay provider restriction resolution evidence"):
+                return
+            body = self._read_json_body()
+            company_id = str(body.get("company_id") or "").strip()
+            store_id = str(body.get("store_id") or "").strip()
+            evidence_type = str(body.get("evidence_type") or "").strip().lower()
+            verified_at = str(body.get("verified_at") or "").strip()
+            restriction_error_id = str(body.get("restriction_error_id") or "").strip()
+            evidence_sha256 = str(body.get("evidence_sha256") or "").strip().lower()
+            exact_confirmation = str(body.get("exact_confirmation") or "").strip()
+            if not company_id or not store_id:
+                self._send_error(HTTPStatus.BAD_REQUEST, "company_id and store_id are required")
+                return
+            store = self.repository.get_store_for_company(company_id=company_id, store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found")
+                return
+            if evidence_type not in TRUSTED_PROVIDER_RESTRICTION_RESOLUTION_TYPES:
+                self._send_error(HTTPStatus.BAD_REQUEST, "unsupported eBay restriction-resolution evidence type")
+                return
+            if restriction_error_id != "25019":
+                self._send_error(HTTPStatus.BAD_REQUEST, "restriction_error_id must match the active eBay restriction")
+                return
+            if not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256):
+                self._send_error(HTTPStatus.BAD_REQUEST, "a SHA-256 digest of the reviewed evidence file is required")
+                return
+            try:
+                datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                self._send_error(HTTPStatus.BAD_REQUEST, "verified_at must be an ISO-8601 timestamp")
+                return
+            expected_confirmation = (
+                f"record_provider_restriction_resolution:{company_id}:{store_id}:"
+                f"{restriction_error_id}:{evidence_sha256}"
+            )
+            if not hmac.compare_digest(exact_confirmation, expected_confirmation):
+                self._send_error(HTTPStatus.CONFLICT, "exact restriction-resolution evidence confirmation is required")
+                return
+            prior = self.repository.find_latest_audit_log_by_target(
+                company_id=company_id,
+                store_id=store_id,
+                action_type="ebay.provider_restriction.resolution_verified",
+                target_type="store",
+                target_id=store_id,
+            )
+            prior_details = prior.get("details") if isinstance(prior, dict) and isinstance(prior.get("details"), dict) else {}
+            duplicate_request = bool(
+                prior
+                and prior.get("actor_type") == "platform_internal_admin"
+                and prior_details.get("evidence_sha256") == evidence_sha256
+                and prior_details.get("restriction_error_id") == restriction_error_id
+            )
+            if duplicate_request:
+                audit = prior
+            else:
+                audit = self.repository.write_audit(
+                    company_id=company_id,
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    actor_type="platform_internal_admin",
+                    action_type="ebay.provider_restriction.resolution_verified",
+                    target_type="store",
+                    target_id=store_id,
+                    summary="An eBay provider restriction-resolution notice was reviewed and recorded.",
+                    details={
+                        "status": "clear",
+                        "evidence_type": evidence_type,
+                        "verified_at": verified_at,
+                        "restriction_error_id": restriction_error_id,
+                        "evidence_sha256": evidence_sha256,
+                        "raw_evidence_stored": False,
+                        "real_platform_write_performed": False,
+                        "secret_exposed": False,
+                    },
+                )
+            self._send_json(
+                {
+                    "provider_restriction_resolution": {
+                        "recorded": True,
+                        "duplicate_request": duplicate_request,
+                        "company_id": company_id,
+                        "store_id": store_id,
+                        "restriction_error_id": restriction_error_id,
+                        "evidence_type": evidence_type,
+                        "verified_at": verified_at,
+                        "evidence_sha256": evidence_sha256,
+                        "audit_id": audit.get("audit_id") if isinstance(audit, dict) else None,
+                        "raw_evidence_stored": False,
+                        "real_platform_write_performed": False,
+                        "secret_exposed": False,
+                    },
+                    "account_health": build_account_health_snapshot(
+                        self.repository,
+                        company_id=company_id,
+                        store_id=store_id,
+                    ),
+                },
+                status=HTTPStatus.OK if duplicate_request else HTTPStatus.CREATED,
+            )
             return
 
         if path == "product-feedback":

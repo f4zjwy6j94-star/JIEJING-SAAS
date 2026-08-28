@@ -98,6 +98,10 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("merchant_onboarding_state", [sys.executable, "tools/test_jiejing_merchant_onboarding_state.py"]),
     ("merchant_onboarding_frontend", [sys.executable, "tools/test_jiejing_merchant_onboarding_frontend.py"]),
     ("account_health_incident_mode", [sys.executable, "tools/test_jiejing_account_health_incident_mode.py"]),
+    (
+        "provider_restriction_resolution_http",
+        [sys.executable, "tools/test_jiejing_provider_restriction_resolution_http.py"],
+    ),
     ("oauth_staging_deploy_contract", [sys.executable, "tools/test_jiejing_oauth_staging_deploy_contract.py"]),
     ("public_staging_proxy_contract", [sys.executable, "tools/test_jiejing_public_staging_proxy_contract.py"]),
     ("staging_oauth_operator_flow_tool", [sys.executable, "tools/test_jiejing_staging_ebay_oauth_flow_tool.py"]),

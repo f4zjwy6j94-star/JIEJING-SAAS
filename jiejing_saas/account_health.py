@@ -24,6 +24,12 @@ ALLOWED_INCIDENT_ACTIONS = [
     "appeal_draft",
 ]
 
+STICKY_PROVIDER_RESTRICTION_ERROR_IDS = {"25019"}
+TRUSTED_PROVIDER_RESTRICTION_RESOLUTION_TYPES = {
+    "ebay_message_resolution_notice",
+    "ebay_support_case_resolution",
+}
+
 
 def build_account_health_snapshot(
     repository: Any,
@@ -48,9 +54,15 @@ def build_account_health_snapshot(
     connections = repository.list_connections(company_id=company_id, store_id=store_id)
     execution_results = repository.list_execution_results(company_id=company_id, limit=80)
     latest_packet_created_at = str(latest_packet.get("created_at") or packet.get("created_at") or "")
-    recent_platform_errors = _recent_platform_error_summaries(
+    provider_restriction_resolution = _provider_restriction_resolution_evidence(
+        repository,
+        company_id=company_id,
+        store_id=store_id,
+    )
+    recent_platform_errors = _active_platform_error_summaries(
         execution_results,
-        since=latest_packet_created_at,
+        latest_packet_created_at=latest_packet_created_at,
+        provider_restriction_resolution=provider_restriction_resolution,
     )
 
     raw_status = _first_text(
@@ -122,7 +134,7 @@ def build_account_health_snapshot(
         selling_limits=selling_limits,
     )
     return {
-        "contract_version": "2026-08-28-account-health-kyc-preflight-v4",
+        "contract_version": "2026-08-28-account-health-sticky-provider-restriction-v5",
         "platform": "ebay",
         "company_id": company_id,
         "store_id": store_id,
@@ -165,6 +177,7 @@ def build_account_health_snapshot(
             "kyc_check_status": kyc_check_status or "unknown",
             "kyc_check_count": len(kyc_checks),
             "kyc_checks": _safe_kyc_evidence(kyc_checks),
+            "provider_restriction_resolution": provider_restriction_resolution,
             "frontend_gets_token": False,
             "runtime_gets_token": False,
             "raw_secret_stored": False,
@@ -396,8 +409,110 @@ def _recent_platform_error_summaries(
     return summaries
 
 
+def _active_platform_error_summaries(
+    execution_results: list[dict[str, Any]],
+    *,
+    latest_packet_created_at: str,
+    provider_restriction_resolution: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Keep account-level provider restrictions active until explicit proof clears them.
+
+    A new store-profile or KYC packet is not evidence that a separate seller
+    restriction was removed. Other platform errors keep the older behavior and
+    are retired by a newer official packet.
+    """
+
+    all_errors = _recent_platform_error_summaries(execution_results)
+    active: list[dict[str, Any]] = []
+    for error in all_errors:
+        error_id = str(error.get("error_id") or "").strip()
+        if error_id in STICKY_PROVIDER_RESTRICTION_ERROR_IDS:
+            if _provider_restriction_resolution_clears(error, provider_restriction_resolution):
+                continue
+            active.append(error)
+            continue
+        created_at = str(error.get("created_at") or "")
+        if latest_packet_created_at and created_at and not _is_after(created_at, latest_packet_created_at):
+            continue
+        active.append(error)
+    return active
+
+
+def _provider_restriction_resolution_evidence(
+    repository: Any,
+    *,
+    company_id: str,
+    store_id: str,
+) -> dict[str, Any]:
+    finder = getattr(repository, "find_latest_audit_log_by_target", None)
+    audit = {}
+    if callable(finder):
+        found = finder(
+            company_id=company_id,
+            store_id=store_id,
+            action_type="ebay.provider_restriction.resolution_verified",
+            target_type="store",
+            target_id=store_id,
+        )
+        audit = found if isinstance(found, dict) else {}
+    details = audit.get("details") if isinstance(audit.get("details"), dict) else {}
+    status = str(details.get("status") or "").strip().lower()
+    evidence_type = str(details.get("evidence_type") or "").strip().lower()
+    verified_at = str(details.get("verified_at") or "").strip()
+    restriction_error_id = str(details.get("restriction_error_id") or "").strip()
+    trusted = bool(
+        audit.get("actor_type") == "platform_internal_admin"
+        and audit.get("action_type") == "ebay.provider_restriction.resolution_verified"
+        and audit.get("target_type") == "store"
+        and audit.get("target_id") == store_id
+        and status == "clear"
+        and evidence_type in TRUSTED_PROVIDER_RESTRICTION_RESOLUTION_TYPES
+        and verified_at
+        and restriction_error_id in STICKY_PROVIDER_RESTRICTION_ERROR_IDS
+        and _valid_timestamp(verified_at)
+    )
+    return {
+        "status": status or "missing",
+        "evidence_type": evidence_type,
+        "verified_at": verified_at,
+        "restriction_error_id": restriction_error_id,
+        "trusted": trusted,
+        "secret_exposed": False,
+    }
+
+
+def _provider_restriction_resolution_clears(
+    error: dict[str, Any],
+    resolution: dict[str, Any],
+) -> bool:
+    if resolution.get("trusted") is not True:
+        return False
+    if str(resolution.get("restriction_error_id") or "") != str(error.get("error_id") or ""):
+        return False
+    error_created_at = str(error.get("created_at") or "")
+    verified_at = str(resolution.get("verified_at") or "")
+    return bool(error_created_at and verified_at and _timestamp_after(verified_at, error_created_at))
+
+
+def _valid_timestamp(value: str) -> bool:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _timestamp_after(candidate: str, baseline: str) -> bool:
+    try:
+        candidate_at = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        baseline_at = datetime.fromisoformat(baseline.replace("Z", "+00:00"))
+        return candidate_at > baseline_at
+    except (TypeError, ValueError):
+        return False
+
+
 def _is_after(candidate: str, baseline: str) -> bool:
-    """Keep an execution incident only until a newer official packet supersedes it."""
+    """Keep a non-sticky execution incident until a newer official packet supersedes it."""
 
     try:
         candidate_at = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
@@ -517,7 +632,7 @@ def _merchant_summary(
     if status in {"restricted", "payout_hold"} and _has_kyc_restriction(restrictions or []):
         return "eBay 官方仍有待处理的账户资料或 KYC 检查；捷境已在正式发布前进入事故模式并暂停真实写入。"
     if status == "restricted" and _has_ebay_verification_restriction(recent_platform_errors or []):
-        return "eBay 拒绝了最近一次正式发布并暂时限制账号；Offer 仍未公开，捷境已暂停后续真实写入。"
+        return "eBay 拒绝了最近一次正式发布并暂时限制账号；KYC 已清除也不代表该限制已解除，Offer 仍未公开，捷境已暂停后续真实写入。"
     return "账号存在冻结、受限、付款冻结或额度风险；系统进入事故模式，只允许诊断、证据包和只读同步。"
 
 
@@ -557,9 +672,9 @@ def _next_actions(
         ]
     if status == "restricted" and _has_ebay_verification_restriction(recent_platform_errors or []):
         return [
-            "在 eBay 站内信打开官方核验通知，并按要求提交一份有效且未修改的证明文件，完成资料核验；无需重新授权。",
-            "等待 eBay 解除限制后回到捷境刷新账号状态；旧 Offer、Listing 草稿和素材无需重建。",
-            "账号恢复后重新生成正式发布确认单，并再次获得动作时确认后再提交一次。",
+            "在 eBay 站内信打开本次账号限制的官方通知，按通知的实际要求完成资料核验或申诉；无需重新授权。",
+            "收到 eBay 明确的限制解除通知后，将该通知作为解除证据交给捷境；仅 KYC=clear 或普通只读同步不会解除门禁。",
+            "捷境核验证据晚于最近一次 25019 拒绝后，才重新生成精确发布确认单；旧 Offer、Listing 草稿和素材无需重建。",
         ]
     return [
         "暂停真实发布、改价、库存、退款、广告、政策和敏感客服承诺。",
