@@ -63,6 +63,12 @@ def main() -> None:
     assert "latestSaasReportByTypes" not in activity
     assert "saasConfirmationsForDisplay" in activity
     assert "reports.find" in activity
+    assert 'renderSaasListingFactoryReportCard(marketReport, "市场报告", { snapshot: true })' in activity
+    assert 'renderSaasListingFactoryReportCard(listingReport, "Listing 草稿", { snapshot: true })' in activity
+
+    report_card = scope("function renderSaasListingFactoryReportCard", "function saasListingSyncedProductRows")
+    assert "这是生成时快照；当前状态以页面顶部为准。" in report_card
+    assert 'options.snapshot ?' in report_card
 
     assert "latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true })" in APP
     print("PASS jiejing_core_workflow_maturity")

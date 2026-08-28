@@ -5867,7 +5867,7 @@ async function refreshSaasReportsForListingImport() {
   return false;
 }
 
-function renderSaasListingFactoryReportCard(record = null, fallbackTitle = "") {
+function renderSaasListingFactoryReportCard(record = null, fallbackTitle = "", options = {}) {
   if (!record) {
     return `
       <article class="saas-listing-report-card is-empty">
@@ -5882,6 +5882,7 @@ function renderSaasListingFactoryReportCard(record = null, fallbackTitle = "") {
       <span>${escapeHtml(saasReportTypeLabel(record.report_type))}</span>
       <strong>${escapeHtml(saasTitleWithProduct(record.title || saasReportTypeLabel(record.report_type), saasProductLabelForRecord(record)))}</strong>
       <p>${escapeHtml(saasReportSummary(record))}</p>
+      ${options.snapshot ? '<small class="saas-report-snapshot-note">这是生成时快照；当前状态以页面顶部为准。</small>' : ""}
       <small>${escapeHtml(saasTimestampLabel(record.created_at || ""))} · ${escapeHtml(record.report_id || record.task_id || "SaaS report")}</small>
       ${saasWorkbenchReportDetailMarkup(record)}
     </article>
@@ -37391,8 +37392,8 @@ function renderSaasActivityCenter(view) {
       </div>
 
       <section class="saas-listing-report-grid" aria-label="核心报告">
-        ${renderSaasListingFactoryReportCard(marketReport, "市场报告")}
-        ${renderSaasListingFactoryReportCard(listingReport, "Listing 草稿")}
+        ${renderSaasListingFactoryReportCard(marketReport, "市场报告", { snapshot: true })}
+        ${renderSaasListingFactoryReportCard(listingReport, "Listing 草稿", { snapshot: true })}
       </section>
 
       ${renderSaasActivityExecutionRecords(executions)}
