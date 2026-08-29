@@ -4035,65 +4035,85 @@
         display: none !important;
       }
 
-      /* Public homepage v2: one scoped layer, preserving the existing auth shell. */
-      .public-home-v2 {
-        --home-max: 1240px;
-        --home-space: clamp(64px, 8vw, 104px);
-        --home-card-radius: 16px;
+      /* Public homepage v3: premium merchant-facing visual system, preserving the existing auth shell. */
+      .public-home-v3 {
+        --home-max: 1280px;
+        --home-space: clamp(96px, 10vw, 152px);
+        --home-card-radius: 8px;
+        --home-paper: #f7f6f1;
+        --home-surface: rgba(255, 255, 255, 0.86);
+        --home-ink: #15211c;
+        --home-green: #0e6655;
+        --home-green-deep: #0b2a22;
+        --home-amber: #b57b3d;
+        --home-line: #dde6e0;
+        --home-shadow-soft: 0 18px 48px rgba(21, 33, 28, 0.065);
+        --home-shadow-canvas: 0 32px 86px rgba(21, 33, 28, 0.11);
+        color: var(--home-ink);
+        background:
+          linear-gradient(rgba(14, 102, 85, 0.022) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(14, 102, 85, 0.022) 1px, transparent 1px),
+          var(--home-paper);
+        background-size: 48px 48px;
+        font-family: "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
       }
 
-      .public-home-v2 :where(h1, h2, h3, p) {
+      .public-home-v3 :where(h1, h2, h3, p) {
         text-wrap: pretty;
       }
 
-      .public-home-v2 .topbar {
+      .public-home-v3 .topbar {
         padding-right: max(24px, calc((100vw - var(--home-max)) / 2));
         padding-left: max(24px, calc((100vw - var(--home-max)) / 2));
+        border-bottom-color: rgba(14, 102, 85, 0.09);
+        background: rgba(247, 246, 241, 0.88);
+        backdrop-filter: blur(18px) saturate(120%);
       }
 
-      .public-home-v2 .navlinks {
+      .public-home-v3 .navlinks {
         justify-self: center;
       }
 
-      .public-home-v2 .hero {
+      .public-home-v3 .hero {
         display: grid;
-        grid-template-columns: minmax(0, 1.08fr) minmax(420px, 0.92fr);
-        gap: clamp(40px, 6vw, 84px);
+        grid-template-columns: minmax(0, 7fr) minmax(470px, 5fr);
+        gap: clamp(48px, 6vw, 92px);
         width: min(var(--home-max), calc(100% - 48px));
         min-height: auto;
         margin: 0 auto;
-        padding: clamp(76px, 9vw, 124px) 0 var(--home-space);
+        padding: clamp(96px, 10vw, 144px) 0 var(--home-space);
         align-items: center;
       }
 
-      .public-home-v2 .hero h1 {
+      .public-home-v3 .hero h1 {
         max-width: 760px;
         margin: 18px 0 22px;
-        font-size: clamp(48px, 6.6vw, 88px);
-        line-height: 0.98;
-        letter-spacing: -0.055em;
+        color: var(--home-ink);
+        font-size: clamp(52px, 6.4vw, 92px);
+        line-height: 0.96;
+        letter-spacing: -0.062em;
       }
 
-      .public-home-v2 .hero .lead {
+      .public-home-v3 .hero .lead {
         max-width: 720px;
         margin: 0;
-        color: var(--ink-soft);
-        font-size: clamp(18px, 1.7vw, 22px);
-        line-height: 1.75;
+        color: rgba(21, 33, 28, 0.72);
+        font-size: clamp(17px, 1.55vw, 20px);
+        line-height: 1.78;
       }
 
-      .public-home-v2 .hero-actions {
+      .public-home-v3 .hero-actions {
         margin-top: 30px;
       }
 
-      .public-home-v2 .hero-assurance {
+      .public-home-v3 .hero-assurance {
         display: flex;
         flex-wrap: wrap;
         gap: 9px;
         margin-top: 28px;
       }
 
-      .public-home-v2 .hero-assurance span {
+      .public-home-v3 .hero-assurance span {
         padding: 8px 12px;
         border: 1px solid rgba(8, 118, 110, 0.16);
         border-radius: 999px;
@@ -4102,229 +4122,364 @@
         font-size: 13px;
       }
 
-      .public-home-v2 .home-command {
+      .public-home-v3 .home-command {
         position: relative;
         overflow: hidden;
-        min-height: 520px;
-        padding: 30px;
-        border: 1px solid rgba(8, 118, 110, 0.18);
-        border-radius: 24px;
+        min-height: 610px;
+        padding: 26px;
+        border: 1px solid var(--home-line);
+        border-radius: 8px;
         background:
-          linear-gradient(150deg, rgba(255, 255, 255, 0.96), rgba(237, 248, 244, 0.9)),
-          var(--paper);
-        box-shadow: var(--shadow);
+          linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 245, 0.92)),
+          var(--home-surface);
+        box-shadow: var(--home-shadow-canvas);
       }
 
-      .public-home-v2 .home-command::after {
+      .public-home-v3 .home-command::before {
         position: absolute;
-        right: -110px;
-        bottom: -130px;
-        width: 320px;
-        height: 320px;
+        top: -170px;
+        right: -150px;
+        width: 360px;
+        height: 360px;
         border-radius: 50%;
-        background: radial-gradient(circle, rgba(185, 130, 40, 0.18), transparent 66%);
+        background: radial-gradient(circle, rgba(181, 123, 61, 0.12), transparent 68%);
         content: "";
         pointer-events: none;
       }
 
-      .public-home-v2 .home-command-head {
+      .public-home-v3 .home-command-head {
         position: relative;
         z-index: 1;
         display: flex;
         justify-content: space-between;
         gap: 20px;
-        padding-bottom: 24px;
-        border-bottom: 1px solid var(--line);
+        align-items: flex-start;
+        padding-bottom: 19px;
+        border-bottom: 1px solid var(--home-line);
       }
 
-      .public-home-v2 .home-command-head strong {
+      .public-home-v3 .home-command-head strong {
         display: block;
-        margin-top: 7px;
-        font-size: 26px;
+        margin-top: 8px;
+        color: var(--home-ink);
+        font-size: 24px;
+        line-height: 1.2;
       }
 
-      .public-home-v2 .home-command-head small {
-        color: var(--muted);
-        font-size: 13px;
+      .public-home-v3 .home-command-head small {
+        color: var(--home-green);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.15em;
       }
 
-      .public-home-v2 .home-command-state {
+      .public-home-v3 .home-command-state {
         align-self: flex-start;
-        padding: 8px 12px;
+        padding: 7px 10px;
         border-radius: 999px;
-        background: var(--teal-soft);
-        color: var(--teal-deep);
-        font-size: 12px;
+        background: rgba(14, 102, 85, 0.08);
+        color: var(--home-green-deep);
+        font-size: 11px;
         font-weight: 700;
       }
 
-      .public-home-v2 .home-command-steps {
+      .public-home-v3 .home-ai-ceo-canvas {
         position: relative;
-        z-index: 1;
-        display: grid;
-        gap: 14px;
-        margin-top: 24px;
+        min-height: 444px;
+        margin-top: 16px;
       }
 
-      .public-home-v2 .home-command-step {
-        display: grid;
-        grid-template-columns: 42px minmax(0, 1fr);
-        gap: 15px;
-        align-items: start;
-        padding: 18px;
-        border: 1px solid rgba(220, 231, 223, 0.96);
-        border-radius: 12px;
-        background: rgba(255, 255, 255, 0.82);
-        transition: transform 220ms var(--ease), border-color 220ms var(--ease), box-shadow 220ms var(--ease);
+      .public-home-v3 .home-ai-ceo-connections {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+        pointer-events: none;
       }
 
-      .public-home-v2 .home-command-step:hover {
-        border-color: rgba(8, 118, 110, 0.34);
-        box-shadow: var(--shadow-soft);
-        transform: translateY(-2px);
+      .public-home-v3 .home-ai-ceo-connections path {
+        fill: none;
+        stroke: rgba(14, 102, 85, 0.19);
+        stroke-width: 1.35;
+        stroke-linecap: round;
+        stroke-dasharray: 6 10;
+        vector-effect: non-scaling-stroke;
+        transition: stroke 200ms var(--ease), stroke-width 200ms var(--ease), opacity 200ms var(--ease);
       }
 
-      .public-home-v2 .home-command-step > span {
+      .public-home-v3 .home-ai-ceo-connections path.is-active {
+        stroke: var(--home-green);
+        stroke-width: 2;
+        animation: homeLineFlow 6s linear infinite;
+      }
+
+      .public-home-v3 .home-ai-ceo-core {
+        position: absolute;
+        top: 49%;
+        left: 50%;
         display: grid;
-        width: 42px;
-        height: 42px;
+        width: 174px;
+        min-height: 174px;
         place-items: center;
-        border-radius: 10px;
-        background: var(--ink);
+        padding: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        border-radius: 50%;
+        background: var(--home-green-deep);
+        box-shadow: 0 24px 60px rgba(11, 42, 34, 0.2), 0 0 0 11px rgba(14, 102, 85, 0.06);
         color: white;
-        font-size: 12px;
-        font-weight: 700;
+        text-align: center;
+        transform: translate(-50%, -50%);
+        animation: homeCeoBreathe 5.8s ease-in-out infinite;
       }
 
-      .public-home-v2 .home-command-step strong,
-      .public-home-v2 .home-command-step small {
+      .public-home-v3 .home-ai-ceo-core strong,
+      .public-home-v3 .home-ai-ceo-core small {
         display: block;
       }
 
-      .public-home-v2 .home-command-step strong {
-        margin: 2px 0 6px;
-        font-size: 17px;
+      .public-home-v3 .home-ai-ceo-core strong {
+        font-size: 28px;
+        letter-spacing: -0.035em;
       }
 
-      .public-home-v2 .home-command-step small {
+      .public-home-v3 .home-ai-ceo-core small {
+        margin-top: 11px;
+        color: rgba(255, 255, 255, 0.68);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .public-home-v3 .home-ai-ceo-node {
+        position: absolute;
+        z-index: 2;
+        width: 152px;
+        min-height: 76px;
+        padding: 13px 15px;
+        border: 1px solid var(--home-line);
+        border-radius: 7px;
+        appearance: none;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: var(--home-shadow-soft);
+        color: var(--home-ink);
+        cursor: pointer;
+        font: inherit;
+        text-align: left;
+        transition: border-color 200ms var(--ease), box-shadow 200ms var(--ease), transform 200ms var(--ease), background 200ms var(--ease);
+      }
+
+      .public-home-v3 .home-ai-ceo-node::before {
+        position: absolute;
+        top: 15px;
+        left: 14px;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: rgba(14, 102, 85, 0.36);
+        content: "";
+      }
+
+      .public-home-v3 .home-ai-ceo-node strong,
+      .public-home-v3 .home-ai-ceo-node small {
+        display: block;
+      }
+
+      .public-home-v3 .home-ai-ceo-node strong {
+        margin-left: 13px;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      .public-home-v3 .home-ai-ceo-node small {
+        margin-top: 7px;
         color: var(--muted);
-        line-height: 1.55;
+        font-size: 11px;
+        line-height: 1.45;
       }
 
-      .public-home-v2 .jj-home-section {
+      .public-home-v3 .home-ai-ceo-node:is(:hover, :focus-visible),
+      .public-home-v3 .home-ai-ceo-node[aria-pressed="true"] {
+        border-color: rgba(14, 102, 85, 0.54);
+        background: #fff;
+        box-shadow: 0 18px 42px rgba(14, 102, 85, 0.13);
+        transform: translateY(-3px);
+      }
+
+      .public-home-v3 .home-ai-ceo-node[aria-pressed="true"]::before {
+        background: var(--home-green);
+        animation: homeNodePulse 2.4s ease-out infinite;
+      }
+
+      .public-home-v3 .home-ai-ceo-node:focus-visible {
+        outline: 3px solid rgba(181, 123, 61, 0.44);
+        outline-offset: 3px;
+      }
+
+      .public-home-v3 .home-ai-ceo-node[data-home-ai-ceo-node="market"] { top: 4%; left: 1%; }
+      .public-home-v3 .home-ai-ceo-node[data-home-ai-ceo-node="product"] { top: 2%; right: 1%; }
+      .public-home-v3 .home-ai-ceo-node[data-home-ai-ceo-node="listing"] { top: 42%; right: 0; }
+      .public-home-v3 .home-ai-ceo-node[data-home-ai-ceo-node="media"] { right: 8%; bottom: 1%; }
+      .public-home-v3 .home-ai-ceo-node[data-home-ai-ceo-node="publish"] { bottom: 1%; left: 8%; }
+
+      .public-home-v3 .home-ai-ceo-result {
+        position: relative;
+        z-index: 2;
+        min-height: 48px;
+        margin: 4px 2px 0;
+        padding: 13px 16px 13px 37px;
+        border-top: 1px solid var(--home-line);
+        color: var(--home-green-deep);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.6;
+      }
+
+      .public-home-v3 .home-ai-ceo-result::before {
+        position: absolute;
+        top: 21px;
+        left: 16px;
+        width: 8px;
+        height: 1px;
+        background: var(--home-amber);
+        content: "";
+      }
+
+      @keyframes homeLineFlow {
+        to { stroke-dashoffset: -64; }
+      }
+
+      @keyframes homeCeoBreathe {
+        0%, 100% { box-shadow: 0 24px 60px rgba(11, 42, 34, 0.2), 0 0 0 11px rgba(14, 102, 85, 0.06); }
+        50% { box-shadow: 0 28px 68px rgba(11, 42, 34, 0.23), 0 0 0 17px rgba(14, 102, 85, 0.035); }
+      }
+
+      @keyframes homeNodePulse {
+        0% { box-shadow: 0 0 0 0 rgba(14, 102, 85, 0.28); }
+        100% { box-shadow: 0 0 0 9px rgba(14, 102, 85, 0); }
+      }
+
+      .public-home-v3 .jj-home-section {
         width: min(var(--home-max), calc(100% - 48px));
         margin: 0 auto;
         padding: var(--home-space) 0;
       }
 
-      .public-home-v2 .jj-home-section + .jj-home-section {
-        border-top: 1px solid rgba(220, 231, 223, 0.76);
+      .public-home-v3 .jj-home-section + .jj-home-section {
+        border-top: 1px solid rgba(221, 230, 224, 0.82);
       }
 
-      .public-home-v2 .jj-home-heading {
+      .public-home-v3 .jj-home-heading {
         display: grid;
         grid-template-columns: minmax(0, 0.9fr) minmax(320px, 0.7fr);
         gap: 48px;
-        margin-bottom: 38px;
+        margin-bottom: 46px;
         align-items: end;
       }
 
-      .public-home-v2 .jj-home-heading h2 {
+      .public-home-v3 .jj-home-heading h2 {
         margin: 10px 0 0;
-        font-size: clamp(34px, 4.2vw, 58px);
-        line-height: 1.08;
-        letter-spacing: -0.035em;
+        color: var(--home-ink);
+        font-size: clamp(38px, 4.4vw, 62px);
+        line-height: 1.04;
+        letter-spacing: -0.045em;
       }
 
-      .public-home-v2 .jj-home-heading > p {
+      .public-home-v3 .jj-home-heading > p {
         margin: 0;
         color: var(--muted);
         font-size: 17px;
         line-height: 1.75;
       }
 
-      .public-home-v2 .home-proof-grid {
+      .public-home-v3 .home-proof-grid {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
         overflow: hidden;
-        border: 1px solid var(--line);
+        border: 1px solid var(--home-line);
         border-radius: var(--home-card-radius);
-        background: rgba(255, 255, 255, 0.72);
-        box-shadow: var(--shadow-soft);
+        background: var(--home-surface);
+        box-shadow: var(--home-shadow-soft);
       }
 
-      .public-home-v2 .home-proof-grid article {
+      .public-home-v3 .home-proof-grid article {
         min-height: 180px;
         padding: 28px;
       }
 
-      .public-home-v2 .home-proof-grid article + article {
+      .public-home-v3 .home-proof-grid article + article {
         border-left: 1px solid var(--line);
       }
 
-      .public-home-v2 .home-proof-grid strong,
-      .public-home-v2 .home-proof-grid span,
-      .public-home-v2 .home-proof-grid small {
+      .public-home-v3 .home-proof-grid strong,
+      .public-home-v3 .home-proof-grid span,
+      .public-home-v3 .home-proof-grid small {
         display: block;
       }
 
-      .public-home-v2 .home-proof-grid strong {
+      .public-home-v3 .home-proof-grid strong {
         color: var(--teal-deep);
         font-size: clamp(28px, 3.2vw, 44px);
       }
 
-      .public-home-v2 .home-proof-grid span {
+      .public-home-v3 .home-proof-grid span {
         margin-top: 18px;
         font-weight: 700;
       }
 
-      .public-home-v2 .home-proof-grid small {
+      .public-home-v3 .home-proof-grid small {
         margin-top: 8px;
         color: var(--muted);
         line-height: 1.55;
       }
 
-      .public-home-v2 .home-capability-grid {
+      .public-home-v3 .home-capability-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 16px;
       }
 
-      .public-home-v2 .home-capability-grid article {
+      .public-home-v3 .home-capability-grid article {
         min-height: 210px;
         padding: 28px;
-        border: 1px solid var(--line);
+        border: 1px solid var(--home-line);
         border-radius: var(--home-card-radius);
-        background: rgba(255, 255, 255, 0.68);
+        background: var(--home-surface);
+        transition: border-color 200ms var(--ease), box-shadow 200ms var(--ease), transform 200ms var(--ease);
       }
 
-      .public-home-v2 .home-capability-grid span {
+      .public-home-v3 .home-capability-grid article:hover {
+        border-color: rgba(14, 102, 85, 0.3);
+        box-shadow: var(--home-shadow-soft);
+        transform: translateY(-3px);
+      }
+
+      .public-home-v3 .home-capability-grid span {
         color: var(--teal);
         font-size: 12px;
         font-weight: 800;
         letter-spacing: 0.12em;
       }
 
-      .public-home-v2 .home-capability-grid strong {
+      .public-home-v3 .home-capability-grid strong {
         display: block;
         margin: 20px 0 10px;
         font-size: 22px;
       }
 
-      .public-home-v2 .home-capability-grid p {
+      .public-home-v3 .home-capability-grid p {
         margin: 0;
         color: var(--muted);
         line-height: 1.7;
       }
 
-      .public-home-v2 .home-example-shell {
+      .public-home-v3 .home-example-shell {
         display: grid;
         grid-template-columns: minmax(0, 1.08fr) minmax(340px, 0.92fr);
         gap: 20px;
       }
 
-      .public-home-v2 .home-example-visual,
-      .public-home-v2 .home-example-process {
+      .public-home-v3 .home-example-visual,
+      .public-home-v3 .home-example-process {
         padding: 22px;
         border: 1px solid var(--line);
         border-radius: 20px;
@@ -4332,53 +4487,53 @@
         box-shadow: var(--shadow-soft);
       }
 
-      .public-home-v2 .home-example-main {
+      .public-home-v3 .home-example-main {
         overflow: hidden;
         aspect-ratio: 1.22;
         border-radius: 14px;
         background: var(--wash);
       }
 
-      .public-home-v2 .home-example-main img,
-      .public-home-v2 .home-example-thumb img {
+      .public-home-v3 .home-example-main img,
+      .public-home-v3 .home-example-thumb img {
         width: 100%;
         height: 100%;
         object-fit: cover;
       }
 
-      .public-home-v2 .home-example-main img {
+      .public-home-v3 .home-example-main img {
         object-fit: contain;
         padding: 16px;
         background: white;
       }
 
-      .public-home-v2 .home-example-gallery {
+      .public-home-v3 .home-example-gallery {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 10px;
         margin-top: 10px;
       }
 
-      .public-home-v2 .home-example-thumb {
+      .public-home-v3 .home-example-thumb {
         overflow: hidden;
         aspect-ratio: 1.2;
         border-radius: 9px;
         background: var(--wash);
       }
 
-      .public-home-v2 .home-example-caption {
+      .public-home-v3 .home-example-caption {
         margin: 18px 2px 0;
         color: var(--muted);
         font-size: 13px;
         line-height: 1.65;
       }
 
-      .public-home-v2 .home-workflow-list {
+      .public-home-v3 .home-workflow-list {
         display: grid;
         gap: 2px;
       }
 
-      .public-home-v2 .home-workflow-list article {
+      .public-home-v3 .home-workflow-list article {
         display: grid;
         grid-template-columns: 32px minmax(0, 1fr);
         gap: 14px;
@@ -4386,57 +4541,57 @@
         border-bottom: 1px solid var(--line);
       }
 
-      .public-home-v2 .home-workflow-list article:last-child {
+      .public-home-v3 .home-workflow-list article:last-child {
         border-bottom: 0;
       }
 
-      .public-home-v2 .home-workflow-list span {
+      .public-home-v3 .home-workflow-list span {
         color: var(--amber);
         font-size: 12px;
         font-weight: 800;
       }
 
-      .public-home-v2 .home-workflow-list strong,
-      .public-home-v2 .home-workflow-list small {
+      .public-home-v3 .home-workflow-list strong,
+      .public-home-v3 .home-workflow-list small {
         display: block;
       }
 
-      .public-home-v2 .home-workflow-list small {
+      .public-home-v3 .home-workflow-list small {
         margin-top: 4px;
         color: var(--muted);
         line-height: 1.5;
       }
 
-      .public-home-v2 .home-source-paths {
+      .public-home-v3 .home-source-paths {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 18px;
       }
 
-      .public-home-v2 .home-source-paths article {
+      .public-home-v3 .home-source-paths article {
         padding: clamp(28px, 4vw, 44px);
         border: 1px solid var(--line);
         border-radius: 20px;
         background: rgba(255, 255, 255, 0.76);
       }
 
-      .public-home-v2 .home-source-paths span {
+      .public-home-v3 .home-source-paths span {
         color: var(--teal);
         font-weight: 800;
       }
 
-      .public-home-v2 .home-source-paths h3 {
+      .public-home-v3 .home-source-paths h3 {
         margin: 16px 0 12px;
         font-size: 28px;
       }
 
-      .public-home-v2 .home-source-paths p {
+      .public-home-v3 .home-source-paths p {
         margin: 0;
         color: var(--muted);
         line-height: 1.75;
       }
 
-      .public-home-v2 .home-boundary-strip {
+      .public-home-v3 .home-boundary-strip {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
         gap: 24px;
@@ -4448,64 +4603,64 @@
         color: white;
       }
 
-      .public-home-v2 .home-boundary-strip p {
+      .public-home-v3 .home-boundary-strip p {
         margin: 5px 0 0;
         color: rgba(255, 255, 255, 0.7);
       }
 
-      .public-home-v2 .home-boundary-strip span {
+      .public-home-v3 .home-boundary-strip span {
         color: #f1cd8a;
         font-size: 13px;
         font-weight: 700;
       }
 
-      .public-home-v2 .home-plan-grid {
+      .public-home-v3 .home-plan-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 16px;
       }
 
-      .public-home-v2 .home-plan-grid .path-card {
+      .public-home-v3 .home-plan-grid .path-card {
         min-height: 300px;
         text-align: left;
       }
 
-      .public-home-v2 .home-plan-grid .path-card strong {
+      .public-home-v3 .home-plan-grid .path-card strong {
         margin-top: 22px;
         font-size: 26px;
       }
 
-      .public-home-v2 .home-plan-grid .path-card .price {
+      .public-home-v3 .home-plan-grid .path-card .price {
         margin: 16px 0;
         font-size: clamp(26px, 3vw, 38px);
       }
 
-      .public-home-v2 .home-faq-grid {
+      .public-home-v3 .home-faq-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 14px;
         margin-top: 28px;
       }
 
-      .public-home-v2 .home-faq-grid article {
+      .public-home-v3 .home-faq-grid article {
         padding: 24px;
         border: 1px solid var(--line);
         border-radius: 14px;
         background: rgba(255, 255, 255, 0.58);
       }
 
-      .public-home-v2 .home-faq-grid h3 {
+      .public-home-v3 .home-faq-grid h3 {
         margin: 0 0 10px;
         font-size: 18px;
       }
 
-      .public-home-v2 .home-faq-grid p {
+      .public-home-v3 .home-faq-grid p {
         margin: 0;
         color: var(--muted);
         line-height: 1.65;
       }
 
-      .public-home-v2 .home-final-action {
+      .public-home-v3 .home-final-action {
         display: flex;
         justify-content: space-between;
         gap: 24px;
@@ -4516,129 +4671,196 @@
         background: var(--wash-2);
       }
 
-      .public-home-v2 .home-final-action strong,
-      .public-home-v2 .home-final-action small {
+      .public-home-v3 .home-final-action strong,
+      .public-home-v3 .home-final-action small {
         display: block;
       }
 
-      .public-home-v2 .home-final-action strong {
+      .public-home-v3 .home-final-action strong {
         font-size: 20px;
       }
 
-      .public-home-v2 .home-final-action small {
+      .public-home-v3 .home-final-action small {
         margin-top: 6px;
         color: var(--muted);
       }
 
       @media (max-width: 1020px) {
-        .public-home-v2 .hero,
-        .public-home-v2 .home-example-shell {
+        .public-home-v3 .hero,
+        .public-home-v3 .home-example-shell {
           grid-template-columns: 1fr;
         }
 
-        .public-home-v2 .hero {
+        .public-home-v3 .hero {
           padding-top: 70px;
         }
 
-        .public-home-v2 .home-command {
+        .public-home-v3 .home-command {
           min-height: 0;
+          width: min(100%, 700px);
+          margin: 0 auto;
         }
 
-        .public-home-v2 .home-proof-grid,
-        .public-home-v2 .home-capability-grid {
+        .public-home-v3 .home-proof-grid,
+        .public-home-v3 .home-capability-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
-        .public-home-v2 .home-proof-grid article:nth-child(3) {
+        .public-home-v3 .home-proof-grid article:nth-child(3) {
           border-left: 0;
           border-top: 1px solid var(--line);
         }
 
-        .public-home-v2 .home-proof-grid article:nth-child(4) {
+        .public-home-v3 .home-proof-grid article:nth-child(4) {
           border-top: 1px solid var(--line);
         }
       }
 
       @media (max-width: 720px) {
-        .public-home-v2 .topbar {
+        .public-home-v3 .topbar {
           padding-right: 16px;
           padding-left: 16px;
         }
 
-        .public-home-v2 .navlinks {
+        .public-home-v3 .navlinks {
           display: none;
         }
 
-        .public-home-v2 .hero,
-        .public-home-v2 .jj-home-section {
+        .public-home-v3 .hero,
+        .public-home-v3 .jj-home-section {
           width: min(100% - 32px, var(--home-max));
         }
 
-        .public-home-v2 .hero {
+        .public-home-v3 .hero {
           gap: 34px;
-          padding: 52px 0 64px;
+          padding: 68px 0 78px;
         }
 
-        .public-home-v2 .hero h1 {
+        .public-home-v3 .hero h1 {
           font-size: clamp(42px, 14vw, 62px);
         }
 
-        .public-home-v2 .home-command,
-        .public-home-v2 .home-example-visual,
-        .public-home-v2 .home-example-process {
+        .public-home-v3 .home-command,
+        .public-home-v3 .home-example-visual,
+        .public-home-v3 .home-example-process {
           padding: 18px;
-          border-radius: 16px;
+          border-radius: 8px;
         }
 
-        .public-home-v2 .jj-home-heading,
-        .public-home-v2 .home-source-paths,
-        .public-home-v2 .home-plan-grid,
-        .public-home-v2 .home-faq-grid,
-        .public-home-v2 .home-boundary-strip {
+        .public-home-v3 .home-command-head {
+          display: grid;
+          gap: 14px;
+        }
+
+        .public-home-v3 .home-command-state {
+          justify-self: start;
+        }
+
+        .public-home-v3 .home-ai-ceo-canvas {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          min-height: 0;
+          margin-top: 22px;
+        }
+
+        .public-home-v3 .home-ai-ceo-connections {
+          display: none;
+        }
+
+        .public-home-v3 .home-ai-ceo-core {
+          position: relative;
+          top: auto;
+          left: auto;
+          grid-column: 1 / -1;
+          width: 148px;
+          min-height: 148px;
+          margin: 4px auto 18px;
+          padding: 18px;
+          transform: none;
+        }
+
+        .public-home-v3 .home-ai-ceo-node,
+        .public-home-v3 .home-ai-ceo-node[data-home-ai-ceo-node] {
+          position: relative;
+          inset: auto;
+          width: 100%;
+          min-height: 82px;
+        }
+
+        .public-home-v3 .home-ai-ceo-node:is(:hover, :focus-visible),
+        .public-home-v3 .home-ai-ceo-node[aria-pressed="true"] {
+          transform: none;
+        }
+
+        .public-home-v3 .home-ai-ceo-node[data-home-ai-ceo-node="publish"] {
+          grid-column: 1 / -1;
+          width: calc(50% - 5px);
+          justify-self: center;
+        }
+
+        .public-home-v3 .home-ai-ceo-result {
+          margin-top: 18px;
+        }
+
+        .public-home-v3 .jj-home-heading,
+        .public-home-v3 .home-source-paths,
+        .public-home-v3 .home-plan-grid,
+        .public-home-v3 .home-faq-grid,
+        .public-home-v3 .home-boundary-strip {
           grid-template-columns: 1fr;
         }
 
-        .public-home-v2 .jj-home-heading {
+        .public-home-v3 .jj-home-heading {
           gap: 18px;
           margin-bottom: 28px;
         }
 
-        .public-home-v2 .home-proof-grid,
-        .public-home-v2 .home-capability-grid {
+        .public-home-v3 .home-proof-grid,
+        .public-home-v3 .home-capability-grid {
           grid-template-columns: 1fr;
         }
 
-        .public-home-v2 .home-proof-grid article + article,
-        .public-home-v2 .home-proof-grid article:nth-child(3) {
+        .public-home-v3 .home-proof-grid article + article,
+        .public-home-v3 .home-proof-grid article:nth-child(3) {
           border-top: 1px solid var(--line);
           border-left: 0;
         }
 
-        .public-home-v2 .home-proof-grid article {
+        .public-home-v3 .home-proof-grid article {
           min-height: 0;
         }
 
-        .public-home-v2 .home-example-gallery {
+        .public-home-v3 .home-example-gallery {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
-        .public-home-v2 .home-final-action {
+        .public-home-v3 .home-final-action {
           display: grid;
         }
 
-        .public-home-v2 .home-final-action .button-ghost {
+        .public-home-v3 .home-final-action .button-ghost {
           width: 100%;
         }
       }
 
       @media (prefers-reduced-motion: reduce) {
-        .public-home-v2 .home-command-step {
-          transition: none;
+        .public-home-v3 .home-ai-ceo-core,
+        .public-home-v3 .home-ai-ceo-connections path,
+        .public-home-v3 .home-ai-ceo-node,
+        .public-home-v3 .home-ai-ceo-core::before,
+        .public-home-v3 .home-ai-ceo-core::after,
+        .public-home-v3 .home-ai-ceo-connections path::before,
+        .public-home-v3 .home-ai-ceo-connections path::after,
+        .public-home-v3 .home-ai-ceo-node::before,
+        .public-home-v3 .home-ai-ceo-node::after {
+          animation: none !important;
+          transition: none !important;
         }
       }
     </style>
   </head>
-  <body class="public-home-v2">
+  <body class="public-home-v3" data-home-version="premium-v3">
     <div class="scroll-progress" aria-hidden="true"><span></span></div>
     <div class="cursor-glow" id="cursorGlow" aria-hidden="true"></div>
     <nav class="topbar">
@@ -4663,7 +4885,7 @@
         <p class="eyebrow">捷境 JIEJING / eBay AI 经营工作台</p>
         <h1>让 eBay 经营少一点重复，多一点自动推进。</h1>
         <p class="lead">
-          捷境把市场调研、商品资料、Listing、图片与视频、客服订单和工作记录整理进一个 AI CEO 工作台。AI 负责生成、预填和推进；真正影响店铺的动作，由商家确认后执行。
+          捷境把市场判断、商品资料、Listing、素材和客服任务组织进一个 AI CEO 工作台。AI 负责生成、预填和推进；需要授权或真正影响店铺的动作，由商家确认后执行。
         </p>
         <div class="hero-actions">
           <button class="button" type="button" id="heroWorkbenchLogin" data-home-primary-cta="jiejing_ai_ceo_workspace_v2">进入 AI CEO 工作台</button>
@@ -4676,32 +4898,32 @@
         </div>
       </section>
 
-      <aside class="home-command command-room" aria-label="AI CEO 工作方式">
+      <aside class="home-command home-ai-ceo-map" aria-label="AI CEO 经营任务调度图">
         <div class="home-command-head">
           <div>
             <small>JIEJING AI CEO</small>
-            <strong>把经营目标变成下一步</strong>
+            <strong>经营任务，从一个目标开始协同</strong>
           </div>
           <span class="home-command-state">商家掌握最终决定</span>
         </div>
-        <div class="home-command-steps">
-          <article class="home-command-step">
-            <span>01</span>
-            <div><strong>接收目标</strong><small>输入商品、链接、图片、订单问题或经营目标。</small></div>
-          </article>
-          <article class="home-command-step">
-            <span>02</span>
-            <div><strong>整理资料</strong><small>区分商品事实、来源、缺口和 AI 建议。</small></div>
-          </article>
-          <article class="home-command-step">
-            <span>03</span>
-            <div><strong>生成草稿</strong><small>推进市场报告、Listing、素材和客服回复建议。</small></div>
-          </article>
-          <article class="home-command-step">
-            <span>04</span>
-            <div><strong>等待确认</strong><small>发布、退款、预算等真实动作由商家确认。</small></div>
-          </article>
+        <div class="home-ai-ceo-canvas">
+          <svg class="home-ai-ceo-connections" viewBox="0 0 600 460" preserveAspectRatio="none" data-home-ai-ceo-connections="merchant-goal-router-v3" aria-hidden="true">
+            <path class="is-active" data-home-ai-ceo-line="market" d="M300 225 C236 154 164 100 84 66"></path>
+            <path data-home-ai-ceo-line="product" d="M300 225 C370 148 438 96 514 62"></path>
+            <path data-home-ai-ceo-line="listing" d="M300 225 C390 221 470 218 536 220"></path>
+            <path data-home-ai-ceo-line="media" d="M300 225 C364 304 418 358 472 397"></path>
+            <path data-home-ai-ceo-line="publish" d="M300 225 C244 304 194 358 132 397"></path>
+          </svg>
+          <div class="home-ai-ceo-core" data-home-ai-ceo-core="merchant-goal-router-v3">
+            <div><strong>AI CEO</strong><small>理解经营目标<br />判断下一步</small></div>
+          </div>
+          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="market" data-home-ai-ceo-result-copy="先梳理市场需求、价格带与经营风险，再给出有依据的方向。" aria-label="市场判断：查看商家结果" aria-pressed="true"><strong>市场判断</strong><small>需求 · 价格 · 风险</small></button>
+          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="product" data-home-ai-ceo-result-copy="把链接、图片和规格整理成可核对的商品事实与缺口。" aria-label="商品资料：查看商家结果" aria-pressed="false"><strong>商品资料</strong><small>来源 · 规格 · 缺口</small></button>
+          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="listing" data-home-ai-ceo-result-copy="依据商品事实生成标题、类目、属性和描述草稿。" aria-label="Listing：查看商家结果" aria-pressed="false"><strong>Listing</strong><small>标题 · 类目 · 描述</small></button>
+          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="media" data-home-ai-ceo-result-copy="按主图、场景、卖点和细节生成可选择的素材方案。" aria-label="素材工坊：查看商家结果" aria-pressed="false"><strong>素材工坊</strong><small>生成 · 选择 · 审核</small></button>
+          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="publish" data-home-ai-ceo-result-copy="发布前集中核对资料与平台动作，最终决定仍由商家掌握。" aria-label="发布确认：查看商家结果" aria-pressed="false"><strong>发布确认</strong><small>核对 · 授权 · 执行</small></button>
         </div>
+        <p class="home-ai-ceo-result" data-home-ai-ceo-result="active-result" data-home-ai-ceo-result-key="market" aria-live="polite">先梳理市场需求、价格带与经营风险，再给出有依据的方向。</p>
       </aside>
     </header>
 
@@ -4722,7 +4944,7 @@
         <article data-home-proof-metric="six-work-areas">
           <strong>6 类</strong>
           <span>eBay 经营工作</span>
-          <small>调研、资料、Listing、图片视频、客服订单和工作记录。</small>
+          <small>调研、资料、Listing、图片视频、客服订单和发布确认。</small>
         </article>
         <article data-home-proof-metric="traceable-work">
           <strong>全程</strong>
@@ -4752,7 +4974,7 @@
           <article><span>03 / LISTING</span><strong>生成可核对草稿</strong><p>协助整理标题、类目、属性、描述、政策和发布前缺口。</p></article>
           <article><span>04 / 图片与视频</span><strong>组织商品素材</strong><p>生成或处理主图、场景图、详情内容和视频脚本，并保留审核边界。</p></article>
           <article><span>05 / 客服与订单</span><strong>起草回复与下一步</strong><p>基于订单和商品事实生成回复建议；退款、补偿和敏感承诺交商家确认。</p></article>
-          <article><span>06 / 工作记录</span><strong>看见每一步发生了什么</strong><p>对话、报告、草稿、生成任务、确认和执行结果留在商家账号内。</p></article>
+          <article><span>06 / 发布确认</span><strong>关键动作由商家决定</strong><p>发布、退款、预算和敏感承诺等动作，统一在执行前核对与确认。</p></article>
         </div>
       </section>
 
@@ -5856,53 +6078,33 @@
         document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
       }
 
-      function setupSignalCanvas() {
-        const canvas = document.querySelector("#signalCanvas");
-        if (!canvas) return;
-        const context = canvas.getContext("2d");
-        let width = 0;
-        let height = 0;
-        let tick = 0;
+      function setupHomepageAiCeoMap() {
+        const scope = document.querySelector("#top");
+        if (!scope) return;
+        const nodes = Array.from(scope.querySelectorAll("button[data-home-ai-ceo-node]"));
+        const lines = Array.from(scope.querySelectorAll("path[data-home-ai-ceo-line]"));
+        const result = scope.querySelector('[data-home-ai-ceo-result="active-result"]');
+        if (!nodes.length || !lines.length || !result) return;
 
-        function resize() {
-          const rect = canvas.getBoundingClientRect();
-          const ratio = Math.min(window.devicePixelRatio || 1, 2);
-          width = Math.max(1, Math.floor(rect.width));
-          height = Math.max(1, Math.floor(rect.height));
-          canvas.width = Math.floor(width * ratio);
-          canvas.height = Math.floor(height * ratio);
-          context.setTransform(ratio, 0, 0, ratio, 0, 0);
-        }
+        const setActiveNode = (key) => {
+          const target = nodes.find((node) => node.dataset.homeAiCeoNode === key);
+          if (!target) return;
+          nodes.forEach((node) => node.setAttribute("aria-pressed", String(node === target)));
+          lines.forEach((line) => line.classList.toggle("is-active", line.dataset.homeAiCeoLine === key));
+          result.dataset.homeAiCeoResultKey = key;
+          result.textContent = target.dataset.homeAiCeoResultCopy || "";
+        };
 
-        function draw() {
-          context.clearRect(0, 0, width, height);
-          const pulse = wheelPulse;
-          tick += reducedMotion.matches ? 0 : 0.012 + pulse * 0.018;
+        nodes.forEach((node) => {
+          const activate = () => setActiveNode(node.dataset.homeAiCeoNode || "market");
+          node.addEventListener("pointerenter", activate);
+          node.addEventListener("pointerdown", activate);
+          node.addEventListener("focus", activate);
+          node.addEventListener("click", activate);
+        });
 
-          for (let lane = 0; lane < 6; lane += 1) {
-            const yBase = height * (0.2 + lane * 0.115);
-            const amp = 10 + lane * 1.6 + pulse * 28;
-            context.beginPath();
-            for (let x = 0; x <= width; x += 18) {
-              const y =
-                yBase +
-                Math.sin(x * 0.012 + tick * (1.2 + lane * 0.12) + lane) * amp +
-                Math.cos(x * 0.006 + pageProgressValue * 8 + lane) * (5 + pulse * 8);
-              if (x === 0) context.moveTo(x, y);
-              else context.lineTo(x, y);
-            }
-            context.strokeStyle = lane % 2 ? "rgba(185,130,40,0.18)" : "rgba(8,118,110,0.2)";
-            context.lineWidth = lane === 3 ? 1.7 : 1;
-            context.stroke();
-          }
-
-          wheelPulse *= 0.92;
-          window.requestAnimationFrame(draw);
-        }
-
-        resize();
-        window.addEventListener("resize", resize);
-        window.requestAnimationFrame(draw);
+        const initial = nodes.find((node) => node.getAttribute("aria-pressed") === "true") || nodes[0];
+        setActiveNode(initial.dataset.homeAiCeoNode || "market");
       }
 
       function setFlow(key) {
@@ -7007,7 +7209,7 @@
       setupHomeIntentStrip();
       bindSurfaceLight();
       setupReveal();
-      setupSignalCanvas();
+      setupHomepageAiCeoMap();
       openAuthModalFromUrl();
     </script>
 </body>
