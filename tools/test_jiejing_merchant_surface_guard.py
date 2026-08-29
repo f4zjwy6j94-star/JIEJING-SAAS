@@ -224,6 +224,9 @@ def main() -> int:
         return fail("public homepage should lead with the merchant product positioning")
     if "让 eBay 经营少一点重复，多一点自动推进" not in public_text:
         return fail("public homepage must lead with the approved AI CEO outcome")
+    body_boundary = re.search(r'<body\b[^>]*\bclass\s*=\s*"[^"]*\bpublic-home-v3\b[^"]*"[^>]*>', index_html, flags=re.I)
+    if not body_boundary:
+        return fail("public homepage must use the approved V3 design scope")
     primary_ctas = re.findall(
         r'<button\b(?=[^>]*data-home-primary-cta="jiejing_ai_ceo_workspace_v2")[^>]*>\s*进入 AI CEO 工作台\s*</button>',
         index_html,
@@ -231,7 +234,10 @@ def main() -> int:
     )
     if len(primary_ctas) != 1:
         return fail(f"public homepage must expose exactly one AI CEO workspace primary CTA: {len(primary_ctas)}")
-    homepage_source = source_between(index_html, '<nav class="topbar">', '<footer class="footer">')
+    footer_boundary = re.search(r'<footer\b', index_html[body_boundary.end():], flags=re.I)
+    if not footer_boundary:
+        return fail("public homepage semantic marketing boundaries are missing")
+    homepage_source = index_html[body_boundary.end():body_boundary.end() + footer_boundary.start()]
     filled_home_buttons = re.findall(r'<button\b[^>]*class="button"[^>]*>', homepage_source, flags=re.I)
     if len(filled_home_buttons) != 1:
         return fail(f"public homepage must keep one filled primary button: {len(filled_home_buttons)}")
@@ -243,6 +249,21 @@ def main() -> int:
     expected_home_sections = ["hero", "proof", "capabilities", "workflow", "merchants", "plans"]
     if home_sections != expected_home_sections:
         return fail(f"public homepage must expose six ordered merchant sections: {home_sections}")
+    if "工作记录" in visible_text(homepage_source):
+        return fail("public homepage must not market internal work records to merchants")
+    public_marketing_data = "".join([
+        source_between(index_html, "const pathData = {", "const planData = {"),
+        source_between(index_html, "const planData = {", "const guideData = {"),
+        source_between(index_html, "const guideData = {", "let guideAnswers ="),
+    ])
+    if "工作记录" in public_marketing_data:
+        return fail("public path, plan, and guide data must not sell work records as a product label")
+    for retired_defensive_copy in [
+        "不代表捷境销售该商品",
+        "不代表商品事实或图片权利已经核验",
+    ]:
+        if retired_defensive_copy in homepage_source + public_marketing_data:
+            return fail(f"public index must remove the retired defensive product disclaimer: {retired_defensive_copy}")
     for marker in ["IP 防侵权", "完整体验路径", "eBay 自动化系统架构", "先把 eBay 真实经营做深，再把同一套经营能力扩展到 Amazon"]:
         if marker in homepage_source:
             return fail(f"public homepage must not expose an overclaim or internal architecture narrative: {marker}")
@@ -255,7 +276,8 @@ def main() -> int:
     workflow_start = index_html.find('data-home-section="workflow"', capability_start)
     merchants_start = index_html.find('data-home-section="merchants"', workflow_start)
     plans_start = index_html.find('data-home-section="plans"')
-    footer_start = index_html.find('<footer class="footer">', plans_start)
+    footer_match = re.search(r'<footer\b', index_html[plans_start:], flags=re.I) if plans_start >= 0 else None
+    footer_start = plans_start + footer_match.start() if footer_match else -1
     if min(proof_start, capability_start, workflow_start, merchants_start, plans_start, footer_start) < 0:
         return fail("public homepage section boundaries are missing")
     proof_source = index_html[proof_start:capability_start]
@@ -267,12 +289,68 @@ def main() -> int:
         return fail("public homepage must expose four verifiable product proof metrics")
     if len(re.findall(r'<article>', capability_source)) != 6:
         return fail("public homepage must explain the six merchant work areas")
+    hero_start = index_html.find('data-home-section="hero"')
+    hero_source = index_html[hero_start:proof_start]
+    if hero_source.count('data-home-ai-ceo-core="merchant-goal-router-v3"') != 1:
+        return fail("public homepage hero must expose one AI CEO decision core")
+    hero_nodes = re.findall(r'<button\b(?=[^>]*data-home-ai-ceo-node="([^"]+)")(?=[^>]*data-home-ai-ceo-result-copy="[^"]+")(?=[^>]*aria-pressed="(?:true|false)")[^>]*>', hero_source, flags=re.I)
+    approved_hero_nodes = ["market", "product", "listing", "media", "publish"]
+    if hero_nodes != approved_hero_nodes:
+        return fail(f"public homepage hero must expose the five approved merchant nodes: {hero_nodes}")
+    hero_lines = re.findall(r'<path\b[^>]*data-home-ai-ceo-line="([^"]+)"[^>]*>', hero_source, flags=re.I)
+    if hero_lines != approved_hero_nodes:
+        return fail(f"public homepage hero must connect every approved merchant node to AI CEO: {hero_lines}")
+    if len(re.findall(r'data-home-ai-ceo-line="[^"]+"', hero_source)) != 5:
+        return fail("public homepage hero line markers must belong to exactly five SVG paths")
+    if 'data-home-ai-ceo-connections="merchant-goal-router-v3"' not in hero_source:
+        return fail("public homepage hero must expose the approved SVG relationship map")
+    if 'data-home-ai-ceo-result="active-result"' not in hero_source:
+        return fail("public homepage hero must expose merchant-facing active-node result copy")
+    if 'data-home-ai-ceo-result-key=' not in hero_source:
+        return fail("public homepage hero result must expose its synchronized active key")
+    for legacy_marker in ["home-command-steps", "home-command-step", "hero-ops-board", "signalCanvas"]:
+        if legacy_marker in hero_source:
+            return fail(f"public homepage hero must remove legacy relationship UI: {legacy_marker}")
     if 'data-home-example="travel-compression-workflow-v1"' not in workflow_source:
         return fail("public homepage workflow example must be explicitly marked")
-    if len(re.findall(r'data-home-workflow-step="[^"]+"', workflow_source)) != 6:
-        return fail("public homepage example must explain the six workflow steps")
-    if "示例商品工作流；实际内容以商家提供的商品事实与授权素材为准。" not in visible_text(workflow_source):
-        return fail("public homepage workflow example must show the approved rights and facts disclaimer")
+    if 'data-home-material-studio="listing-media-v3"' not in workflow_source:
+        return fail("public homepage workflow must present the material studio product interface")
+    for stage in ["input", "generation", "review", "listing"]:
+        if f'data-home-material-stage="{stage}"' not in workflow_source:
+            return fail(f"public homepage material studio is missing stage: {stage}")
+    material_tasks = re.findall(r'data-home-material-task="([^"]+)"', workflow_source)
+    if material_tasks != ["main", "scene", "selling-points", "detail"]:
+        return fail(f"public homepage material studio must expose four generation directions: {material_tasks}")
+    material_options = re.findall(r'data-home-material-option="([^"]+)"', workflow_source)
+    if material_options != ["main", "scene", "selling-points", "detail", "video-cover"]:
+        return fail(f"public homepage material studio must expose five selectable results: {material_options}")
+    for marker in [
+        'data-home-material-canvas="active-result"',
+        'data-home-material-title="active-title"',
+        'data-home-material-purpose="active-purpose"',
+        'data-home-material-status="listing-draft"',
+    ]:
+        if marker not in workflow_source:
+            return fail(f"public homepage material studio is missing review contract: {marker}")
+    for marker in ["data-home-active-material=", "data-home-material-key=", "data-home-rotate-interval-ms="]:
+        if marker not in workflow_source:
+            return fail(f"public homepage material studio is missing synchronized state: {marker}")
+    rotate_interval = re.search(r'data-home-rotate-interval-ms="(\d+)"', workflow_source)
+    if not rotate_interval or not 5000 <= int(rotate_interval.group(1)) <= 7000:
+        return fail("public homepage material rotation interval must stay between 5000 and 7000 ms")
+    material_option_tags = re.findall(r'<button\b[^>]*data-home-material-option="[^"]+"[^>]*>', workflow_source, flags=re.I)
+    if len(material_option_tags) != 5 or sum('aria-pressed="true"' in tag for tag in material_option_tags) != 1:
+        return fail("public homepage material studio must expose exactly one initial selection")
+    for option_tag in material_option_tags:
+        for attribute in ["data-home-material-src=", "data-home-material-title-copy=", "data-home-material-purpose-copy="]:
+            if attribute not in option_tag:
+                return fail(f"public homepage material option is missing synchronized copy: {attribute}")
+    if "一份商品资料，生成可选择的 Listing 素材。" not in visible_text(workflow_source):
+        return fail("public homepage material studio must lead with the merchant outcome")
+    if "流程示例｜实际结果以商家提供的商品资料与审核为准。" not in visible_text(workflow_source):
+        return fail("public homepage material studio must show the approved concise boundary")
+    if "示例商品工作流；实际内容以商家提供的商品事实与授权素材为准。" in visible_text(workflow_source):
+        return fail("public homepage must remove the retired defensive workflow disclaimer")
     for marker in ['data-merchant-source-path="stocked"', 'data-merchant-source-path="sourcing"']:
         if marker not in merchants_source:
             return fail(f"public homepage is missing a merchant source path: {marker}")
