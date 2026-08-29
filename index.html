@@ -4472,94 +4472,325 @@
         line-height: 1.7;
       }
 
-      .public-home-v3 .home-example-shell {
+      .public-home-v3 .home-material-studio {
+        position: relative;
         display: grid;
-        grid-template-columns: minmax(0, 1.08fr) minmax(340px, 0.92fr);
-        gap: 20px;
-      }
-
-      .public-home-v3 .home-example-visual,
-      .public-home-v3 .home-example-process {
-        padding: 22px;
-        border: 1px solid var(--line);
-        border-radius: 20px;
-        background: rgba(255, 255, 255, 0.8);
-        box-shadow: var(--shadow-soft);
-      }
-
-      .public-home-v3 .home-example-main {
+        grid-template-columns: minmax(210px, 0.76fr) minmax(230px, 0.84fr) minmax(420px, 1.4fr);
+        grid-template-areas:
+          "input generation review"
+          "listing listing review"
+          "caption caption caption";
+        gap: 1px;
         overflow: hidden;
-        aspect-ratio: 1.22;
-        border-radius: 14px;
-        background: var(--wash);
+        border: 1px solid var(--home-line);
+        border-radius: var(--home-card-radius);
+        background: var(--home-line);
+        box-shadow: var(--home-shadow-canvas);
       }
 
-      .public-home-v3 .home-example-main img,
-      .public-home-v3 .home-example-thumb img {
+      .public-home-v3 .home-material-stage {
+        min-width: 0;
+        background: var(--home-surface);
+      }
+
+      .public-home-v3 .home-material-input {
+        grid-area: input;
+        padding: 24px;
+      }
+
+      .public-home-v3 .home-material-generation {
+        grid-area: generation;
+        padding: 24px;
+      }
+
+      .public-home-v3 .home-material-review {
+        grid-area: review;
+        padding: 24px;
+      }
+
+      .public-home-v3 .home-material-listing {
+        grid-area: listing;
+        display: flex;
+        justify-content: space-between;
+        gap: 22px;
+        align-items: center;
+        padding: 18px 24px;
+        background: var(--home-wash);
+      }
+
+      .public-home-v3 .home-material-stage-label {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin: 0 0 18px;
+        color: var(--teal);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .public-home-v3 .home-material-stage-label::before {
+        width: 18px;
+        height: 1px;
+        background: currentColor;
+        content: "";
+      }
+
+      .public-home-v3 .home-material-source-image {
+        overflow: hidden;
+        aspect-ratio: 1.24;
+        border: 1px solid var(--home-line);
+        border-radius: 6px;
+        background: #fff;
+      }
+
+      .public-home-v3 .home-material-source-image img {
         width: 100%;
         height: 100%;
-        object-fit: cover;
-      }
-
-      .public-home-v3 .home-example-main img {
         object-fit: contain;
-        padding: 16px;
-        background: white;
+        padding: 12px;
       }
 
-      .public-home-v3 .home-example-gallery {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 10px;
-        margin-top: 10px;
+      .public-home-v3 .home-material-input h3 {
+        margin: 18px 0 12px;
+        font-size: 19px;
+        line-height: 1.35;
       }
 
-      .public-home-v3 .home-example-thumb {
-        overflow: hidden;
-        aspect-ratio: 1.2;
-        border-radius: 9px;
-        background: var(--wash);
+      .public-home-v3 .home-material-facts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
       }
 
-      .public-home-v3 .home-example-caption {
-        margin: 18px 2px 0;
+      .public-home-v3 .home-material-facts li {
+        padding: 5px 8px;
+        border: 1px solid var(--home-line);
+        border-radius: 4px;
         color: var(--muted);
-        font-size: 13px;
-        line-height: 1.65;
+        background: var(--home-wash);
+        font-size: 11px;
       }
 
-      .public-home-v3 .home-workflow-list {
-        display: grid;
-        gap: 2px;
-      }
-
-      .public-home-v3 .home-workflow-list article {
-        display: grid;
-        grid-template-columns: 32px minmax(0, 1fr);
-        gap: 14px;
-        padding: 15px 4px;
-        border-bottom: 1px solid var(--line);
-      }
-
-      .public-home-v3 .home-workflow-list article:last-child {
-        border-bottom: 0;
-      }
-
-      .public-home-v3 .home-workflow-list span {
-        color: var(--amber);
+      .public-home-v3 .home-material-input-note {
+        margin: 15px 0 0;
+        color: var(--muted);
         font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .public-home-v3 .home-material-tasks {
+        display: grid;
+        gap: 8px;
+      }
+
+      .public-home-v3 .home-material-task {
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        min-height: 58px;
+        padding: 10px 11px;
+        border: 1px solid var(--home-line);
+        border-radius: 6px;
+        background: #fff;
+      }
+
+      .public-home-v3 .home-material-task > span:first-child {
+        display: grid;
+        width: 26px;
+        height: 26px;
+        place-items: center;
+        border-radius: 50%;
+        color: var(--teal);
+        background: rgba(14, 102, 85, 0.09);
+        font-size: 10px;
         font-weight: 800;
       }
 
-      .public-home-v3 .home-workflow-list strong,
-      .public-home-v3 .home-workflow-list small {
+      .public-home-v3 .home-material-task strong,
+      .public-home-v3 .home-material-task small {
         display: block;
       }
 
-      .public-home-v3 .home-workflow-list small {
+      .public-home-v3 .home-material-task strong {
+        font-size: 13px;
+      }
+
+      .public-home-v3 .home-material-task small {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .public-home-v3 .home-material-task > em {
+        color: var(--teal);
+        font-size: 10px;
+        font-style: normal;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .public-home-v3 .home-material-review-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: flex-start;
+        margin-bottom: 16px;
+      }
+
+      .public-home-v3 .home-material-review-head .home-material-stage-label {
+        margin-bottom: 0;
+      }
+
+      .public-home-v3 .home-material-review-head span:last-child {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .public-home-v3 .home-material-canvas {
+        overflow: hidden;
+        aspect-ratio: 1.54;
+        margin: 0;
+        border: 1px solid var(--home-line);
+        border-radius: 6px;
+        background:
+          linear-gradient(rgba(221, 230, 224, 0.46) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(221, 230, 224, 0.46) 1px, transparent 1px),
+          #fff;
+        background-size: 22px 22px;
+      }
+
+      .public-home-v3 .home-material-canvas img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        padding: 16px;
+        opacity: 1;
+        transition: opacity 300ms var(--ease), transform 360ms var(--ease);
+      }
+
+      .public-home-v3 .home-material-canvas img.is-switching {
+        opacity: 0.42;
+        transform: scale(0.988);
+      }
+
+      .public-home-v3 .home-material-result-copy {
+        display: grid;
+        grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+        gap: 18px;
+        align-items: start;
+        padding: 17px 2px 15px;
+      }
+
+      .public-home-v3 .home-material-result-copy strong {
+        font-size: 16px;
+      }
+
+      .public-home-v3 .home-material-result-copy p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .public-home-v3 .home-material-options {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .public-home-v3 .home-material-option {
+        display: grid;
+        gap: 6px;
+        min-width: 0;
+        padding: 5px;
+        border: 1px solid var(--home-line);
+        border-radius: 6px;
+        color: var(--muted);
+        background: #fff;
+        cursor: pointer;
+        text-align: left;
+        transition: border-color 180ms var(--ease), box-shadow 180ms var(--ease), color 180ms var(--ease);
+      }
+
+      .public-home-v3 .home-material-option img {
+        width: 100%;
+        aspect-ratio: 1.12;
+        border-radius: 3px;
+        object-fit: cover;
+        background: var(--home-wash);
+      }
+
+      .public-home-v3 .home-material-option span {
+        overflow: hidden;
+        padding: 0 2px 1px;
+        font-size: 10px;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .public-home-v3 .home-material-option:is(:hover, :focus-visible),
+      .public-home-v3 .home-material-option[aria-pressed="true"] {
+        border-color: var(--teal);
+        color: var(--teal-deep);
+        box-shadow: 0 0 0 2px rgba(14, 102, 85, 0.1);
+      }
+
+      .public-home-v3 .home-material-option:focus-visible {
+        outline: 2px solid var(--teal);
+        outline-offset: 3px;
+      }
+
+      .public-home-v3 .home-material-listing-copy strong,
+      .public-home-v3 .home-material-listing-copy small {
+        display: block;
+      }
+
+      .public-home-v3 .home-material-listing-copy strong {
+        font-size: 14px;
+      }
+
+      .public-home-v3 .home-material-listing-copy small {
         margin-top: 4px;
         color: var(--muted);
-        line-height: 1.5;
+        font-size: 11px;
+      }
+
+      .public-home-v3 .home-material-status {
+        margin: 0;
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 800;
+        text-align: right;
+      }
+
+      .public-home-v3 .home-example-caption {
+        grid-area: caption;
+        margin: 0;
+        padding: 12px 20px;
+        color: var(--muted);
+        background: var(--home-wash);
+        font-size: 12px;
+        line-height: 1.65;
+      }
+
+      .public-home-v3 .home-material-announcement {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        margin: -1px;
+        padding: 0;
+        border: 0;
+        white-space: nowrap;
       }
 
       .public-home-v3 .home-source-paths {
@@ -4686,9 +4917,17 @@
       }
 
       @media (max-width: 1020px) {
-        .public-home-v3 .hero,
-        .public-home-v3 .home-example-shell {
+        .public-home-v3 .hero {
           grid-template-columns: 1fr;
+        }
+
+        .public-home-v3 .home-material-studio {
+          grid-template-columns: minmax(230px, 0.8fr) minmax(0, 1.2fr);
+          grid-template-areas:
+            "input review"
+            "generation review"
+            "listing listing"
+            "caption caption";
         }
 
         .public-home-v3 .hero {
@@ -4740,9 +4979,7 @@
           font-size: clamp(42px, 14vw, 62px);
         }
 
-        .public-home-v3 .home-command,
-        .public-home-v3 .home-example-visual,
-        .public-home-v3 .home-example-process {
+        .public-home-v3 .home-command {
           padding: 18px;
           border-radius: 8px;
         }
@@ -4831,8 +5068,41 @@
           min-height: 0;
         }
 
-        .public-home-v3 .home-example-gallery {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+        .public-home-v3 .home-material-studio {
+          grid-template-columns: 1fr;
+          grid-template-areas:
+            "input"
+            "generation"
+            "review"
+            "listing"
+            "caption";
+        }
+
+        .public-home-v3 .home-material-input,
+        .public-home-v3 .home-material-generation,
+        .public-home-v3 .home-material-review {
+          padding: 18px;
+        }
+
+        .public-home-v3 .home-material-listing {
+          display: grid;
+          padding: 17px 18px;
+        }
+
+        .public-home-v3 .home-material-status {
+          text-align: left;
+        }
+
+        .public-home-v3 .home-material-result-copy {
+          grid-template-columns: 1fr;
+          gap: 7px;
+        }
+
+        .public-home-v3 .home-material-options {
+          grid-template-columns: repeat(5, minmax(58px, 1fr));
+          overflow-x: auto;
+          padding: 3px 3px 7px;
+          scrollbar-width: thin;
         }
 
         .public-home-v3 .home-final-action {
@@ -4848,6 +5118,8 @@
         .public-home-v3 .home-ai-ceo-core,
         .public-home-v3 .home-ai-ceo-connections path,
         .public-home-v3 .home-ai-ceo-node,
+        .public-home-v3 .home-material-canvas img,
+        .public-home-v3 .home-material-option,
         .public-home-v3 .home-ai-ceo-core::before,
         .public-home-v3 .home-ai-ceo-core::after,
         .public-home-v3 .home-ai-ceo-connections path::before,
@@ -4981,37 +5253,70 @@
       <section class="jj-home-section reveal" id="workflow" data-home-section="workflow" data-home-example="travel-compression-workflow-v1">
         <div class="jj-home-heading">
           <div>
-            <p class="eyebrow">一条商品如何推进</p>
-            <h2>从商品资料到可核对结果，每一步都能看见依据和缺口。</h2>
+            <p class="eyebrow">素材工坊 / Listing Media</p>
+            <h2>一份商品资料，生成可选择的 Listing 素材。</h2>
           </div>
-          <p>下面用旅行压缩收纳袋展示界面会如何组织商品工作。它只用于说明流程，不代表捷境销售该商品，也不代表商品事实或图片权利已经核验。</p>
+          <p>导入来源图和商品事实后，素材工坊按主图、场景、卖点和细节分别生成方案。商家选定后，再进入 Listing 草稿。</p>
         </div>
-        <div class="home-example-shell">
-          <article class="home-example-visual">
-            <div class="home-example-main">
-              <picture>
-                <source srcset="assets/travel-compression-main-v2.webp" type="image/webp" />
-                <img src="assets/travel-compression-main-v2.webp" alt="旅行压缩收纳袋套装示例主图" loading="lazy" decoding="async" />
-              </picture>
+        <div
+          class="home-material-studio"
+          data-home-material-studio="listing-media-v3"
+          data-home-active-material="main"
+          data-home-auto-rotate="true"
+          data-home-rotate-interval-ms="6000"
+          data-home-motion-policy="respect-reduced-motion"
+        >
+          <article class="home-material-stage home-material-input" data-home-material-stage="input">
+            <p class="home-material-stage-label">01 / 商品输入</p>
+            <div class="home-material-source-image">
+              <img src="assets/travel-compression-main-v2.webp" alt="旅行压缩收纳袋商品输入样例" loading="lazy" decoding="async" />
             </div>
-            <div class="home-example-gallery" aria-label="示例商品素材组成">
-              <div class="home-example-thumb"><img src="assets/travel-compression-scene-v2.webp" alt="旅行使用场景示意" loading="lazy" decoding="async" /></div>
-              <div class="home-example-thumb"><img src="assets/travel-compression-feature-v2.webp" alt="商品细节示意" loading="lazy" decoding="async" /></div>
-              <div class="home-example-thumb"><img src="assets/travel-compression-detail-v2.webp" alt="详情内容结构示意" loading="lazy" decoding="async" /></div>
-              <div class="home-example-thumb"><img src="assets/travel-compression-video-cover.webp" alt="视频脚本与封面示意" loading="lazy" decoding="async" /></div>
-            </div>
-            <p class="home-example-caption">示例商品工作流；实际内容以商家提供的商品事实与授权素材为准。</p>
+            <h3>旅行压缩收纳袋套装</h3>
+            <ul class="home-material-facts" aria-label="已识别的商品要点">
+              <li>多件组合</li>
+              <li>旅行收纳</li>
+              <li>拉链压缩</li>
+            </ul>
+            <p class="home-material-input-note">待商家补充：尺寸、材质、成本与库存。</p>
           </article>
-          <article class="home-example-process">
-            <div class="home-workflow-list">
-              <article data-home-workflow-step="source"><span>01</span><div><strong>提交资料</strong><small>提供货源链接、商品图片或自有规格。</small></div></article>
-              <article data-home-workflow-step="facts"><span>02</span><div><strong>整理事实</strong><small>区分已知信息、缺失字段和需要商家确认的内容。</small></div></article>
-              <article data-home-workflow-step="research"><span>03</span><div><strong>市场调研</strong><small>形成候选判断、价格参考与风险疑点。</small></div></article>
-              <article data-home-workflow-step="listing"><span>04</span><div><strong>生成 Listing</strong><small>整理标题、类目、属性、描述和政策字段。</small></div></article>
-              <article data-home-workflow-step="media"><span>05</span><div><strong>准备图片与视频</strong><small>形成素材包、视频脚本与图片权利审核项。</small></div></article>
-              <article data-home-workflow-step="confirm"><span>06</span><div><strong>商家核对并确认</strong><small>核对商品事实后，再决定保存草稿或执行平台动作。</small></div></article>
+
+          <article class="home-material-stage home-material-generation" data-home-material-stage="generation">
+            <p class="home-material-stage-label">02 / 生成任务</p>
+            <div class="home-material-tasks" aria-label="素材生成方向">
+              <div class="home-material-task" data-home-material-task="main"><span>01</span><div><strong>白底主图</strong><small>突出商品组合与轮廓</small></div><em>可选择</em></div>
+              <div class="home-material-task" data-home-material-task="scene"><span>02</span><div><strong>旅行场景图</strong><small>呈现收纳使用情境</small></div><em>可选择</em></div>
+              <div class="home-material-task" data-home-material-task="selling-points"><span>03</span><div><strong>卖点图</strong><small>组织功能与结构信息</small></div><em>可选择</em></div>
+              <div class="home-material-task" data-home-material-task="detail"><span>04</span><div><strong>细节图</strong><small>展示面料与拉链细节</small></div><em>可选择</em></div>
             </div>
           </article>
+
+          <article class="home-material-stage home-material-review" data-home-material-stage="review">
+            <div class="home-material-review-head">
+              <p class="home-material-stage-label">03 / 审核画布</p>
+              <span>选择方向查看用途</span>
+            </div>
+            <figure class="home-material-canvas" data-home-material-canvas="active-result" data-home-material-key="main">
+              <img src="assets/travel-compression-main-v2.webp" alt="白底主图方案" loading="lazy" decoding="async" />
+            </figure>
+            <div class="home-material-result-copy">
+              <strong data-home-material-title="active-title" data-home-material-key="main">白底主图</strong>
+              <p data-home-material-purpose="active-purpose" data-home-material-key="main">用于 Listing 首图，清楚呈现套装数量与商品轮廓。</p>
+            </div>
+            <div class="home-material-options" aria-label="选择素材方向">
+              <button class="home-material-option" type="button" data-home-material-option="main" data-home-material-src="assets/travel-compression-main-v2.webp" data-home-material-title-copy="白底主图" data-home-material-purpose-copy="用于 Listing 首图，清楚呈现套装数量与商品轮廓。" data-home-material-status-copy="当前选择：白底主图，可加入 Listing 草稿" data-home-material-alt-copy="白底主图方案" aria-label="查看白底主图" aria-pressed="true"><img src="assets/travel-compression-main-v2.webp" alt="" loading="lazy" decoding="async" /><span>主图</span></button>
+              <button class="home-material-option" type="button" data-home-material-option="scene" data-home-material-src="assets/travel-compression-scene-v2.webp" data-home-material-title-copy="旅行场景图" data-home-material-purpose-copy="用于展示旅行收纳情境，帮助买家理解使用方式。" data-home-material-status-copy="当前选择：旅行场景图，可加入 Listing 草稿" data-home-material-alt-copy="旅行场景图方案" aria-label="查看旅行场景图" aria-pressed="false"><img src="assets/travel-compression-scene-v2.webp" alt="" loading="lazy" decoding="async" /><span>场景</span></button>
+              <button class="home-material-option" type="button" data-home-material-option="selling-points" data-home-material-src="assets/travel-compression-feature-v2.webp" data-home-material-title-copy="卖点图" data-home-material-purpose-copy="用于组织压缩、分类和便携等商品卖点。" data-home-material-status-copy="当前选择：卖点图，可加入 Listing 草稿" data-home-material-alt-copy="卖点图方案" aria-label="查看卖点图" aria-pressed="false"><img src="assets/travel-compression-feature-v2.webp" alt="" loading="lazy" decoding="async" /><span>卖点</span></button>
+              <button class="home-material-option" type="button" data-home-material-option="detail" data-home-material-src="assets/travel-compression-detail-v2.webp" data-home-material-title-copy="细节图" data-home-material-purpose-copy="用于展示面料、车线和拉链等可核对细节。" data-home-material-status-copy="当前选择：细节图，可加入 Listing 草稿" data-home-material-alt-copy="细节图方案" aria-label="查看细节图" aria-pressed="false"><img src="assets/travel-compression-detail-v2.webp" alt="" loading="lazy" decoding="async" /><span>细节</span></button>
+              <button class="home-material-option" type="button" data-home-material-option="video-cover" data-home-material-src="assets/travel-compression-video-cover.webp" data-home-material-title-copy="视频封面方向" data-home-material-purpose-copy="用于承接视频脚本的封面构图参考。" data-home-material-status-copy="当前选择：视频封面方向，可加入 Listing 草稿" data-home-material-alt-copy="视频封面构图方向" aria-label="查看视频封面方向" aria-pressed="false"><img src="assets/travel-compression-video-cover.webp" alt="" loading="lazy" decoding="async" /><span>封面</span></button>
+            </div>
+          </article>
+
+          <aside class="home-material-stage home-material-listing" data-home-material-stage="listing">
+            <div class="home-material-listing-copy"><strong>04 / 进入 Listing 草稿</strong><small>商家选定素材后，与标题、属性和描述一起核对。</small></div>
+            <p class="home-material-status" data-home-material-status="listing-draft" data-home-material-key="main">当前选择：白底主图，可加入 Listing 草稿</p>
+          </aside>
+          <p class="home-example-caption">流程示例｜实际结果以商家提供的商品资料与审核为准。</p>
+          <span class="home-material-announcement" data-home-material-announcement="manual-selection" aria-live="polite" aria-atomic="true"></span>
         </div>
       </section>
 
@@ -6105,6 +6410,105 @@
 
         const initial = nodes.find((node) => node.getAttribute("aria-pressed") === "true") || nodes[0];
         setActiveNode(initial.dataset.homeAiCeoNode || "market");
+      }
+
+      function setupHomepageMediaStudio() {
+        const studio = document.querySelector('[data-home-material-studio="listing-media-v3"]');
+        if (!studio) return;
+        const options = Array.from(studio.querySelectorAll("button[data-home-material-option]"));
+        const canvas = studio.querySelector('[data-home-material-canvas="active-result"]');
+        const image = canvas?.querySelector("img");
+        const title = studio.querySelector('[data-home-material-title="active-title"]');
+        const purpose = studio.querySelector('[data-home-material-purpose="active-purpose"]');
+        const status = studio.querySelector('[data-home-material-status="listing-draft"]');
+        const announcement = studio.querySelector('[data-home-material-announcement="manual-selection"]');
+        if (!options.length || !canvas || !image || !title || !purpose || !status || !announcement) return;
+
+        const intervalMs = Number(studio.dataset.homeRotateIntervalMs) || 6000;
+        const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+        let timer = 0;
+        let userControlled = false;
+
+        const announceManualSelection = (target) => {
+          const nextTitle = target.dataset.homeMaterialTitleCopy || "素材方案";
+          const nextStatus = target.dataset.homeMaterialStatusCopy || "当前素材可加入 Listing 草稿";
+          announcement.textContent = "";
+          window.requestAnimationFrame(() => {
+            announcement.textContent = `已选择${nextTitle}。${nextStatus}`;
+          });
+        };
+
+        const setActiveMaterial = (key, announce = false) => {
+          const target = options.find((option) => option.dataset.homeMaterialOption === key);
+          if (!target) return;
+          const nextKey = target.dataset.homeMaterialOption || "main";
+          if (studio.dataset.homeActiveMaterial === nextKey && target.getAttribute("aria-pressed") === "true") {
+            if (announce) announceManualSelection(target);
+            return;
+          }
+          options.forEach((option) => option.setAttribute("aria-pressed", String(option === target)));
+          studio.dataset.homeActiveMaterial = nextKey;
+          canvas.dataset.homeMaterialKey = nextKey;
+          title.dataset.homeMaterialKey = nextKey;
+          purpose.dataset.homeMaterialKey = nextKey;
+          status.dataset.homeMaterialKey = nextKey;
+          image.classList.add("is-switching");
+          image.src = target.dataset.homeMaterialSrc || image.src;
+          image.alt = target.dataset.homeMaterialAltCopy || target.dataset.homeMaterialTitleCopy || "素材方案";
+          title.textContent = target.dataset.homeMaterialTitleCopy || "素材方案";
+          purpose.textContent = target.dataset.homeMaterialPurposeCopy || "选择后可继续核对。";
+          status.textContent = target.dataset.homeMaterialStatusCopy || "当前素材可加入 Listing 草稿";
+          window.requestAnimationFrame(() => image.classList.remove("is-switching"));
+          if (announce) announceManualSelection(target);
+        };
+
+        const stopAutoRotation = () => {
+          userControlled = true;
+          if (timer) window.clearInterval(timer);
+          timer = 0;
+          studio.dataset.homeAutoRotate = "false";
+        };
+
+        const startAutoRotation = () => {
+          if (userControlled || motionPreference.matches || options.length < 2) {
+            studio.dataset.homeAutoRotate = "false";
+            return;
+          }
+          if (timer) window.clearInterval(timer);
+          studio.dataset.homeAutoRotate = "true";
+          timer = window.setInterval(() => {
+            const activeIndex = options.findIndex((option) => option.getAttribute("aria-pressed") === "true");
+            const next = options[(Math.max(activeIndex, 0) + 1) % options.length];
+            setActiveMaterial(next.dataset.homeMaterialOption || "main");
+          }, intervalMs);
+        };
+
+        options.forEach((option) => {
+          option.addEventListener("pointerdown", stopAutoRotation);
+          option.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") stopAutoRotation();
+          });
+          option.addEventListener("click", () => {
+            stopAutoRotation();
+            setActiveMaterial(option.dataset.homeMaterialOption || "main", true);
+          });
+        });
+
+        if (typeof motionPreference.addEventListener === "function") {
+          motionPreference.addEventListener("change", () => {
+            if (motionPreference.matches) {
+              if (timer) window.clearInterval(timer);
+              timer = 0;
+              studio.dataset.homeAutoRotate = "false";
+            } else {
+              startAutoRotation();
+            }
+          });
+        }
+
+        const initial = options.find((option) => option.getAttribute("aria-pressed") === "true") || options[0];
+        setActiveMaterial(initial.dataset.homeMaterialOption || "main");
+        startAutoRotation();
       }
 
       function setFlow(key) {
@@ -7210,6 +7614,7 @@
       bindSurfaceLight();
       setupReveal();
       setupHomepageAiCeoMap();
+      setupHomepageMediaStudio();
       openAuthModalFromUrl();
     </script>
 </body>

@@ -702,7 +702,6 @@ def main() -> int:
             return fail(f"missing frontend staging config marker: {endpoint} fetch")
     for marker in [
         "cursorGlow",
-        "signalCanvas",
         "merchant-guide",
         "entryModeGrid",
         "pointermove",
