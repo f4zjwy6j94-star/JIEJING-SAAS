@@ -4034,9 +4034,611 @@
         content: "" !important;
         display: none !important;
       }
+
+      /* Public homepage v2: one scoped layer, preserving the existing auth shell. */
+      .public-home-v2 {
+        --home-max: 1240px;
+        --home-space: clamp(64px, 8vw, 104px);
+        --home-card-radius: 16px;
+      }
+
+      .public-home-v2 :where(h1, h2, h3, p) {
+        text-wrap: pretty;
+      }
+
+      .public-home-v2 .topbar {
+        padding-right: max(24px, calc((100vw - var(--home-max)) / 2));
+        padding-left: max(24px, calc((100vw - var(--home-max)) / 2));
+      }
+
+      .public-home-v2 .navlinks {
+        justify-self: center;
+      }
+
+      .public-home-v2 .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.08fr) minmax(420px, 0.92fr);
+        gap: clamp(40px, 6vw, 84px);
+        width: min(var(--home-max), calc(100% - 48px));
+        min-height: auto;
+        margin: 0 auto;
+        padding: clamp(76px, 9vw, 124px) 0 var(--home-space);
+        align-items: center;
+      }
+
+      .public-home-v2 .hero h1 {
+        max-width: 760px;
+        margin: 18px 0 22px;
+        font-size: clamp(48px, 6.6vw, 88px);
+        line-height: 0.98;
+        letter-spacing: -0.055em;
+      }
+
+      .public-home-v2 .hero .lead {
+        max-width: 720px;
+        margin: 0;
+        color: var(--ink-soft);
+        font-size: clamp(18px, 1.7vw, 22px);
+        line-height: 1.75;
+      }
+
+      .public-home-v2 .hero-actions {
+        margin-top: 30px;
+      }
+
+      .public-home-v2 .hero-assurance {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+        margin-top: 28px;
+      }
+
+      .public-home-v2 .hero-assurance span {
+        padding: 8px 12px;
+        border: 1px solid rgba(8, 118, 110, 0.16);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.72);
+        color: var(--ink-soft);
+        font-size: 13px;
+      }
+
+      .public-home-v2 .home-command {
+        position: relative;
+        overflow: hidden;
+        min-height: 520px;
+        padding: 30px;
+        border: 1px solid rgba(8, 118, 110, 0.18);
+        border-radius: 24px;
+        background:
+          linear-gradient(150deg, rgba(255, 255, 255, 0.96), rgba(237, 248, 244, 0.9)),
+          var(--paper);
+        box-shadow: var(--shadow);
+      }
+
+      .public-home-v2 .home-command::after {
+        position: absolute;
+        right: -110px;
+        bottom: -130px;
+        width: 320px;
+        height: 320px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(185, 130, 40, 0.18), transparent 66%);
+        content: "";
+        pointer-events: none;
+      }
+
+      .public-home-v2 .home-command-head {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        padding-bottom: 24px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .public-home-v2 .home-command-head strong {
+        display: block;
+        margin-top: 7px;
+        font-size: 26px;
+      }
+
+      .public-home-v2 .home-command-head small {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .public-home-v2 .home-command-state {
+        align-self: flex-start;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .public-home-v2 .home-command-steps {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 14px;
+        margin-top: 24px;
+      }
+
+      .public-home-v2 .home-command-step {
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr);
+        gap: 15px;
+        align-items: start;
+        padding: 18px;
+        border: 1px solid rgba(220, 231, 223, 0.96);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.82);
+        transition: transform 220ms var(--ease), border-color 220ms var(--ease), box-shadow 220ms var(--ease);
+      }
+
+      .public-home-v2 .home-command-step:hover {
+        border-color: rgba(8, 118, 110, 0.34);
+        box-shadow: var(--shadow-soft);
+        transform: translateY(-2px);
+      }
+
+      .public-home-v2 .home-command-step > span {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        place-items: center;
+        border-radius: 10px;
+        background: var(--ink);
+        color: white;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .public-home-v2 .home-command-step strong,
+      .public-home-v2 .home-command-step small {
+        display: block;
+      }
+
+      .public-home-v2 .home-command-step strong {
+        margin: 2px 0 6px;
+        font-size: 17px;
+      }
+
+      .public-home-v2 .home-command-step small {
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .public-home-v2 .jj-home-section {
+        width: min(var(--home-max), calc(100% - 48px));
+        margin: 0 auto;
+        padding: var(--home-space) 0;
+      }
+
+      .public-home-v2 .jj-home-section + .jj-home-section {
+        border-top: 1px solid rgba(220, 231, 223, 0.76);
+      }
+
+      .public-home-v2 .jj-home-heading {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(320px, 0.7fr);
+        gap: 48px;
+        margin-bottom: 38px;
+        align-items: end;
+      }
+
+      .public-home-v2 .jj-home-heading h2 {
+        margin: 10px 0 0;
+        font-size: clamp(34px, 4.2vw, 58px);
+        line-height: 1.08;
+        letter-spacing: -0.035em;
+      }
+
+      .public-home-v2 .jj-home-heading > p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 17px;
+        line-height: 1.75;
+      }
+
+      .public-home-v2 .home-proof-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--home-card-radius);
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .public-home-v2 .home-proof-grid article {
+        min-height: 180px;
+        padding: 28px;
+      }
+
+      .public-home-v2 .home-proof-grid article + article {
+        border-left: 1px solid var(--line);
+      }
+
+      .public-home-v2 .home-proof-grid strong,
+      .public-home-v2 .home-proof-grid span,
+      .public-home-v2 .home-proof-grid small {
+        display: block;
+      }
+
+      .public-home-v2 .home-proof-grid strong {
+        color: var(--teal-deep);
+        font-size: clamp(28px, 3.2vw, 44px);
+      }
+
+      .public-home-v2 .home-proof-grid span {
+        margin-top: 18px;
+        font-weight: 700;
+      }
+
+      .public-home-v2 .home-proof-grid small {
+        margin-top: 8px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .public-home-v2 .home-capability-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .public-home-v2 .home-capability-grid article {
+        min-height: 210px;
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: var(--home-card-radius);
+        background: rgba(255, 255, 255, 0.68);
+      }
+
+      .public-home-v2 .home-capability-grid span {
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+      }
+
+      .public-home-v2 .home-capability-grid strong {
+        display: block;
+        margin: 20px 0 10px;
+        font-size: 22px;
+      }
+
+      .public-home-v2 .home-capability-grid p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .public-home-v2 .home-example-shell {
+        display: grid;
+        grid-template-columns: minmax(0, 1.08fr) minmax(340px, 0.92fr);
+        gap: 20px;
+      }
+
+      .public-home-v2 .home-example-visual,
+      .public-home-v2 .home-example-process {
+        padding: 22px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.8);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .public-home-v2 .home-example-main {
+        overflow: hidden;
+        aspect-ratio: 1.22;
+        border-radius: 14px;
+        background: var(--wash);
+      }
+
+      .public-home-v2 .home-example-main img,
+      .public-home-v2 .home-example-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .public-home-v2 .home-example-main img {
+        object-fit: contain;
+        padding: 16px;
+        background: white;
+      }
+
+      .public-home-v2 .home-example-gallery {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .public-home-v2 .home-example-thumb {
+        overflow: hidden;
+        aspect-ratio: 1.2;
+        border-radius: 9px;
+        background: var(--wash);
+      }
+
+      .public-home-v2 .home-example-caption {
+        margin: 18px 2px 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.65;
+      }
+
+      .public-home-v2 .home-workflow-list {
+        display: grid;
+        gap: 2px;
+      }
+
+      .public-home-v2 .home-workflow-list article {
+        display: grid;
+        grid-template-columns: 32px minmax(0, 1fr);
+        gap: 14px;
+        padding: 15px 4px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .public-home-v2 .home-workflow-list article:last-child {
+        border-bottom: 0;
+      }
+
+      .public-home-v2 .home-workflow-list span {
+        color: var(--amber);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .public-home-v2 .home-workflow-list strong,
+      .public-home-v2 .home-workflow-list small {
+        display: block;
+      }
+
+      .public-home-v2 .home-workflow-list small {
+        margin-top: 4px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .public-home-v2 .home-source-paths {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .public-home-v2 .home-source-paths article {
+        padding: clamp(28px, 4vw, 44px);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.76);
+      }
+
+      .public-home-v2 .home-source-paths span {
+        color: var(--teal);
+        font-weight: 800;
+      }
+
+      .public-home-v2 .home-source-paths h3 {
+        margin: 16px 0 12px;
+        font-size: 28px;
+      }
+
+      .public-home-v2 .home-source-paths p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.75;
+      }
+
+      .public-home-v2 .home-boundary-strip {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 24px;
+        align-items: center;
+        margin-top: 18px;
+        padding: 22px 26px;
+        border-radius: 14px;
+        background: var(--ink);
+        color: white;
+      }
+
+      .public-home-v2 .home-boundary-strip p {
+        margin: 5px 0 0;
+        color: rgba(255, 255, 255, 0.7);
+      }
+
+      .public-home-v2 .home-boundary-strip span {
+        color: #f1cd8a;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .public-home-v2 .home-plan-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .public-home-v2 .home-plan-grid .path-card {
+        min-height: 300px;
+        text-align: left;
+      }
+
+      .public-home-v2 .home-plan-grid .path-card strong {
+        margin-top: 22px;
+        font-size: 26px;
+      }
+
+      .public-home-v2 .home-plan-grid .path-card .price {
+        margin: 16px 0;
+        font-size: clamp(26px, 3vw, 38px);
+      }
+
+      .public-home-v2 .home-faq-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 28px;
+      }
+
+      .public-home-v2 .home-faq-grid article {
+        padding: 24px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.58);
+      }
+
+      .public-home-v2 .home-faq-grid h3 {
+        margin: 0 0 10px;
+        font-size: 18px;
+      }
+
+      .public-home-v2 .home-faq-grid p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .public-home-v2 .home-final-action {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        align-items: center;
+        margin-top: 30px;
+        padding: 26px;
+        border-radius: 16px;
+        background: var(--wash-2);
+      }
+
+      .public-home-v2 .home-final-action strong,
+      .public-home-v2 .home-final-action small {
+        display: block;
+      }
+
+      .public-home-v2 .home-final-action strong {
+        font-size: 20px;
+      }
+
+      .public-home-v2 .home-final-action small {
+        margin-top: 6px;
+        color: var(--muted);
+      }
+
+      @media (max-width: 1020px) {
+        .public-home-v2 .hero,
+        .public-home-v2 .home-example-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .public-home-v2 .hero {
+          padding-top: 70px;
+        }
+
+        .public-home-v2 .home-command {
+          min-height: 0;
+        }
+
+        .public-home-v2 .home-proof-grid,
+        .public-home-v2 .home-capability-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .public-home-v2 .home-proof-grid article:nth-child(3) {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+
+        .public-home-v2 .home-proof-grid article:nth-child(4) {
+          border-top: 1px solid var(--line);
+        }
+      }
+
+      @media (max-width: 720px) {
+        .public-home-v2 .topbar {
+          padding-right: 16px;
+          padding-left: 16px;
+        }
+
+        .public-home-v2 .navlinks {
+          display: none;
+        }
+
+        .public-home-v2 .hero,
+        .public-home-v2 .jj-home-section {
+          width: min(100% - 32px, var(--home-max));
+        }
+
+        .public-home-v2 .hero {
+          gap: 34px;
+          padding: 52px 0 64px;
+        }
+
+        .public-home-v2 .hero h1 {
+          font-size: clamp(42px, 14vw, 62px);
+        }
+
+        .public-home-v2 .home-command,
+        .public-home-v2 .home-example-visual,
+        .public-home-v2 .home-example-process {
+          padding: 18px;
+          border-radius: 16px;
+        }
+
+        .public-home-v2 .jj-home-heading,
+        .public-home-v2 .home-source-paths,
+        .public-home-v2 .home-plan-grid,
+        .public-home-v2 .home-faq-grid,
+        .public-home-v2 .home-boundary-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .public-home-v2 .jj-home-heading {
+          gap: 18px;
+          margin-bottom: 28px;
+        }
+
+        .public-home-v2 .home-proof-grid,
+        .public-home-v2 .home-capability-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .public-home-v2 .home-proof-grid article + article,
+        .public-home-v2 .home-proof-grid article:nth-child(3) {
+          border-top: 1px solid var(--line);
+          border-left: 0;
+        }
+
+        .public-home-v2 .home-proof-grid article {
+          min-height: 0;
+        }
+
+        .public-home-v2 .home-example-gallery {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .public-home-v2 .home-final-action {
+          display: grid;
+        }
+
+        .public-home-v2 .home-final-action .button-ghost {
+          width: 100%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .public-home-v2 .home-command-step {
+          transition: none;
+        }
+      }
     </style>
   </head>
-  <body>
+  <body class="public-home-v2">
     <div class="scroll-progress" aria-hidden="true"><span></span></div>
     <div class="cursor-glow" id="cursorGlow" aria-hidden="true"></div>
     <nav class="topbar">
@@ -4048,237 +4650,215 @@
         </span>
       </a>
       <div class="navlinks" aria-label="页面导航">
-        <a href="#outcome">草稿内容</a>
-        <a href="#logic">使用流程</a>
-        <a href="#trust">安全边界</a>
-        <a href="#paths">套餐方案</a>
+        <a href="#capabilities">产品能力</a>
+        <a href="#workflow">工作流程</a>
+        <a href="#merchants">适用商家</a>
+        <a href="#plans">套餐</a>
       </div>
       <button class="button-text" type="button" id="topLogin">登录 / 注册</button>
     </nav>
 
     <header class="hero" id="top" data-home-section="hero">
       <section>
-        <p class="eyebrow">捷境 JIEJING / eBay 自动化工作台</p>
-        <h1>把商品资料，变成商家可以核对的 eBay 草稿。</h1>
+        <p class="eyebrow">捷境 JIEJING / eBay AI 经营工作台</p>
+        <h1>让 eBay 经营少一点重复，多一点自动推进。</h1>
         <p class="lead">
-          上传图片、货源链接或商品资料，捷境协助整理标题、属性、描述、利润参考和风险疑点。商家先核对结果，再决定是否连接店铺；发布、收费、退款和真实平台写入仍需商家确认。
+          捷境把市场调研、商品资料、Listing、图片与视频、客服订单和工作记录整理进一个 AI CEO 工作台。AI 负责生成、预填和推进；真正影响店铺的动作，由商家确认后执行。
         </p>
         <div class="hero-actions">
-          <button class="button" type="button" id="heroLogin" data-home-primary-cta="merchant_first_draft_v1">免费生成第一条草稿</button>
-          <button class="button-text" type="button" id="heroWorkbenchLogin">注册 / 登录工作台</button>
-          <a class="button-text" href="#paths">了解商家起点</a>
+          <button class="button" type="button" id="heroWorkbenchLogin" data-home-primary-cta="jiejing_ai_ceo_workspace_v2">进入 AI CEO 工作台</button>
+          <a class="button-text" href="#workflow">查看捷境如何工作</a>
         </div>
-        <div class="proof-row" aria-label="产品信任边界">
-          <span class="pill green">7 天免费体验</span>
-          <span class="pill">不绑卡、不自动续费</span>
-          <span class="pill">关键动作由商家确认</span>
-        </div>
-        <div class="hero-intent-strip" data-home-intent-strip="homepage_ai_ceo_intents_v1" aria-label="从一个经营目标开始">
-          <button class="hero-intent-card is-active" type="button" data-home-intent="listing">
-            <span>01 · 找商品</span>
-            <strong>帮我判断一个商品能不能做</strong>
-            <small>先出市场结论，再进入 Listing 和素材草稿。</small>
-          </button>
-          <button class="hero-intent-card" type="button" data-home-intent="bulk">
-            <span>02 · 小批量</span>
-            <strong>帮我筛一批候选商品</strong>
-            <small>先分成建议尝试、补资料、暂不做。</small>
-          </button>
-          <button class="hero-intent-card" type="button" data-home-intent="service">
-            <span>03 · 订单客服</span>
-            <strong>帮我处理订单和买家消息</strong>
-            <small>普通回复先起草，退款补偿进确认中心。</small>
-          </button>
+        <div class="hero-assurance" aria-label="捷境使用边界">
+          <span>当前专注 eBay</span>
+          <span>资料不足不编造</span>
+          <span>关键动作执行前确认</span>
         </div>
       </section>
 
-      <aside class="command-room hero-draft-summary" data-home-draft-summary="merchant_first_draft_summary_v1" aria-label="第一条草稿摘要">
-        <div class="hero-draft-summary-head">
-          <span>第一条草稿</span>
-          <strong>提交资料后，捷境把结果整理成一张可核对清单。</strong>
-          <p>不使用固定商品样例；实际内容只来自商家提交的图片、链接和规格。</p>
+      <aside class="home-command command-room" aria-label="AI CEO 工作方式">
+        <div class="home-command-head">
+          <div>
+            <small>JIEJING AI CEO</small>
+            <strong>把经营目标变成下一步</strong>
+          </div>
+          <span class="home-command-state">商家掌握最终决定</span>
         </div>
-        <div class="hero-draft-summary-list">
-          <article>
-            <span>已整理</span>
-            <strong>标题、属性、描述结构</strong>
-            <small>每项标明来自商家资料还是 AI 建议。</small>
+        <div class="home-command-steps">
+          <article class="home-command-step">
+            <span>01</span>
+            <div><strong>接收目标</strong><small>输入商品、链接、图片、订单问题或经营目标。</small></div>
           </article>
-          <article>
-            <span>待补</span>
-            <strong>缺失的尺寸、成本与图片权利</strong>
-            <small>不知道的事实保留为空，不替商家编造。</small>
+          <article class="home-command-step">
+            <span>02</span>
+            <div><strong>整理资料</strong><small>区分商品事实、来源、缺口和 AI 建议。</small></div>
           </article>
-          <article>
-            <span>下一步</span>
-            <strong>核对草稿，再决定是否连接店铺</strong>
-            <small>正式发布、收费、退款和平台写入仍需确认。</small>
+          <article class="home-command-step">
+            <span>03</span>
+            <div><strong>生成草稿</strong><small>推进市场报告、Listing、素材和客服回复建议。</small></div>
+          </article>
+          <article class="home-command-step">
+            <span>04</span>
+            <div><strong>等待确认</strong><small>发布、退款、预算等真实动作由商家确认。</small></div>
           </article>
         </div>
       </aside>
     </header>
 
-    <section class="commerce-band reveal" id="outcome" data-home-section="outcome" aria-label="商家得到什么">
-      <div class="commerce-top">
+    <section class="jj-home-section reveal" id="proof" data-home-section="proof" aria-label="捷境产品边界">
+      <div class="jj-home-heading">
         <div>
-          <p class="eyebrow">第一条草稿会包含什么</p>
-          <h2>不是只生成一段文案，而是整理成商家可以逐项核对的 eBay 草稿。</h2>
+          <p class="eyebrow">一个入口，完整推进</p>
+          <h2>商家看到的是经营进度，不是一堆内部工具。</h2>
         </div>
-        <p class="section-note">
-          商品资料不足时，捷境会明确标出缺口，不替商家猜尺寸、材质、成本或授权信息。草稿生成后仍由商家核对，默认不会自动发布。
-        </p>
+        <p>捷境把分散在商品、素材、客服和平台操作之间的重复工作收进同一条可追溯路径，并在真正影响店铺前停下来等商家确认。</p>
       </div>
-      <div class="commerce-rail">
-        <article class="signal-card">
-          <span>01</span>
-          <strong>标题与属性建议</strong>
-          <small>根据商家提交的图片、链接和文字资料整理关键词、规格与类目字段。</small>
-          <em>资料不足时显示待补充，不编造商品事实。</em>
+      <div class="home-proof-grid" data-home-proof-grid="jiejing_product_proof_v2">
+        <article data-home-proof-metric="one-ai-ceo">
+          <strong>1 个</strong>
+          <span>AI CEO 入口</span>
+          <small>商家从一个对话入口布置目标、查看结果和继续推进。</small>
         </article>
-        <article class="signal-card">
-          <span>02</span>
-          <strong>描述与素材清单</strong>
-          <small>生成描述结构、主图与详情页建议，说明哪些素材仍需商家提供或核对。</small>
-          <em>AI 图片和文案不等于实物一致性已确认。</em>
+        <article data-home-proof-metric="six-work-areas">
+          <strong>6 类</strong>
+          <span>eBay 经营工作</span>
+          <small>调研、资料、Listing、图片视频、客服订单和工作记录。</small>
         </article>
-        <article class="signal-card">
-          <span>03</span>
-          <strong>利润参考</strong>
-          <small>使用商家填写的采购、物流和平台费用估算利润，并标出尚未确认的成本。</small>
-          <em>利润结果仅供经营判断，成本变化后需要重算。</em>
+        <article data-home-proof-metric="traceable-work">
+          <strong>全程</strong>
+          <span>资料与结果留痕</span>
+          <small>来源、缺口、草稿、确认和执行结果可以回到账号内查看。</small>
         </article>
-        <article class="signal-card">
-          <span>04</span>
-          <strong>风险疑点与下一步</strong>
-          <small>提示品牌词、图片来源、平台规则和资料缺口，列出商家下一步需要确认的事项。</small>
-          <em>侵权风险初筛，仍需商家核对。</em>
+        <article data-home-proof-metric="confirmation-gate">
+          <strong>执行前</strong>
+          <span>关键动作确认</span>
+          <small>发布、退款、预算、采购付款等动作不会静默越权。</small>
         </article>
       </div>
     </section>
 
     <main>
-      <section class="section reveal" id="logic" data-home-section="workflow">
-        <div class="section-head">
+      <section class="jj-home-section reveal" id="capabilities" data-home-section="capabilities">
+        <div class="jj-home-heading">
           <div>
-          <p class="eyebrow">三步开始</p>
-            <h2>提交资料、核对草稿、再决定是否连接店铺。</h2>
+            <p class="eyebrow">捷境能做什么</p>
+            <h2>从市场判断到店铺经营，围绕同一份商品事实推进。</h2>
           </div>
-          <p class="section-note">
-            免费体验先帮商家验证一条商品资料是否能整理成可用草稿。复杂设置在登录后的设置中心管理，不需要在首页先学会。
-          </p>
+          <p>AI CEO 负责理解目标并组织任务，业务页面负责让商家核对资料和结果。复杂连接、模型与账单设置统一留在设置中心。</p>
         </div>
+        <div class="home-capability-grid">
+          <article><span>01 / 市场调研</span><strong>判断机会与风险</strong><p>整理需求、竞品、价格带和候选方向，说明依据与尚未确认的假设。</p></article>
+          <article><span>02 / 商品资料</span><strong>把来源变成事实表</strong><p>接收图片、链接和规格，区分商家事实、公开来源与 AI 建议。</p></article>
+          <article><span>03 / LISTING</span><strong>生成可核对草稿</strong><p>协助整理标题、类目、属性、描述、政策和发布前缺口。</p></article>
+          <article><span>04 / 图片与视频</span><strong>组织商品素材</strong><p>生成或处理主图、场景图、详情内容和视频脚本，并保留审核边界。</p></article>
+          <article><span>05 / 客服与订单</span><strong>起草回复与下一步</strong><p>基于订单和商品事实生成回复建议；退款、补偿和敏感承诺交商家确认。</p></article>
+          <article><span>06 / 工作记录</span><strong>看见每一步发生了什么</strong><p>对话、报告、草稿、生成任务、确认和执行结果留在商家账号内。</p></article>
+        </div>
+      </section>
 
-        <div class="flow-stage">
-          <div class="flow-tabs" aria-label="工作流步骤">
-            <button class="flow-tab is-active" type="button" data-flow="goal">
-              <em>01</em>
-              <span><strong>提交商品资料</strong><span>图片、链接或文字说明。</span></span>
-            </button>
-            <button class="flow-tab" type="button" data-flow="sop">
-              <em>02</em>
-              <span><strong>生成待核对草稿</strong><span>整理字段、缺口和风险疑点。</span></span>
-            </button>
-            <button class="flow-tab" type="button" data-flow="roles">
-              <em>03</em>
-              <span><strong>商家核对后继续</strong><span>连接店铺或保留草稿。</span></span>
-            </button>
+      <section class="jj-home-section reveal" id="workflow" data-home-section="workflow" data-home-example="travel-compression-workflow-v1">
+        <div class="jj-home-heading">
+          <div>
+            <p class="eyebrow">一条商品如何推进</p>
+            <h2>从商品资料到可核对结果，每一步都能看见依据和缺口。</h2>
           </div>
-          <article class="panel flow-detail" aria-live="polite">
-            <p class="eyebrow" id="flowEyebrow">01 / 提交商品资料</p>
-            <h3 id="flowTitle">上传商品图片、货源链接或文字说明。</h3>
-            <p id="flowBody">
-              捷境先整理商家已经提供的商品事实和来源；资料不完整时会列出需要补充的内容，不会替商家猜测。
-            </p>
-            <div class="role-list" id="flowRoles">
-              <span>商品图片</span>
-              <span>货源链接</span>
-              <span>文字说明</span>
+          <p>下面用旅行压缩收纳袋展示界面会如何组织商品工作。它只用于说明流程，不代表捷境销售该商品，也不代表商品事实或图片权利已经核验。</p>
+        </div>
+        <div class="home-example-shell">
+          <article class="home-example-visual">
+            <div class="home-example-main">
+              <picture>
+                <source srcset="assets/travel-compression-main-v2.webp" type="image/webp" />
+                <img src="assets/travel-compression-main-v2.webp" alt="旅行压缩收纳袋套装示例主图" loading="lazy" decoding="async" />
+              </picture>
+            </div>
+            <div class="home-example-gallery" aria-label="示例商品素材组成">
+              <div class="home-example-thumb"><img src="assets/travel-compression-scene-v2.webp" alt="旅行使用场景示意" loading="lazy" decoding="async" /></div>
+              <div class="home-example-thumb"><img src="assets/travel-compression-feature-v2.webp" alt="商品细节示意" loading="lazy" decoding="async" /></div>
+              <div class="home-example-thumb"><img src="assets/travel-compression-detail-v2.webp" alt="详情内容结构示意" loading="lazy" decoding="async" /></div>
+              <div class="home-example-thumb"><img src="assets/travel-compression-video-cover.webp" alt="视频脚本与封面示意" loading="lazy" decoding="async" /></div>
+            </div>
+            <p class="home-example-caption">示例商品工作流；实际内容以商家提供的商品事实与授权素材为准。</p>
+          </article>
+          <article class="home-example-process">
+            <div class="home-workflow-list">
+              <article data-home-workflow-step="source"><span>01</span><div><strong>提交资料</strong><small>提供货源链接、商品图片或自有规格。</small></div></article>
+              <article data-home-workflow-step="facts"><span>02</span><div><strong>整理事实</strong><small>区分已知信息、缺失字段和需要商家确认的内容。</small></div></article>
+              <article data-home-workflow-step="research"><span>03</span><div><strong>市场调研</strong><small>形成候选判断、价格参考与风险疑点。</small></div></article>
+              <article data-home-workflow-step="listing"><span>04</span><div><strong>生成 Listing</strong><small>整理标题、类目、属性、描述和政策字段。</small></div></article>
+              <article data-home-workflow-step="media"><span>05</span><div><strong>准备图片与视频</strong><small>形成素材包、视频脚本与图片权利审核项。</small></div></article>
+              <article data-home-workflow-step="confirm"><span>06</span><div><strong>商家核对并确认</strong><small>核对商品事实后，再决定保存草稿或执行平台动作。</small></div></article>
             </div>
           </article>
         </div>
       </section>
 
-      <section class="section reveal" id="trust" data-home-section="trust">
-        <div class="section-head">
+      <section class="jj-home-section reveal" id="merchants" data-home-section="merchants">
+        <div class="jj-home-heading">
           <div>
-            <p class="eyebrow">信任与安全边界</p>
-            <h2>AI 提建议，关键决定留给商家。</h2>
+            <p class="eyebrow">从你的真实情况开始</p>
+            <h2>有货源和无货源，走的是两条清楚的路径。</h2>
           </div>
-          <p class="section-note">侵权风险初筛，仍需商家核对。发布、收费、退款和真实店铺写入等关键操作，不会在商家确认前执行。</p>
+          <p>捷境不卖货，也不替商家承诺供货。AI CEO 可以协助判断方向和整理资料，但真实货源与商品事实仍需要商家提供或确认。</p>
         </div>
-        <div class="stack-grid" aria-label="商家安全边界">
-          <article class="stack-card"><span>01</span><strong>信息有依据</strong><p>显示当前资料来源和缺口，资料不足时明确提示补充。</p></article>
-          <article class="stack-card"><span>02</span><strong>风险只做初筛</strong><p>标记品牌词、Logo 和资料疑点，不承诺零侵权或平台审核通过。</p></article>
-          <article class="stack-card"><span>03</span><strong>关键动作需确认</strong><p>发布、收费、退款和其他真实平台写入由商家决定。</p></article>
+        <div class="home-source-paths">
+          <article data-merchant-source-path="stocked">
+            <span>01 / 已经有货源</span>
+            <h3>把链接、图片和规格交给捷境。</h3>
+            <p>系统整理商品事实、生成 Listing 与素材草稿；缺失的尺寸、重量、成本、库存和图片权利会集中列出，商家在捷境内补齐并核对。</p>
+          </article>
+          <article data-merchant-source-path="sourcing">
+            <span>02 / 暂时没有货源</span>
+            <h3>先让 AI CEO 调研，再由商家找真实货源。</h3>
+            <p>捷境生成市场方向和候选建议，不把候选直接当成可销售商品。找到真实货源后，再进入商品资料、Listing 与图片视频流程。</p>
+          </article>
+        </div>
+        <div class="home-boundary-strip">
+          <div><strong>AI 给建议，商品事实由商家核对。</strong><p>图片权利、供应能力、成本、库存、商品规格和 eBay 政策不会由 AI 凭空补全。</p></div>
+          <span>侵权风险初筛，仍需商家核对</span>
         </div>
       </section>
 
-      <section class="section reveal" id="paths" data-home-section="plans">
-        <div class="section-head">
+
+      <section class="jj-home-section reveal" id="plans" data-home-section="plans">
+        <div class="jj-home-heading">
           <div>
-            <p class="eyebrow">开始方式</p>
-            <h2>按店铺规模开始，也可以先免费体验。</h2>
+            <p class="eyebrow">按店铺规模开始</p>
+            <h2>先免费体验，也可以直接进入单店或多店经营。</h2>
           </div>
-          <p class="section-note">
-            已经有 eBay 店铺的商家按有店铺或多店铺进入；还想先确认是否适合，可以用 7 天免费体验完成 20 次 AI 对话和一条未发布 Listing 草稿。免费体验不绑卡、不自动续费。
-          </p>
+          <p>免费体验不绑卡、不自动续费。付费方案会在登录后的设置中心再次显示当前可用状态和金额，不由静态官网替代真实账单状态。</p>
         </div>
-        <div class="path-grid" aria-label="开始方式">
+        <div class="home-plan-grid" aria-label="捷境套餐">
           <button class="path-card is-active" type="button" data-path="trial" data-plan="free">
-            <span class="pill amber">先体验</span>
-            <strong>免费体验</strong>
+            <span class="pill amber">免费体验</span>
+            <strong>先验证是否适合</strong>
             <span class="price">¥0 / 7 天</span>
-            <p>20 次捷境托管 AI 对话和 1 条未发布草稿；不绑卡、不自动续费。</p>
+            <p>20 次平台 AI 调用；不绑卡、不自动续费，不赠送 FAL 素材点。</p>
           </button>
           <button class="path-card" type="button" data-path="opened" data-plan="single">
-            <span class="pill green">单店经营</span>
-            <strong>有店铺</strong>
+            <span class="pill green">有店铺</span>
+            <strong>单店经营</strong>
             <span class="price">¥99 / 30 天</span>
-            <p>1 个店铺、2 个席位、每月 100 个经营任务；含 1,000 素材点。</p>
+            <p>1 个店铺、2 个席位、100 个经营任务；含 1,000 素材点。</p>
           </button>
           <button class="path-card" type="button" data-path="multi" data-plan="multi">
-            <span class="pill">多店协作</span>
-            <strong>多店铺</strong>
+            <span class="pill">多店铺</span>
+            <strong>团队协作</strong>
             <span class="price">¥199 / 30 天</span>
-            <p>3 个店铺、5 个席位、每月 500 个经营任务；含 3,000 素材点。</p>
+            <p>3 个店铺、5 个席位、500 个经营任务；含 3,000 素材点。</p>
           </button>
         </div>
         <div class="hero-actions">
-          <button class="button-ghost" type="button" id="choosePlan">登录后到套餐与付款</button>
+          <button class="button-text" type="button" id="choosePlan">登录后查看套餐与付款</button>
         </div>
-      </section>
-
-
-      <section class="section reveal" id="pricing" data-home-section="faq">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">常见问题</p>
-            <h2>开始前，先把边界说清楚。</h2>
-          </div>
-          <p class="section-note">
-            复杂配置留在设置中心；首页只回答商家开始体验前最关心的问题。
-          </p>
+        <div class="home-faq-grid" aria-label="常见问题">
+          <article><h3>会自动发布商品吗？</h3><p>不会。捷境先生成草稿；正式发布、改价、库存和政策调整仍需商家确认。</p></article>
+          <article><h3>免费体验会自动扣费吗？</h3><p>不会。免费体验不绑卡、不自动续费；需要付费时会再次显示方案和金额。</p></article>
+          <article><h3>AI 设置和账单在哪里？</h3><p>登录后在“设置”统一管理店铺连接、AI 服务、权限、套餐、素材点和账单。</p></article>
         </div>
-        <aside class="panel pricing-ai-note" aria-label="AI 模型与费用说明">
-          <div>
-            <p class="eyebrow">AI 模型与费用</p>
-            <h3>不用先理解复杂设置，也能开始。</h3>
-          </div>
-          <p>先上传商品资料并查看草稿结构；登录后可在设置中心管理 AI 服务、店铺权限、套餐和账单。AI 生成内容在发布前仍需核对商品事实、版权和 eBay 政策。</p>
-        </aside>
-        <div class="faq-grid" aria-label="常见问题">
-          <article class="panel">
-            <h3>会自动发布商品吗？</h3>
-            <p>不会。捷境先生成未发布草稿，正式发布、改价和库存调整仍需商家确认。</p>
-          </article>
-          <article class="panel">
-            <h3>免费体验会自动扣费吗？</h3>
-            <p>不会。免费体验不绑卡、不自动续费；需要付费时会在设置中心再次显示方案与金额。</p>
-          </article>
-          <article class="panel">
-            <h3>在哪里管理套餐和 AI 设置？</h3>
-            <p>登录后前往“设置”，统一管理店铺连接、AI 服务、权限、套餐、素材点和账单。</p>
-          </article>
+        <div class="home-final-action">
+          <div><strong>从一个经营目标开始。</strong><small>已有账号直接进入工作台；新商家可以先完成免费体验。</small></div>
+          <button class="button-ghost" type="button" id="publicWorkbenchEnter">进入 AI CEO 工作台</button>
         </div>
       </section>
     </main>

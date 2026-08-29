@@ -220,17 +220,17 @@ def main() -> int:
             if marker in legal_text:
                 return fail(f"{filename} visible text exposes internal/customer-hostile marker: {marker}")
 
-    if "捷境 JIEJING / eBay 自动化工作台" not in public_text:
+    if "捷境 JIEJING / eBay AI 经营工作台" not in public_text:
         return fail("public homepage should lead with the merchant product positioning")
-    if "把商品资料，变成商家可以核对的 eBay 草稿" not in public_text:
-        return fail("public homepage must lead with the first merchant outcome")
+    if "让 eBay 经营少一点重复，多一点自动推进" not in public_text:
+        return fail("public homepage must lead with the approved AI CEO outcome")
     primary_ctas = re.findall(
-        r'<button\b(?=[^>]*data-home-primary-cta="merchant_first_draft_v1")[^>]*>\s*免费生成第一条草稿\s*</button>',
+        r'<button\b(?=[^>]*data-home-primary-cta="jiejing_ai_ceo_workspace_v2")[^>]*>\s*进入 AI CEO 工作台\s*</button>',
         index_html,
         flags=re.I,
     )
     if len(primary_ctas) != 1:
-        return fail(f"public homepage must expose exactly one merchant first-draft primary CTA: {len(primary_ctas)}")
+        return fail(f"public homepage must expose exactly one AI CEO workspace primary CTA: {len(primary_ctas)}")
     homepage_source = source_between(index_html, '<nav class="topbar">', '<footer class="footer">')
     filled_home_buttons = re.findall(r'<button\b[^>]*class="button"[^>]*>', homepage_source, flags=re.I)
     if len(filled_home_buttons) != 1:
@@ -240,7 +240,7 @@ def main() -> int:
         index_html,
         flags=re.I,
     )
-    expected_home_sections = ["hero", "outcome", "workflow", "trust", "plans", "faq"]
+    expected_home_sections = ["hero", "proof", "capabilities", "workflow", "merchants", "plans"]
     if home_sections != expected_home_sections:
         return fail(f"public homepage must expose six ordered merchant sections: {home_sections}")
     for marker in ["IP 防侵权", "完整体验路径", "eBay 自动化系统架构", "先把 eBay 真实经营做深，再把同一套经营能力扩展到 Amazon"]:
@@ -250,31 +250,36 @@ def main() -> int:
         section_match = re.search(rf'<section\b[^>]*id="{re.escape(section_id)}"[^>]*>', homepage_source)
         if section_match and " hidden" not in section_match.group(0):
             return fail(f"legacy homepage section must not remain visible: {section_id}")
-    outcome_start = index_html.find('data-home-section="outcome"')
-    workflow_start = index_html.find('data-home-section="workflow"', outcome_start)
-    trust_start = index_html.find('data-home-section="trust"', workflow_start)
-    outcome_source = index_html[outcome_start:workflow_start]
-    workflow_source = index_html[workflow_start:trust_start]
-    if len(re.findall(r'class="signal-card"', outcome_source)) > 4:
-        return fail("merchant outcome section must stay concise with at most four result cards")
-    if 'class="operating-stack"' in workflow_source:
-        return fail("merchant workflow section must not expose the retired internal architecture stack")
-    if len(re.findall(r'class="flow-tab(?:\s|\")', workflow_source)) != 3:
-        return fail("merchant workflow section must expose exactly three steps")
+    proof_start = index_html.find('data-home-section="proof"')
+    capability_start = index_html.find('data-home-section="capabilities"', proof_start)
+    workflow_start = index_html.find('data-home-section="workflow"', capability_start)
+    merchants_start = index_html.find('data-home-section="merchants"', workflow_start)
     plans_start = index_html.find('data-home-section="plans"')
-    faq_start = index_html.find('data-home-section="faq"', plans_start)
-    footer_start = index_html.find('<footer class="footer">', faq_start)
-    if plans_start < 0 or faq_start < 0 or footer_start < 0:
-        return fail("public homepage plan/FAQ section boundaries are missing")
-    plans_source = index_html[plans_start:faq_start]
-    faq_source = index_html[faq_start:footer_start]
+    footer_start = index_html.find('<footer class="footer">', plans_start)
+    if min(proof_start, capability_start, workflow_start, merchants_start, plans_start, footer_start) < 0:
+        return fail("public homepage section boundaries are missing")
+    proof_source = index_html[proof_start:capability_start]
+    capability_source = index_html[capability_start:workflow_start]
+    workflow_source = index_html[workflow_start:merchants_start]
+    merchants_source = index_html[merchants_start:plans_start]
+    plans_source = index_html[plans_start:footer_start]
+    if len(re.findall(r'data-home-proof-metric="[^"]+"', proof_source)) != 4:
+        return fail("public homepage must expose four verifiable product proof metrics")
+    if len(re.findall(r'<article>', capability_source)) != 6:
+        return fail("public homepage must explain the six merchant work areas")
+    if 'data-home-example="travel-compression-workflow-v1"' not in workflow_source:
+        return fail("public homepage workflow example must be explicitly marked")
+    if len(re.findall(r'data-home-workflow-step="[^"]+"', workflow_source)) != 6:
+        return fail("public homepage example must explain the six workflow steps")
+    if "示例商品工作流；实际内容以商家提供的商品事实与授权素材为准。" not in visible_text(workflow_source):
+        return fail("public homepage workflow example must show the approved rights and facts disclaimer")
+    for marker in ['data-merchant-source-path="stocked"', 'data-merchant-source-path="sourcing"']:
+        if marker not in merchants_source:
+            return fail(f"public homepage is missing a merchant source path: {marker}")
     for marker in ['data-plan="free"', 'data-plan="single"', 'data-plan="multi"']:
         if marker not in plans_source:
             return fail(f"merchant plan card must live in the plans section: {marker}")
-        if marker in faq_source:
-            return fail(f"merchant plan card must not be duplicated in the FAQ section: {marker}")
     for marker in [
-        "旅行压缩收纳袋",
         "桌面线缆收纳盒",
         "抽屉分隔收纳板",
         "1688 货源图",
@@ -283,9 +288,13 @@ def main() -> int:
     ]:
         if marker in public_text:
             return fail(f"public homepage must not expose a fixed product or overclaim risk screening: {marker}")
+    if "旅行压缩收纳袋" not in visible_text(workflow_source):
+        return fail("public homepage must restore the approved travel organizer workflow example")
+    if "旅行压缩收纳袋" in visible_text(index_html[:workflow_start] + index_html[merchants_start:]):
+        return fail("travel organizer example must stay inside the explicitly marked public workflow section")
     if "侵权风险初筛，仍需商家核对" not in public_text:
         return fail("public homepage must explain the merchant IP risk review boundary")
-    for marker in ["会自动发布商品吗？", "免费体验会自动扣费吗？", "在哪里管理套餐和 AI 设置？"]:
+    for marker in ["会自动发布商品吗？", "免费体验会自动扣费吗？", "AI 设置和账单在哪里？"]:
         if marker not in public_text:
             return fail(f"public homepage FAQ is missing a merchant question: {marker}")
     for marker in ["模型 API", "BYOK", "应用 Key", "API Base", "Vault", "Runtime"]:

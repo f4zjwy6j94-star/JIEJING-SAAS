@@ -210,14 +210,15 @@ def main() -> int:
     if "width: 50px;" not in styles_css or "height: 50px;" not in styles_css or 'center / 118% no-repeat' not in styles_css:
         return fail("SaaS brand mark must stay enlarged and centered with the JIEJING app icon")
     for homepage_intent_marker in [
-        'data-home-primary-cta="merchant_first_draft_v1"',
-        'data-home-draft-summary="merchant_first_draft_summary_v1"',
-        'data-home-section="outcome"',
+        'data-home-primary-cta="jiejing_ai_ceo_workspace_v2"',
+        'data-home-proof-grid="jiejing_product_proof_v2"',
+        'data-home-section="proof"',
+        'data-home-section="capabilities"',
         'data-home-section="workflow"',
-        'data-home-section="trust"',
+        'data-home-section="merchants"',
         'data-home-section="plans"',
-        'data-home-section="faq"',
-        "免费生成第一条草稿",
+        'data-home-example="travel-compression-workflow-v1"',
+        "进入 AI CEO 工作台",
     ]:
         if homepage_intent_marker not in index_html:
             return fail(f"public homepage AI CEO intent entry missing marker: {homepage_intent_marker}")
@@ -642,14 +643,14 @@ def main() -> int:
         if stale_public_copy in index_html + app_html:
             return fail(f"public product copy should avoid abstract internal positioning: {stale_public_copy}")
     for merchant_outcome_copy in [
-        "把商品资料，变成商家可以核对的 eBay 草稿。",
-        "商品资料不足时，捷境会明确标出缺口",
-        "侵权风险初筛，仍需商家核对。",
+        "让 eBay 经营少一点重复，多一点自动推进。",
+        "资料不足不编造",
+        "侵权风险初筛，仍需商家核对",
     ]:
         if merchant_outcome_copy not in index_html + app_html:
             return fail(f"public product copy should explain the merchant outcome: {merchant_outcome_copy}")
-    if "免费体验先帮商家验证一条商品资料是否能整理成可用草稿" not in index_html:
-        return fail("homepage onboarding copy should explain the blank first-draft trial")
+    if "免费体验不绑卡、不自动续费" not in index_html:
+        return fail("homepage onboarding copy should explain the bounded free trial")
     for onboarding_control_marker in [
         "onboardingDeferredSettingsFields",
         "onboarding-lite-path",

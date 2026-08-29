@@ -22,7 +22,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Verify public pricing cards remain readable across merchant viewports."
     )
-    parser.add_argument("--url", default="https://app.jiejing.shop/#paths")
+    parser.add_argument("--url", default="https://app.jiejing.shop/#plans")
     parser.add_argument(
         "--output-dir",
         default="output/jiejing-public-pricing-smoke",
@@ -57,9 +57,11 @@ def main() -> int:
                 page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 pass
-            plans = page.locator("#paths")
+            plans = page.locator("#plans")
             plans.wait_for(state="visible", timeout=10000)
-            plans.scroll_into_view_if_needed()
+            page.evaluate(
+                "window.scrollTo({top: document.querySelector('#plans').offsetTop - 72, behavior: 'instant'})"
+            )
             page.wait_for_timeout(300)
 
             if local_static_target:
@@ -70,20 +72,25 @@ def main() -> int:
                     and "status of 501" not in error
                 ]
 
-            prices = page.locator("#paths .path-card .price").evaluate_all(
+            prices = page.locator("#plans .path-card .price").evaluate_all(
                 """
                 (elements) => elements.map((element) => {
                   const range = document.createRange();
                   range.selectNodeContents(element);
-                  const lineTops = [...range.getClientRects()]
+                  const textRects = [...range.getClientRects()]
                     .filter((rect) => rect.width > 0 && rect.height > 0)
-                    .map((rect) => Math.round(rect.top));
+                  const lineTops = textRects.map((rect) => Math.round(rect.top));
+                  const textWidth = textRects.reduce((width, rect) => Math.max(width, rect.width), 0);
+                  const parentStyle = getComputedStyle(element.parentElement);
+                  const parentWidth = element.parentElement.getBoundingClientRect().width
+                    - parseFloat(parentStyle.paddingLeft || 0)
+                    - parseFloat(parentStyle.paddingRight || 0);
                   return {
                     text: element.textContent.trim(),
                     lineCount: new Set(lineTops).size,
-                    clientWidth: element.clientWidth,
-                    scrollWidth: element.scrollWidth,
-                    fits: element.scrollWidth <= element.clientWidth + 1,
+                    textWidth: Math.round(textWidth * 100) / 100,
+                    availableWidth: Math.round(parentWidth * 100) / 100,
+                    fits: textWidth <= parentWidth + 1,
                   };
                 })
                 """
@@ -92,7 +99,7 @@ def main() -> int:
                 "(elements) => elements.map((element) => element.dataset.homeSection)"
             )
             primary_cta_count = page.locator(
-                '[data-home-primary-cta="merchant_first_draft_v1"]'
+                '[data-home-primary-cta="jiejing_ai_ceo_workspace_v2"]'
             ).count()
             horizontal_overflow = page.evaluate(
                 "document.documentElement.scrollWidth > window.innerWidth + 1"
@@ -120,7 +127,7 @@ def main() -> int:
 
             if len(prices) != 3:
                 failures.append(f"{key}: expected 3 prices, found {len(prices)}")
-            if home_sections != ["hero", "outcome", "workflow", "trust", "plans", "faq"]:
+            if home_sections != ["hero", "proof", "capabilities", "workflow", "merchants", "plans"]:
                 failures.append(f"{key}: unexpected homepage sections: {home_sections}")
             if primary_cta_count != 1:
                 failures.append(f"{key}: expected one primary CTA, found {primary_cta_count}")

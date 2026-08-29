@@ -53,33 +53,55 @@ async function inspectViewport(browser, viewport, name) {
   const page = await context.newPage();
   const pageErrors = [];
   const badResponses = [];
+  const consoleIssues = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
+  page.on("console", (message) => {
+    if (["error", "warning"].includes(message.type())) consoleIssues.push(message.text());
+  });
   page.on("response", (response) => {
     if (response.status() >= 500) badResponses.push({ url: response.url(), status: response.status() });
   });
   await page.goto(`${base}/index.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.waitForSelector('[data-home-draft-summary="merchant_first_draft_summary_v1"]', { timeout: 20000 });
+  await page.waitForSelector('[data-home-example="travel-compression-workflow-v1"]', { timeout: 20000 });
+  await page.locator('[data-home-example="travel-compression-workflow-v1"] img').evaluateAll(async (images) => {
+    images.forEach((image) => { image.loading = "eager"; });
+    await Promise.all(images.map((image) => image.complete ? Promise.resolve() : new Promise((resolve) => {
+      image.addEventListener("load", resolve, { once: true });
+      image.addEventListener("error", resolve, { once: true });
+    })));
+  });
   const state = await page.evaluate(() => {
     const planOrder = Array.from(document.querySelectorAll(".path-card[data-plan]")).map((item) => item.dataset.plan);
-    const login = document.querySelector("#heroWorkbenchLogin");
+    const login = document.querySelector("#topLogin");
+    const workflowImages = Array.from(document.querySelectorAll('[data-home-example="travel-compression-workflow-v1"] img'));
     return {
       section_count: document.querySelectorAll("[data-home-section]").length,
-      primary_cta_count: document.querySelectorAll('[data-home-primary-cta="merchant_first_draft_v1"]').length,
+      section_order: Array.from(document.querySelectorAll("[data-home-section]")).map((item) => item.dataset.homeSection),
+      primary_cta_count: document.querySelectorAll('[data-home-primary-cta="jiejing_ai_ceo_workspace_v2"]').length,
       plan_order: planOrder,
       retired_dom_count: document.querySelectorAll("#retired-public-home-sections, #merchant-guide, #ai-ceo-workbench-technical, #ai-ceo-workbench").length,
       radiating_hero_count: document.querySelectorAll("#signalCanvas, .hero .flow-line, .hero .role-node").length,
       login_is_text: Boolean(login?.classList.contains("button-text")),
+      workflow_step_count: document.querySelectorAll("[data-home-workflow-step]").length,
+      workflow_image_count: workflowImages.length,
+      workflow_images_loaded: workflowImages.every((image) => image.complete && image.naturalWidth > 0),
+      workflow_disclaimer_visible: document.querySelector(".home-example-caption")?.getClientRects().length > 0,
       horizontal_overflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
     };
   });
+  await page.screenshot({ path: path.join("output", "browser-smoke", `homepage-maturity-${name}.png`), fullPage: true });
+  if (name === "mobile") {
+    await page.locator('[data-home-example="travel-compression-workflow-v1"]').screenshot({
+      path: path.join("output", "browser-smoke", "homepage-maturity-mobile-workflow.png"),
+    });
+  }
   if (name === "desktop") {
-    await page.screenshot({ path: path.join("output", "browser-smoke", "homepage-maturity-desktop.png"), fullPage: true });
-    await page.click('[data-home-primary-cta="merchant_first_draft_v1"]');
+    await page.click('[data-home-primary-cta="jiejing_ai_ceo_workspace_v2"]');
     await page.waitForSelector("#nextStepModal.is-open", { timeout: 10000 });
     state.primary_cta_opens_auth = await page.evaluate(() => document.body.classList.contains("is-auth-mode"));
   }
   await context.close();
-  return { name, viewport, ...state, page_errors: pageErrors, bad_responses: badResponses };
+  return { name, viewport, ...state, page_errors: pageErrors, console_issues: consoleIssues, bad_responses: badResponses };
 }
 
 async function main() {
@@ -96,13 +118,19 @@ async function main() {
     const ok = results.every(
       (item) =>
         item.section_count === 6 &&
+        JSON.stringify(item.section_order) === JSON.stringify(["hero", "proof", "capabilities", "workflow", "merchants", "plans"]) &&
         item.primary_cta_count === 1 &&
         JSON.stringify(item.plan_order) === JSON.stringify(["free", "single", "multi"]) &&
         item.retired_dom_count === 0 &&
         item.radiating_hero_count === 0 &&
         item.login_is_text &&
+        item.workflow_step_count === 6 &&
+        item.workflow_image_count === 5 &&
+        item.workflow_images_loaded &&
+        item.workflow_disclaimer_visible &&
         item.horizontal_overflow <= 1 &&
         item.page_errors.length === 0 &&
+        item.console_issues.length === 0 &&
         item.bad_responses.length === 0 &&
         (item.name !== "desktop" || item.primary_cta_opens_auth === true),
     );
