@@ -30,6 +30,7 @@ public/audio/launch-01-voice.wav
 npm run dev
 npm run render:launch-01
 npm run render:cover-01
+npm run render:cover-horizontal-01
 npm run render:avatar
 ```
 

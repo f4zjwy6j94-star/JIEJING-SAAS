@@ -2,6 +2,7 @@ import "./index.css";
 import { Composition, Still } from "remotion";
 import { DouyinLaunch01 } from "./DouyinLaunch01";
 import { DouyinCover01 } from "./stills/DouyinCover01";
+import { DouyinCoverHorizontal01 } from "./stills/DouyinCoverHorizontal01";
 import { JiejingAvatar } from "./stills/JiejingAvatar";
 
 export const RemotionRoot: React.FC = () => {
@@ -20,6 +21,12 @@ export const RemotionRoot: React.FC = () => {
         component={DouyinCover01}
         width={1080}
         height={1920}
+      />
+      <Still
+        id="DouyinCoverHorizontal01"
+        component={DouyinCoverHorizontal01}
+        width={1440}
+        height={1080}
       />
       <Still
         id="JiejingAvatar"
