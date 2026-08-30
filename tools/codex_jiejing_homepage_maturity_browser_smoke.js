@@ -361,15 +361,16 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
     const rotateInterval = Number(await studio.getAttribute("data-home-rotate-interval-ms"));
     state.material_rotate_interval_valid = Number.isFinite(rotateInterval) && rotateInterval >= 5000 && rotateInterval <= 7000;
     const initialMaterial = await materialSnapshot(page);
-    await page.waitForTimeout(rotateInterval + 300);
-    const autoMaterial = await materialSnapshot(page);
-    state.material_auto_rotates = materialTransitionIsConsistent(initialMaterial, autoMaterial);
+    await page.waitForTimeout(300);
+    const staticMaterial = await materialSnapshot(page);
+    state.material_default_static = JSON.stringify(initialMaterial) === JSON.stringify(staticMaterial) &&
+      await studio.getAttribute("data-home-auto-rotate") === "false";
     const optionKeys = await materialOptions.evaluateAll((options) => options.map((option) => option.dataset.homeMaterialOption));
-    const firstTargetIndex = optionKeys.findIndex((key) => key !== autoMaterial.active_key);
+    const firstTargetIndex = optionKeys.findIndex((key) => key !== staticMaterial.active_key);
     await materialOptions.nth(firstTargetIndex).click();
     const firstUserMaterial = await materialSnapshot(page);
     const exercisedKeys = [firstUserMaterial.active_key];
-    state.material_first_user_switch = materialTransitionIsConsistent(autoMaterial, firstUserMaterial);
+    state.material_first_user_switch = materialTransitionIsConsistent(staticMaterial, firstUserMaterial);
     let priorMaterial = firstUserMaterial;
     const remainingIndices = Array.from({ length: optionKeys.length - 1 }, (_, offset) => (firstTargetIndex + offset + 1) % optionKeys.length);
     let keyboardTransitionsSynchronized = true;
@@ -711,11 +712,12 @@ async function main() {
         JSON.stringify([...item.workflow_unique_assets].sort()) === JSON.stringify([...approvedMaterialAssets].sort()) &&
         item.workflow_images_loaded &&
         item.reduced_motion_marker &&
+        item.auto_rotate_state === "false" &&
         item.horizontal_overflow <= 1 &&
         item.page_errors.length === 0 &&
         item.console_issues.length === 0 &&
         item.bad_responses.length === 0 &&
-        (item.name !== "desktop" || (item.primary_cta_opens_auth === true && item.material_rotate_interval_valid === true && item.material_auto_rotates === true && item.material_first_user_switch === true && item.material_all_options_exercised === true && item.material_keyboard_focus_ready === true && item.material_enter_selection === true && item.material_space_selection === true && item.material_user_stops_rotation === true && item.hero_keyboard_navigated === true && item.hero_keyboard_relation_active === true && item.hero_pointer_relation_active === true && item.workflow_keyboard_navigated === true && item.workflow_keyboard_switch === true && item.workflow_cta_opens_entry?.auth_mode === true && item.workflow_cta_opens_entry?.login_form_visible === true && Boolean(item.workflow_cta_opens_entry?.modal_title))) &&
+        (item.name !== "desktop" || (item.primary_cta_opens_auth === true && item.material_rotate_interval_valid === true && item.material_default_static === true && item.material_first_user_switch === true && item.material_all_options_exercised === true && item.material_keyboard_focus_ready === true && item.material_enter_selection === true && item.material_space_selection === true && item.material_user_stops_rotation === true && item.hero_keyboard_navigated === true && item.hero_keyboard_relation_active === true && item.hero_pointer_relation_active === true && item.workflow_keyboard_navigated === true && item.workflow_keyboard_switch === true && item.workflow_cta_opens_entry?.auth_mode === true && item.workflow_cta_opens_entry?.login_form_visible === true && Boolean(item.workflow_cta_opens_entry?.modal_title))) &&
         (item.name !== "reduced-motion" || (item.reduced_motion_static === true && item.reduced_motion_no_rotation === true)),
     );
     console.log(JSON.stringify({ ok, results, keyboard_first: keyboardFirst, touch_interactions: touchInteractions, javascript_disabled: javascriptDisabled, expired_session_hint: expiredSessionHint, no_login_performed: true, no_real_world_action: true }, null, 2));

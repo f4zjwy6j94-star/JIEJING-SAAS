@@ -4417,6 +4417,247 @@
         line-height: 1.7;
       }
 
+      .public-home-v3 .home-workflow-shell {
+        display: grid;
+        gap: 16px;
+      }
+
+      .public-home-v3 .home-workflow-steps {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        overflow: hidden;
+        border: 1px solid var(--home-line);
+        border-radius: 8px;
+        background: var(--home-surface);
+        box-shadow: var(--home-shadow-soft);
+      }
+
+      .public-home-v3 .home-workflow-step {
+        position: relative;
+        display: grid;
+        min-height: 92px;
+        gap: 10px;
+        align-content: center;
+        padding: 16px;
+        border: 0;
+        border-right: 1px solid var(--home-line);
+        appearance: none;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+        text-align: left;
+        transition: background 180ms var(--ease), color 180ms var(--ease), box-shadow 180ms var(--ease);
+      }
+
+      .public-home-v3 .home-workflow-step:last-child {
+        border-right: 0;
+      }
+
+      .public-home-v3 .home-workflow-step::after {
+        position: absolute;
+        right: 14px;
+        bottom: 0;
+        left: 14px;
+        height: 2px;
+        background: transparent;
+        content: "";
+      }
+
+      .public-home-v3 .home-workflow-step span {
+        color: var(--home-green);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+      }
+
+      .public-home-v3 .home-workflow-step strong {
+        color: inherit;
+        font-size: 14px;
+        line-height: 1.35;
+      }
+
+      .public-home-v3 .home-workflow-step:is(:hover, :focus-visible) {
+        background: var(--home-wash);
+        color: var(--home-ink);
+      }
+
+      .public-home-v3 .home-workflow-step:focus-visible {
+        z-index: 1;
+        outline: 2px solid var(--home-green);
+        outline-offset: -3px;
+      }
+
+      .public-home-v3 .home-workflow-step[aria-pressed="true"] {
+        background: rgba(14, 102, 85, 0.075);
+        color: var(--home-green-deep);
+      }
+
+      .public-home-v3 .home-workflow-step[aria-pressed="true"]::after {
+        background: var(--home-green);
+      }
+
+      .public-home-v3 .home-workflow-panel {
+        min-width: 0;
+      }
+
+      .public-home-v3 .home-workflow-panel[hidden] {
+        display: none;
+      }
+
+      .public-home-v3 .home-workflow-scene {
+        display: grid;
+        grid-template-columns: minmax(0, 0.78fr) minmax(420px, 1.22fr);
+        min-height: 420px;
+        overflow: hidden;
+        border: 1px solid var(--home-line);
+        border-radius: 8px;
+        background: var(--home-surface);
+        box-shadow: var(--home-shadow-canvas);
+      }
+
+      .public-home-v3 .home-workflow-copy {
+        display: grid;
+        align-content: center;
+        padding: clamp(28px, 4vw, 52px);
+        border-right: 1px solid var(--home-line);
+      }
+
+      .public-home-v3 .home-workflow-copy > span {
+        color: var(--home-green);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.13em;
+      }
+
+      .public-home-v3 .home-workflow-copy h3 {
+        max-width: 13ch;
+        margin: 16px 0 14px;
+        color: var(--home-ink);
+        font-size: clamp(28px, 3.3vw, 46px);
+        line-height: 1.08;
+        letter-spacing: -0.04em;
+      }
+
+      .public-home-v3 .home-workflow-copy p {
+        max-width: 37em;
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.75;
+      }
+
+      .public-home-v3 .home-workflow-example {
+        display: grid;
+        align-content: center;
+        gap: 16px;
+        padding: clamp(26px, 4vw, 48px);
+        background:
+          linear-gradient(145deg, rgba(232, 243, 237, 0.82), rgba(255, 255, 255, 0.92) 54%, rgba(252, 241, 220, 0.52)),
+          var(--home-paper);
+      }
+
+      .public-home-v3 .home-workflow-example-label {
+        margin: 0;
+        color: var(--home-green);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+      }
+
+      .public-home-v3 .home-workflow-card {
+        padding: 22px;
+        border: 1px solid rgba(14, 102, 85, 0.18);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: var(--home-shadow-soft);
+      }
+
+      .public-home-v3 .home-workflow-card strong,
+      .public-home-v3 .home-workflow-card small {
+        display: block;
+      }
+
+      .public-home-v3 .home-workflow-card strong {
+        color: var(--home-ink);
+        font-size: 18px;
+        line-height: 1.45;
+      }
+
+      .public-home-v3 .home-workflow-card small {
+        margin-top: 8px;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .public-home-v3 .home-workflow-card + .home-workflow-card {
+        margin-top: -4px;
+      }
+
+      .public-home-v3 .home-workflow-facts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .public-home-v3 .home-workflow-facts li {
+        padding: 7px 10px;
+        border: 1px solid var(--home-line);
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.76);
+        color: var(--home-green-deep);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .public-home-v3 .home-workflow-boundary {
+        margin: 0;
+        padding: 14px 16px;
+        border-left: 2px solid var(--home-amber);
+        background: rgba(252, 241, 220, 0.58);
+        color: var(--home-ink-soft);
+        font-size: 13px;
+        line-height: 1.65;
+      }
+
+      .public-home-v3 .home-workflow-panel-media > h3 {
+        margin: 0 0 16px;
+        color: var(--home-ink);
+        font-size: clamp(26px, 3.2vw, 42px);
+        line-height: 1.1;
+        letter-spacing: -0.035em;
+      }
+
+      .public-home-v3 .home-workflow-panel-media > p {
+        max-width: 780px;
+        margin: 0 0 24px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .public-home-v3 .home-workflow-final-action {
+        display: flex;
+        justify-content: space-between;
+        gap: 22px;
+        align-items: center;
+        padding: 18px 20px;
+        border: 1px solid rgba(14, 102, 85, 0.2);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.86);
+      }
+
+      .public-home-v3 .home-workflow-final-action strong,
+      .public-home-v3 .home-workflow-final-action small {
+        display: block;
+      }
+
+      .public-home-v3 .home-workflow-final-action small {
+        margin-top: 6px;
+        color: var(--muted);
+      }
+
       .public-home-v3 .home-material-studio {
         position: relative;
         display: grid;
@@ -4872,6 +5113,22 @@
           padding-top: 56px;
         }
 
+        .public-home-v3 .home-workflow-steps {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .public-home-v3 .home-workflow-step:nth-child(3) {
+          border-right: 0;
+        }
+
+        .public-home-v3 .home-workflow-step:nth-child(-n + 3) {
+          border-bottom: 1px solid var(--home-line);
+        }
+
+        .public-home-v3 .home-workflow-scene {
+          grid-template-columns: minmax(0, 0.82fr) minmax(360px, 1.18fr);
+        }
+
         .public-home-v3 .home-material-studio {
           grid-template-columns: minmax(230px, 0.8fr) minmax(0, 1.2fr);
           grid-template-areas:
@@ -5029,6 +5286,48 @@
         .public-home-v3 .jj-home-heading {
           gap: 18px;
           margin-bottom: 28px;
+        }
+
+        .public-home-v3 .home-workflow-steps {
+          display: flex;
+          overflow-x: auto;
+          scroll-snap-type: x proximity;
+          scrollbar-width: thin;
+        }
+
+        .public-home-v3 .home-workflow-step {
+          min-width: 142px;
+          min-height: 78px;
+          flex: 0 0 142px;
+          scroll-snap-align: start;
+          border-bottom: 0 !important;
+        }
+
+        .public-home-v3 .home-workflow-step:nth-child(3) {
+          border-right: 1px solid var(--home-line);
+        }
+
+        .public-home-v3 .home-workflow-scene {
+          grid-template-columns: 1fr;
+          min-height: 0;
+        }
+
+        .public-home-v3 .home-workflow-copy {
+          padding: 26px 22px;
+          border-right: 0;
+          border-bottom: 1px solid var(--home-line);
+        }
+
+        .public-home-v3 .home-workflow-example {
+          padding: 22px;
+        }
+
+        .public-home-v3 .home-workflow-final-action {
+          display: grid;
+        }
+
+        .public-home-v3 .home-workflow-final-action .button {
+          width: 100%;
         }
 
         .public-home-v3 .home-proof-grid,
@@ -5238,16 +5537,89 @@
       <section class="jj-home-section reveal" id="workflow" data-home-section="workflow" data-home-example="travel-compression-workflow-v1">
         <div class="jj-home-heading">
           <div>
-            <p class="eyebrow">素材工坊 / Listing Media</p>
-            <h2>一份商品资料，生成可选择的 Listing 素材。</h2>
+            <p class="eyebrow">捷境如何工作 / Merchant Loop</p>
+            <h2>从经营目标，到可以核对的 eBay 草稿。</h2>
           </div>
-          <p>导入来源图和商品事实后，素材工坊按主图、场景、卖点和细节分别生成方案。商家选定后，再进入 Listing 草稿。</p>
+          <p>看看一份商品资料如何在捷境中被识别、补齐、生成和审核。AI 负责推进，商品事实与真正影响店铺的动作由商家决定。</p>
         </div>
-        <div
+        <div class="home-workflow-shell" data-home-workflow="merchant-loop-v1">
+          <div class="home-workflow-steps" role="group" aria-label="捷境六步经营流程">
+            <button class="home-workflow-step" type="button" data-home-workflow-step="goal" aria-pressed="true"><span>01</span><strong>提交经营目标</strong></button>
+            <button class="home-workflow-step" type="button" data-home-workflow-step="research" aria-pressed="false"><span>02</span><strong>市场调研</strong></button>
+            <button class="home-workflow-step" type="button" data-home-workflow-step="facts" aria-pressed="false"><span>03</span><strong>核对商品资料</strong></button>
+            <button class="home-workflow-step" type="button" data-home-workflow-step="listing" aria-pressed="false"><span>04</span><strong>生成 Listing</strong></button>
+            <button class="home-workflow-step" type="button" data-home-workflow-step="media" aria-pressed="false"><span>05</span><strong>生成并审核素材</strong></button>
+            <button class="home-workflow-step" type="button" data-home-workflow-step="confirm" aria-pressed="false"><span>06</span><strong>发布前确认</strong></button>
+          </div>
+
+          <article class="home-workflow-panel" data-home-workflow-panel="goal">
+            <div class="home-workflow-scene">
+              <div class="home-workflow-copy">
+                <span>01 / 经营目标</span>
+                <h3>先说清楚想解决什么。</h3>
+                <p>商家可以输入经营目标，也可以直接提交商品链接、图片和真实规格。AI CEO 先判断这是普通咨询、市场调研，还是需要进入商品工作流。</p>
+              </div>
+              <div class="home-workflow-example">
+                <p class="home-workflow-example-label">脱敏示例输入</p>
+                <div class="home-workflow-card"><strong>“我有一套旅行压缩收纳袋，想在 eBay 上生成第一条草稿。”</strong><small>可同时上传来源图片、规格表和供应链接。</small></div>
+                <p class="home-workflow-boundary">不确定的尺寸、材质、成本和库存会被标为待补充，不会由 AI 猜测。</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="home-workflow-panel" data-home-workflow-panel="research">
+            <div class="home-workflow-scene">
+              <div class="home-workflow-copy">
+                <span>02 / 市场调研</span>
+                <h3>先判断机会，再决定是否继续。</h3>
+                <p>AI CEO 整理买家需求、常见卖点、价格区间和竞争风险。无货源商家先得到选品建议，再自行确认真实货源；已有货源可直接进入资料识别。</p>
+              </div>
+              <div class="home-workflow-example">
+                <p class="home-workflow-example-label">AI 输出示例</p>
+                <div class="home-workflow-card"><strong>旅行收纳需求清晰，适合从套装组合与尺寸差异切入。</strong><small>价格与竞争判断需结合站点、配送成本和真实商品规格继续核对。</small></div>
+                <ul class="home-workflow-facts" aria-label="调研结果维度"><li>需求场景</li><li>价格区间</li><li>竞品差异</li><li>风险提示</li></ul>
+              </div>
+            </div>
+          </article>
+
+          <article class="home-workflow-panel" data-home-workflow-panel="facts">
+            <div class="home-workflow-scene">
+              <div class="home-workflow-copy">
+                <span>03 / 商品资料</span>
+                <h3>把来源资料整理成事实表。</h3>
+                <p>系统从商家提交的图片、链接和规格中提取可证信息，并清楚区分来源事实、商家确认和 AI 建议。缺失项集中呈现，商家只需在捷境内补齐。</p>
+              </div>
+              <div class="home-workflow-example">
+                <p class="home-workflow-example-label">待核对商品事实</p>
+                <div class="home-workflow-card"><strong>旅行压缩收纳袋套装</strong><small>已识别：多件组合、拉链压缩、旅行收纳。待补充：准确尺寸、材质、重量、成本与库存。</small></div>
+                <p class="home-workflow-boundary">图片会进行侵权风险初筛，仍需商家核对来源与商业使用权。</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="home-workflow-panel" data-home-workflow-panel="listing">
+            <div class="home-workflow-scene">
+              <div class="home-workflow-copy">
+                <span>04 / Listing 草稿</span>
+                <h3>生成后仍然可以逐项修改。</h3>
+                <p>捷境根据已确认的商品事实生成标题、类目、属性、描述和政策建议。商家可在商品页面核对或修改，不必打开 eBay 手工重复填写。</p>
+              </div>
+              <div class="home-workflow-example">
+                <p class="home-workflow-example-label">草稿预览</p>
+                <div class="home-workflow-card"><strong>Travel Compression Packing Cube Set</strong><small>标题与描述属于营销文案；尺寸、材质、数量和兼容性继续受商品事实约束。</small></div>
+                <ul class="home-workflow-facts" aria-label="草稿组成"><li>标题</li><li>类目</li><li>属性</li><li>描述</li><li>店铺政策</li></ul>
+              </div>
+            </div>
+          </article>
+
+          <article class="home-workflow-panel home-workflow-panel-media" data-home-workflow-panel="media">
+            <h3>一份商品资料，生成可选择的 Listing 素材。</h3>
+            <p>素材工坊按主图、场景、卖点和细节分别生成方案。商家核对事实一致性、图片权利与平台规则后，再把选定素材加入 Listing 草稿。</p>
+            <div
           class="home-material-studio"
           data-home-material-studio="listing-media-v3"
           data-home-active-material="main"
-          data-home-auto-rotate="true"
+          data-home-auto-rotate="false"
           data-home-rotate-interval-ms="6000"
           data-home-motion-policy="respect-reduced-motion"
         >
@@ -5302,6 +5674,29 @@
           </aside>
           <p class="home-example-caption">流程示例｜实际结果以商家提供的商品资料与审核为准。</p>
           <span class="home-material-announcement" data-home-material-announcement="manual-selection" aria-live="polite" aria-atomic="true"></span>
+            </div>
+          </article>
+
+          <article class="home-workflow-panel" data-home-workflow-panel="confirm">
+            <div class="home-workflow-scene">
+              <div class="home-workflow-copy">
+                <span>06 / 发布前确认</span>
+                <h3>真正影响店铺前，再由商家确认。</h3>
+                <p>草稿完成后，捷境集中呈现商品、价格、库存、物流、政策与素材。商家确认后经 eBay 官方连接执行；未确认前，系统不会把商品公开发布。</p>
+              </div>
+              <div class="home-workflow-example">
+                <p class="home-workflow-example-label">确认边界</p>
+                <div class="home-workflow-card"><strong>发布对象、价格、库存和店铺政策清楚可见。</strong><small>高风险动作在执行前单独确认，普通草稿编辑仍可继续。</small></div>
+                <div class="home-workflow-final-action">
+                  <div><strong>准备体验自己的商品流程？</strong><small>注册后从 AI CEO 提交目标或商品资料。</small></div>
+                  <button class="button-ghost" type="button" data-home-workflow-cta="workspace">免费生成第一条草稿</button>
+                </div>
+                <p class="home-workflow-boundary">当前专注 eBay；TikTok、Amazon 后续开放。</p>
+              </div>
+            </div>
+          </article>
+
+          <span class="home-material-announcement" data-home-workflow-live="active-step" aria-live="polite" aria-atomic="true">当前步骤：提交经营目标</span>
         </div>
       </section>
 
@@ -6373,6 +6768,44 @@
         setActiveNode(initial.dataset.homeAiCeoNode || "market");
       }
 
+      function setupHomepageMerchantWorkflow() {
+        const workflow = document.querySelector('[data-home-workflow="merchant-loop-v1"]');
+        if (!workflow) return;
+        const steps = Array.from(workflow.querySelectorAll("button[data-home-workflow-step]"));
+        const panels = Array.from(workflow.querySelectorAll("[data-home-workflow-panel]"));
+        const live = workflow.querySelector('[data-home-workflow-live="active-step"]');
+        const workspaceCta = workflow.querySelector('[data-home-workflow-cta="workspace"]');
+        if (!steps.length || steps.length !== panels.length || !live) return;
+
+        const setActiveStep = (key, { focus = false, announce = true } = {}) => {
+          const target = steps.find((step) => step.dataset.homeWorkflowStep === key);
+          const targetPanel = panels.find((panel) => panel.dataset.homeWorkflowPanel === key);
+          if (!target || !targetPanel) return;
+          steps.forEach((step) => step.setAttribute("aria-pressed", String(step === target)));
+          panels.forEach((panel) => { panel.hidden = panel !== targetPanel; });
+          if (announce) live.textContent = `当前步骤：${target.textContent.trim()}`;
+          if (focus) target.focus();
+        };
+
+        steps.forEach((step, index) => {
+          step.addEventListener("click", () => setActiveStep(step.dataset.homeWorkflowStep || "goal"));
+          step.addEventListener("keydown", (event) => {
+            let nextIndex = -1;
+            if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % steps.length;
+            if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + steps.length) % steps.length;
+            if (event.key === "Home") nextIndex = 0;
+            if (event.key === "End") nextIndex = steps.length - 1;
+            if (nextIndex < 0) return;
+            event.preventDefault();
+            setActiveStep(steps[nextIndex].dataset.homeWorkflowStep || "goal", { focus: true });
+          });
+        });
+
+        workspaceCta?.addEventListener("click", () => openWorkbenchOrAuth());
+        const initial = steps.find((step) => step.getAttribute("aria-pressed") === "true") || steps[0];
+        setActiveStep(initial.dataset.homeWorkflowStep || "goal", { announce: false });
+      }
+
       function setupHomepageMediaStudio() {
         const studio = document.querySelector('[data-home-material-studio="listing-media-v3"]');
         if (!studio) return;
@@ -6384,11 +6817,6 @@
         const status = studio.querySelector('[data-home-material-status="listing-draft"]');
         const announcement = studio.querySelector('[data-home-material-announcement="manual-selection"]');
         if (!options.length || !canvas || !image || !title || !purpose || !status || !announcement) return;
-
-        const intervalMs = Number(studio.dataset.homeRotateIntervalMs) || 6000;
-        const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
-        let timer = 0;
-        let userControlled = false;
 
         const announceManualSelection = (target) => {
           const nextTitle = target.dataset.homeMaterialTitleCopy || "素材方案";
@@ -6424,24 +6852,7 @@
         };
 
         const stopAutoRotation = () => {
-          userControlled = true;
-          if (timer) window.clearInterval(timer);
-          timer = 0;
           studio.dataset.homeAutoRotate = "false";
-        };
-
-        const startAutoRotation = () => {
-          if (userControlled || motionPreference.matches || options.length < 2) {
-            studio.dataset.homeAutoRotate = "false";
-            return;
-          }
-          if (timer) window.clearInterval(timer);
-          studio.dataset.homeAutoRotate = "true";
-          timer = window.setInterval(() => {
-            const activeIndex = options.findIndex((option) => option.getAttribute("aria-pressed") === "true");
-            const next = options[(Math.max(activeIndex, 0) + 1) % options.length];
-            setActiveMaterial(next.dataset.homeMaterialOption || "main");
-          }, intervalMs);
         };
 
         options.forEach((option) => {
@@ -6455,21 +6866,9 @@
           });
         });
 
-        if (typeof motionPreference.addEventListener === "function") {
-          motionPreference.addEventListener("change", () => {
-            if (motionPreference.matches) {
-              if (timer) window.clearInterval(timer);
-              timer = 0;
-              studio.dataset.homeAutoRotate = "false";
-            } else {
-              startAutoRotation();
-            }
-          });
-        }
-
         const initial = options.find((option) => option.getAttribute("aria-pressed") === "true") || options[0];
         setActiveMaterial(initial.dataset.homeMaterialOption || "main");
-        startAutoRotation();
+        stopAutoRotation();
       }
 
       const homeIntentData = {
@@ -7558,6 +7957,7 @@
       bindSurfaceLight();
       setupReveal();
       setupHomepageAiCeoMap();
+      setupHomepageMerchantWorkflow();
       setupHomepageMediaStudio();
       openAuthModalFromUrl();
     </script>

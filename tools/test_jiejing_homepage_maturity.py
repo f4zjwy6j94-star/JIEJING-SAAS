@@ -182,7 +182,7 @@ def main() -> None:
         'data-home-material-title="active-title"',
         'data-home-material-purpose="active-purpose"',
         'data-home-material-status="listing-draft"',
-        'data-home-auto-rotate="true"',
+        'data-home-auto-rotate="false"',
         'data-home-motion-policy="respect-reduced-motion"',
     ):
         assert marker in workflow_source
@@ -205,6 +205,8 @@ def main() -> None:
     referenced_assets = set(re.findall(r'(?:\./)?(assets/travel-compression-[^"\s]+\.webp)', workflow_source))
     assert referenced_assets == approved_assets
     assert "setupHomepageMediaStudio" in INDEX
+    media_setup_source = INDEX[INDEX.index("function setupHomepageMediaStudio"):INDEX.index("const homeIntentData")]
+    assert "setInterval" not in media_setup_source
     assert "一份商品资料，生成可选择的 Listing 素材。" in workflow_source
     assert "流程示例｜实际结果以商家提供的商品资料与审核为准。" in workflow_source
     assert "示例商品工作流；实际内容以商家提供的商品事实与授权素材为准。" not in public_marketing_source
