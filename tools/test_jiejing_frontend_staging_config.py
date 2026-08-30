@@ -224,10 +224,11 @@ def main() -> int:
         'data-home-ai-ceo-core="merchant-goal-router-v3"',
         'data-home-ai-ceo-connections="merchant-goal-router-v3"',
         'data-home-ai-ceo-node="market"',
-        'data-home-ai-ceo-node="product"',
         'data-home-ai-ceo-node="listing"',
         'data-home-ai-ceo-node="media"',
-        'data-home-ai-ceo-node="publish"',
+        'data-home-ai-ceo-node="ads"',
+        'data-home-ai-ceo-node="service"',
+        'data-home-ai-ceo-node="finance"',
         'data-home-ai-ceo-result="active-result"',
         "data-home-ai-ceo-result-key=",
         'data-home-material-studio="listing-media-v3"',
@@ -332,10 +333,11 @@ def main() -> int:
             return fail(f"AI CEO merchant-safe pending marker missing: {ai_ceo_pending_marker}")
     for expected_interaction_marker in [
         'data-home-ai-ceo-line="market"',
-        'data-home-ai-ceo-line="product"',
         'data-home-ai-ceo-line="listing"',
         'data-home-ai-ceo-line="media"',
-        'data-home-ai-ceo-line="publish"',
+        'data-home-ai-ceo-line="ads"',
+        'data-home-ai-ceo-line="service"',
+        'data-home-ai-ceo-line="finance"',
         'data-home-auto-rotate="true"',
         'aria-pressed="true"',
         'aria-pressed="false"',
@@ -352,14 +354,17 @@ def main() -> int:
         return fail("homepage V3 hero and material-studio boundaries are missing")
     hero_source = index_html[hero_start:proof_start]
     hero_nodes = re.findall(r'<button\b(?=[^>]*data-home-ai-ceo-node="([^"]+)")(?=[^>]*data-home-ai-ceo-result-copy="[^"]+")(?=[^>]*aria-pressed="(?:true|false)")[^>]*>', hero_source, flags=re.I)
-    if hero_nodes != ["market", "product", "listing", "media", "publish"]:
+    approved_hero_nodes = ["market", "listing", "media", "ads", "service", "finance"]
+    if hero_nodes != approved_hero_nodes:
         return fail(f"homepage V3 nodes must expose exact accessible mappings: {hero_nodes}")
     hero_paths = re.findall(r'<path\b[^>]*data-home-ai-ceo-line="([^"]+)"[^>]*>', hero_source, flags=re.I)
-    if hero_paths != ["market", "product", "listing", "media", "publish"]:
-        return fail(f"homepage V3 relationships must be five SVG paths: {hero_paths}")
-    if len(re.findall(r'data-home-ai-ceo-line="[^"]+"', hero_source)) != 5:
+    if hero_paths != approved_hero_nodes:
+        return fail(f"homepage V3 relationships must be six SVG paths: {hero_paths}")
+    if len(re.findall(r'data-home-ai-ceo-line="[^"]+"', hero_source)) != 6:
         return fail("homepage V3 must not attach relationship markers to non-path elements")
-    for legacy_marker in ["home-command-steps", "home-command-step", "hero-ops-board", "signalCanvas"]:
+    if 'data-home-ai-ceo-layout="classic-orbit-v1"' not in hero_source or "hero-ops-board" not in hero_source:
+        return fail("homepage V3 must preserve the approved classic AI CEO orbit")
+    for legacy_marker in ["home-command-steps", "home-command-step", "signalCanvas"]:
         if legacy_marker in hero_source:
             return fail(f"homepage V3 hero retains legacy relationship UI: {legacy_marker}")
     workflow_source = index_html[workflow_start:merchants_start]

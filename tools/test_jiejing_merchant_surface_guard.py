@@ -294,21 +294,23 @@ def main() -> int:
     if hero_source.count('data-home-ai-ceo-core="merchant-goal-router-v3"') != 1:
         return fail("public homepage hero must expose one AI CEO decision core")
     hero_nodes = re.findall(r'<button\b(?=[^>]*data-home-ai-ceo-node="([^"]+)")(?=[^>]*data-home-ai-ceo-result-copy="[^"]+")(?=[^>]*aria-pressed="(?:true|false)")[^>]*>', hero_source, flags=re.I)
-    approved_hero_nodes = ["market", "product", "listing", "media", "publish"]
+    approved_hero_nodes = ["market", "listing", "media", "ads", "service", "finance"]
     if hero_nodes != approved_hero_nodes:
-        return fail(f"public homepage hero must expose the five approved merchant nodes: {hero_nodes}")
+        return fail(f"public homepage hero must expose the six approved merchant nodes: {hero_nodes}")
     hero_lines = re.findall(r'<path\b[^>]*data-home-ai-ceo-line="([^"]+)"[^>]*>', hero_source, flags=re.I)
     if hero_lines != approved_hero_nodes:
         return fail(f"public homepage hero must connect every approved merchant node to AI CEO: {hero_lines}")
-    if len(re.findall(r'data-home-ai-ceo-line="[^"]+"', hero_source)) != 5:
-        return fail("public homepage hero line markers must belong to exactly five SVG paths")
+    if len(re.findall(r'data-home-ai-ceo-line="[^"]+"', hero_source)) != 6:
+        return fail("public homepage hero line markers must belong to exactly six SVG paths")
     if 'data-home-ai-ceo-connections="merchant-goal-router-v3"' not in hero_source:
         return fail("public homepage hero must expose the approved SVG relationship map")
     if 'data-home-ai-ceo-result="active-result"' not in hero_source:
         return fail("public homepage hero must expose merchant-facing active-node result copy")
     if 'data-home-ai-ceo-result-key=' not in hero_source:
         return fail("public homepage hero result must expose its synchronized active key")
-    for legacy_marker in ["home-command-steps", "home-command-step", "hero-ops-board", "signalCanvas"]:
+    if 'data-home-ai-ceo-layout="classic-orbit-v1"' not in hero_source or "hero-ops-board" not in hero_source:
+        return fail("public homepage hero must preserve the approved classic AI CEO orbit")
+    for legacy_marker in ["home-command-steps", "home-command-step", "signalCanvas"]:
         if legacy_marker in hero_source:
             return fail(f"public homepage hero must remove legacy relationship UI: {legacy_marker}")
     if 'data-home-example="travel-compression-workflow-v1"' not in workflow_source:
