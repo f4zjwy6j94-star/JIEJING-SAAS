@@ -974,7 +974,7 @@ async function main() {
               has_subpage_strip: Boolean(section?.querySelector(".saas-settings-subpage-strip")),
               has_one_glance: Boolean(section?.querySelector(".saas-settings-one-glance")),
               one_glance_count: section?.querySelectorAll(".saas-settings-one-glance-grid article").length || 0,
-              has_one_glance_copy: text.includes("本页只看三件事") && text.includes("先理解状态"),
+              has_one_glance_copy: text.includes("本页只看三件事") && text.includes("先看状态"),
               has_model_provider_panel: Boolean(section?.querySelector(".saas-model-provider-panel")),
               has_billing_current_panel:
                 Boolean(section?.querySelector(".saas-merchant-billing-current")) &&
@@ -1050,16 +1050,19 @@ async function main() {
       }
       check.settings_child_audit = settingsChildAudit;
       check.settings_children_are_focused = settingsChildAudit.every(
-        (item) =>
-          !item.has_focus_panel &&
-          !item.has_one_glance &&
-          item.one_glance_count === 0 &&
-          !item.has_one_glance_copy &&
-          !item.has_home_hub &&
-          (item.id === "billing"
-            ? item.section_group_count === 1 && item.open_section_group_count === 0
-            : item.section_group_count === 0) &&
-          !item.has_subpage_strip,
+        (item) => {
+          const isAccountLanding = item.id === "account";
+          return (
+            !item.has_focus_panel &&
+            (isAccountLanding
+              ? item.has_one_glance && item.one_glance_count === 3 && item.has_one_glance_copy && item.has_home_hub
+              : !item.has_one_glance && item.one_glance_count === 0 && !item.has_one_glance_copy && !item.has_home_hub) &&
+            (item.id === "billing"
+              ? item.section_group_count === 1 && item.open_section_group_count === 0
+              : item.section_group_count === 0) &&
+            !item.has_subpage_strip
+          );
+        },
       );
       const modelAudit = settingsChildAudit.find((item) => item.id === "model") || {};
       const billingAudit = settingsChildAudit.find((item) => item.id === "billing") || {};
@@ -1161,7 +1164,7 @@ async function main() {
   if (product.has_listing_internal_copy) failures.push("product daily Listing surface exposes internal report/debug copy");
   if (product.has_direct_publish_button) failures.push("product daily Listing surface exposes a direct publish button");
   const connect = moduleChecks.find((item) => item.view === "connect") || {};
-  if (!connect.has_settings_shell || connect.settings_tab_count < 6 || connect.settings_tab_count > 7) failures.push("settings clean shell/tabs missing");
+  if (!connect.has_settings_shell || connect.settings_tab_count !== 5) failures.push("settings clean shell/tabs missing");
   if (!connect.has_settings_home_hub || connect.settings_home_status_count < 4) {
     failures.push("settings compact hub/status missing");
   }
