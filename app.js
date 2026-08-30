@@ -203,6 +203,12 @@ const state = {
   saasLastAiCeoMarketResearchTurn: null,
   saasLastCeoCommandPersistPromise: null,
   saasLastCeoCommandHydratePromise: null,
+  aiCeoTaskContextMode: "plain_consultation",
+  aiCeoTaskContextExpanded: false,
+  aiCeoTaskContextCommandId: "",
+  aiCeoTaskContextProjectId: "",
+  aiCeoTaskContextStartedAt: "",
+  aiCeoTaskContextStartedAtReliable: false,
   saasStartupRequestedView: "",
   saasWorkflowFeedbackOpen: false,
   saasWorkflowFeedbackReason: "",
@@ -11771,21 +11777,40 @@ function pulseFlowTarget(selector, options = {}) {
 function handleGlobalFlowNavigation(button) {
   const key = button.dataset.globalFlowKey || "";
   const view = button.dataset.globalFlowView || "cockpit";
+  const sourceView = state.view || "";
   state.activeFlowKey = key;
   if (key === "goal") {
-    setView("cockpit", { preserveFlowKey: true });
+    const currentProjectId = saasCurrentMerchantProjectId();
+    const explicitProjectEntry = ["product", "media", "confirm"].includes(sourceView) && Boolean(currentProjectId);
+    setView("cockpit", {
+      preserveFlowKey: true,
+      aiCeoTaskContextMode: explicitProjectEntry ? "explicit_project_entry" : "plain_consultation",
+      aiCeoTaskContextExpanded: explicitProjectEntry,
+      aiCeoTaskContextProjectId: explicitProjectEntry ? currentProjectId : "",
+      aiCeoTaskContextStartedAt: "",
+      aiCeoTaskContextStartedAtReliable: false,
+    });
     pulseFlowTarget("#view-cockpit .cockpit-chat-panel", { focusInput: true });
     return;
   }
   if (key === "market") {
-    setView("cockpit", { preserveFlowKey: true });
+    setView("cockpit", {
+      preserveFlowKey: true,
+      aiCeoTaskContextMode: "active_product_task",
+      aiCeoTaskContextExpanded: true,
+    });
     pulseFlowTarget("#view-cockpit .cockpit-market-panel");
     return;
   }
   if (key === "account") state.saasSettingsTab = "account";
   if (key === "model") state.saasSettingsTab = "model";
   if (key === "billing") state.saasSettingsTab = "billing";
-  setView(view, { preserveFlowKey: Boolean(key) });
+  setView(view, {
+    preserveFlowKey: Boolean(key),
+    ...(view === "cockpit" && key
+      ? { aiCeoTaskContextMode: "active_product_task", aiCeoTaskContextExpanded: true }
+      : {}),
+  });
   if (key === "source") pulseFlowTarget("#view-connect .source-intake-panel");
   else if (key === "product" || key === "finance") pulseFlowTarget("#view-product");
   else if (key === "media") pulseFlowTarget("#view-media");
@@ -14105,6 +14130,17 @@ function saasServerNowMs(referenceLocalNow = Date.now()) {
     Math.abs(localNowMs - observedAtMs) <= 5 * 60 * 1000
   ) return localNowMs + offsetMs;
   return localNowMs;
+}
+
+function saasHasFreshServerClock(referenceLocalNow = Date.now()) {
+  const localNowMs = Number(referenceLocalNow);
+  const observedAtMs = Number(state.saasServerClockObservedAtMs);
+  const offsetMs = Number(state.saasServerClockOffsetMs);
+  return Number.isFinite(localNowMs) &&
+    Number.isFinite(observedAtMs) &&
+    Number.isFinite(offsetMs) &&
+    observedAtMs > 0 &&
+    Math.abs(localNowMs - observedAtMs) <= 5 * 60 * 1000;
 }
 
 async function saasFetch(path, options = {}) {
@@ -21802,6 +21838,263 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
   `;
 }
 
+function saasAiCeoTaskContextState(options = {}) {
+  const allowedModes = new Set(["plain_consultation", "active_product_task", "explicit_project_entry"]);
+  const requestedMode = String(options.mode || state.aiCeoTaskContextMode || "plain_consultation");
+  const mode = allowedModes.has(requestedMode) ? requestedMode : "plain_consultation";
+  const visible = mode === "active_product_task" || mode === "explicit_project_entry";
+  const expanded = visible && (Object.prototype.hasOwnProperty.call(options, "expanded")
+    ? options.expanded === true
+    : state.aiCeoTaskContextExpanded === true);
+  return {
+    mode,
+    visible,
+    expanded,
+    state: visible ? (expanded ? mode : "collapsed") : "plain_consultation",
+  };
+}
+
+function setSaasAiCeoTaskContextState(mode = "plain_consultation", expanded = false, binding = {}) {
+  const next = saasAiCeoTaskContextState({ mode, expanded });
+  state.aiCeoTaskContextMode = next.mode;
+  state.aiCeoTaskContextExpanded = next.expanded;
+  if (Object.prototype.hasOwnProperty.call(binding, "commandId")) {
+    state.aiCeoTaskContextCommandId = String(binding.commandId || "");
+  }
+  if (Object.prototype.hasOwnProperty.call(binding, "projectId")) {
+    state.aiCeoTaskContextProjectId = String(binding.projectId || "");
+  }
+  if (Object.prototype.hasOwnProperty.call(binding, "startedAt")) {
+    state.aiCeoTaskContextStartedAt = String(binding.startedAt || "");
+  }
+  if (Object.prototype.hasOwnProperty.call(binding, "startedAtReliable")) {
+    state.aiCeoTaskContextStartedAtReliable = binding.startedAtReliable === true;
+  }
+  if (next.mode === "plain_consultation") {
+    state.aiCeoTaskContextCommandId = "";
+    state.aiCeoTaskContextProjectId = "";
+    state.aiCeoTaskContextStartedAt = "";
+    state.aiCeoTaskContextStartedAtReliable = false;
+  }
+  return next;
+}
+
+function saasAiCeoCommandUsesProductTaskContext(command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!current || current.intent === "general_chat") return false;
+  if (["listing", "research", "bulk", "media"].includes(current.intent)) return true;
+  return current.intent === "confirm" && Boolean(saasCurrentMerchantProjectId());
+}
+
+function saasAiCeoTaskContextProjection(command = state.saasLastCeoCommand) {
+  const boundCommandId = String(state.aiCeoTaskContextCommandId || "");
+  const boundProjectId = String(state.aiCeoTaskContextProjectId || "");
+  const currentCommand = normalizeSaasCeoCommand(command);
+  const commandMatches = Boolean(currentCommand && boundCommandId && currentCommand.id === boundCommandId);
+  if (!boundProjectId) {
+    const commandLabel = publicRuntimeText(commandMatches ? currentCommand.text || saasCeoTaskGoalLabel(currentCommand) : "当前经营目标").slice(0, 96);
+    return {
+      productLabel: commandLabel || "当前经营目标",
+      stageLabel: "正在建立商品任务",
+      stageDetail: "AI CEO 正在把本次目标建立为可追踪商品任务。",
+      completedItems: [], missingFacts: [], blockerTitle: "",
+      nextView: "product", nextLabel: "查看任务建立进度", nextKey: "recent",
+    };
+  }
+  const candidateSnapshot = state.saasMerchantProjectStatus?.snapshot_version === "merchant_project_status_v1"
+    ? state.saasMerchantProjectStatus : null;
+  const snapshot = String(candidateSnapshot?.project?.project_id || "") === boundProjectId ? candidateSnapshot : null;
+  const project = snapshot?.project && typeof snapshot.project === "object" ? snapshot.project : {};
+  const stages = Array.isArray(snapshot?.stages) ? snapshot.stages : [];
+  const currentStage = stages.find((stage) => stage?.is_current) || stages.find((stage) => stage?.key === snapshot?.current_stage) || null;
+  const latestTask = (state.saasTasks || []).filter((task) => {
+    const identity = saasNormalizeListingProjectIdentity(task?.listing_project_identity || task?.input?.listing_project_identity || task?.output?.listing_project_identity);
+    return task?.task_type === "product_workflow" && String(identity?.key || task?.project_id || task?.input?.project_id || "") === boundProjectId;
+  }).sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at))[0] || null;
+  const draftCandidate = state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object" ? state.saasListingComposerDraft : null;
+  const draft = saasCurrentListingProjectIdentity(draftCandidate)?.key === boundProjectId ? draftCandidate : null;
+  const productLabel = publicRuntimeText(
+    project.product_name ||
+      project.sku ||
+      saasWorkflowProductLabel(latestTask) ||
+      draft?.product ||
+      draft?.title ||
+      draft?.fields?.title ||
+      "当前商品任务",
+  ).slice(0, 96);
+  const projectReports = (state.saasReports || []).filter((record) => saasActivityReportProjectIdentity(record)?.key === boundProjectId);
+  const fallbackCoverage = saasAiCeoStageCoverage(projectReports, []);
+  const completedItems = (stages.length ? stages : fallbackCoverage.stages || [])
+    .filter((stage) => stage?.status === "completed" || stage?.done === true)
+    .map((stage) => publicRuntimeText(stage.label || stage.key || "").slice(0, 48))
+    .filter(Boolean)
+    .slice(-3);
+  const packet = draft?.merchant_product_fact_packet && typeof draft.merchant_product_fact_packet === "object"
+    ? draft.merchant_product_fact_packet
+    : null;
+  const unknownFacts = Array.isArray(packet?.unknown_facts)
+    ? packet.unknown_facts
+    : Array.isArray(draft?.merchant_required_answers)
+      ? draft.merchant_required_answers
+      : [];
+  const missingFacts = unknownFacts
+    .map((item) => {
+      const value = typeof item === "string" ? item : item?.label || item?.prompt || item?.key || "";
+      return saasMerchantProductFactLabel(publicRuntimeText(value).replace(/^merchant_product_fact_missing:/, ""));
+    })
+    .filter(Boolean)
+    .slice(0, 4);
+  const blockerCandidate = snapshot?.blocker && typeof snapshot.blocker === "object" ? snapshot.blocker : {};
+  const blocker = String(blockerCandidate.key || "") === "none" ? {} : blockerCandidate;
+  const nextAction = snapshot?.next_action && typeof snapshot.next_action === "object" ? snapshot.next_action : {};
+  const route = primarySaasCeoRoute(command);
+  const rawNextView = nextAction.view || (route?.view && route.view !== "cockpit" ? route.view : "product");
+  const nextView = rawNextView === "activity" ? "product" : rawNextView;
+  const nextLabel = publicRuntimeText(
+    nextAction.label ||
+      (missingFacts.length ? "补齐商品资料" : route?.view === "cockpit" ? "继续当前调研" : "打开选品与上架"),
+  ).slice(0, 56);
+  return {
+    productLabel,
+    stageLabel: publicRuntimeText(currentStage?.label || route?.label || "资料整理").slice(0, 48),
+    stageDetail: publicRuntimeText(currentStage?.detail || blocker.detail || "围绕当前商品继续整理事实、草稿与审核边界。").slice(0, 160),
+    completedItems,
+    missingFacts,
+    blockerTitle: publicRuntimeText(blocker.title || "").slice(0, 96),
+    nextView,
+    nextLabel,
+    nextKey: nextView === "product" ? "recent" : nextView,
+  };
+}
+
+function renderSaasAiCeoTaskContextMarkup(options = {}) {
+  const contextState = saasAiCeoTaskContextState(options);
+  if (!contextState.visible) return "";
+  const context = saasAiCeoTaskContextProjection(options.command || state.saasLastCeoCommand);
+  const completedMarkup = context.completedItems.length
+    ? context.completedItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+    : "<li>当前任务已建立，等待第一项可核对结果。</li>";
+  const missingMarkup = context.missingFacts.length
+    ? context.missingFacts.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+    : "<li>当前没有新增资料缺口；继续核对下一阶段。</li>";
+  return `
+    <aside class="saas-ai-ceo-task-context ${contextState.expanded ? "is-expanded" : "is-collapsed"}" data-ai-ceo-task-context="adaptive_task_context_v1" data-ai-ceo-task-context-state="${escapeHtml(contextState.state)}" aria-label="当前商品任务">
+      <button class="saas-ai-ceo-task-context-summary" type="button" data-ai-ceo-task-context-summary data-ai-ceo-task-context-toggle aria-controls="saasAiCeoTaskContextDetail" aria-expanded="${contextState.expanded ? "true" : "false"}">
+        <span>当前任务</span>
+        <strong>${escapeHtml(context.productLabel)}</strong>
+        <small>${escapeHtml(context.stageLabel)} · ${contextState.expanded ? "收起" : "展开"}</small>
+      </button>
+      <div class="saas-ai-ceo-task-context-detail" id="saasAiCeoTaskContextDetail" data-ai-ceo-task-context-detail tabindex="-1" ${contextState.expanded ? "" : "hidden"}>
+        <button class="saas-ai-ceo-task-context-close" type="button" data-ai-ceo-task-context-close aria-label="关闭当前商品任务详情">关闭</button>
+        <header>
+          <span>当前阶段</span>
+          <strong>${escapeHtml(context.stageLabel)}</strong>
+          <p>${escapeHtml(context.stageDetail)}</p>
+        </header>
+        <section aria-label="已完成事项">
+          <span>已完成</span>
+          <ul>${completedMarkup}</ul>
+        </section>
+        <section aria-label="待补商品事实">
+          <span>${context.blockerTitle ? "当前阻断" : "待补资料"}</span>
+          ${context.blockerTitle ? `<strong>${escapeHtml(context.blockerTitle)}</strong>` : ""}
+          <ul>${missingMarkup}</ul>
+        </section>
+        <button class="primary-action compact-action" type="button" data-ai-ceo-task-next-action data-global-flow-view="${escapeHtml(context.nextView)}" data-global-flow-key="${escapeHtml(context.nextKey)}">${escapeHtml(context.nextLabel)}</button>
+        <p class="saas-ai-ceo-task-context-boundary">完整字段在“选品与上架”修改；收起这里只改变界面，不会删除商品资料、报告或草稿。</p>
+      </div>
+    </aside>
+  `;
+}
+
+function collapseSaasAiCeoTaskContextIfTerminal() {
+  const projectId = String(state.aiCeoTaskContextProjectId || "");
+  const snapshot = state.saasMerchantProjectStatus;
+  if (!projectId || String(snapshot?.project?.project_id || "") !== projectId) return false;
+  const stages = Array.isArray(snapshot?.stages) ? snapshot.stages : [];
+  const currentStage = stages.find((stage) => stage?.is_current) || stages.find((stage) => stage?.key === snapshot?.current_stage);
+  const terminal = ["completed", "published"].includes(String(snapshot?.overall_status || "")) ||
+    (String(currentStage?.key || "") === "publish" && ["completed", "published"].includes(String(currentStage?.status || "")));
+  const blocked = snapshot?.blocker && String(snapshot.blocker.key || "none") !== "none";
+  const startedAtMs = saasTimestampMillis(state.aiCeoTaskContextStartedAt || "");
+  const matchingTasks = (state.saasTasks || []).filter((task) => {
+    const identity = saasNormalizeListingProjectIdentity(task?.listing_project_identity || task?.input?.listing_project_identity || task?.output?.listing_project_identity);
+    return String(identity?.key || task?.project_id || task?.input?.project_id || "") === projectId;
+  });
+  const newestEvidenceMs = Math.max(
+    saasTimestampMillis(snapshot?.evidence_cutoff || snapshot?.updated_at || ""),
+    ...matchingTasks.map((task) => saasTimestampMillis(task.updated_at || task.created_at || "")),
+  );
+  const activeWork = matchingTasks.some((task) => ["pending", "queued", "running", "in_progress"].includes(String(task?.status || "")));
+  const pending = (state.saasConfirmations || []).some((item) => {
+    const confirmation = item?.confirmation && typeof item.confirmation === "object" ? item.confirmation : item;
+    const identity = saasNormalizeListingProjectIdentity(item?.listing_project_identity || confirmation?.listing_project_identity);
+    return identity?.key === projectId && ["pending", "required", "awaiting_confirmation"].includes(String(confirmation?.status || item?.status || ""));
+  });
+  const freshEnough = !state.aiCeoTaskContextCommandId ||
+    (state.aiCeoTaskContextStartedAtReliable === true &&
+      startedAtMs > 0 &&
+      newestEvidenceMs >= startedAtMs);
+  if (!terminal || blocked || pending || activeWork || !freshEnough) return false;
+  setSaasAiCeoTaskContextState("plain_consultation", false);
+  return true;
+}
+
+function refreshSaasAiCeoTaskContext() {
+  collapseSaasAiCeoTaskContextIfTerminal();
+  const layout = document.querySelector("#view-cockpit .saas-ai-ceo-chatgpt-layout");
+  if (!layout) return null;
+  const current = layout.querySelector('[data-ai-ceo-task-context="adaptive_task_context_v1"]');
+  const markup = renderSaasAiCeoTaskContextMarkup();
+  if (!markup) {
+    current?.remove();
+    syncSaasAiCeoTaskContextDomState(layout);
+    return null;
+  }
+  if (current) {
+    replaceJiejingTrustedHtml(current, trustedJiejingHtml(markup, "ai_ceo.task_context.refresh"));
+  } else {
+    insertJiejingTrustedHtml(layout, "beforeend", trustedJiejingHtml(markup, "ai_ceo.task_context.mount"));
+  }
+  syncSaasAiCeoTaskContextDomState(layout);
+  return layout.querySelector('[data-ai-ceo-task-context="adaptive_task_context_v1"]');
+}
+
+function syncSaasAiCeoTaskContextDomState(layout = document.querySelector("#view-cockpit .saas-ai-ceo-chatgpt-layout")) {
+  if (!layout) return;
+  const contextState = saasAiCeoTaskContextState();
+  const context = layout.querySelector('[data-ai-ceo-task-context="adaptive_task_context_v1"]');
+  const expanded = Boolean(context && contextState.visible && contextState.expanded);
+  layout.classList.toggle("has-task-context", Boolean(context && contextState.visible));
+  layout.classList.toggle("is-task-context-collapsed", Boolean(context && !expanded));
+  if (!context) return;
+  context.classList.toggle("is-expanded", expanded);
+  context.classList.toggle("is-collapsed", !expanded);
+  context.dataset.aiCeoTaskContextState = expanded ? contextState.mode : "collapsed";
+  const toggle = context.querySelector("[data-ai-ceo-task-context-toggle]");
+  const detail = context.querySelector("[data-ai-ceo-task-context-detail]");
+  if (toggle) toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  if (detail) {
+    detail.hidden = !expanded;
+    const overlay = window.matchMedia("(max-width: 1100px)").matches;
+    detail.setAttribute("role", overlay ? "dialog" : "region");
+    if (overlay) detail.setAttribute("aria-modal", "true"); else detail.removeAttribute("aria-modal");
+  }
+}
+
+function handleSaasAiCeoTaskContextToggle(button) {
+  if (!button) return;
+  const closing = button.matches("[data-ai-ceo-task-context-close]");
+  const nextExpanded = closing ? false : button.getAttribute("aria-expanded") !== "true";
+  state.aiCeoTaskContextExpanded = nextExpanded;
+  refreshSaasAiCeoTaskContext();
+  const overlay = window.matchMedia("(max-width: 1100px)").matches;
+  const focusTarget = nextExpanded && overlay
+    ? document.querySelector("[data-ai-ceo-task-context-close]")
+    : document.querySelector("[data-ai-ceo-task-context-summary]");
+  focusTarget?.focus?.({ preventScroll: true });
+}
+
 function refreshSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
   const slot = document.querySelector("#saasCeoRouteTaskSlot");
   if (!slot) return;
@@ -22750,6 +23043,18 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
   const ctx = saasMerchantWorkbenchContext();
   const command = buildSaasCeoCommand(text, ctx);
   state.saasLastCeoCommand = command;
+  if (saasAiCeoCommandUsesProductTaskContext(command)) {
+    const serverClockReliable = saasHasFreshServerClock();
+    setSaasAiCeoTaskContextState("active_product_task", true, {
+      commandId: command.id,
+      projectId: "",
+      startedAt: serverClockReliable ? new Date(saasServerNowMs()).toISOString() : "",
+      startedAtReliable: serverClockReliable,
+    });
+  } else {
+    setSaasAiCeoTaskContextState("plain_consultation", false);
+  }
+  refreshSaasAiCeoTaskContext();
   state.saasCeoCommandChatVisible = true;
   persistSaasLastCeoCommand(command);
   recordSaasCeoCommandSourceRecord(command);
@@ -26012,6 +26317,7 @@ async function refreshSaasMerchantProjectStatus(options = {}) {
   const projectId = String(options.projectId || saasCurrentMerchantProjectId() || "").trim();
   if (!store?.store_id || !/^[A-Za-z0-9._:-]{1,160}$/.test(projectId)) {
     state.saasMerchantProjectStatus = null;
+    if (state.view === "cockpit") refreshSaasAiCeoTaskContext();
     return null;
   }
   const payload = await optionalSaasFetchFast(
@@ -26021,6 +26327,7 @@ async function refreshSaasMerchantProjectStatus(options = {}) {
   );
   const snapshot = payload?.merchant_project_status;
   state.saasMerchantProjectStatus = snapshot?.snapshot_version === "merchant_project_status_v1" ? snapshot : null;
+  if (state.view === "cockpit") refreshSaasAiCeoTaskContext();
   return state.saasMerchantProjectStatus;
 }
 
@@ -26105,7 +26412,7 @@ function renderSaasMerchantProjectStatusStrip(snapshot = state.saasMerchantProje
 }
 
 function mountSaasMerchantProjectStatusStrip(viewId = state.view || "") {
-  if (!isSaasPublicMvpMode() || !["cockpit", "product", "media", "confirm", "activity"].includes(viewId)) return;
+  if (!isSaasPublicMvpMode() || !["product", "media", "confirm"].includes(viewId)) return;
   const view = document.querySelector(`#view-${viewId}`);
   if (!view) return;
   view.querySelectorAll(":scope > .saas-merchant-project-status-strip").forEach((node) => node.remove());
@@ -33415,6 +33722,20 @@ function sanitizeSaasInactiveMerchantViews(activeView = "") {
 
 function setView(nextView, options = {}) {
   nextView = normalizeSaasProtectedView(nextView);
+  if (nextView === "cockpit") {
+    if (Object.prototype.hasOwnProperty.call(options, "aiCeoTaskContextMode")) {
+      setSaasAiCeoTaskContextState(
+        String(options.aiCeoTaskContextMode || "plain_consultation"),
+        options.aiCeoTaskContextExpanded === true,
+        {
+          ...(Object.prototype.hasOwnProperty.call(options, "aiCeoTaskContextCommandId") ? { commandId: options.aiCeoTaskContextCommandId } : {}),
+          ...(Object.prototype.hasOwnProperty.call(options, "aiCeoTaskContextProjectId") ? { projectId: options.aiCeoTaskContextProjectId } : {}),
+          ...(Object.prototype.hasOwnProperty.call(options, "aiCeoTaskContextStartedAt") ? { startedAt: options.aiCeoTaskContextStartedAt } : {}),
+          ...(Object.prototype.hasOwnProperty.call(options, "aiCeoTaskContextStartedAtReliable") ? { startedAtReliable: options.aiCeoTaskContextStartedAtReliable } : {}),
+        },
+      );
+    }
+  }
   if (!options.preserveFlowKey) state.activeFlowKey = "";
   state.view = nextView;
   state.pageState = "normal";
@@ -34974,6 +35295,7 @@ function renderSaasCockpitRealWorkbench() {
   const visibleCommandChat = renderSaasAiCeoThreadMarkup(latestCeoTurn);
   const hasVisibleCeoChat = Boolean(visibleCommandChat.trim());
   const firstRunHandoff = hasVisibleCeoChat ? "" : renderSaasAiCeoFirstRunHandoff();
+  const taskContextState = saasAiCeoTaskContextState();
   cockpit.dataset.title = "AI CEO";
   const pageTitleNode = document.querySelector("#pageTitle");
   const moduleHintNode = document.querySelector("#moduleFlowHint");
@@ -34982,7 +35304,7 @@ function renderSaasCockpitRealWorkbench() {
   cockpit.innerHTML = jiejingTrustedTemplate("ai_ceo.cockpit")`
     <section class="saas-real-cockpit-shell saas-ai-ceo-workbench saas-ai-ceo-chatgpt-shell" data-ai-ceo-fixed-chat-viewport="ai_ceo_fixed_chat_viewport_v1" aria-label="AI CEO 对话工作台">
       <div class="saas-ai-ceo-cockpit-main">
-        <div class="saas-ai-ceo-chatgpt-layout saas-ai-ceo-chatgpt-layout-clean">
+        <div class="saas-ai-ceo-chatgpt-layout saas-ai-ceo-chatgpt-layout-clean ${taskContextState.visible ? "has-task-context" : ""} ${taskContextState.visible && !taskContextState.expanded ? "is-task-context-collapsed" : ""}">
           <section class="ceo-panel cockpit-chat-panel saas-ai-ceo-chat saas-ai-ceo-thread" aria-label="AI CEO 对话窗口">
             <div class="saas-ai-ceo-thread-intro ${hasVisibleCeoChat ? "is-compact" : "is-empty"}">
               <p class="eyebrow">JIEJING AI CEO</p>
@@ -35007,6 +35329,7 @@ function renderSaasCockpitRealWorkbench() {
               }
             </div>
           </section>
+          ${renderSaasAiCeoTaskContextMarkup({ command: visibleRoutingCommand || state.saasLastCeoCommand })}
         </div>
       </div>
     </section>
@@ -40950,6 +41273,10 @@ function updateSaasAiCeoLatestReply(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   if (!latest) return;
   state.saasAiCeoLatestTurn = latest;
+  if (latest.listing_project_identity?.key && state.aiCeoTaskContextCommandId === state.saasLastCeoCommand?.id) {
+    state.aiCeoTaskContextProjectId = latest.listing_project_identity.key;
+    refreshSaasAiCeoTaskContext();
+  }
   upsertSaasAiCeoThreadTurn(latest);
   const panel = document.querySelector("#saasAiCeoLatestReply");
   if (panel) {
@@ -40957,6 +41284,8 @@ function updateSaasAiCeoLatestReply(turn = {}) {
     panel.hidden = false;
   }
   if (isSaasAiCeoPlainConsultationTurn(latest)) {
+    setSaasAiCeoTaskContextState("plain_consultation", false);
+    refreshSaasAiCeoTaskContext();
     refreshSaasCeoRoutingTaskCard(null);
   }
   syncSaasAiCeoFixedChatViewportState();
@@ -41067,6 +41396,7 @@ function syncSaasAiCeoFixedChatViewportState() {
   const thread = document.querySelector(".saas-ai-ceo-thread");
   const chat = document.querySelector("#ceoChat");
   if (!thread || !chat) return;
+  syncSaasAiCeoTaskContextDomState(thread.closest(".saas-ai-ceo-chatgpt-layout"));
   bindSaasAiCeoScrollIntent(chat);
   bindSaasAiCeoHistoryControls(chat);
   bindSaasAiCeoMarketImportControls(chat);
@@ -41520,6 +41850,12 @@ function bindEvents() {
 
   document.addEventListener("click", (event) => {
     if (!event.target.closest("#accountMenu")) closeAccountMenu();
+    const aiCeoTaskContextToggle = event.target.closest("[data-ai-ceo-task-context-toggle], [data-ai-ceo-task-context-close]");
+    if (aiCeoTaskContextToggle) {
+      event.preventDefault();
+      handleSaasAiCeoTaskContextToggle(aiCeoTaskContextToggle);
+      return;
+    }
     const accountActionButton = event.target.closest("[data-account-action]");
     if (accountActionButton && !accountActionButton.closest("#accountMenuPopover")) {
       event.preventDefault();
@@ -41601,6 +41937,11 @@ function bindEvents() {
     if (event.key === "Escape") {
       closeAccountMenu();
       closeSaasWorkflowFeedback();
+      if (state.view === "cockpit" && state.aiCeoTaskContextExpanded) {
+        state.aiCeoTaskContextExpanded = false;
+        refreshSaasAiCeoTaskContext();
+        document.querySelector("[data-ai-ceo-task-context-summary]")?.focus?.({ preventScroll: true });
+      }
     }
   });
 

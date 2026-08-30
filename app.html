@@ -127,7 +127,8 @@
         gap: 0;
         align-items: stretch;
         justify-content: center;
-        width: min(100%, 1080px);
+        width: 100%;
+        max-width: none;
         height: 100%;
         min-height: 0;
       }
@@ -200,6 +201,16 @@
         overflow: hidden;
       }
 
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-layout.has-task-context:not(.is-task-context-collapsed) {
+        display: grid !important;
+        grid-template-columns: minmax(0, 68fr) minmax(280px, 32fr);
+        gap: 20px;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-layout.is-task-context-collapsed {
+        position: relative;
+      }
+
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro,
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-run-handoff,
       body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-task-slot,
@@ -262,7 +273,7 @@
         min-width: 0;
       }
 
-      @media (max-width: 1120px) {
+      @media (max-width: 1100px) {
         body.saas-public-mvp[data-view="cockpit"] #appShell .main {
           height: calc(100dvh - 86px);
         }
@@ -274,6 +285,11 @@
 
         body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
           grid-template-columns: 1fr;
+        }
+
+        body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-layout.has-task-context:not(.is-task-context-collapsed) {
+          display: flex !important;
+          gap: 0;
         }
       }
     </style>
