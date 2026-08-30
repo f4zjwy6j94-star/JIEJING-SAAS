@@ -16,8 +16,8 @@ const approvedMaterialAssets = [
   "/assets/travel-compression-detail-v2.webp",
   "/assets/travel-compression-video-cover.webp",
 ];
-const approvedHeroNodes = ["market", "product", "listing", "media", "publish"];
-const approvedHeroLabels = ["市场判断", "商品资料", "Listing", "素材工坊", "发布确认"];
+const approvedHeroNodes = ["market", "listing", "media", "ads", "service", "finance"];
+const approvedHeroLabels = ["市场与货源", "Listing 草稿", "素材工坊", "广告费用", "客服物流", "财务风控"];
 
 function localStaticPath(requestUrl) {
   const pathname = decodeURIComponent(new URL(requestUrl).pathname.replace(/^\/+/, "")) || "index.html";
@@ -249,9 +249,10 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
         heroResult?.textContent.trim() === activeHeroNodes[0].dataset.homeAiCeoResultCopy?.trim()
       ),
       hero_svg_count: heroScope?.querySelectorAll('svg[data-home-ai-ceo-connections="merchant-goal-router-v3"]').length || 0,
-      legacy_hero_node_count: heroScope?.querySelectorAll(':is(.role-node, .home-command-step, .hero-ops-board article):not([data-home-ai-ceo-node])').length || 0,
-      unmarked_hero_flow_line_count: heroScope?.querySelectorAll('.flow-line:not(path[data-home-ai-ceo-line])').length || 0,
-      legacy_hero_container_count: heroScope?.querySelectorAll("#signalCanvas, .home-command-steps, .hero-ops-board").length || 0,
+      classic_orbit_count: heroScope?.querySelectorAll('[data-home-ai-ceo-layout="classic-orbit-v1"]').length || 0,
+      legacy_hero_node_count: heroScope?.querySelectorAll('.home-command-step:not([data-home-ai-ceo-node])').length || 0,
+      unmarked_hero_flow_line_count: heroScope?.querySelectorAll('.flow-line path:not([data-home-ai-ceo-line])').length || 0,
+      legacy_hero_container_count: heroScope?.querySelectorAll("#signalCanvas, .home-command-steps").length || 0,
       hero_result_visible: heroScope?.querySelector('[data-home-ai-ceo-result="active-result"]')?.getClientRects().length > 0,
       login_is_text: Boolean(login?.classList.contains("button-text")),
       work_record_marketing_count: homepageText.includes("工作记录") ? 1 : 0,
@@ -334,13 +335,13 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
     state.material_space_selection = spaceTransitionVerified;
     state.material_user_stops_rotation = await studio.getAttribute("data-home-auto-rotate") === "false";
     await page.reload({ waitUntil: "domcontentloaded", timeout: 60000 });
-    await page.waitForSelector('button[data-home-ai-ceo-node="product"]', { timeout: 20000 });
-    state.hero_keyboard_navigated = await keyboardNavigateAndActivateHeroNode(page, "product");
-    const focusHeroState = await heroInteractionSnapshot(page, "product");
+    await page.waitForSelector('button[data-home-ai-ceo-node="listing"]', { timeout: 20000 });
+    state.hero_keyboard_navigated = await keyboardNavigateAndActivateHeroNode(page, "listing");
+    const focusHeroState = await heroInteractionSnapshot(page, "listing");
     await page.locator('button[data-home-ai-ceo-node="media"]').hover();
     const hoverHeroState = await heroInteractionSnapshot(page, "media");
-    await page.locator('button[data-home-ai-ceo-node="publish"]').click();
-    const clickHeroState = await heroInteractionSnapshot(page, "publish");
+    await page.locator('button[data-home-ai-ceo-node="finance"]').click();
+    const clickHeroState = await heroInteractionSnapshot(page, "finance");
     state.hero_keyboard_relation_active = heroInteractionIsConsistent(focusHeroState, true);
     state.hero_pointer_relation_active = heroInteractionIsConsistent(hoverHeroState) && heroInteractionIsConsistent(clickHeroState);
     await page.click('[data-home-primary-cta="jiejing_ai_ceo_workspace_v2"]');
@@ -360,7 +361,7 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
         const durations = style.animationDuration.split(",").map((duration) => parseFloat(duration) || 0);
         return names.every((name) => name === "none") || durations.every((duration) => duration === 0);
       };
-      return animated.length === 7 && animated.every((item) =>
+      return animated.length === 8 && animated.every((item) =>
         stylesAreStatic(item, null) && stylesAreStatic(item, "::before") && stylesAreStatic(item, "::after")
       );
     });
@@ -409,8 +410,8 @@ async function inspectTouchInteractions(browser) {
     materialTransitionIsConsistent(initial, tapped) &&
     JSON.stringify(tapped) === JSON.stringify(held) &&
     await studio.getAttribute("data-home-auto-rotate") === "false";
-  await page.locator('button[data-home-ai-ceo-node="publish"]').tap();
-  const heroTap = await heroInteractionSnapshot(page, "publish");
+  await page.locator('button[data-home-ai-ceo-node="service"]').tap();
+  const heroTap = await heroInteractionSnapshot(page, "service");
   await context.close();
   return {
     material_tap_was_first_user_input: materialTapStopsRotation,
@@ -514,6 +515,42 @@ async function inspectJavascriptDisabled(browser) {
   };
 }
 
+async function inspectExpiredSessionHint(browser) {
+  const context = await browser.newContext({
+    viewport: { width: 820, height: 1180 },
+    deviceScaleFactor: 1,
+  });
+  await installStaticRoute(context);
+  await context.route(`${base}/merchant-onboarding/primary-ebay`, (route) => route.fulfill({
+    status: 401,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "login_required" }),
+  }));
+  await context.addInitScript(() => {
+    localStorage.setItem("jiejing_saas_backend_session_hint", "1");
+  });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  await page.goto(`${base}/index.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.locator('[data-home-primary-cta="jiejing_ai_ceo_workspace_v2"]').click();
+  await page.waitForSelector("#nextStepModal.is-open", { timeout: 10000 });
+  const state = await page.evaluate(() => ({
+    login_form_visible: document.querySelector("#entryLoginForm")?.hidden === false,
+    mode_area_hidden: document.querySelector("#entryModeArea")?.hidden === true,
+    modal_title: document.querySelector("#nextStepTitle")?.textContent.trim() || "",
+    auth_status: document.querySelector("#entryAuthStatus")?.textContent.trim() || "",
+    stale_hint_cleared: localStorage.getItem("jiejing_saas_backend_session_hint") !== "1",
+  }));
+  await context.close();
+  return {
+    ...state,
+    page_errors: pageErrors,
+    ok: state.login_form_visible && state.mode_area_hidden && state.modal_title === "进入捷境账号。" &&
+      state.auth_status.includes("登录状态已过期") && state.stale_hint_cleared && pageErrors.length === 0,
+  };
+}
+
 async function main() {
   const browser = await chromium.launch({ channel: browserChannel, headless: true });
   try {
@@ -529,7 +566,8 @@ async function main() {
     const keyboardFirst = await inspectKeyboardFirstStop(browser);
     const touchInteractions = await inspectTouchInteractions(browser);
     const javascriptDisabled = await inspectJavascriptDisabled(browser);
-    const ok = keyboardFirst.ok && touchInteractions.ok && javascriptDisabled.ok && results.every(
+    const expiredSessionHint = await inspectExpiredSessionHint(browser);
+    const ok = keyboardFirst.ok && touchInteractions.ok && javascriptDisabled.ok && expiredSessionHint.ok && results.every(
       (item) =>
         item.body_version &&
         item.section_count === 6 &&
@@ -540,24 +578,24 @@ async function main() {
         item.legacy_signal_canvas_count === 0 &&
         item.hero_core_count === 1 &&
         item.hero_core_visible &&
-        item.hero_node_marker_count === 5 &&
-        item.hero_node_button_count === 5 &&
+        item.hero_node_marker_count === 6 &&
+        item.hero_node_button_count === 6 &&
         JSON.stringify(item.hero_node_order) === JSON.stringify(approvedHeroNodes) &&
         item.hero_nodes_keyboard_ready &&
         item.hero_nodes_visible &&
         item.hero_node_mappings_ready &&
         item.hero_node_texts.every((text, index) => text.includes(approvedHeroLabels[index]) || item.hero_node_aria_labels[index].includes(approvedHeroLabels[index])) &&
         item.hero_initial_active_node_count === 1 &&
-        item.hero_line_marker_count === 5 &&
-        item.hero_line_path_count === 5 &&
+        item.hero_line_marker_count === 6 &&
+        item.hero_line_path_count === 6 &&
         JSON.stringify(item.hero_line_order) === JSON.stringify(approvedHeroNodes) &&
         item.hero_initial_active_line_count === 1 &&
         item.hero_initial_mapping_ready &&
         item.hero_svg_count === 1 &&
+        item.classic_orbit_count === 1 &&
         item.legacy_hero_node_count === 0 &&
         item.unmarked_hero_flow_line_count === 0 &&
         item.legacy_hero_container_count === 0 &&
-        item.hero_result_visible &&
         item.login_is_text &&
         item.work_record_marketing_count === 0 &&
         JSON.stringify(item.material_stage_order) === JSON.stringify(["input", "generation", "review", "listing"]) &&
@@ -584,7 +622,7 @@ async function main() {
         (item.name !== "desktop" || (item.primary_cta_opens_auth === true && item.material_rotate_interval_valid === true && item.material_auto_rotates === true && item.material_first_user_switch === true && item.material_all_options_exercised === true && item.material_keyboard_focus_ready === true && item.material_enter_selection === true && item.material_space_selection === true && item.material_user_stops_rotation === true && item.hero_keyboard_navigated === true && item.hero_keyboard_relation_active === true && item.hero_pointer_relation_active === true)) &&
         (item.name !== "reduced-motion" || (item.reduced_motion_static === true && item.reduced_motion_no_rotation === true)),
     );
-    console.log(JSON.stringify({ ok, results, keyboard_first: keyboardFirst, touch_interactions: touchInteractions, javascript_disabled: javascriptDisabled, no_login_performed: true, no_real_world_action: true }, null, 2));
+    console.log(JSON.stringify({ ok, results, keyboard_first: keyboardFirst, touch_interactions: touchInteractions, javascript_disabled: javascriptDisabled, expired_session_hint: expiredSessionHint, no_login_performed: true, no_real_world_action: true }, null, 2));
     if (!ok) process.exitCode = 1;
   } finally {
     await browser.close();

@@ -37,11 +37,11 @@ def main() -> None:
         hero_source,
         re.I,
     )
-    assert hero_nodes == ["market", "product", "listing", "media", "publish"]
+    assert hero_nodes == ["market", "listing", "media", "ads", "service", "finance"]
     hero_node_tags = re.findall(r'<button\b[^>]*data-home-ai-ceo-node="[^"]+"[^>]*>', hero_source, re.I)
-    assert len(hero_node_tags) == 5
+    assert len(hero_node_tags) == 6
     assert sum('aria-pressed="true"' in tag for tag in hero_node_tags) == 1
-    for label in ("市场判断", "商品资料", "Listing", "素材工坊", "发布确认"):
+    for label in ("市场与货源", "Listing 草稿", "素材工坊", "广告费用", "客服物流", "财务风控"):
         assert label in hero_source
     assert re.search(r'<svg\b[^>]*data-home-ai-ceo-connections="merchant-goal-router-v3"', hero_source, re.I)
     hero_lines = re.findall(
@@ -50,11 +50,19 @@ def main() -> None:
         re.I,
     )
     assert hero_lines == hero_nodes
-    assert len(re.findall(r'data-home-ai-ceo-line="[^"]+"', hero_source)) == 5
+    assert len(re.findall(r'data-home-ai-ceo-line="[^"]+"', hero_source)) == 6
     assert 'data-home-ai-ceo-result="active-result"' in hero_source
     assert 'data-home-ai-ceo-result-key=' in hero_source
-    for legacy_marker in ("home-command-steps", "home-command-step", "hero-ops-board", "signalCanvas"):
+    assert 'data-home-ai-ceo-layout="classic-orbit-v1"' in hero_source
+    assert "hero-ops-board" in hero_source
+    for legacy_marker in ("home-command-steps", "home-command-step", "signalCanvas"):
         assert legacy_marker not in hero_source
+
+    assert '--home-space: clamp(72px, 7vw, 104px);' in INDEX
+    assert '--home-space: clamp(56px, 7vw, 72px);' in INDEX
+    assert "clearEntrySaasSessionCandidate" in INDEX
+    assert "validateEntrySaasSessionCandidate" in INDEX
+    assert "entryLoggedIn = true;" in INDEX[INDEX.index("async function validateEntrySaasSessionCandidate"):INDEX.index("function appStageForPath")]
 
     footer_match = re.search(r'<footer\b', INDEX[body_match.end():], re.I)
     assert footer_match

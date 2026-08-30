@@ -3918,7 +3918,7 @@
       /* Public homepage v3: premium merchant-facing visual system, preserving the existing auth shell. */
       .public-home-v3 {
         --home-max: 1280px;
-        --home-space: clamp(96px, 10vw, 152px);
+        --home-space: clamp(72px, 7vw, 104px);
         --home-card-radius: 8px;
         --home-paper: #f7f6f1;
         --home-surface: rgba(255, 255, 255, 0.86);
@@ -3961,7 +3961,7 @@
         width: min(var(--home-max), calc(100% - 48px));
         min-height: auto;
         margin: 0 auto;
-        padding: clamp(96px, 10vw, 144px) 0 var(--home-space);
+        padding: clamp(72px, 7vw, 104px) 0 var(--home-space);
         align-items: center;
       }
 
@@ -4224,6 +4224,70 @@
         content: "";
       }
 
+      .public-home-v3 .home-ai-ceo-orbit {
+        min-height: 610px;
+        border-color: var(--home-line);
+        border-radius: 8px;
+        background:
+          linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(232, 243, 237, 0.84) 48%, rgba(252, 241, 220, 0.58)),
+          linear-gradient(90deg, rgba(14, 102, 85, 0.045) 1px, transparent 1px),
+          linear-gradient(rgba(14, 102, 85, 0.04) 1px, transparent 1px),
+          var(--home-paper);
+        background-size: auto, 42px 42px, 42px 42px;
+        box-shadow: var(--home-shadow-canvas);
+        transform: none;
+      }
+
+      .public-home-v3 .home-ai-ceo-orbit .role-node {
+        color: var(--home-ink);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .public-home-v3 .home-ai-ceo-orbit .role-node:is(:hover, :focus-visible),
+      .public-home-v3 .home-ai-ceo-orbit .role-node[aria-pressed="true"] {
+        border-color: rgba(14, 102, 85, 0.42);
+        background: #fff;
+        box-shadow: 0 18px 44px rgba(21, 33, 28, 0.12);
+      }
+
+      .public-home-v3 .home-ai-ceo-orbit .role-node[aria-pressed="true"]::before {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--home-green);
+        box-shadow: 0 0 0 5px rgba(14, 102, 85, 0.1);
+        content: "";
+      }
+
+      .public-home-v3 .home-ai-ceo-orbit .role-node:focus-visible {
+        outline: 2px solid var(--home-green);
+        outline-offset: 3px;
+      }
+
+      .public-home-v3 .home-ai-ceo-orbit .flow-line path.is-active {
+        stroke: var(--home-green);
+        stroke-width: 2;
+        animation: dashMove 6s linear infinite;
+      }
+
+      .public-home-v3 .home-ai-ceo-orbit-result {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        margin: -1px;
+        padding: 0;
+        border: 0;
+        white-space: nowrap;
+      }
+
       @keyframes homeLineFlow {
         to { stroke-dashoffset: -64; }
       }
@@ -4253,7 +4317,7 @@
         display: grid;
         grid-template-columns: minmax(0, 0.9fr) minmax(320px, 0.7fr);
         gap: 48px;
-        margin-bottom: 46px;
+        margin-bottom: 34px;
         align-items: end;
       }
 
@@ -4283,8 +4347,8 @@
       }
 
       .public-home-v3 .home-proof-grid article {
-        min-height: 180px;
-        padding: 28px;
+        min-height: 154px;
+        padding: 24px;
       }
 
       .public-home-v3 .home-proof-grid article + article {
@@ -4320,8 +4384,8 @@
       }
 
       .public-home-v3 .home-capability-grid article {
-        min-height: 210px;
-        padding: 28px;
+        min-height: 184px;
+        padding: 24px;
         border: 1px solid var(--home-line);
         border-radius: var(--home-card-radius);
         background: var(--home-surface);
@@ -4733,7 +4797,7 @@
       }
 
       .public-home-v3 .home-plan-grid .path-card {
-        min-height: 300px;
+        min-height: 270px;
         text-align: left;
       }
 
@@ -4798,8 +4862,14 @@
       }
 
       @media (max-width: 1020px) {
+        .public-home-v3 {
+          --home-space: clamp(56px, 7vw, 72px);
+        }
+
         .public-home-v3 .hero {
           grid-template-columns: 1fr;
+          gap: 36px;
+          padding-top: 56px;
         }
 
         .public-home-v3 .home-material-studio {
@@ -4811,14 +4881,18 @@
             "caption caption";
         }
 
-        .public-home-v3 .hero {
-          padding-top: 70px;
+        .public-home-v3 .home-command,
+        .public-home-v3 .home-ai-ceo-orbit {
+          width: min(100%, 700px);
+          margin: 0 auto;
         }
 
         .public-home-v3 .home-command {
           min-height: 0;
-          width: min(100%, 700px);
-          margin: 0 auto;
+        }
+
+        .public-home-v3 .home-ai-ceo-orbit {
+          min-height: 560px;
         }
 
         .public-home-v3 .home-proof-grid,
@@ -4853,7 +4927,7 @@
 
         .public-home-v3 .hero {
           gap: 34px;
-          padding: 68px 0 78px;
+          padding: 52px 0 62px;
         }
 
         .public-home-v3 .hero h1 {
@@ -4863,6 +4937,29 @@
         .public-home-v3 .home-command {
           padding: 18px;
           border-radius: 8px;
+        }
+
+        .public-home-v3 .home-ai-ceo-orbit {
+          min-height: 470px;
+          padding: 12px;
+        }
+
+        .public-home-v3 .home-ai-ceo-orbit .hero-ops-board {
+          display: none;
+        }
+
+        .public-home-v3 .home-ai-ceo-orbit .node-service,
+        .public-home-v3 .home-ai-ceo-orbit .node-finance {
+          display: block;
+          bottom: 12px;
+        }
+
+        .public-home-v3 .home-ai-ceo-orbit .node-service {
+          left: 12px;
+        }
+
+        .public-home-v3 .home-ai-ceo-orbit .node-finance {
+          right: 12px;
         }
 
         .public-home-v3 .home-command-head {
@@ -4996,6 +5093,15 @@
       }
 
       @media (prefers-reduced-motion: reduce) {
+        .public-home-v3 .home-ai-ceo-orbit .ceo-core,
+        .public-home-v3 .home-ai-ceo-orbit .flow-line path,
+        .public-home-v3 .home-ai-ceo-orbit .role-node,
+        .public-home-v3 .home-ai-ceo-orbit .ceo-core::before,
+        .public-home-v3 .home-ai-ceo-orbit .ceo-core::after,
+        .public-home-v3 .home-ai-ceo-orbit .flow-line path::before,
+        .public-home-v3 .home-ai-ceo-orbit .flow-line path::after,
+        .public-home-v3 .home-ai-ceo-orbit .role-node::before,
+        .public-home-v3 .home-ai-ceo-orbit .role-node::after,
         .public-home-v3 .home-ai-ceo-core,
         .public-home-v3 .home-ai-ceo-connections path,
         .public-home-v3 .home-ai-ceo-node,
@@ -5051,32 +5157,30 @@
         </div>
       </section>
 
-      <aside class="home-command home-ai-ceo-map" aria-label="AI CEO 经营任务调度图">
-        <div class="home-command-head">
-          <div>
-            <small>JIEJING AI CEO</small>
-            <strong>经营任务，从一个目标开始协同</strong>
-          </div>
-          <span class="home-command-state">商家掌握最终决定</span>
+      <aside class="command-room home-ai-ceo-orbit" data-home-ai-ceo-layout="classic-orbit-v1" aria-label="AI CEO 经营任务调度图">
+        <svg class="flow-line" viewBox="0 0 640 660" data-home-ai-ceo-connections="merchant-goal-router-v3" aria-hidden="true">
+          <path class="is-active" data-home-ai-ceo-line="market" d="M320 330 C210 170 160 135 120 110"></path>
+          <path data-home-ai-ceo-line="listing" d="M320 330 C430 170 480 135 520 110"></path>
+          <path data-home-ai-ceo-line="media" d="M320 330 C170 330 140 310 110 300"></path>
+          <path data-home-ai-ceo-line="ads" d="M320 330 C470 330 500 310 530 300"></path>
+          <path data-home-ai-ceo-line="service" d="M320 330 C210 500 170 520 130 560"></path>
+          <path data-home-ai-ceo-line="finance" d="M320 330 C430 500 470 520 510 560"></path>
+        </svg>
+        <div class="ceo-core" data-home-ai-ceo-core="merchant-goal-router-v3">
+          <div><strong>AI CEO</strong><span>接目标 · 排队列<br />留记录 · 等确认</span></div>
         </div>
-        <div class="home-ai-ceo-canvas">
-          <svg class="home-ai-ceo-connections" viewBox="0 0 600 460" preserveAspectRatio="none" data-home-ai-ceo-connections="merchant-goal-router-v3" aria-hidden="true">
-            <path class="is-active" data-home-ai-ceo-line="market" d="M300 225 C236 154 164 100 84 66"></path>
-            <path data-home-ai-ceo-line="product" d="M300 225 C370 148 438 96 514 62"></path>
-            <path data-home-ai-ceo-line="listing" d="M300 225 C390 221 470 218 536 220"></path>
-            <path data-home-ai-ceo-line="media" d="M300 225 C364 304 418 358 472 397"></path>
-            <path data-home-ai-ceo-line="publish" d="M300 225 C244 304 194 358 132 397"></path>
-          </svg>
-          <div class="home-ai-ceo-core" data-home-ai-ceo-core="merchant-goal-router-v3">
-            <div><strong>AI CEO</strong><small>理解经营目标<br />判断下一步</small></div>
-          </div>
-          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="market" data-home-ai-ceo-result-copy="先梳理市场需求、价格带与经营风险，再给出有依据的方向。" aria-label="市场判断：查看商家结果" aria-pressed="true"><strong>市场判断</strong><small>需求 · 价格 · 风险</small></button>
-          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="product" data-home-ai-ceo-result-copy="把链接、图片和规格整理成可核对的商品事实与缺口。" aria-label="商品资料：查看商家结果" aria-pressed="false"><strong>商品资料</strong><small>来源 · 规格 · 缺口</small></button>
-          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="listing" data-home-ai-ceo-result-copy="依据商品事实生成标题、类目、属性和描述草稿。" aria-label="Listing：查看商家结果" aria-pressed="false"><strong>Listing</strong><small>标题 · 类目 · 描述</small></button>
-          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="media" data-home-ai-ceo-result-copy="按主图、场景、卖点和细节生成可选择的素材方案。" aria-label="素材工坊：查看商家结果" aria-pressed="false"><strong>素材工坊</strong><small>生成 · 选择 · 审核</small></button>
-          <button class="home-ai-ceo-node" type="button" data-home-ai-ceo-node="publish" data-home-ai-ceo-result-copy="发布前集中核对资料与平台动作，最终决定仍由商家掌握。" aria-label="发布确认：查看商家结果" aria-pressed="false"><strong>发布确认</strong><small>核对 · 授权 · 执行</small></button>
+        <div class="hero-ops-board" aria-label="AI CEO 推进方式">
+          <article class="is-active"><span>01</span><strong>接收目标</strong><small>一句话进入经营流</small></article>
+          <article><span>02</span><strong>整理与生成</strong><small>资料、报告、草稿</small></article>
+          <article><span>03</span><strong>确认执行</strong><small>关键动作先停住</small></article>
         </div>
-        <p class="home-ai-ceo-result" data-home-ai-ceo-result="active-result" data-home-ai-ceo-result-key="market" aria-live="polite">先梳理市场需求、价格带与经营风险，再给出有依据的方向。</p>
+        <button class="role-node node-market" type="button" data-home-ai-ceo-node="market" data-home-ai-ceo-result-copy="整理需求、竞品、价格带、退货风险和供货可行性。" aria-label="市场与货源：查看商家结果" aria-pressed="true"><strong>市场与货源</strong><span>需求、竞品、价格带与供货可行性。</span></button>
+        <button class="role-node node-listing" type="button" data-home-ai-ceo-node="listing" data-home-ai-ceo-result-copy="依据商品事实生成标题、类目、属性和描述草稿。" aria-label="Listing 草稿：查看商家结果" aria-pressed="false"><strong>Listing 草稿</strong><span>标题、类目、参数与描述。</span></button>
+        <button class="role-node node-media" type="button" data-home-ai-ceo-node="media" data-home-ai-ceo-result-copy="规划主图、场景图、详情内容和商品视频方案。" aria-label="素材工坊：查看商家结果" aria-pressed="false"><strong>素材工坊</strong><span>主图、场景图、详情与视频。</span></button>
+        <button class="role-node node-ads" type="button" data-home-ai-ceo-node="ads" data-home-ai-ceo-result-copy="整理广告费用和表现，预算变更仍由商家确认。" aria-label="广告费用：查看商家结果" aria-pressed="false"><strong>广告费用</strong><span>只读表现，预算变更先确认。</span></button>
+        <button class="role-node node-service" type="button" data-home-ai-ceo-node="service" data-home-ai-ceo-result-copy="基于商品、订单和政策生成客服与物流处理草稿。" aria-label="客服物流：查看商家结果" aria-pressed="false"><strong>客服物流</strong><span>回复草稿、售后与时效风险。</span></button>
+        <button class="role-node node-finance" type="button" data-home-ai-ceo-node="finance" data-home-ai-ceo-result-copy="归集成交费、广告费、订阅费、物流和退款预留。" aria-label="财务风控：查看商家结果" aria-pressed="false"><strong>财务风控</strong><span>费用、利润与退款预留。</span></button>
+        <p class="home-ai-ceo-orbit-result" data-home-ai-ceo-result="active-result" data-home-ai-ceo-result-key="market" aria-live="polite">整理需求、竞品、价格带、退货风险和供货可行性。</p>
       </aside>
     </header>
 
@@ -6629,6 +6733,23 @@
         }
       }
 
+      function clearEntrySaasSessionCandidate() {
+        entryLoggedIn = false;
+        try {
+          localStorage.removeItem("jiejing_saas_backend_session_hint");
+          localStorage.removeItem("jiejing_saas_backend_store_id");
+          localStorage.removeItem("jiejing_saas_backend_token");
+          sessionStorage.removeItem("jiejing_saas_backend_token");
+        } catch (error) {
+          // The backend cookie remains authoritative; local hints are best-effort only.
+        }
+      }
+
+      function isEntrySessionAuthError(error) {
+        const status = Number(error?.status || 0);
+        return status === 401 || status === 403 || /login_required|unauthorized|未登录|登录状态/i.test(String(error?.message || ""));
+      }
+
       function setEntryAuthStatus(message = "", tone = "info") {
         const status = document.querySelector("#entryAuthStatus");
         if (!status) return;
@@ -6754,7 +6875,11 @@
           cache: "no-store",
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(entryAuthErrorMessage(data, `HTTP ${response.status}`));
+        if (!response.ok) {
+          const error = new Error(entryAuthErrorMessage(data, `HTTP ${response.status}`));
+          error.status = response.status;
+          throw error;
+        }
         applyEntryMerchantOnboarding(data.merchant_onboarding);
         return entryMerchantOnboarding;
       }
@@ -7041,6 +7166,23 @@
         pill.textContent = "向导已接入";
       }
 
+      async function validateEntrySaasSessionCandidate() {
+        if (!hasEntrySaasSessionCandidate()) {
+          entryLoggedIn = false;
+          return { valid: false, expired: false, model: null, error: null };
+        }
+        try {
+          const model = await loadEntryMerchantOnboarding();
+          entryLoggedIn = true;
+          return { valid: true, expired: false, model, error: null };
+        } catch (error) {
+          const expired = isEntrySessionAuthError(error);
+          entryLoggedIn = false;
+          if (expired) clearEntrySaasSessionCandidate();
+          return { valid: false, expired, model: null, error };
+        }
+      }
+
       function appStageForPath(key) {
         return {
           opened: "store_opened",
@@ -7068,27 +7210,33 @@
         window.location.replace(target.toString());
       }
 
-      function openRealSaasEntry() {
+      async function openRealSaasEntry() {
+        const session = await validateEntrySaasSessionCandidate();
         openNextStepModal("path");
+        if (session.expired) {
+          setEntryAuthStatus("登录状态已过期，请重新输入账号和密码。", "info");
+        } else if (session.error) {
+          setEntryAuthStatus("暂时无法验证登录状态，请重新登录。", "error");
+        }
       }
 
       async function openWorkbenchOrAuth() {
-        if (hasEntrySaasSessionCandidate()) {
-          entryLoggedIn = true;
-          try {
-            const model = await loadEntryMerchantOnboarding();
-            if (model?.progress?.preferences_saved) {
-              openLoggedInExperience(activePath, { onboarded: true });
-              return;
-            }
-          } catch (error) {
-            showToast(`账号向导暂未读取：${error.message || error}`);
+        const session = await validateEntrySaasSessionCandidate();
+        if (session.valid) {
+          if (session.model?.progress?.preferences_saved) {
+            openLoggedInExperience(activePath, { onboarded: true });
+            return;
           }
           openNextStepModal("path");
           showToast("请先完成商家身份向导，再进入 AI CEO 工作台。");
           return;
         }
         openNextStepModal("path");
+        if (session.expired) {
+          setEntryAuthStatus("登录状态已过期，请重新输入账号和密码。", "info");
+        } else if (session.error) {
+          setEntryAuthStatus("暂时无法验证登录状态，请重新登录。", "error");
+        }
       }
 
       async function finishGuideAndOpenWorkspace(workMode = "guided") {
