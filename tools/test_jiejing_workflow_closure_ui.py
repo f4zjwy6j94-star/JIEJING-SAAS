@@ -17,7 +17,7 @@ def main() -> int:
     app_html = (ROOT / "app.html").read_text(encoding="utf-8")
 
     for needle, label in [
-        ('status.live_image_generation_enabled === true', "live image readiness signal"),
+        ('capability.live_image_generation_enabled === true', "live image readiness signal"),
         ("素材清单实际返回 ${deliveredCount} 个结果", "actual manifest result count"),
         ('job.status !== "approved_for_listing"', "review gate before Listing writeback"),
         ("approveLatestSaasMediaAssetJobForListingDraft", "persisted merchant media review"),

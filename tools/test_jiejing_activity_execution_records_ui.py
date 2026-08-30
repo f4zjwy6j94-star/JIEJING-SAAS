@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merchant activity must show safe, actionable eBay execution records."""
+"""Execution traces stay safe without becoming a separate merchant workflow."""
 
 from __future__ import annotations
 
@@ -16,8 +16,12 @@ APP_HTML = ROOT / "app.html"
 def main() -> None:
     app_js = APP_JS.read_text(encoding="utf-8")
     app_html = APP_HTML.read_text(encoding="utf-8")
-    if 'class="nav-item" data-view="activity"' not in app_html or "运行记录" not in app_html:
-        raise AssertionError("Public merchant navigation must expose the account-scoped execution record page")
+    if 'class="nav-item" data-view="activity"' in app_html:
+        raise AssertionError("Public merchant navigation must not expose a separate work-record page")
+    if 'id="view-activity"' not in app_html or 'data-internal-view="legacy-report-center" hidden' not in app_html:
+        raise AssertionError("Legacy execution traces must remain preserved in a hidden internal archive")
+    if 'activity: "cockpit"' not in app_js:
+        raise AssertionError("Old activity links must return merchants to AI CEO instead of a hidden page")
     start_marker = "function saasExecutionActionLabel"
     end_marker = "function renderSaasActivityCenter"
     if start_marker not in app_js or end_marker not in app_js:
@@ -122,8 +126,8 @@ for (const forbidden of ["access_token", "refresh_token", "signedUrl"]) {{
             raise AssertionError(f"merchant execution recovery copy missing: {required_copy}")
     activity_source = app_js[app_js.index(end_marker) : app_js.index("function renderActivities", app_js.index(end_marker))]
     if "renderSaasActivityExecutionRecords(executions)" not in activity_source:
-        raise AssertionError("AI CEO activity page does not render account-scoped execution records")
-    print("PASS Jiejing activity shows safe merchant-facing eBay execution records")
+        raise AssertionError("Hidden archive no longer preserves safe account-scoped execution traces")
+    print("PASS Jiejing preserves safe execution traces without a separate merchant work-record page")
 
 
 if __name__ == "__main__":

@@ -225,7 +225,7 @@ const state = {
   saasListingBackendWorkflow: null,
   saasListingBackendWorkflowStatus: "",
   saasListingBackendWorkflowError: "",
-  saasSettingsTab: "general",
+  saasSettingsTab: "account",
   runtimeConnected: false,
   runtimeLoading: false,
   runtimeError: "",
@@ -542,7 +542,7 @@ function isProtectedSaasAppRoute() {
   }
 }
 
-const saasRealWorkbenchViews = new Set(["cockpit", "workflow", "product", "media", "bulk", "activity", "confirm", "service", "connect"]);
+const saasRealWorkbenchViews = new Set(["cockpit", "workflow", "product", "media", "bulk", "confirm", "service", "connect"]);
 const saasProtectedViewAliases = {
   ai: "cockpit",
   "ai-ceo": "cockpit",
@@ -564,6 +564,9 @@ const saasProtectedViewAliases = {
   account: "connect",
   support: "service",
   orders: "service",
+  activity: "cockpit",
+  report: "cockpit",
+  reports: "cockpit",
 };
 
 function normalizeSaasProtectedView(view = "cockpit") {
@@ -1531,7 +1534,7 @@ const planDetails = {
       "7 天内最多 20 次捷境托管 AI 对话",
       "完成 1 套市场分析、Listing、利润和风险检查",
       "可保存 1 条未发布 Listing 草稿；真实发布等高风险动作仍需确认",
-      "商家自己的模型 API 不占试用次数；免费体验不赠送生图素材点",
+      "商家自己连接的 AI 不占试用次数；免费体验不赠送生图素材点",
     ],
   },
   starter: {
@@ -4901,8 +4904,10 @@ function ensureSaasMediaFirstRunStrip() {
 function renderSaasMediaStudioStatus() {
   const ctx = saasMerchantWorkbenchContext();
   const reports = saasMediaReportRows(ctx);
+  const view = document.querySelector("#view-media");
   const tabs = document.querySelector("#view-media .media-project-tabs");
   if (!tabs) return;
+  if (view) view.dataset.mediaEmpty = reports.length ? "false" : "true";
   let handoff = document.querySelector("#view-media .saas-ceo-module-handoff");
   if (handoff) handoff.remove();
   renderSaasModuleAiGoalStripIntoView("media", { anchorSelector: ".media-flow-status, .media-project-tabs" });
@@ -10321,6 +10326,7 @@ function renderSaasProductListingCenter(view) {
     view,
     trustedJiejingHtml(`
     <section class="panel full product-manager-module saas-real-listing-factory" aria-label="真实 Listing 工厂">
+      ${renderSaasModuleAiGoalStrip("product")}
       <header class="product-manager-header saas-real-listing-header">
         <div>
           <p class="eyebrow">Listing 工厂 · 真实状态</p>
@@ -10357,6 +10363,7 @@ function renderSaasProductListingCenter(view) {
 
       <div class="saas-listing-composer-boundary">
         <span>当前页面只生成草稿、体检结果和确认单。真实发布、改价、库存、广告、退款、政策和敏感客服承诺仍然进入决策中心。</span>
+        <button class="secondary-action compact-action" type="button" data-global-flow-view="bulk" data-global-flow-key="bulk">批量铺货</button>
         <button class="secondary-action compact-action" type="button" data-saas-action="open-confirm" ${pendingConfirmations.length ? "" : "disabled"}>查看确认项</button>
       </div>
 
@@ -11746,7 +11753,7 @@ function renderGlobalFlowBar() {
 }
 
 function pulseFlowTarget(selector, options = {}) {
-  const { focusInput = false, message = "" } = options;
+  const { focusInput = false } = options;
   setTimeout(() => {
     const target = document.querySelector(selector);
     if (!target) return;
@@ -11758,7 +11765,6 @@ function pulseFlowTarget(selector, options = {}) {
       const input = target.matches("input, textarea") ? target : target.querySelector("input, textarea");
       input?.focus({ preventScroll: true });
     }
-    if (message) showActionToast(message);
   }, 80);
 }
 
@@ -11766,46 +11772,30 @@ function handleGlobalFlowNavigation(button) {
   const key = button.dataset.globalFlowKey || "";
   const view = button.dataset.globalFlowView || "cockpit";
   state.activeFlowKey = key;
-  const messages = {
-    goal: "接目标：在 AI CEO 对话框里输入商品、链接、图片或订单问题，系统再拆成后续任务。",
-    market: "已定位市场判断：这里看商品值不值得继续测。",
-    source: "已打开货源资料：这里处理 AI 找货源、手动填写和货源连接。",
-    product: "已打开产品刊登：这里生成 eBay 刊登资料、政策引用和发布前校验。",
-    media: "已打开素材工坊：这里处理主图、详情页和视频。",
-    bulk: "已打开批量铺货：这里从 eBay 机会到货源匹配、筛选、分批草稿和确认边界。",
-    finance: "已打开利润履约：利润、费用和时效会跟刊登草稿一起核算。",
-    service: "已打开客服物流：普通回复和物流整理可先起草，高风险承诺仍进确认中心。",
-    confirm: "已打开确认中心：发布、付款、退款和广告等高风险动作在这里确认。",
-    account: "已打开设置：先恢复登录、店铺和 eBay 连接状态。",
-    model: "已打开设置：AI 连接、商家记忆、来源和上线状态都在这里。",
-    billing: "已打开套餐与付款：这里查看免费体验、软件套餐、素材点、订单和续购状态。",
-    audit: "已打开 AI CEO 汇报：查看报告、来源、确认记录和长期记忆的回写。",
-  };
   if (key === "goal") {
     setView("cockpit", { preserveFlowKey: true });
-    pulseFlowTarget("#view-cockpit .cockpit-chat-panel", { focusInput: true, message: messages.goal });
+    pulseFlowTarget("#view-cockpit .cockpit-chat-panel", { focusInput: true });
     return;
   }
   if (key === "market") {
     setView("cockpit", { preserveFlowKey: true });
-    pulseFlowTarget("#view-cockpit .cockpit-market-panel", { message: messages.market });
+    pulseFlowTarget("#view-cockpit .cockpit-market-panel");
     return;
   }
   if (key === "account") state.saasSettingsTab = "account";
   if (key === "model") state.saasSettingsTab = "model";
   if (key === "billing") state.saasSettingsTab = "billing";
   setView(view, { preserveFlowKey: Boolean(key) });
-  if (key === "source") pulseFlowTarget("#view-connect .source-intake-panel", { message: messages.source });
-  else if (key === "product" || key === "finance") pulseFlowTarget("#view-product", { message: messages[key] });
-  else if (key === "media") pulseFlowTarget("#view-media", { message: messages.media });
-  else if (key === "confirm") pulseFlowTarget("#view-confirm", { message: messages.confirm });
-  else if (key === "bulk") pulseFlowTarget("#view-bulk", { message: messages.bulk });
-  else if (key === "service") pulseFlowTarget("#view-service", { message: messages.service });
-  else if (key === "account") pulseFlowTarget("#view-connect", { message: messages.account });
-  else if (key === "model") pulseFlowTarget("#view-connect", { message: messages.model });
-  else if (key === "billing") pulseFlowTarget("#view-connect .saas-settings-clean-content", { message: messages.billing });
-  else if (key === "audit") pulseFlowTarget("#view-activity", { message: messages.audit });
-  else showActionToast(messages[key] || "已打开对应流程。");
+  if (key === "source") pulseFlowTarget("#view-connect .source-intake-panel");
+  else if (key === "product" || key === "finance") pulseFlowTarget("#view-product");
+  else if (key === "media") pulseFlowTarget("#view-media");
+  else if (key === "confirm") pulseFlowTarget("#view-confirm");
+  else if (key === "bulk") pulseFlowTarget("#view-bulk");
+  else if (key === "service") pulseFlowTarget("#view-service");
+  else if (key === "account" || key === "model") pulseFlowTarget("#view-connect");
+  else if (key === "billing") pulseFlowTarget("#view-connect .saas-settings-clean-content");
+  else if (key === "audit") pulseFlowTarget("#view-activity");
+  else if (key) pulseFlowTarget(`#view-${view}`);
 }
 
 function renderProjectArchiveCard() {
@@ -12168,7 +12158,7 @@ function setMediaNewTaskMode() {
   setText("#mediaSourceNote", "支持从桌面拖入 WEBP / PNG / JPG 图片；生成前不会触发市场结论、真实发布、采购付款或平台写入。");
   setText("#mediaFactLabel", "本机路径");
   setText("#mediaFactTitle", "等待读取");
-  setText("#mediaFactNote", "拖入后会显示文件名、本机路径和浏览器预览路径，并把来源写入 AI 工作记录。");
+  setText("#mediaFactNote", "拖入后会显示文件名和预览，并把来源关联到当前商品素材任务。");
   setText("#mediaEntryStatus", "独立上传");
   setText("#mediaEntryNote", "未经过市场和刊登流程，只处理本次图片。");
   setText("#mediaOutputNote", "拖入图片后按你选择的图片要求生成。");
@@ -12543,7 +12533,7 @@ function syncMediaStudioGenerated(sourceText = "商品图", options = {}) {
     status.classList.add("is-generated");
     status.innerHTML = `
       <span>已跟进</span>
-      <strong>素材已生成，并写入 AI 工作记录</strong>
+      <strong>素材已生成，并关联到当前商品</strong>
       <p>${escapeHtml(returnedSummary)} 工作记录会写清楚入口、平台预设、尺寸、实际返回数量、缺失资料、审核状态和后续去向。</p>
     `;
   }
@@ -20453,9 +20443,9 @@ function renderSaasConfirmPanel() {
     saasModelValueProductLabel();
   const realWritesEnabled = state.saasEbayWriteAdapter?.real_platform_writes_enabled === true;
   panel.innerHTML = `
-    <section class="saas-readable-page-head saas-confirm-readable-head" aria-label="决策中心说明">
+    <section class="saas-readable-page-head saas-confirm-readable-head" aria-label="确认中心说明">
       <div>
-        <span>决策中心</span>
+        <span>确认中心</span>
         <strong>只让你处理真正要拍板的事</strong>
         <p>没有重要动作时，这里保持安静。AI 继续整理草稿、素材和报告；发布、付款、退款、广告和客服承诺必须等你点头。</p>
       </div>
@@ -20467,7 +20457,7 @@ function renderSaasConfirmPanel() {
     ${renderSaasModuleAiGoalStrip("confirm")}
     <div class="runtime-confirm-head saas-confirm-simple-head">
       <div>
-        <span class="pill ${state.saasConnected ? "green" : "neutral"}">决策中心</span>
+        <span class="pill ${state.saasConnected ? "green" : "neutral"}">确认中心</span>
         <strong>${escapeHtml(saasDecisionCenterHeadline(productLabel, allPendingCount))}</strong>
         <p>这里只做三种选择：同意、稍后、回去补资料。其他记录和复盘放在设置里，不打扰当前任务。</p>
       </div>
@@ -20490,7 +20480,7 @@ function renderSaasConfirmPanel() {
         <small>保留记录，不继续执行</small>
       </article>
     </div>
-    <section class="saas-confirm-action-model" aria-label="决策中心处理边界">
+    ${visible.length ? `<section class="saas-confirm-action-model" aria-label="确认中心处理边界">
       <article>
         <span>现在只看</span>
         <strong>待你点头的事</strong>
@@ -20506,7 +20496,7 @@ function renderSaasConfirmPanel() {
         <strong>发布、付款、退款、广告、客服承诺</strong>
         <p>这些动作会先停住。你没点头前不会执行。</p>
       </article>
-    </section>
+    </section>` : ""}
     ${
       visible.length
         ? `<div class="runtime-confirm-grid saas-confirm-grid">
@@ -21779,8 +21769,6 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
   const current = normalizeSaasCeoCommand(command);
   const route = primarySaasCeoRoute(current);
   if (!current || !route) return "";
-  const whyRows = saasCeoRoutingWhyRows(route, current);
-  const closureRows = saasCeoFirstDayClosureRows(route, current);
   const buttonLabel =
     route.view === "confirm"
       ? "去决策中心"
@@ -21801,40 +21789,11 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
     <section class="saas-ceo-routing-task-card ${current.high_risk ? "is-risk" : ""}" data-ai-ceo-route-task-card="ai_ceo_route_task_card_v2" aria-label="AI CEO 下一步任务卡">
       <div class="saas-ceo-routing-main">
         <div class="saas-ceo-routing-kicker">
-          <span>AI CEO 已接住</span>
-          <small>下一步建议 · 不会自动执行真实动作</small>
+          <span>建议下一步</span>
+          <small>不会自动执行真实动作</small>
         </div>
         <strong>${escapeHtml(handoffTitle)}</strong>
-        <p class="saas-ceo-routing-summary">我理解你想：${escapeHtml(saasCeoTaskGoalLabel(current))}。${escapeHtml(saasCeoTaskNextCopy(route, current))}</p>
-        <div class="saas-ceo-routing-why" aria-label="AI CEO 路由确认">
-          ${whyRows
-            .map(
-              ([label, value]) => `
-                <article>
-                  <span>${escapeHtml(label)}</span>
-                  <strong>${escapeHtml(value)}</strong>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <p class="saas-ceo-routing-nextline">${escapeHtml(saasCeoRoutingNextLine(route, current))}</p>
-        <details class="saas-ceo-route-closure" data-ai-ceo-first-day-closure="first_day_ai_ceo_closure_v1" aria-label="AI CEO 首日闭环">
-          <summary><span>查看处理步骤</span><small>目标 → 判断 → 工作台 → 设置</small></summary>
-          <div>
-            ${closureRows
-              .map(
-                ([step, title, detail]) => `
-                  <article>
-                    <b>${escapeHtml(step)}</b>
-                    <strong>${escapeHtml(title)}</strong>
-                    <small>${escapeHtml(detail)}</small>
-                  </article>
-                `,
-              )
-              .join("")}
-          </div>
-        </details>
+        <p class="saas-ceo-routing-summary">${escapeHtml(saasCeoTaskGoalLabel(current))}</p>
       </div>
       <button class="primary-action compact-action" type="button" data-global-flow-view="${escapeHtml(route.view)}" data-global-flow-key="${escapeHtml(route.key || route.view)}">
         ${escapeHtml(buttonLabel)}
@@ -21845,7 +21804,11 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
 
 function refreshSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
   const slot = document.querySelector("#saasCeoRouteTaskSlot");
-  setJiejingTrustedHtml(slot, trustedJiejingHtml(renderSaasCeoRoutingTaskCard(command), "ai_ceo.route_task_card"));
+  if (!slot) return;
+  setJiejingTrustedHtml(
+    slot,
+    trustedJiejingHtml(renderSaasCeoRoutingTaskCard(command), "ai_ceo.route_task_card"),
+  );
 }
 
 function saasCeoModuleHandoffCopy(view = "product") {
@@ -21934,7 +21897,7 @@ function saasCeoModuleGoalView(command = state.saasLastCeoCommand) {
 
 function shouldShowSaasCeoModuleGoalStrip(view = "product", command = state.saasLastCeoCommand) {
   const targetView = saasCeoModuleGoalView(command);
-  if (!targetView || view === "product") return false;
+  if (!targetView) return false;
   return targetView === view;
 }
 
@@ -22061,7 +22024,7 @@ function renderSaasAiCeoWorkDetailMarkup(turn = {}) {
     ? "查看确认边界"
     : sourceCount
       ? "查看来源"
-      : "查看工作详情";
+      : "查看处理详情";
   return `
     <details class="saas-ai-ceo-work-detail">
       <summary>${escapeHtml(summary)}</summary>
@@ -22189,7 +22152,7 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
         <div>
           <span>市场调研已保存</span>
           <strong>${escapeHtml(title)}</strong>
-          <small>${sourceCopy}这份工作记录还不能导入 Listing。请先补齐候选商品和商家核对项。</small>
+          <small>${sourceCopy}这份调研还不能导入 Listing。请先补齐候选商品和商家核对项。</small>
         </div>
       </div>
     `;
@@ -22200,7 +22163,7 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
         <div>
           <span>市场调研已保存</span>
           <strong>${escapeHtml(title)}</strong>
-          <small>${sourceCopy}正在恢复后端工作记录，恢复完成前不能导入 Listing。</small>
+          <small>${sourceCopy}正在恢复已保存的调研结果，恢复完成前不能导入 Listing。</small>
         </div>
       </div>
     `;
@@ -25152,7 +25115,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
         <div>
           <span>账号 AI</span>
           <strong>${merchantModelConfigured ? "账号 AI 已连接" : platformTrial.configured ? "可先试用，再连接账号自己的 AI" : "连接一次，当前账号下的店铺都能使用"}</strong>
-          <p>保存商家自己的 DeepSeek 或 OpenAI 连接后，AI CEO 对话、市场报告和 Listing 文案都优先使用它；不会消耗捷境试用额度。图片和视频仍由素材工坊生成并审核。</p>
+          <p>保存商家自己的 DeepSeek 或 OpenAI 连接后，AI CEO 对话、市场报告和上架文案都优先使用它；不会消耗捷境试用额度。图片和视频仍由素材工坊生成并审核。</p>
         </div>
       </div>
       <div class="saas-merchant-evidence-grid" data-ai-media-capability-grid="merchant_ai_media_capabilities_v1">
@@ -25233,8 +25196,8 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
               <small>选择服务商后自动填写，通常不需要改。</small>
             </label>
             <label>
-              <span>服务商连接信息</span>
-              <input id="saas-model-api-key" type="password" value="" placeholder="粘贴服务商提供的 API Key" autocomplete="off" spellcheck="false">
+              <span>服务商连接凭证</span>
+              <input id="saas-model-api-key" type="password" value="" placeholder="粘贴服务商提供的连接凭证" autocomplete="off" spellcheck="false">
               <small>只发送到捷境安全存储；保存后输入框立即清空。</small>
             </label>
           </div>
@@ -28327,7 +28290,7 @@ async function registerSaasBackendSession(button = null) {
     saveSaasSessionToStorage();
     clearSaasLoginPassword(card);
     await refreshSaasState({ silent: true });
-    showActionToast("捷境账号已创建。先完成身份向导，再连接 eBay 和模型 API。");
+    showActionToast("捷境账号已创建。先完成身份向导，再按需连接 eBay 和自己的 AI。");
     const activation = session.platform_trial_activation || {};
     showActionToast(
       activation.platform_trial_allowed === true
@@ -31013,8 +30976,8 @@ function handleSaasAction(button) {
     return;
   }
   if (action === "open-activity") {
-    setView("activity");
-    showActionToast("已打开 AI CEO 报告和工作记录。");
+    setView("cockpit");
+    showActionToast("相关结果已归入 AI CEO 对话和对应商品页面。");
     return;
   }
   if (action === "open-confirm") {
@@ -37786,25 +37749,29 @@ function renderSaasServiceTrace(records = saasServiceTraceRecords()) {
           <p>订单数据不等于买家消息；没有接入官方消息时保持空状态，也不会把 AI 草稿或演练记录标成已发送。</p>
         </div>
       </div>
-      <div class="saas-service-lane-grid" aria-label="客服消息五种状态">
-        ${states
-          .map(
-            (stateKey, index) => `
-              <article>
-                <span>${index + 1}</span>
-                <strong>${escapeHtml(saasServiceTraceStateLabel(stateKey))}</strong>
-                <p>${escapeHtml({
-                  buyer_message: "只代表从官方消息来源读取的买家原文。",
-                  ai_suggested: "AI 起草但商家尚未修改或确认。",
-                  merchant_edited: "商家已编辑，仍未代表已经发送。",
-                  sent: "只有平台返回成功证据才显示已发送。",
-                  simulated: "演练或模拟，不会形成真实买家承诺。",
-                }[stateKey])}</p>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
+      ${
+        items.length
+          ? `<div class="saas-service-lane-grid" aria-label="客服消息五种状态">
+              ${states
+                .map(
+                  (stateKey, index) => `
+                    <article>
+                      <span>${index + 1}</span>
+                      <strong>${escapeHtml(saasServiceTraceStateLabel(stateKey))}</strong>
+                      <p>${escapeHtml({
+                        buyer_message: "从官方消息来源读取的买家原文。",
+                        ai_suggested: "AI 已起草，等待商家核对。",
+                        merchant_edited: "商家已修改，尚未发送。",
+                        sent: "平台已返回发送成功证据。",
+                        simulated: "演练记录，没有真实发送。",
+                      }[stateKey])}</p>
+                    </article>
+                  `,
+                )
+                .join("")}
+            </div>`
+          : ""
+      }
       <div class="saas-activity-simple-grid">
         ${
           items.length
@@ -37866,7 +37833,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
         <div>
           <p class="eyebrow">客服与订单</p>
           <h2>今日客服与订单</h2>
-          <p class="section-note">买家消息、订单状态和回复草稿集中处理；退款、补偿、重发、地址修改和明确到货日会进入决策中心。</p>
+          <p class="section-note">买家消息、订单状态和回复草稿集中处理；退款、补偿、重发、地址修改和明确到货日会进入确认中心。</p>
         </div>
         <span class="pill ${hasOfficialBuyerMessages ? "green" : "amber"}">${hasOfficialBuyerMessages ? "有买家消息" : "没有官方消息"}</span>
       </header>
@@ -37875,7 +37842,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
         <div>
           <span>今日处理台</span>
           <strong>客服、物流和售后放在一页</strong>
-          <p>能从商品档案和订单状态回答的，AI 先整理成草稿；涉及钱、重发、地址修改、明确到货日和敏感承诺，直接停到决策中心。</p>
+          <p>能从商品档案和订单状态回答的，AI 先整理成草稿；涉及钱、重发、地址修改、明确到货日和敏感承诺，直接停到确认中心。</p>
         </div>
         <div class="saas-page-next-action">
           <b>${escapeHtml(serviceNextAction)}</b>
@@ -37883,45 +37850,6 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
         </div>
       </section>
       ${renderSaasModuleAiGoalStrip("service")}
-
-      <div class="saas-service-lane-grid" aria-label="客服与订单三件事">
-        <article class="${hasOfficialOrders ? "is-green" : "is-amber"}">
-          <span>1</span>
-          <strong>买家消息</strong>
-          <p>${hasOfficialBuyerMessages ? "已读取官方买家原消息，按时间和风险处理。" : "订单数据不等于买家消息；没有官方消息来源时保持空状态。"}</p>
-        </article>
-        <article class="${hasListings ? "is-green" : "is-amber"}">
-          <span>2</span>
-          <strong>订单状态</strong>
-          <p>${hasOfficialOrders ? escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "按订单状态核对 tracking、发货和退货")) : "等真实订单、tracking 和退货状态后再处理，不让 AI 猜物流。"}</p>
-        </article>
-        <article class="${pendingServiceConfirmations.length ? "is-amber" : "is-green"}">
-          <span>3</span>
-          <strong>回复边界</strong>
-          <p>普通问题可先起草；退款、补偿、重发、地址修改、明确到货日和敏感承诺进决策中心。</p>
-        </article>
-      </div>
-
-      ${renderSaasFirstRunAssuranceStrip(
-        [
-          {
-            label: "不造假",
-            title: "没有真实消息就保持安静",
-            copy: "客服页不把订单当消息，也不显示虚构买家、虚构订单或虚构物流。",
-          },
-          {
-            label: "按事实回复",
-            title: "只引用已知事实",
-            copy: "商品档案、订单状态和商家规则是回复依据。",
-          },
-          {
-            label: "承诺停住",
-            title: "敏感回复进决策中心",
-            copy: "退款、补偿、重发、地址修改和明确到货日都要确认。",
-          },
-        ],
-        "saas-service-first-run-strip",
-      )}
 
       <section class="saas-service-simple-workspace" aria-label="客服与订单工作区">
         <article class="${hasOfficialOrders ? "is-green" : "is-empty"}">
@@ -37937,7 +37865,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
         <article class="${pendingServiceConfirmations.length ? "is-amber" : "is-green"}">
           <span>确认事项</span>
           <strong>${pendingServiceConfirmations.length}</strong>
-          <p>退款、补偿、重发、地址修改、明确到货日和敏感承诺会进入决策中心。</p>
+          <p>退款、补偿、重发、地址修改、明确到货日和敏感承诺会进入确认中心。</p>
         </article>
       </section>
 
@@ -38600,6 +38528,18 @@ function saasAccountHealthSnapshot() {
   return state.saasAccountHealth && typeof state.saasAccountHealth === "object" ? state.saasAccountHealth : {};
 }
 
+function saasMerchantSafeSettingsText(value = "", fallback = "状态待更新") {
+  const text = publicRuntimeText(value)
+    .replace(/\bpacket\b/gi, "店铺资料")
+    .replace(/\bprovider\b/gi, "服务商")
+    .replace(/\bpreflight\b/gi, "发布体检")
+    .trim();
+  if (!text) return fallback;
+  return /\b(token|secret_ref|webhook|quota)\b|BYOK|API key|后台排查|后台证据/i.test(text)
+    ? fallback
+    : text;
+}
+
 function saasAccountHealthTone(health = saasAccountHealthSnapshot()) {
   const severity = String(health.severity || "").toLowerCase();
   const status = String(health.status || "").toLowerCase();
@@ -38759,7 +38699,7 @@ function renderSaasMerchantOnboardingPanel(options = {}) {
         <div class="saas-settings-card-head">
           <div>
             <span>eBay 起步向导</span>
-            <strong>${escapeHtml(model.stage_label || "正在读取账号下一步")}</strong>
+            <strong>${escapeHtml(saasMerchantSafeSettingsText(model.stage_label, "正在读取账号下一步"))}</strong>
           </div>
         </div>
         <div class="saas-backend-preflight-actions">
@@ -38781,8 +38721,8 @@ function renderSaasMerchantOnboardingPanel(options = {}) {
       <div class="saas-settings-card-head">
         <div>
           <span>eBay 起步向导</span>
-          <strong>${escapeHtml(model.stage_label || "正在读取账号下一步")}</strong>
-          <p>${escapeHtml(model.stage_summary || "捷境会根据当前连接和官方只读证据，只给你一个下一步。")}</p>
+          <strong>${escapeHtml(saasMerchantSafeSettingsText(model.stage_label, "正在读取账号下一步"))}</strong>
+          <p>${escapeHtml(saasMerchantSafeSettingsText(model.stage_summary, "捷境会根据当前连接和官方只读资料，只给你一个下一步。"))}</p>
         </div>
         <span class="pill ${model.connection_current ? "green" : "amber"}">${escapeHtml(connectionLabel)}</span>
       </div>
@@ -38844,8 +38784,8 @@ function renderSaasAccountHealthPanel() {
       <div class="saas-settings-card-head">
         <div>
           <span>账号健康</span>
-          <strong>${escapeHtml(health.label || "状态未知")}</strong>
-          <p>${escapeHtml(health.summary || "同步 eBay 店铺资料后，捷境会显示账号是否正常、受限、冻结、付款冻结或额度不足。")}</p>
+          <strong>${escapeHtml(saasMerchantSafeSettingsText(health.label, "状态未知"))}</strong>
+          <p>${escapeHtml(saasMerchantSafeSettingsText(health.summary, "同步 eBay 店铺资料后，捷境会显示账号是否正常、受限、冻结、付款冻结或额度不足。"))}</p>
         </div>
         <span class="pill ${tone}">${health.incident_mode ? "保护模式" : "可继续检查"}</span>
       </div>
@@ -38897,7 +38837,7 @@ function renderSaasAccountHealthPanel() {
           ? `<div class="saas-settings-resource-list">
               ${nextActions
                 .slice(0, 3)
-                .map((item, index) => `<article><span>下一步 ${index + 1}</span><strong>${escapeHtml(item)}</strong><small>所有真实写入仍需决策中心。</small></article>`)
+                .map((item, index) => `<article><span>下一步 ${index + 1}</span><strong>${escapeHtml(saasMerchantSafeSettingsText(item, "按页面提示完成账号检查与资料更新。"))}</strong><small>所有真实写入仍需确认中心。</small></article>`)
                 .join("")}
             </div>`
           : ""
@@ -38915,7 +38855,7 @@ function renderSaasSettingsStatusCards(ctx = saasMerchantWorkbenchContext()) {
   const cards = [
     ["登录", state.saasConnected ? "已恢复" : "未登录", state.saasConnected ? saasAccountDisplayName() : "账号密码登录"],
     ["eBay", saasStoreStatusLabel(connectionStatus || "not_connected"), saasStoreDisplayName(ctx.store, ctx.connection)],
-    ["账号健康", accountHealth.label || "状态未知", accountHealth.summary || "同步 eBay 账号快照后显示封禁、受限、付款冻结和额度风险"],
+    ["账号健康", saasMerchantSafeSettingsText(accountHealth.label, "状态未知"), saasMerchantSafeSettingsText(accountHealth.summary, "同步 eBay 账号状态后显示封禁、受限、付款冻结和额度风险")],
     ["店铺数据", ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 已读取` : "待读取", ctx.hasPacket ? "商品、订单、政策、费用等来源可追溯" : "连接 eBay 后读取店铺资料"],
     ["AI", modelReady ? "已连接" : "待保存", "页面不显示原始凭证"],
     ["待确认", String(pendingCount), "发布、付款、退款、广告、客服承诺"],
@@ -39017,8 +38957,8 @@ function saasCurrentStoreEbayRefreshProofView(ebayAuthorized = false) {
     ready,
     label: ready ? "eBay 连接已验证" : "验证 eBay 连接",
     detail: ready
-      ? "当前店铺的后台连接凭证已验证可用；不需要重新授权。"
-      : "仅由捷境后端安全检查连接凭证；不重新授权、不同步商品、不修改 eBay。",
+      ? "当前店铺的安全连接已验证可用；不需要重新授权。"
+      : "仅由捷境安全检查连接状态；不重新授权、不同步商品、不修改 eBay。",
   };
 }
 
@@ -39582,7 +39522,7 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
   `;
 }
 
-function saasSettingsOneGlanceRows(activeTabId = "general") {
+function saasSettingsOneGlanceRows(activeTabId = "account") {
   const domesticBilling = saasMerchantDomesticBillingState();
   const rowsByTab = {
     general: [
@@ -39613,18 +39553,18 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
     billing: [
       ["当前阶段", domesticBilling.online ? "微信扫码付款可用" : "试用模式，不自动扣费", domesticBilling.online ? "单次购买 30 天，到账后自动开通；不会自动续费。" : "在线付款开放前不会生成付款二维码。"],
       ["软件套餐", "¥0 / ¥99 / ¥199", "公开方案仅按免费体验、有店铺和多店铺选择；付费套餐单次购买 30 天。"],
-      ["模型与素材", "BYOK / 素材点", "商家模型由商家承担；图片和视频使用素材点，失败任务返还预占点数。"],
+      ["AI 与素材", "账号 AI / 素材点", "账号 AI 由商家自行连接；图片和视频使用素材点，失败任务返还预占点数。"],
     ],
   };
   return rowsByTab[activeTabId] || rowsByTab.general;
 }
 
-function renderSaasSettingsOneGlanceStrip(activeTabId = "general") {
+function renderSaasSettingsOneGlanceStrip(activeTabId = "account") {
   const rows = saasSettingsOneGlanceRows(activeTabId);
   return `
     <section class="saas-settings-one-glance" aria-label="本页重点">
       <div class="saas-settings-one-glance-head">
-        <span>本页重点</span>
+        <span>本页只看三件事</span>
         <strong>先看状态，再处理需要补齐的项目</strong>
       </div>
       <div class="saas-settings-one-glance-grid">
@@ -39888,8 +39828,8 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
           <h2>${escapeHtml(activeTab.title)}</h2>
           <p>${escapeHtml(activeTab.intro || "设置只处理连接、安全、来源、AI、权限和订阅安全。日常经营仍回到工作台。")}</p>
         </header>
-        ${renderSaasSettingsOneGlanceStrip(activeTab.id)}
-        ${renderSaasSettingsReadableMap(activeTab.id)}
+        ${activeTab.id === "account" ? renderSaasSettingsOneGlanceStrip(activeTab.id) : ""}
+        ${activeTab.id === "account" ? renderSaasSettingsReadableMap(activeTab.id) : ""}
         <div class="saas-settings-clean-panels">
           ${activeTab.panels.filter(Boolean).join("")}
         </div>
@@ -40748,13 +40688,13 @@ function renderSaasAiCeoWorkRecordsMarkup(records = []) {
   const normalized = normalizeSaasAiCeoWorkRecords(records);
   if (!normalized.length) return "";
   return `
-    <div class="saas-ai-ceo-work-record-list" aria-label="AI CEO 工作记录">
+    <div class="saas-ai-ceo-work-record-list" aria-label="相关业务结果">
       ${normalized
         .map(
           (record) => `
             <article>
               <span>${escapeHtml(record.status || "已记录")}</span>
-              <strong>${escapeHtml(record.title || "AI CEO 工作记录")}</strong>
+              <strong>${escapeHtml(record.title || "相关业务结果")}</strong>
               ${record.summary ? `<small>${escapeHtml(record.summary)}</small>` : ""}
               <em>${escapeHtml(record.source_record_count ? `已关联 ${record.source_record_count} 条来源` : "等待更多来源")}</em>
             </article>
@@ -40818,7 +40758,7 @@ function saasAiCeoTurnOperatingRows(latest = {}) {
     ["计划", route === "ebay_workflow" ? "拆到调研、Listing、素材、利润、客服、确认和复盘" : route === "confirmation_required" ? "生成确认项，等待你批准后再执行" : route === "external_realtime" ? "先查来源，再给结论" : "先给结论，需要时转经营任务"],
     ["来源", sourceText],
     ["风险", route === "external_realtime" && !sourceCount ? "没有来源不编实时数据" : route === "confirmation_required" ? "真实发布、改价、库存、退款、广告、政策或敏感承诺必须确认" : "按来源可信度标记缺口"],
-    ["工作记录", workCount ? `已写入 ${workCount} 条` : "普通对话不写工作记录"],
+    ["相关结果", workCount ? `已关联 ${workCount} 条业务结果` : "普通对话不生成业务结果"],
     ["待确认动作", latest.decision_center_required || route === "confirmation_required" ? "已进入决策中心" : confirmationCount ? "真实动作前再确认" : "当前无高风险执行"],
     ["执行结果", latest.pending ? "正在处理" : `${statusLabel} / ${memoryText}`],
   ];
@@ -41615,14 +41555,14 @@ function bindEvents() {
     const settingsTabButton = event.target.closest("[data-saas-settings-tab]");
     if (settingsTabButton) {
       event.preventDefault();
-      state.saasSettingsTab = settingsTabButton.dataset.saasSettingsTab || "general";
+      state.saasSettingsTab = settingsTabButton.dataset.saasSettingsTab || "account";
       renderSaasConnectCenter(document.querySelector("#view-connect"));
       return;
     }
     const settingsMapButton = event.target.closest("[data-saas-settings-map-tab]");
     if (settingsMapButton) {
       event.preventDefault();
-      state.saasSettingsTab = settingsMapButton.dataset.saasSettingsMapTab || "general";
+      state.saasSettingsTab = settingsMapButton.dataset.saasSettingsMapTab || "account";
       renderSaasConnectCenter(document.querySelector("#view-connect"));
       return;
     }
@@ -41865,16 +41805,12 @@ function bindEvents() {
     const button = event.target.closest(".nav-item");
     if (button) {
       setView(button.dataset.view);
-      const active = document.querySelector(`#view-${button.dataset.view}`);
-      showActionToast(`已打开：${active?.dataset.title || button.textContent.trim()}`);
     }
   });
 
   document.querySelectorAll("[data-open-view]").forEach((button) => {
     button.addEventListener("click", () => {
       setView(button.dataset.openView);
-      const target = document.querySelector(`#view-${button.dataset.openView}`);
-      showActionToast(`已打开：${target?.dataset.title || "目标页面"}`);
     });
   });
 
@@ -41911,14 +41847,14 @@ function bindEvents() {
     const settingsTabButton = event.target.closest("[data-saas-settings-tab]");
     if (settingsTabButton) {
       event.preventDefault();
-      state.saasSettingsTab = settingsTabButton.dataset.saasSettingsTab || "general";
+      state.saasSettingsTab = settingsTabButton.dataset.saasSettingsTab || "account";
       renderSaasConnectCenter(document.querySelector("#view-connect"));
       return;
     }
     const settingsMapButton = event.target.closest("[data-saas-settings-map-tab]");
     if (settingsMapButton) {
       event.preventDefault();
-      state.saasSettingsTab = settingsMapButton.dataset.saasSettingsMapTab || "general";
+      state.saasSettingsTab = settingsMapButton.dataset.saasSettingsMapTab || "account";
       renderSaasConnectCenter(document.querySelector("#view-connect"));
       return;
     }

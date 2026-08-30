@@ -369,7 +369,7 @@ async function runSmoke() {
   await page.waitForSelector('#view-product.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 60000 });
 
   const viewResults = {};
-  for (const view of ["product", "media", "confirm", "activity", "cockpit"]) {
+  for (const view of ["product", "media", "confirm", "cockpit"]) {
     await page.evaluate((nextView) => setView(nextView), view);
     await page.waitForSelector(`#view-${view}.is-active [data-merchant-project-status="merchant_project_status_v1"]`, { timeout: 20000 });
     viewResults[view] = await page.evaluate(
@@ -392,33 +392,14 @@ async function runSmoke() {
       { view, projectId, expectedStage: expectedSnapshot.current_stage },
     );
   }
-  await page.evaluate(() => setView("activity"));
-  await page.waitForSelector(
-    '#view-activity.is-active [data-work-record-index="merchant_project_work_record_index_v1"]',
-    { timeout: 20000 },
-  );
-  await page.waitForFunction(
-    ({ taskId, reportId }) => {
-      const root = document.querySelector('[data-work-record-index="merchant_project_work_record_index_v1"]');
-      const rows = Array.from(root?.querySelectorAll("[data-work-record-id]") || []);
-      const routeFor = (recordId) =>
-        rows.find((row) => row.getAttribute("data-work-record-id") === recordId)
-          ?.querySelector("[data-global-flow-view]")
-          ?.getAttribute("data-global-flow-view") || "";
-      return routeFor(taskId) === "activity" && routeFor(reportId) === "product";
-    },
-    { taskId: savedFacts.task?.task_id || "", reportId: savedFacts.report?.report_id || "" },
-    { timeout: 20000 },
-  );
-  const workRecordUi = await page.evaluate(() => {
-    const root = document.querySelector('[data-work-record-index="merchant_project_work_record_index_v1"]');
+  const legacyActivityRoute = await page.evaluate(() => {
+    setView("activity");
+    const url = new URL(window.location.href);
     return {
-      present: Boolean(root),
-      rows: Array.from(root?.querySelectorAll("[data-work-record-id]") || []).map((row) => ({
-        id: row.getAttribute("data-work-record-id") || "",
-        text: row.textContent || "",
-        target: row.querySelector("[data-global-flow-view]")?.getAttribute("data-global-flow-view") || "",
-      })),
+      current_view: state.view,
+      route_view: url.searchParams.get("view") || "",
+      activity_active: document.querySelector("#view-activity")?.classList.contains("is-active") === true,
+      activity_nav_count: document.querySelectorAll('.nav-item[data-view="activity"]').length,
     };
   });
   await page.evaluate(() => setView("service"));
@@ -433,7 +414,7 @@ async function runSmoke() {
         item.textContent.trim(),
       );
       return (
-        ["买家原消息", "AI 建议", "商家已修改", "已发送", "演练记录"].every((label) => labels.includes(label)) &&
+        labels.length === 0 &&
         root?.textContent?.includes("当前没有买家消息或回复记录") === true &&
         root?.textContent?.includes("订单数据不等于买家消息") === true
       );
@@ -484,7 +465,7 @@ async function runSmoke() {
     { name: "mobile", width: 390, height: 844 },
   ]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    for (const view of ["product", "confirm", "activity"]) {
+    for (const view of ["product", "confirm", "cockpit"]) {
       await page.evaluate((nextView) => setView(nextView), view);
       await page.waitForSelector(`#view-${view}.is-active [data-merchant-project-status="merchant_project_status_v1"]`, {
         timeout: 20000,
@@ -536,14 +517,15 @@ async function runSmoke() {
     afterReload.snapshot_match &&
     afterReload.view_match &&
     statusRequests.some((item) => item.status === 200 && item.url.includes(encodeURIComponent(projectId))) &&
-    workRecordUi.present &&
-    workRecordUi.rows.some((item) => item.id === savedFacts.task?.task_id && item.target === "activity") &&
-    workRecordUi.rows.some((item) => item.id === savedFacts.report?.report_id && item.target === "product") &&
+    legacyActivityRoute.current_view === "cockpit" &&
+    legacyActivityRoute.route_view === "cockpit" &&
+    legacyActivityRoute.activity_active === false &&
+    legacyActivityRoute.activity_nav_count === 0 &&
     serviceTraceUi.present &&
     serviceTraceUi.record_count === 0 &&
     serviceTraceUi.empty_state &&
     serviceTraceUi.honest_order_boundary &&
-    ["买家原消息", "AI 建议", "商家已修改", "已发送", "演练记录"].every((label) => serviceTraceUi.state_labels.includes(label)) &&
+    serviceTraceUi.state_labels.length === 0 &&
     pageErrors.length === 0 &&
     badResponses.length === 0;
   const failedChecks = Object.entries({
@@ -554,15 +536,14 @@ async function runSmoke() {
     reload_project_snapshot: afterReload.snapshot_match,
     reload_view_route: afterReload.view_match,
     project_status_200: statusRequests.some((item) => item.status === 200 && item.url.includes(encodeURIComponent(projectId))),
-    work_record_root: workRecordUi.present,
-    work_record_task_route: workRecordUi.rows.some((item) => item.id === savedFacts.task?.task_id && item.target === "activity"),
-    work_record_report_route: workRecordUi.rows.some((item) => item.id === savedFacts.report?.report_id && item.target === "product"),
+    legacy_activity_routes_to_cockpit:
+      legacyActivityRoute.current_view === "cockpit" && legacyActivityRoute.route_view === "cockpit",
+    legacy_activity_hidden:
+      legacyActivityRoute.activity_active === false && legacyActivityRoute.activity_nav_count === 0,
     service_trace_root: serviceTraceUi.present,
     service_trace_empty: serviceTraceUi.record_count === 0 && serviceTraceUi.empty_state,
     service_trace_order_boundary: serviceTraceUi.honest_order_boundary,
-    service_trace_state_labels: ["买家原消息", "AI 建议", "商家已修改", "已发送", "演练记录"].every((label) =>
-      serviceTraceUi.state_labels.includes(label),
-    ),
+    service_trace_empty_labels_suppressed: serviceTraceUi.state_labels.length === 0,
     page_errors: pageErrors.length === 0,
     bad_responses: badResponses.length === 0,
   })
@@ -577,7 +558,7 @@ async function runSmoke() {
     initial_diagnostic: initialDiagnostic,
     view_results: viewResults,
     after_reload: afterReload,
-    work_record_ui: workRecordUi,
+    legacy_activity_route: legacyActivityRoute,
     service_trace_ui: serviceTraceUi,
     responsive_results: responsiveResults,
     status_requests: statusRequests,

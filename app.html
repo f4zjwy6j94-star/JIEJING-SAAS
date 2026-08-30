@@ -119,7 +119,7 @@
       }
     </style>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css?v=20260828-simulation-facts-4341ec2ab849" />
+    <link rel="stylesheet" href="./styles.css?v=20260830-premium-workbench-4b42df424b8c" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -231,7 +231,7 @@
       }
 
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream > .message:first-child {
-        margin-top: auto;
+        margin-top: 0;
       }
 
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock {
@@ -253,7 +253,7 @@
 
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer {
         display: grid;
-        grid-template-columns: minmax(180px, 1fr) auto;
+        grid-template-columns: auto minmax(0, 1fr) auto;
         width: 100%;
       }
 
@@ -556,7 +556,7 @@
       </main>
     </div>
 
-    <div class="app-shell is-hidden" id="appShell">
+    <div class="app-shell is-hidden" id="appShell" data-ui-generation="premium-merchant-workbench-v1">
       <aside class="sidebar" aria-label="主导航">
         <button class="brand app-home-link" type="button" data-saas-action="open-public-home" aria-label="返回捷境官网主页">
           <span class="brand-mark" aria-hidden="true"></span>
@@ -571,29 +571,21 @@
             <span class="nav-icon">⌂</span>
             <span>AI CEO</span>
           </button>
-          <button class="nav-item" data-view="product" data-mobile-label="Listing">
+          <button class="nav-item" data-view="product" data-mobile-label="上架">
             <span class="nav-icon">▤</span>
-            <span>Listing</span>
-          </button>
-          <button class="nav-item" data-view="bulk" data-mobile-label="批量">
-            <span class="nav-icon">▥</span>
-            <span>批量铺货</span>
+            <span>选品与上架</span>
           </button>
           <button class="nav-item" data-view="media" data-mobile-label="素材">
             <span class="nav-icon">▧</span>
             <span>素材工坊</span>
           </button>
-          <button class="nav-item" data-view="confirm" data-mobile-label="决策">
+          <button class="nav-item" data-view="confirm" data-mobile-label="确认">
             <span class="nav-icon">✓</span>
-            <span>决策中心</span>
+            <span>确认中心</span>
           </button>
           <button class="nav-item" data-view="service" data-mobile-label="客服">
             <span class="nav-icon">✎</span>
             <span>客服与订单</span>
-          </button>
-          <button class="nav-item" data-view="activity" data-mobile-label="记录">
-            <span class="nav-icon">≡</span>
-            <span>运行记录</span>
           </button>
           <button class="nav-item" data-view="connect" data-mobile-label="设置">
             <span class="nav-icon">◌</span>
@@ -621,7 +613,7 @@
 
         <div class="sidebar-footer">
           <span class="status-dot"></span>
-          <span>产品模式 · 真实状态</span>
+          <span>关键动作需确认</span>
         </div>
       </aside>
 
@@ -1642,7 +1634,7 @@
                 </div>
                 <div class="button-row">
                   <button class="primary-action" type="button" id="workflowPrimaryAction">处理当前卡点</button>
-                  <button class="secondary-action" type="button" data-open-view="activity">查看 AI 工作汇报</button>
+                  <button class="secondary-action" type="button" data-open-view="product">查看当前商品</button>
                 </div>
               </aside>
             </div>
@@ -2199,17 +2191,17 @@
           </section>
         </section>
 
-        <section class="view" id="view-activity" data-title="AI 汇报">
+        <section class="view" id="view-activity" data-title="AI 工作记录" data-internal-view="legacy-report-center" hidden aria-hidden="true">
           <section class="panel full">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">AI 汇报中心</p>
-                <h2>每个商品、每个批次，都沉淀成可追溯的经营档案</h2>
-                <p class="section-note">首页的市场判断、产品刊登、素材工坊、批量铺货和客服处理都会回到这里。页面会展示结论、依据、缺口、下一步和需要确认的边界。</p>
+                <p class="eyebrow">AI 工作记录</p>
+                <h2>每次 AI 处理，都留下可核对的经营记录</h2>
+                <p class="section-note">AI CEO、选品与上架、素材工坊、批量铺货、客服和确认动作都会回到这里。你可以查看结论、依据、资料缺口、下一步和需要确认的事项。</p>
               </div>
               <div class="topbar-actions">
                 <span class="pill neutral" id="activityProjectPill">当前项目</span>
-                <button class="primary-action" id="exportAllPdf">导出本项目汇报</button>
+                <button class="primary-action" id="exportAllPdf">导出本项目记录</button>
               </div>
             </div>
 
@@ -2217,14 +2209,14 @@
 
             <section class="readiness-score-board" id="readinessScoreBoard" aria-label="AI CEO 经营价值核对"></section>
 
-            <section class="activity-command-board" aria-label="AI 汇报总览">
+            <section class="activity-command-board" aria-label="AI 工作记录总览">
               <article class="activity-command-main">
-                <span>汇报链路</span>
-                <strong>从市场判断到发布前确认，所有关键输出集中阅读</strong>
+                <span>工作链路</span>
+                <strong>从市场判断到发布前确认，关键处理结果集中查看</strong>
                 <p>左侧选择商品或批次，再按流程看报告；右侧直接预览完整文字。PDF 只是留档动作，不是查看报告的入口。</p>
               </article>
               <article>
-                <span>当前项目汇报</span>
+                <span>当前项目记录</span>
                 <strong id="activityTotalCount">0</strong>
                 <p>市场、刊登、素材、风控、客服等输出</p>
               </article>
@@ -2242,9 +2234,9 @@
 
             <section class="activity-archive-card" id="activityArchiveCard" aria-label="当前项目档案"></section>
 
-            <section class="activity-flow-strip" aria-label="AI 汇报来源">
-              <article><span>01</span><strong>首页</strong><p>市场经理报告、机会判断、批量入口。</p></article>
-              <article><span>02</span><strong>产品刊登</strong><p>eBay 字段、政策、价格、待补资料。</p></article>
+            <section class="activity-flow-strip" aria-label="AI 工作记录来源">
+              <article><span>01</span><strong>AI CEO</strong><p>市场判断、机会分析和经营建议。</p></article>
+              <article><span>02</span><strong>选品与上架</strong><p>eBay 字段、政策、价格和待补资料。</p></article>
               <article><span>03</span><strong>素材工坊</strong><p>主图、场景图、详情页、视频脚本。</p></article>
               <article><span>04</span><strong>批量铺货</strong><p>候选分流、草稿接力、拦截原因。</p></article>
               <article><span>05</span><strong>确认/客服</strong><p>高风险动作、客服边界和处理记录。</p></article>
@@ -2272,7 +2264,7 @@
                 <section class="activity-list-panel">
                   <div class="activity-panel-head">
                     <span>汇报列表</span>
-                    <strong id="activityListTitle">全部汇报</strong>
+                    <strong id="activityListTitle">全部记录</strong>
                   </div>
                   <div class="activity-list" id="activityList"></div>
                 </section>
@@ -2280,8 +2272,8 @@
               <aside class="activity-preview-panel" aria-label="工作记录预览">
                 <div class="activity-preview-head">
                   <div>
-                    <p class="eyebrow" id="activityPreviewRole">AI 汇报预览</p>
-                    <h3 id="activityPreviewTitle">选择一条 AI 汇报</h3>
+                    <p class="eyebrow" id="activityPreviewRole">AI 工作记录预览</p>
+                    <h3 id="activityPreviewTitle">选择一条工作记录</h3>
                   </div>
                   <span class="pill neutral" id="activityPreviewStatus">预览</span>
                 </div>
@@ -2997,7 +2989,7 @@
             document.documentElement.classList.remove("app-ready");
             return;
           }
-          const allowedViews = new Set(["cockpit", "workflow", "product", "media", "bulk", "activity", "confirm", "service", "connect"]);
+          const allowedViews = new Set(["cockpit", "workflow", "product", "media", "bulk", "confirm", "service", "connect"]);
           const viewAliases = {
             ai: "cockpit",
             "ai-ceo": "cockpit",
@@ -3048,6 +3040,6 @@
       })();
     </script>
     <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
-    <script src="./app.js?v=20260829-merchant-record-status-37cd2afd042d"></script>
+    <script src="./app.js?v=20260830-premium-workbench-32aa745b5c9a"></script>
 </body>
 </html>

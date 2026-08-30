@@ -35,6 +35,8 @@ CHECKS: list[tuple[str, list[str]]] = [
         [sys.executable, "tools/test_jiejing_phase2_response_boundary_hardening.py"],
     ),
     ("frontend_staging_config", [sys.executable, "tools/test_jiejing_frontend_staging_config.py"]),
+    ("workbench_contract_freeze", [sys.executable, "tools/test_jiejing_workbench_contract_freeze.py"]),
+    ("workflow_closure_ui", [sys.executable, "tools/test_jiejing_workflow_closure_ui.py"]),
     ("frontend_wechat_zero_charge_rehearsal", [sys.executable, "tools/test_jiejing_frontend_wechat_zero_charge_rehearsal.py"]),
     ("frontend_read_only_oauth_confirmation", [sys.executable, "tools/test_jiejing_frontend_oauth_confirmation_flow.py"]),
     ("ebay_current_store_refresh_proof", [sys.executable, "tools/test_jiejing_ebay_refresh_proof_ui.py"]),

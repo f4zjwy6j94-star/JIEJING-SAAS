@@ -44,10 +44,23 @@ def main() -> int:
     app_js_asset_version = app_html_app_versions[0]
     frontend_asset_version = app_html_style_versions[0]
     app_js_digest = hashlib.sha256(app_js.encode("utf-8")).hexdigest()[:12]
+    styles_digest = hashlib.sha256(styles_css.encode("utf-8")).hexdigest()[:12]
     if not app_js_asset_version.endswith(app_js_digest):
         return fail(
             "workbench app.js cache version must end with the current app.js sha256 prefix "
             f"{app_js_digest}; update both entry files whenever app.js changes"
+        )
+    if not frontend_asset_version.endswith(styles_digest):
+        return fail(
+            "workbench styles.css cache version must end with the current styles.css sha256 prefix "
+            f"{styles_digest}; update both entry files whenever styles.css changes"
+        )
+    app_release_family = app_js_asset_version[: -len(app_js_digest)].rstrip("-._")
+    style_release_family = frontend_asset_version[: -len(styles_digest)].rstrip("-._")
+    if app_release_family != style_release_family:
+        return fail(
+            "app.js and styles.css must share one atomic frontend release family: "
+            f"{app_release_family!r} != {style_release_family!r}"
         )
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",

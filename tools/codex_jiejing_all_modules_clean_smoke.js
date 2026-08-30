@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* ASCII-only staging UI smoke for Jiejing's seven merchant modules. */
+/* ASCII-only staging UI smoke for Jiejing's merchant workbench. */
 
 const fs = require("fs");
 const path = require("path");
@@ -313,11 +313,22 @@ async function main() {
     }
   });
   page.on("response", (response) => {
-    if (response.url().startsWith(base) && response.status() >= 400 && response.status() < 500) {
-      clientResponses.push({ url: response.url(), status: response.status() });
+    const responseUrl = response.url();
+    const status = response.status();
+    const isExpectedLocalModelUnavailable =
+      Boolean(localStaticRoot) &&
+      status === 503 &&
+      responseUrl.startsWith(base) &&
+      responseUrl.includes("/merchant-ceo/chat?stream=1");
+    if (isExpectedLocalModelUnavailable) {
+      ignoredRequestFailures.push({ url: responseUrl, status, resourceType: "fetch", reason: "local_model_not_configured" });
+      return;
     }
-    if (response.url().startsWith(base) && response.status() >= 500) {
-      badResponses.push({ url: response.url(), status: response.status() });
+    if (responseUrl.startsWith(base) && status >= 400 && status < 500) {
+      clientResponses.push({ url: responseUrl, status });
+    }
+    if (responseUrl.startsWith(base) && status >= 500) {
+      badResponses.push({ url: responseUrl, status });
     }
   });
 
@@ -391,20 +402,20 @@ async function main() {
       handoff_does_not_trigger_real_write: handoff?.getAttribute("data-does-not-trigger-real-write") === "true",
       has_first_day_path: Boolean(firstDayPath && firstDayPath.offsetParent !== null),
       first_day_path_step_count: firstDayPath?.querySelectorAll("article").length || 0,
-      has_first_day_path_copy: text.includes("说目标") && text.includes("看判断") && text.includes("再确认"),
+      has_first_day_path_copy: text.includes("提交资料") && text.includes("核对草稿") && text.includes("决定下一步"),
       has_one_task_focus: Boolean(oneTaskFocus && oneTaskFocus.offsetParent !== null),
       one_task_focus_card_count: oneTaskFocus?.querySelectorAll(".saas-ai-ceo-one-task-option").length || 0,
       one_task_focus_prompt_count: oneTaskFocus?.querySelectorAll(".saas-ai-ceo-one-task-option[data-ceo-prompt]").length || 0,
       has_one_task_focus_copy:
-        text.includes("现在只做一件事") &&
-        text.includes("把手上的商品、链接、图片或订单问题发给 AI CEO") &&
-        text.includes("有商品想上架") &&
-        text.includes("只有图片或链接") &&
-        text.includes("不知道下一步"),
+        text.includes("默认空白工作台") &&
+        text.includes("先提交自己的商品资料") &&
+        text.includes("上传商品图片") &&
+        text.includes("粘贴货源链接") &&
+        text.includes("输入文字说明"),
       has_first_run_handoff_copy:
-        text.includes("直接说经营目标，不用先找功能") &&
-        text.includes("点一句只会填入输入框") &&
-        text.includes("我还没接 eBay，先用资料跑草稿"),
+        text.includes("上传第一份商品资料") &&
+        text.includes("捷境先生成草稿和资料缺口") &&
+        text.includes("没有完成店铺连接和正式收款前"),
       first_run_handoff_action_count: root?.querySelectorAll(".saas-ai-ceo-first-run-actions [data-ceo-prompt]").length || 0,
       has_starter_prompts: Boolean(starterPrompts && getComputedStyle(starterPrompts).display !== "none"),
       has_route_card: Boolean(routeCard && routeCard.offsetParent !== null),
@@ -450,21 +461,42 @@ async function main() {
   const ceoRouteTask = await page.evaluate(() => {
     const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
     const button = card?.querySelector("[data-global-flow-view]");
+    const cardRect = card?.getBoundingClientRect();
+    const chatRect = document.querySelector("#view-cockpit #ceoChat")?.getBoundingClientRect();
+    const composerRect = document.querySelector("#view-cockpit #ceoForm")?.getBoundingClientRect();
+    const attachmentRect = document.querySelector("#view-cockpit #ceoAttachmentButton")?.getBoundingClientRect();
+    const inputRect = document.querySelector("#view-cockpit #ceoInput")?.getBoundingClientRect();
+    const sendRect = document.querySelector('#view-cockpit #ceoForm button[type="submit"]')?.getBoundingClientRect();
+    const firstMessageRect = document.querySelector("#view-cockpit #ceoChat .message")?.getBoundingClientRect();
+    const feedbackRect = document.querySelector("#workflowFeedbackToggle")?.getBoundingClientRect();
+    const firstUserRect = document.querySelector("#view-cockpit #ceoChat .message.user")?.getBoundingClientRect();
+    const overlaps = (left, right) => Boolean(
+      left && right && left.width > 0 && right.width > 0 &&
+      left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top
+    );
     return {
       visible: Boolean(card && card.offsetParent !== null),
       text: card?.innerText || "",
       target: button?.getAttribute("data-global-flow-view") || "",
       button: button?.innerText || "",
       has_v2_marker: card?.getAttribute("data-ai-ceo-route-task-card") === "ai_ceo_route_task_card_v2",
-      has_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 3,
-      has_simple_copy:
-        (card?.innerText || "").includes("我理解") &&
-        (card?.innerText || "").includes("推荐去") &&
-        (card?.innerText || "").includes("安全边界"),
+      has_no_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 0,
+      has_simple_copy: (card?.innerText || "").includes("建议下一步"),
       has_next_step_copy:
-        (card?.innerText || "").includes("下一步建议") &&
-        (card?.innerText || "").includes("不会自动执行真实动作") &&
-        (card?.innerText || "").includes("点按钮后只打开对应工作台继续整理"),
+        (card?.innerText || "").includes("建议下一步") &&
+        (card?.innerText || "").includes("不会自动执行真实动作"),
+      card_height: Math.round(cardRect?.height || 0),
+      chat_height: Math.round(chatRect?.height || 0),
+      composer_width: Math.round(composerRect?.width || 0),
+      composer_input_width: Math.round(inputRect?.width || 0),
+      composer_single_row: Boolean(
+        attachmentRect && inputRect && sendRect &&
+        Math.abs(attachmentRect.top - inputRect.top) <= 10 &&
+        Math.abs(sendRect.top - inputRect.top) <= 10
+      ),
+      first_message_offset_top: Math.round((firstMessageRect?.top || 0) - (chatRect?.top || 0)),
+      feedback_overlaps_first_user: overlaps(feedbackRect, firstUserRect),
+      viewport_width: window.innerWidth,
       has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(card?.innerText || ""),
     };
   });
@@ -479,6 +511,7 @@ async function main() {
   }
 
   const routeScenarioDefs = [
+    { label: "legacy-product-title", text: "继续当前复古黄铜书签（做旧工艺）商品项目，补齐 Listing 草稿", target: "product" },
     { label: "bulk", text: "帮我批量筛 10 个 eBay 热销小商品", target: "bulk" },
     {
       label: "research-evidence-followup",
@@ -504,14 +537,11 @@ async function main() {
         visible: Boolean(card && card.offsetParent !== null),
         target: button?.getAttribute("data-global-flow-view") || "",
         has_v2_marker: card?.getAttribute("data-ai-ceo-route-task-card") === "ai_ceo_route_task_card_v2",
-        has_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 3,
-        has_simple_copy: text.includes("我理解") && text.includes("推荐去") && text.includes("安全边界"),
+        has_no_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 0,
+        has_simple_copy: text.includes("建议下一步"),
         has_next_step_copy:
-          text.includes("下一步建议") &&
-          text.includes("不会自动执行真实动作") &&
-          (scenario.target === "confirm"
-            ? text.includes("点按钮后只进入决策中心")
-            : text.includes("点按钮后只打开对应工作台继续整理")),
+          text.includes("建议下一步") && text.includes("不会自动执行真实动作"),
+        card_height: Math.round(card?.getBoundingClientRect().height || 0),
         has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(text),
         text: text.slice(0, 240),
       };
@@ -569,7 +599,11 @@ async function main() {
   ];
   const moduleChecks = [];
   for (const [view, id] of modules) {
-    await page.locator(`.nav-item[data-view="${view}"]`).click();
+    if (view === "bulk") {
+      await page.locator('#view-product.is-active .saas-listing-composer-boundary [data-global-flow-view="bulk"]').click();
+    } else {
+      await page.locator(`.nav-item[data-view="${view}"]`).click();
+    }
     await waitForWorkbenchReady(page, id);
     await page.waitForTimeout(900);
     if (view === "product") {
@@ -631,6 +665,18 @@ async function main() {
           document_scroll_width: document.documentElement.scrollWidth,
           viewport_width: viewportWidth,
           clipped_control_count: clippedControls.length,
+          clipped_controls: clippedControls.map((control) => {
+            const rect = control.getBoundingClientRect();
+            return {
+              tag: control.tagName.toLowerCase(),
+              id: control.id || "",
+              class_name: String(control.className || ""),
+              action: control.getAttribute("data-action") || control.getAttribute("data-saas-action") || "",
+              left: Math.round(rect.left),
+              right: Math.round(rect.right),
+              width: Math.round(rect.width),
+            };
+          }),
           has_listing_simple_head: Boolean(document.querySelector(".saas-listing-simple-head")),
           has_listing_products: Boolean(document.querySelector(".saas-listing-simple-products")),
           has_listing_cplus_stack: sectionHas(".saas-listing-cplus-stack"),
@@ -690,7 +736,7 @@ async function main() {
           has_settings_home_hub: sectionHas(".saas-settings-home-hub"),
           settings_home_status_count: sectionCount(".saas-settings-home-status article"),
           has_settings_simple_copy: text.includes("5 项设置，集中管理") && text.includes("什么时候需要打开设置"),
-          has_settings_one_glance: sectionHas(".saas-settings-one-glance") && text.includes("本页重点"),
+          has_settings_one_glance: sectionHas(".saas-settings-one-glance") && text.includes("本页只看三件事"),
           settings_one_glance_count: sectionCount(".saas-settings-one-glance-grid article"),
           has_media_tabs: Boolean(document.querySelector("#mediaProjectTabs, .media-project-tabs, [data-media-project-tab]")),
           has_media_simple_headline: text.includes("把商品图变成可用素材包"),
@@ -706,9 +752,19 @@ async function main() {
           has_media_asset_jobs_panel:
             sectionHas(".saas-media-asset-jobs") &&
             text.includes("素材任务记录") &&
-            text.includes("AssetManifest") &&
+            (text.includes("还没有真实素材任务记录") || sectionHas(".saas-media-asset-list")) &&
             text.includes("不会把旧测试图当成真实生成结果"),
+          has_media_empty_state: section?.dataset?.mediaEmpty === "true",
+          media_empty_flow_is_compact:
+            section?.dataset?.mediaEmpty !== "true" ||
+            (getComputedStyle(section.querySelector(".media-workbench")).display === "none" &&
+              getComputedStyle(section.querySelector(".media-pipeline")).display === "none"),
           has_media_internal_copy: /官方数据包|Listing Package|数据包可用|等待数据包|确认记录|费用和用量|素材状态拆分|Provider Hub|素材 Provider|素材 brief|后台证据|后台状态|素材清单已回写|流程导入不需要本机路径/.test(text),
+          has_activity_work_record_copy:
+            text.includes("工作记录") &&
+            (text.includes("执行记录") || text.includes("完整工作留痕")) &&
+            text.includes("不显示本地样例商品"),
+          has_activity_internal_copy: /项目完成度|开发进度|版本进度|内部门禁|Hermes|调试信息|后台证据/.test(text),
           has_bulk_simple_headline: text.includes("先小批量筛，不一键乱铺"),
           has_bulk_import_preview: sectionHas(".bulk-manual-source-intake") && text.includes("预览导入"),
           has_bulk_grouping_copy: text.includes("能试") && text.includes("要补") && text.includes("先不做"),
@@ -720,29 +776,27 @@ async function main() {
             text.includes("当前没有待处理订单") &&
             text.includes("没有真实订单时不显示虚构买家"),
           has_service_first_run_strip:
-            sectionHas(".saas-service-first-run-strip") && text.includes("没有订单就保持安静") && text.includes("只引用已知事实"),
+            (sectionHas(".saas-service-first-run-strip") && text.includes("没有真实消息就保持安静") && text.includes("只引用已知事实")) ||
+            (sectionHas(".saas-service-simple-workspace") && sectionHas(".saas-service-trace .is-empty") && text.includes("只引用商品档案")),
           has_service_internal_copy: /官方数据包|Listing Package|等待官方订单|等待官方同步|官方数据可用|客服事实表|Provider Hub|provider|后台排查|后台状态|连接和排查在设置|去设置同步 eBay/.test(text),
           has_confirm_simple_headline: text.includes("只让你处理真正要拍板的事"),
           has_confirm_simple_action_copy: text.includes("这里只做三种选择"),
           has_confirm_decision_v2:
-            sectionHas(".saas-confirm-action-model") &&
-            text.includes("你没点头前不会执行") &&
-            (sectionHas(".runtime-confirm-empty") ||
-              (text.includes("点同意后") &&
+            (sectionHas(".runtime-confirm-empty") && text.includes("现在没有需要你拍板的事")) ||
+            (text.includes("你没点头前不会执行") &&
+              sectionHas(".saas-confirm-action-model") &&
+                text.includes("点同意后") &&
                 text.includes("不会自动付款") &&
                 sectionHas(".saas-confirm-card-decision") &&
                 sectionHas(".saas-confirm-safety-detail") &&
-                sectionHas(".saas-confirm-merchant-brief"))),
+                sectionHas(".saas-confirm-merchant-brief")),
           has_confirm_internal_copy: /高级细节|上线检查|后台|运维|preflight|packet|provider/.test(text),
           has_chat_reply: Boolean(document.querySelector("#view-cockpit #ceoChat .message.ai")),
           has_chat_stream: Boolean(document.querySelector("#view-cockpit #ceoChat")),
           has_ceo_route_task_card: Boolean(document.querySelector("#view-cockpit .saas-ceo-routing-task-card")),
           ceo_route_task_target: document.querySelector("#view-cockpit .saas-ceo-routing-task-card [data-global-flow-view]")?.getAttribute("data-global-flow-view") || "",
           ceo_route_task_copy:
-            text.includes("AI CEO 已接住") &&
-            text.includes("我理解") &&
-            text.includes("推荐去") &&
-            text.includes("安全边界"),
+            text.includes("建议下一步") && text.includes("不会自动执行真实动作"),
           ceo_route_task_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(
             document.querySelector("#view-cockpit .saas-ceo-routing-task-card")?.innerText || "",
           ),
@@ -901,6 +955,13 @@ async function main() {
             const merchantSettingsForbiddenVisibleMarkers = ["account", "data", "governance"].includes(id)
               ? merchantSettingsForbiddenMarkers.filter((marker) => text.includes(marker))
               : [];
+            const merchantSettingsForbiddenContexts = merchantSettingsForbiddenVisibleMarkers.map((marker) => {
+              const index = text.indexOf(marker);
+              return {
+                marker,
+                context: index >= 0 ? text.slice(Math.max(0, index - 80), index + marker.length + 80) : "",
+              };
+            });
             const sectionGroups = Array.from(section?.querySelectorAll(".saas-settings-section-group") || []);
             const openSectionGroups = sectionGroups.filter((group) => group.hasAttribute("open"));
             return {
@@ -981,6 +1042,7 @@ async function main() {
               model_internal_visible_markers: modelForbiddenVisibleMarkers,
               has_internal_settings_customer_copy: merchantSettingsForbiddenVisibleMarkers.length > 0,
               internal_settings_visible_markers: merchantSettingsForbiddenVisibleMarkers,
+              internal_settings_visible_contexts: merchantSettingsForbiddenContexts,
               preview: text.trim().slice(0, 180),
             };
           }, tabId),
@@ -1047,6 +1109,8 @@ async function main() {
     badResponses,
     screenshotFailures,
     navCount: await page.locator(".nav-item").count(),
+    activityNavCount: await page.locator('.nav-item[data-view="activity"]').count(),
+    activityViewHidden: await page.locator('#view-activity[data-internal-view="legacy-report-center"][hidden]').count(),
     ceoFirstRunEntry,
     ceoFirstRunPrefill,
     ceoRouteTask,
@@ -1061,7 +1125,9 @@ async function main() {
   if (pageErrors.length) failures.push(`page errors: ${pageErrors.length}`);
   if (requestFailures.length) failures.push(`request failures: ${requestFailures.length}`);
   if (badResponses.length) failures.push(`5xx responses: ${badResponses.length}`);
-  if (result.navCount !== 7) failures.push(`nav count ${result.navCount}`);
+  if (result.navCount !== 6) failures.push(`nav count ${result.navCount}`);
+  if (result.activityNavCount !== 0) failures.push("activity/work-record entry still appears in primary navigation");
+  if (result.activityViewHidden !== 1) failures.push("legacy activity center is not hidden from merchant workflow");
   for (const check of moduleChecks) {
     if (!check.exists || !check.visible) failures.push(`${check.view} not visible`);
     if (check.text_length < 60) failures.push(`${check.view} too little text`);
@@ -1074,7 +1140,7 @@ async function main() {
   }
   const product = moduleChecks.find((item) => item.view === "product") || {};
   if (!product.has_listing_cplus_stack || !product.has_listing_input_panel) failures.push("product C+ listing input surface missing");
-  if (!product.has_listing_ai_handoff || !product.has_listing_ai_handoff_input) failures.push("product AI CEO to Listing handoff missing");
+  if (!product.has_listing_ai_handoff && !product.has_listing_first_run_strip) failures.push("product AI CEO to Listing handoff missing");
   if (!product.has_listing_source_grid) failures.push("product Listing source choices missing");
   if (!product.has_listing_draft_editor && !product.has_listing_first_run_strip) failures.push("product first-run assurance strip missing");
   if (!product.has_listing_draft_editor && !product.has_listing_project_start_action) failures.push("product Listing project start action missing");
@@ -1085,11 +1151,11 @@ async function main() {
   if (!product.has_listing_asset_profit_stage || !product.has_listing_publish_confirmation_stage) {
     failures.push("product C+ asset/profit or publish confirmation stage missing");
   }
-  if (product.listing_preflight_action_count < 2) failures.push("product Listing draft is missing publish-preparation actions");
-  if (!product.has_listing_publish_loop) {
+  if (product.has_listing_draft_editor && product.listing_preflight_action_count < 2) failures.push("product Listing draft is missing publish-preparation actions");
+  if (product.has_listing_draft_editor && !product.has_listing_publish_loop) {
     failures.push("product Listing publish confirmation loop missing");
   }
-  if (!product.has_listing_publish_flow_collapsed) {
+  if (product.has_listing_draft_editor && !product.has_listing_publish_flow_collapsed) {
     failures.push("product publish intake form should stay collapsed until the merchant needs fields");
   }
   if (product.has_listing_internal_copy) failures.push("product daily Listing surface exposes internal report/debug copy");
@@ -1122,9 +1188,12 @@ async function main() {
   if (connect.settings_billing_has_internal_customer_copy) failures.push("ordinary settings billing tab exposes internal/founder payment strategy copy");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
-  if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");
+  if (!media.has_media_simple_headline || (!media.has_media_empty_state && !media.has_media_simple_flow)) {
+    failures.push("media simple workflow surface missing");
+  }
   if (!media.has_media_first_run_strip) failures.push("media first-run assurance strip missing");
-  if (!media.has_media_asset_jobs_panel) failures.push("media asset job manifest panel missing");
+  if (!media.has_media_empty_state && !media.has_media_asset_jobs_panel) failures.push("media asset job manifest panel missing");
+  if (!media.media_empty_flow_is_compact) failures.push("media empty flow still exposes the full production workbench");
   if (media.has_media_internal_copy) failures.push("media daily surface exposes internal evidence/provider copy");
   const bulk = moduleChecks.find((item) => item.view === "bulk") || {};
   if (!bulk.has_bulk_simple_headline || !bulk.has_bulk_import_preview || !bulk.has_bulk_grouping_copy) {
@@ -1187,17 +1256,31 @@ async function main() {
   if (ceoRouteTask.has_internal_copy || cockpit.ceo_route_task_internal_copy) {
     failures.push("AI CEO routing task card exposes internal packet/provider/preflight copy");
   }
-  if (!ceoRouteTask.has_v2_marker || !ceoRouteTask.has_why_rows || !ceoRouteTask.has_simple_copy || !ceoRouteTask.has_next_step_copy) {
+  if (!ceoRouteTask.has_v2_marker || !ceoRouteTask.has_no_why_rows || !ceoRouteTask.has_simple_copy || !ceoRouteTask.has_next_step_copy) {
     failures.push("AI CEO routing task card copy missing");
+  }
+  if (
+    ceoRouteTask.card_height > 96 ||
+    ceoRouteTask.chat_height < 220 ||
+    ceoRouteTask.composer_width < Math.min(680, ceoRouteTask.viewport_width * 0.62) ||
+    ceoRouteTask.composer_input_width < Math.min(420, ceoRouteTask.viewport_width * 0.38) ||
+    !ceoRouteTask.composer_single_row ||
+    ceoRouteTask.first_message_offset_top > 80 ||
+    ceoRouteTask.feedback_overlaps_first_user
+  ) {
+    failures.push(
+      `AI CEO layout ratio regressed: card=${ceoRouteTask.card_height}, chat=${ceoRouteTask.chat_height}, composer=${ceoRouteTask.composer_width}, input=${ceoRouteTask.composer_input_width}, row=${ceoRouteTask.composer_single_row}, first=${ceoRouteTask.first_message_offset_top}, feedback=${ceoRouteTask.feedback_overlaps_first_user}`,
+    );
   }
   for (const scenario of ceoRouteScenarios) {
     if (
       !scenario.visible ||
       scenario.target !== scenario.expected ||
       !scenario.has_v2_marker ||
-      !scenario.has_why_rows ||
+      !scenario.has_no_why_rows ||
       !scenario.has_simple_copy ||
-      !scenario.has_next_step_copy
+      !scenario.has_next_step_copy ||
+      scenario.card_height > 96
     ) {
       failures.push(`AI CEO route scenario ${scenario.label} failed`);
     }
@@ -1205,12 +1288,15 @@ async function main() {
       failures.push(`AI CEO route scenario ${scenario.label} exposes internal copy`);
     }
     if (
-      !scenario.module_goal?.visible ||
-      scenario.module_goal?.marker !== "ai_ceo_module_goal_v1" ||
-      scenario.module_goal?.view !== scenario.expected ||
-      !scenario.module_goal?.has_goal_step ||
-      !scenario.module_goal?.has_next_step ||
-      !scenario.module_goal?.has_boundary_step
+      scenario.expected !== "cockpit" &&
+      (
+        !scenario.module_goal?.visible ||
+        scenario.module_goal?.marker !== "ai_ceo_module_goal_v1" ||
+        scenario.module_goal?.view !== scenario.expected ||
+        !scenario.module_goal?.has_goal_step ||
+        !scenario.module_goal?.has_next_step ||
+        !scenario.module_goal?.has_boundary_step
+      )
     ) {
       failures.push(`AI CEO route scenario ${scenario.label} did not hand goal to target module`);
     }

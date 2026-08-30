@@ -751,6 +751,8 @@ async function main() {
 
     await page.screenshot({ path: path.join(outDir, "desktop-product-feedback.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => setView("connect"));
+    await page.waitForSelector("#view-connect.is-active #workflowFeedbackToggle, #view-connect.is-active", { timeout: 10000 });
     await page.click("#workflowFeedbackToggle");
     const mobileActionBox = await page.locator("[data-workflow-feedback-submit]").boundingBox();
     if (!mobileActionBox || mobileActionBox.y < 0 || mobileActionBox.y + mobileActionBox.height > 844) {
