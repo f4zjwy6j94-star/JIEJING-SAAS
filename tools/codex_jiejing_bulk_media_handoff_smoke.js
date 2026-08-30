@@ -416,13 +416,20 @@ async function main() {
     const stamp = Date.now();
     const reportId = `report-recent-existing-${stamp}`;
     const productTaskId = `task-recent-product-${stamp}`;
+    const noReportTaskId = `task-recent-no-report-${stamp}`;
     const unrelatedTaskId = `task-recent-service-${stamp}`;
+    const storeId = activeSaasStore()?.store_id || "";
+    const companyId = state.saasCompany?.company_id || state.saasIdentity?.company_id || "";
+    const projectIdentity = { key: `listing-project-recent-${stamp}`, source_report_id: reportId, candidate_id: `candidate-${stamp}` };
     const report = {
       report_id: reportId,
       task_id: productTaskId,
       report_type: "listing.package",
+      store_id: storeId,
+      company_id: companyId,
       status: "completed",
       created_at: new Date(stamp - 1000).toISOString(),
+      listing_project_identity: projectIdentity,
       report: {
         title: "Existing saved travel organizer",
         summary: "Existing report fixture for resume-only browser validation.",
@@ -431,25 +438,41 @@ async function main() {
     const productTask = {
       task_id: productTaskId,
       task_type: "product_workflow",
+      store_id: storeId,
+      company_id: companyId,
+      listing_project_identity: projectIdentity,
       title: "Existing saved travel organizer",
       status: "blocked_facts",
       source_report_id: reportId,
       report_id: reportId,
       updated_at: new Date(stamp).toISOString(),
     };
+    const noReportTask = {
+      task_id: noReportTaskId,
+      task_type: "product_workflow",
+      store_id: storeId,
+      company_id: companyId,
+      title: "Existing task waiting for product facts",
+      status: "completed_with_blocks",
+      missing_fields: ["package_dimensions"],
+      updated_at: new Date(stamp + 2).toISOString(),
+    };
     const unrelatedTask = {
       task_id: unrelatedTaskId,
       task_type: "customer_service",
+      store_id: storeId,
+      company_id: companyId,
       title: "Must not appear in recent products",
       status: "open",
       updated_at: new Date(stamp + 1).toISOString(),
     };
-    state.saasTasks = [unrelatedTask, productTask, ...(Array.isArray(state.saasTasks) ? state.saasTasks : [])];
+    state.saasTasks = [unrelatedTask, noReportTask, productTask, ...(Array.isArray(state.saasTasks) ? state.saasTasks : [])];
     state.saasReports = [report, ...(Array.isArray(state.saasReports) ? state.saasReports : [])];
     renderProductListingCenter();
     return {
       report_id: reportId,
       product_task_id: productTaskId,
+      no_report_task_id: noReportTaskId,
       unrelated_task_id: unrelatedTaskId,
       task_count: state.saasTasks.length,
       report_count: state.saasReports.length,
@@ -470,18 +493,39 @@ async function main() {
     ),
   }));
   await page.click(
+    `#view-product.is-active [data-continue-recent-product-task="${recentFixture.no_report_task_id}"]`,
+  );
+  await page.waitForFunction(
+    (taskId) => state.view === "cockpit" && state.aiCeoExplicitTaskContext?.taskId === taskId,
+    recentFixture.no_report_task_id,
+    { timeout: 20000 },
+  );
+  const recentNoReportContext = await page.evaluate(() => ({
+    task_id: state.aiCeoExplicitTaskContext?.taskId || "",
+    title: state.aiCeoExplicitTaskContext?.title || "",
+    missing_facts: state.aiCeoExplicitTaskContext?.missingFacts || [],
+  }));
+  await page.click('#view-cockpit.is-active [data-global-flow-view="product"][data-global-flow-key="recent"]');
+  await page.waitForSelector(
+    `#view-product.is-active [data-open-recent-product-task="${recentFixture.product_task_id}"]`,
+    { timeout: 20000 },
+  );
+  await page.click(
     `#view-product.is-active [data-open-recent-product-task="${recentFixture.product_task_id}"]`,
   );
   await page.waitForFunction(
-    ({ reportId, taskId }) =>
+    ({ reportId }) =>
       state.saasListingComposerDraft?.source_report_id === reportId &&
-      state.saasActiveRecentProductTaskId === taskId,
-    { reportId: recentFixture.report_id, taskId: recentFixture.product_task_id },
+      state.saasListingSourceMode === "recent_product_task" &&
+      state.view === "product",
+    { reportId: recentFixture.report_id },
     { timeout: 20000 },
   );
   const recentResume = await page.evaluate(() => ({
-    active_task_id: state.saasActiveRecentProductTaskId || "",
     source_report_id: state.saasListingComposerDraft?.source_report_id || "",
+    listing_project_key: saasCurrentListingProjectIdentity(state.saasListingComposerDraft)?.key || "",
+    source_mode: state.saasListingSourceMode || "",
+    route_view: new URL(window.location.href).searchParams.get("view") || "",
     task_count: Array.isArray(state.saasTasks) ? state.saasTasks.length : -1,
     report_count: Array.isArray(state.saasReports) ? state.saasReports.length : -1,
     active_mode: document.querySelector('#view-product.is-active [data-listing-mode][aria-current="page"]')?.dataset.listingMode || "",
@@ -895,11 +939,18 @@ async function main() {
       recentList.task_types.length === recentList.task_ids.length &&
       recentList.task_types.every((taskType) => taskType === "product_workflow"),
     recent_resumes_existing_identity_without_rerun:
-      recentResume.active_task_id === recentFixture.product_task_id &&
       recentResume.source_report_id === recentFixture.report_id &&
+      recentResume.listing_project_key.startsWith("listing-project-recent-") &&
+      recentResume.source_mode === "recent_product_task" &&
+      recentResume.route_view === "product" &&
       recentResume.task_count === recentFixture.task_count &&
       recentResume.report_count === recentFixture.report_count &&
       recentResume.active_mode === "single" &&
+      recentMutationRequests.length === 0,
+    recent_no_report_binds_explicit_context_without_rerun:
+      recentNoReportContext.task_id === recentFixture.no_report_task_id &&
+      Boolean(recentNoReportContext.title) &&
+      recentNoReportContext.missing_facts.includes("包装尺寸") &&
       recentMutationRequests.length === 0,
     media_opens_same_bulk_draft:
       mediaOpened.active_media_draft.startsWith("listing-project-") &&
@@ -976,6 +1027,7 @@ async function main() {
     productAfterBulk,
     recentFixture,
     recentList,
+    recentNoReportContext,
     recentResume,
     recentMutationRequests,
     mediaOpened,

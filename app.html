@@ -2069,15 +2069,15 @@
           </section>
         </section>
 
-        <section class="view" id="view-bulk" data-title="批量铺货">
+        <section class="view" id="view-bulk" data-title="批量选品与草稿">
           <section class="panel full bulk-factory-hero bulk-clean-board">
             <div class="bulk-hero-grid">
               <div>
                 <p class="eyebrow">小批量实验台</p>
-                <h2>先小批量筛，不一键乱铺</h2>
+                <h2>批量选品与草稿</h2>
                 <p class="section-note">用最小批次看清机会和风险。先筛一小批候选，看清能试、要补、先不做。通过后只生成 Listing 和素材草稿，不直接铺货上架。</p>
               </div>
-              <div class="bulk-hero-summary" aria-label="批量铺货概要">
+              <div class="bulk-hero-summary" aria-label="批量选品与草稿概要">
                 <article><span>本轮数量</span><strong id="bulkImportedCount">10</strong><small>准备筛选</small></article>
                 <article><span>来源资料</span><strong id="bulkTestCount">0</strong><small>条可用货源</small></article>
                 <article><span>已分组</span><strong id="bulkMissingCount">0</strong><small>候选方向</small></article>
@@ -2086,7 +2086,7 @@
             </div>
             <div class="bulk-proof-note">批量铺货只负责筛选和草稿。发布、采购付款、改价、库存、退款和广告不会自动执行。</div>
 
-            <div class="bulk-pipeline" id="bulkPipeline" aria-label="批量铺货流程">
+            <div class="bulk-pipeline" id="bulkPipeline" aria-label="批量选品与草稿流程">
               <span data-bulk-stage="import">数量</span>
               <span data-bulk-stage="clean">货源</span>
               <span data-bulk-stage="score">边界</span>
@@ -2095,8 +2095,8 @@
             </div>
 
             <div class="bulk-decision-workbench">
-              <section class="bulk-control-column" aria-label="批量铺货条件">
-                <section class="bulk-sequence" aria-label="批量铺货顺序流程">
+              <section class="bulk-control-column" aria-label="批量选品与草稿条件">
+                <section class="bulk-sequence" aria-label="批量选品与草稿顺序流程">
                   <article class="bulk-control-card bulk-sequence-card">
                     <div class="bulk-step-number">01</div>
                     <div class="bulk-sequence-body">
@@ -2130,7 +2130,7 @@
                           <p>按利润、履约、售后和合规先挡一遍，避免把高风险品带进草稿。</p>
                         </div>
                       </div>
-                      <div class="bulk-guardrail-strip" aria-label="批量铺货默认底线">
+                      <div class="bulk-guardrail-strip" aria-label="批量选品与草稿默认底线">
                         <article><span>先拦风险</span><strong>侵权、禁限售、资料缺失不直接发布</strong></article>
                         <article><span>先测小批</span><strong>看曝光、点击、询单、利润和售后</strong></article>
                         <article><span>确认边界</span><strong>发布、付款、广告预算必须确认</strong></article>
@@ -2188,7 +2188,7 @@
               </section>
             </div>
 
-            <section class="bulk-bottom-strip" aria-label="批量铺货交接规则">
+            <section class="bulk-bottom-strip" aria-label="批量选品与草稿交接规则">
               <article>
                 <span>同意后</span>
                 <strong>生成素材任务和刊登草稿</strong>
@@ -2200,7 +2200,7 @@
                 <p>写入 eBay、付款采购、改价库存和广告预算不会自动执行。</p>
               </article>
               <div class="batch-action-grid">
-                <button class="secondary-action" type="button" data-bulk-action="report">查看批次汇报</button>
+                <button class="secondary-action" type="button" data-bulk-action="report" aria-label="查看最近保存的商品任务">查看最近商品任务</button>
                 <button class="secondary-action" type="button" data-bulk-action="confirm-center">打开决策中心</button>
               </div>
             </section>

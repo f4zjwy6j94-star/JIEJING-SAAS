@@ -224,8 +224,14 @@ def main() -> int:
             raise AssertionError("tenant A received tenant B report")
         if saved_a["report"]["report_id"] in {str(item.get("report_id") or "") for item in reports_b}:
             raise AssertionError("tenant B received tenant A report")
+        report_a = next((item for item in reports_a if item.get("report_id") == saved_a["report"]["report_id"]), None)
+        report_b = next((item for item in reports_b if item.get("report_id") == saved_b["report"]["report_id"]), None)
+        if not report_a or report_a.get("company_id") != store_a["company_id"] or report_a.get("store_id") != store_a["store_id"]:
+            raise AssertionError(f"tenant A report missing authoritative scope: {report_a}")
+        if not report_b or report_b.get("company_id") != store_b["company_id"] or report_b.get("store_id") != store_b["store_id"]:
+            raise AssertionError(f"tenant B report missing authoritative scope: {report_b}")
         serialized = json.dumps(reports_a, ensure_ascii=False).lower()
-        if "internal_prompt" in serialized or "never expose this internal prompt" in serialized:
+        if "internal_prompt" in serialized or "never expose this internal prompt" in serialized or "hidden-token" in serialized or "hidden-secret" in serialized:
             raise AssertionError("merchant reports leaked internal review payload")
 
         admin_audits = request("/audit-logs?limit=100", token=token_a).get("audit_logs") or []

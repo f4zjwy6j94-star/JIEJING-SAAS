@@ -5649,7 +5649,7 @@ class SaaSRepository:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                select r.* from reports r
+                select r.*, t.company_id as company_id, t.store_id as store_id from reports r
                 join tasks t on t.task_id = r.task_id
                 where {where}
                 order by r.created_at {order_direction}
@@ -16341,7 +16341,7 @@ class SaaSRepository:
         }
 
     def _report_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
-        return {
+        projected = {
             "report_id": row["report_id"],
             "task_id": row["task_id"],
             "runtime_run_id": row["runtime_run_id"],
@@ -16351,6 +16351,12 @@ class SaaSRepository:
             "created_at": row["created_at"],
             "report": _load_json_field(row["report_json"]),
         }
+        row_keys = set(row.keys())
+        if "company_id" in row_keys:
+            projected["company_id"] = row["company_id"]
+        if "store_id" in row_keys:
+            projected["store_id"] = row["store_id"]
+        return projected
 
     def _task_step_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         step_json = _load_json_field(row["step_json"])

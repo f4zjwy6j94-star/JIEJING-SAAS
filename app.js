@@ -209,6 +209,7 @@ const state = {
   aiCeoTaskContextProjectId: "",
   aiCeoTaskContextStartedAt: "",
   aiCeoTaskContextStartedAtReliable: false,
+  aiCeoExplicitTaskContext: null,
   saasStartupRequestedView: "",
   saasWorkflowFeedbackOpen: false,
   saasWorkflowFeedbackReason: "",
@@ -228,6 +229,7 @@ const state = {
   saasListingCeoHandoff: null,
   saasListingComposerDraft: null,
   saasListingSourceMode: "",
+  saasListingMode: "single",
   saasListingBackendWorkflow: null,
   saasListingBackendWorkflowStatus: "",
   saasListingBackendWorkflowError: "",
@@ -2525,6 +2527,7 @@ function syncBulkSaasStatusCounters() {
 }
 
 function resetSaasBulkWorkspaceForListingProject() {
+  setSaasAiCeoTaskContextState("plain_consultation", false);
   state.saasBulkCandidates = [];
   state.saasBulkAcceptedCandidates = [];
   state.batchPreviewCount = 0;
@@ -2823,7 +2826,7 @@ function renderSaasBulkCandidatePreview() {
       </div>
       <div class="bulk-candidate-actions">
         <button class="secondary-action" type="button" data-bulk-action="generate-candidates">重新分组</button>
-        <button class="secondary-action" type="button" data-bulk-action="report">查看汇报</button>
+        <button class="secondary-action" type="button" data-bulk-action="report" aria-label="查看最近保存的商品任务">查看最近商品任务</button>
       </div>
     </div>
     ${renderSaasBulkSourceRealityPanel(sourceRecordCount)}
@@ -3822,6 +3825,7 @@ function saasCurrentListingProjectIdentity(draft = state.saasListingComposerDraf
 }
 
 function resetSaasListingPublishEvidenceForNewProject() {
+  setSaasAiCeoTaskContextState("plain_consultation", false);
   state.saasLastPublishReadiness = null;
   state.saasLastPublishConfirmationEvidence = null;
   state.saasPreflightResults = [];
@@ -3990,6 +3994,16 @@ function prepareSaasMediaStudioForCurrentListing() {
   state.saasActiveMediaPreviewKey = "";
   saveSaasProtectedStateSnapshot();
   return identity;
+}
+
+function resetSaasListingProjectTransientState() {
+  state.saasMerchantProjectStatus = null;
+  state.saasListingBackendWorkflow = null;
+  state.saasListingBackendWorkflowStatus = "";
+  state.saasListingBackendWorkflowError = "";
+  state.saasLastWorkflowTaskId = "";
+  resetSaasListingPublishEvidenceForNewProject();
+  resetSaasBulkWorkspaceForListingProject();
 }
 
 function saasMediaAssetJobProductFacts(job = {}) {
@@ -10157,6 +10171,44 @@ function renderSaasListingSourceIntake({
   `;
 }
 
+function normalizeSaasListingMode(mode = "single", view = state.view || "product") {
+  if (String(view || "") === "bulk") return "bulk";
+  return String(mode || "").trim().toLowerCase() === "recent" ? "recent" : "single";
+}
+
+function renderSaasListingModeNav(activeMode = "single") {
+  const currentMode = normalizeSaasListingMode(activeMode, activeMode === "bulk" ? "bulk" : "product");
+  return `
+    <nav class="saas-listing-mode-nav" aria-label="选品与上架工作模式">
+      <button class="saas-listing-mode-tab ${currentMode === "single" ? "is-active" : ""}" type="button" data-listing-mode="single" ${currentMode === "single" ? 'aria-current="page"' : ""}>
+        <strong>单个商品</strong>
+        <span>录入货源或接收 AI CEO 选品建议</span>
+      </button>
+      <button class="saas-listing-mode-tab ${currentMode === "bulk" ? "is-active" : ""}" type="button" data-listing-mode="bulk" ${currentMode === "bulk" ? 'aria-current="page"' : ""}>
+        <strong>批量选品与草稿</strong>
+        <span>小批量筛选并逐项核对商品事实</span>
+      </button>
+      <button class="saas-listing-mode-tab ${currentMode === "recent" ? "is-active" : ""}" type="button" data-listing-mode="recent" ${currentMode === "recent" ? 'aria-current="page"' : ""}>
+        <strong>最近任务</strong>
+        <span>从真实保存状态继续，不重新运行 AI</span>
+      </button>
+    </nav>
+  `;
+}
+
+function mountSaasListingModeNav(viewId = "product", activeMode = "single") {
+  const view = document.querySelector(`#view-${viewId}`);
+  const panel = view?.querySelector(":scope > .panel, :scope > section");
+  if (!panel) return false;
+  panel.querySelector(":scope > .saas-listing-mode-nav")?.remove();
+  insertJiejingTrustedHtml(
+    panel,
+    "afterbegin",
+    trustedJiejingHtml(renderSaasListingModeNav(activeMode), `listing.mode_nav.${viewId}`),
+  );
+  return true;
+}
+
 function renderSaasListingComposerWorkspace({
   listingReport,
   marketReport,
@@ -10278,6 +10330,19 @@ function renderSaasListingMinimalWorkspace({
 }
 
 function renderSaasProductListingCenter(view) {
+  const listingMode = normalizeSaasListingMode(state.saasListingMode, "product");
+  if (listingMode === "recent") {
+    setJiejingTrustedHtml(
+      view,
+      trustedJiejingHtml(`
+        <section class="panel full product-manager-module saas-real-listing-factory saas-recent-product-workspace" aria-label="最近商品任务">
+          ${renderSaasListingModeNav("recent")}
+          ${renderSaasRecentProductTasks()}
+        </section>
+      `, "listing.recent_workspace"),
+    );
+    return;
+  }
   const safeListingDraft = saasListingDraftHasConcreteProduct(state.saasListingComposerDraft)
     ? state.saasListingComposerDraft
     : null;
@@ -10332,6 +10397,7 @@ function renderSaasProductListingCenter(view) {
     view,
     trustedJiejingHtml(`
     <section class="panel full product-manager-module saas-real-listing-factory" aria-label="真实 Listing 工厂">
+      ${renderSaasListingModeNav("single")}
       ${renderSaasModuleAiGoalStrip("product")}
       <header class="product-manager-header saas-real-listing-header">
         <div>
@@ -11779,6 +11845,11 @@ function handleGlobalFlowNavigation(button) {
   const view = button.dataset.globalFlowView || "cockpit";
   const sourceView = state.view || "";
   state.activeFlowKey = key;
+  if (view === "product" && key === "recent") {
+    activateSaasListingMode("recent");
+    pulseFlowTarget("#view-product .saas-recent-product-tasks");
+    return;
+  }
   if (key === "goal") {
     const currentProjectId = saasCurrentMerchantProjectId();
     const explicitProjectEntry = ["product", "media", "confirm"].includes(sourceView) && Boolean(currentProjectId);
@@ -14434,13 +14505,48 @@ function sanitizeSaasPacketSnapshot(packet = {}) {
   };
 }
 
-function restoreSaasListingComposerDraftFromBackendReports() {
-  const factReports = (state.saasReports || []).filter((item) => item?.report_type === "merchant.product_facts");
+function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
+  const reportPool = Array.isArray(options.reports) ? options.reports : state.saasReports || [];
+  const factReports = reportPool.filter((item) => item?.report_type === "merchant.product_facts");
   const packetValues = (packet = {}) => ({
     ...(packet.derived_listing_suggestions && typeof packet.derived_listing_suggestions === "object" ? packet.derived_listing_suggestions : {}),
     ...(packet.source_confirmed_facts && typeof packet.source_confirmed_facts === "object" ? packet.source_confirmed_facts : {}),
     ...(packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object" ? packet.merchant_confirmed_facts : {}),
   });
+  const mergeMatchingFactReports = (items = []) =>
+    items
+      .slice()
+      .sort((a, b) => saasTimestampMillis(a.updated_at || a.created_at) - saasTimestampMillis(b.updated_at || b.created_at))
+      .reduce((merged, item) => {
+        if (!merged) return item;
+        const previousBody = merged.report && typeof merged.report === "object" ? merged.report : {};
+        const incomingBody = item.report && typeof item.report === "object" ? item.report : {};
+        const previousPacket = previousBody.merchant_product_fact_packet || {};
+        const incomingPacket = incomingBody.merchant_product_fact_packet || {};
+        const mergeArray = (previous = [], incoming = []) =>
+          Array.from(new Map([...previous, ...incoming].map((value) => [JSON.stringify(value), value])).values());
+        return {
+          ...merged,
+          ...item,
+          report: {
+            ...previousBody,
+            ...incomingBody,
+            merchant_product_fact_packet: {
+              ...previousPacket,
+              ...incomingPacket,
+              source_confirmed_facts: { ...(previousPacket.source_confirmed_facts || {}), ...(incomingPacket.source_confirmed_facts || {}) },
+              merchant_confirmed_facts: { ...(previousPacket.merchant_confirmed_facts || {}), ...(incomingPacket.merchant_confirmed_facts || {}) },
+              derived_listing_suggestions: { ...(previousPacket.derived_listing_suggestions || {}), ...(incomingPacket.derived_listing_suggestions || {}) },
+              listing_copy: { ...(previousPacket.listing_copy || {}), ...(incomingPacket.listing_copy || {}) },
+              field_evidence: { ...(previousPacket.field_evidence || {}), ...(incomingPacket.field_evidence || {}) },
+              fact_conflicts: mergeArray(previousPacket.fact_conflicts || [], incomingPacket.fact_conflicts || []),
+              unknown_facts: Array.isArray(incomingPacket.unknown_facts) ? [...incomingPacket.unknown_facts] : [...(previousPacket.unknown_facts || [])],
+              source_records: mergeArray(previousPacket.source_records || [], incomingPacket.source_records || []),
+              blocked_by: Array.isArray(incomingPacket.blocked_by) ? [...incomingPacket.blocked_by] : [...(previousPacket.blocked_by || [])],
+            },
+          },
+        };
+      }, null);
   const factReportMatchesDraft = (item, draft) => {
     const body = item?.report && typeof item.report === "object" ? item.report : {};
     const incomingPacket =
@@ -14497,7 +14603,7 @@ function restoreSaasListingComposerDraftFromBackendReports() {
         currentDraft.merchant_product_fact_packet && typeof currentDraft.merchant_product_fact_packet === "object"
           ? currentDraft.merchant_product_fact_packet
           : {};
-      const matchingFactReport = factReports.find((item) => factReportMatchesDraft(item, currentDraft));
+      const matchingFactReport = mergeMatchingFactReports(factReports.filter((item) => factReportMatchesDraft(item, currentDraft)));
       if (matchingFactReport) {
         const body = matchingFactReport.report && typeof matchingFactReport.report === "object" ? matchingFactReport.report : {};
         const incomingPacket = body.merchant_product_fact_packet || {};
@@ -14568,15 +14674,18 @@ function restoreSaasListingComposerDraftFromBackendReports() {
     state.saasListingComposerDraft = null;
     state.saasListingSourceMode = "";
   }
-  const report =
-    latestSaasActionableProductReportByTypes(["listing.package", "product.listing"]) ||
-    latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report"]);
+  const latestReportByTypes = (types = []) =>
+    reportPool
+      .filter((item) => types.includes(item?.report_type))
+      .sort((a, b) => saasTimestampMillis(b.updated_at || b.created_at) - saasTimestampMillis(a.updated_at || a.created_at))
+      .find((item) => saasListingDraftHasConcreteProduct(saasListingDraftFromReport(item, "backend_report_probe"))) || null;
+  const report = latestReportByTypes(["listing.package", "product.listing"]) || latestReportByTypes(["ai_ceo.market_research", "market.report"]);
   if (!report) return null;
   const restored = saasListingDraftFromReport(report, report.report_type === "ai_ceo.market_research" ? "ai_ceo_market_report" : "ai_report");
   if (!restored || !saasListingDraftHasConcreteProduct(restored)) return null;
   const identity = saasCurrentListingProjectIdentity(restored);
   const restoredWithIdentity = { ...restored, listing_project_key: identity.key };
-  const factReport = factReports.find((item) => factReportMatchesDraft(item, restoredWithIdentity));
+  const factReport = mergeMatchingFactReports(factReports.filter((item) => factReportMatchesDraft(item, restoredWithIdentity)));
   const factBody = factReport?.report && typeof factReport.report === "object" ? factReport.report : {};
   state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft(
     restoredWithIdentity,
@@ -17495,6 +17604,314 @@ function saasLatestProductWorkflowTask() {
   return (state.saasTasks || [])
     .filter((task) => task && typeof task === "object" && task.task_type === "product_workflow")
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at))[0] || null;
+}
+
+function saasRecentProductWorkflowTasks() {
+  const storeId = String(activeSaasStore()?.store_id || "").trim();
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  if (!storeId || !companyId) return [];
+  return (Array.isArray(state.saasTasks) ? state.saasTasks : [])
+    .filter(
+      (task) =>
+        task &&
+        typeof task === "object" &&
+        task.task_type === "product_workflow" &&
+        String(task.task_id || "").trim() &&
+        String(task.store_id || "").trim() === storeId &&
+        String(task.company_id || "").trim() === companyId,
+    )
+    .sort(
+      (a, b) =>
+        saasTimestampMillis(b.updated_at || b.created_at) -
+        saasTimestampMillis(a.updated_at || a.created_at),
+    );
+}
+
+function saasRecentProductTaskReportIds(task = {}) {
+  const input = task.input && typeof task.input === "object" ? task.input : {};
+  const output = task.output && typeof task.output === "object" ? task.output : {};
+  return new Set(
+    [
+      task.report_id,
+      task.source_report_id,
+      input.report_id,
+      input.source_report_id,
+      output.report_id,
+      output.source_report_id,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  );
+}
+
+function saasRecentProductTaskReports(task = null) {
+  const storeId = String(activeSaasStore()?.store_id || "").trim();
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  if (
+    !task ||
+    !companyId ||
+    task.task_type !== "product_workflow" ||
+    String(task.store_id || "").trim() !== storeId ||
+    String(task.company_id || "").trim() !== companyId
+  ) return [];
+  const taskId = String(task.task_id || "").trim();
+  const reportIds = saasRecentProductTaskReportIds(task);
+  const reportTypePriority = new Map([
+    ["listing.package", 50],
+    ["product.listing", 50],
+    ["ai_ceo.market_research", 30],
+    ["market.report", 20],
+    ["market.data_packet", 10],
+  ]);
+  const taskIdentity = saasNormalizeListingProjectIdentity(
+    task.listing_project_identity || task.input?.listing_project_identity || task.output?.listing_project_identity,
+  );
+  const taskProjectId = String(taskIdentity?.key || task.project_id || task.input?.project_id || task.output?.project_id || "").trim();
+  return (Array.isArray(state.saasReports) ? state.saasReports : [])
+    .map((report) => {
+      if (!report || typeof report !== "object") return null;
+      const reportStoreId = String(report.store_id || report.report?.store_id || "").trim();
+      const reportCompanyId = String(report.company_id || report.report?.company_id || "").trim();
+      if ((reportStoreId && reportStoreId !== storeId) || (reportCompanyId && reportCompanyId !== companyId)) return null;
+      const reportScopeProven = reportStoreId === storeId && reportCompanyId === companyId;
+      const reportTypeScore = reportTypePriority.get(String(report.report_type || ""));
+      const isFactReport = report.report_type === "merchant.product_facts";
+      if (!reportTypeScore && !isFactReport) return null;
+      const reportId = String(report.report_id || "").trim();
+      const reportTaskId = String(report.task_id || "").trim();
+      const reportIdentity = saasActivityReportProjectIdentity(report);
+      const reportProjectId = String(reportIdentity?.key || report.project_id || report.report?.project_id || "").trim();
+      if (taskProjectId && reportProjectId && reportProjectId !== taskProjectId) return null;
+      if (taskIdentity && reportIdentity) {
+        if (taskIdentity.key !== reportIdentity.key) return null;
+        if (taskIdentity.source_report_id && reportIdentity.source_report_id && taskIdentity.source_report_id !== reportIdentity.source_report_id) return null;
+        if (taskIdentity.candidate_id && reportIdentity.candidate_id && taskIdentity.candidate_id !== reportIdentity.candidate_id) return null;
+      }
+      const exactReportId = Boolean(reportId && reportIds.has(reportId));
+      const exactTaskId = Boolean(taskId && reportTaskId === taskId);
+      const exactProjectIdentity = Boolean(
+        taskIdentity?.key &&
+          reportIdentity?.key === taskIdentity.key &&
+          String(reportIdentity.source_report_id || "") === String(taskIdentity.source_report_id || "") &&
+          String(reportIdentity.candidate_id || "") === String(taskIdentity.candidate_id || ""),
+      );
+      const exactProjectId = Boolean(reportProjectId && taskProjectId && reportProjectId === taskProjectId);
+      const factSourceTask = reportTaskId
+        ? (Array.isArray(state.saasTasks) ? state.saasTasks : []).find((candidate) => String(candidate?.task_id || "").trim() === reportTaskId)
+        : null;
+      const factSourceCompanyId = String(factSourceTask?.company_id || "").trim();
+      const factStoreProven = Boolean(
+        factSourceTask &&
+          String(factSourceTask.store_id || "").trim() === storeId &&
+          factSourceCompanyId === companyId,
+      );
+      const factScopeProven = reportScopeProven || factStoreProven;
+      if (isFactReport && !factScopeProven) return null;
+      if (!isFactReport && !reportScopeProven) return null;
+      const factProjectAssociation = isFactReport && factScopeProven && (exactProjectIdentity || exactProjectId);
+      if (!exactReportId && !exactTaskId && !factProjectAssociation) return null;
+      return {
+        report,
+        score: (reportTypeScore || 5) * 1000 + (exactReportId ? 400 : 0) + (exactTaskId ? 300 : 0) + (exactProjectIdentity ? 200 : 0) + (exactProjectId ? 100 : 0),
+        timestamp: saasTimestampMillis(report.updated_at || report.created_at),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || b.timestamp - a.timestamp)
+    .map((item) => item.report);
+}
+
+function saasRecentProductTaskReport(task = null) {
+  return saasRecentProductTaskReports(task).find(
+    (report) => report.report_type !== "merchant.product_facts" && saasListingDraftHasConcreteProduct(saasListingDraftFromReport(report, "recent_product_task_probe")),
+  ) || null;
+}
+
+function saasRecentProductTaskStage(task = {}) {
+  const input = task.input && typeof task.input === "object" ? task.input : {};
+  const output = task.output && typeof task.output === "object" ? task.output : {};
+  const terminalStatus = String(task.status || output.status || "").trim().toLowerCase();
+  const raw = terminalStatus || String(task.current_stage || input.current_stage || output.current_stage || "").trim().toLowerCase();
+  const labels = {
+    pending: "等待处理",
+    queued: "等待处理",
+    running: "正在处理",
+    completed: "已完成",
+    succeeded: "已完成",
+    blocked: "等待补资料",
+    blocked_facts: "等待补商品事实",
+    failed: "需要处理",
+    success: "已完成",
+    completed_with_blocks: "已完成，仍待补资料",
+    completed_with_warnings: "已完成，建议复核",
+    completed_with_policy_warnings: "已完成，仍需核对平台政策",
+    partial_failure: "部分完成，仍需处理",
+    adapter_plan_only: "已生成草稿方案，尚未写入平台",
+  };
+  return labels[raw] || "状态待更新";
+}
+
+function saasRecentProductTaskBlocker(task = {}, fallback = "没有记录额外阻断；打开已有草稿后继续核对。") {
+  const input = task.input && typeof task.input === "object" ? task.input : {};
+  const output = task.output && typeof task.output === "object" ? task.output : {};
+  const candidates = [
+    task.blocked_by,
+    task.missing_fields,
+    input.blocked_by,
+    input.missing_fields,
+    output.blocked_by,
+    output.missing_fields,
+  ];
+  let hadCandidate = false;
+  const factLabels = {
+    package_dimensions: "包装尺寸",
+    package_dimensions_cm: "包装尺寸",
+    package_weight: "包装重量",
+    package_weight_g: "包装重量",
+    source_url: "商品链接",
+    image_urls: "来源图片",
+    material: "材质",
+    item_location: "发货地",
+    unit_cost: "采购成本",
+  };
+  for (const candidate of candidates) {
+    const values = Array.isArray(candidate) ? candidate : candidate ? [candidate] : [];
+    if (values.length) hadCandidate = true;
+    const visible = values
+      .map((value) => {
+        const raw = String(typeof value === "string" ? value : value?.label || value?.key || "").trim();
+        if (!raw) return "";
+        const key = raw.replace(/^merchant_product_fact_missing:/, "").split(".").pop().trim();
+        const mapped = factLabels[key] || saasMerchantProductFactLabel(key);
+        if (mapped && mapped !== key) return publicRuntimeText(mapped);
+        if (/[_:.]/.test(raw) || /^[a-z0-9-]+$/i.test(raw)) return "";
+        return publicRuntimeText(raw);
+      })
+      .filter(Boolean);
+    if (visible.length) return visible.slice(0, 3).join("、");
+  }
+  return hadCandidate || task.error_code ? "仍有商品资料待补" : fallback;
+}
+
+function renderSaasRecentProductTasks() {
+  const tasks = saasRecentProductWorkflowTasks();
+  return `
+    <section class="saas-recent-product-tasks" aria-label="最近商品任务">
+      <header class="saas-recent-product-head">
+        <div>
+          <p class="eyebrow">已保存的商品工作</p>
+          <h2>从上次停下的位置继续</h2>
+          <p>这里只显示当前账号真实保存的商品任务。打开任务会恢复已有报告和 Listing 草稿，不会创建新任务，也不会重新运行 AI。</p>
+        </div>
+        <span class="pill ${tasks.length ? "green" : "neutral"}">${tasks.length ? `${tasks.length} 个任务` : "暂无任务"}</span>
+      </header>
+      <div class="saas-recent-product-list">
+        ${
+          tasks.length
+            ? tasks
+                .map((task) => {
+                  const taskId = String(task.task_id || "").trim();
+                  const report = saasRecentProductTaskReport(task);
+                  const product = saasWorkflowProductLabel(task) || "未命名商品任务";
+                  const updated = task.updated_at || task.created_at || "";
+                  const taskEvidence = `任务 ${taskId} · ${saasRecentProductTaskStage(task)} · ${saasTimestampLabel(updated)}`;
+                  const nextCopy = report
+                    ? saasRecentProductTaskBlocker(task)
+                    : saasRecentProductTaskBlocker(task, "补充商品链接、来源图片或真实规格后，再生成可核对的 Listing 草稿。");
+                  return `
+                    <article class="saas-recent-product-card" data-recent-product-task-id="${escapeHtml(taskId)}" data-recent-product-task-type="product_workflow">
+                      <div class="saas-recent-product-card-main">
+                        <span>${escapeHtml(saasRecentProductTaskStage(task))} · ${escapeHtml(saasTimestampLabel(updated))}</span>
+                        <strong>${escapeHtml(product)}</strong>
+                        <p>${escapeHtml(nextCopy)}</p>
+                      </div>
+                      <div class="saas-recent-product-card-action">
+                        <small>${report ? "已有草稿可恢复" : escapeHtml(taskEvidence)}</small>
+                        ${report ? `<button class="primary-action compact-action" type="button" data-open-recent-product-task="${escapeHtml(taskId)}">继续已有草稿</button>` : `<button class="secondary-action compact-action" type="button" data-continue-recent-product-task="${escapeHtml(taskId)}">继续补商品资料</button>`}
+                      </div>
+                    </article>
+                  `;
+                })
+                .join("")
+            : `<article class="saas-recent-product-empty"><span>还没有商品任务</span><strong>从单个商品或批量选品开始</strong><p>保存后的真实商品任务会出现在这里；不会放入示例商品或内部执行记录。</p></article>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function openSaasRecentProductTask(taskId = "") {
+  const safeTaskId = String(taskId || "").trim();
+  const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
+  const task = saasRecentProductWorkflowTasks().find((item) => String(item.task_id || "").trim() === safeTaskId);
+  if (!task || String(task.store_id || "").trim() !== currentStoreId) {
+    showActionToast("这条商品任务已不在当前账号列表中，请刷新后再试。");
+    return false;
+  }
+  const projectReports = saasRecentProductTaskReports(task);
+  const report = saasRecentProductTaskReport(task);
+  const draft = report ? saasListingDraftFromReport(report, "recent_product_task") : null;
+  if (!report || !saasListingDraftHasConcreteProduct(draft)) {
+    showActionToast("这条任务还没有可关联的已有草稿；捷境不会为打开记录而新建任务或重跑 AI。");
+    return false;
+  }
+  setSaasAiCeoTaskContextState("plain_consultation", false);
+  resetSaasListingProjectTransientState();
+  state.saasListingComposerDraft = draft;
+  restoreSaasListingComposerDraftFromBackendReports({ reports: projectReports });
+  state.saasListingComposerInput = [draft.product || draft.title || "", saasReportSummary(report)].filter(Boolean).join("\n");
+  state.saasListingSourceMode = "recent_product_task";
+  state.saasListingCeoHandoff = null;
+  state.saasListingMode = "single";
+  commitSaasActiveListingProjectContext("product");
+  setView("product", { preserveFlowKey: true, listingMode: "single" });
+  showActionToast(`已恢复“${saasWorkflowProductLabel(task) || "商品任务"}”的已有草稿；没有重新运行 AI。`);
+  return true;
+}
+
+function continueSaasRecentProductTaskFacts(taskId = "") {
+  const safeTaskId = String(taskId || "").trim();
+  const task = saasRecentProductWorkflowTasks().find((item) => String(item.task_id || "").trim() === safeTaskId);
+  if (!task) {
+    showActionToast("这条商品任务已不在当前店铺中，请刷新后再试。");
+    return false;
+  }
+  const taskIdentity = saasNormalizeListingProjectIdentity(
+    task.listing_project_identity || task.input?.listing_project_identity || task.output?.listing_project_identity,
+  );
+  const projectId = String(taskIdentity?.key || task.project_id || task.input?.project_id || task.output?.project_id || "").trim();
+  const productLabel = saasWorkflowProductLabel(task) || publicRuntimeText(task.title || "待补资料商品任务").slice(0, 96);
+  const missingSummary = saasRecentProductTaskBlocker(task, "补充商品链接、来源图片或真实规格后，再生成可核对的 Listing 草稿。");
+  state.aiCeoExplicitTaskContext = {
+    taskId: safeTaskId,
+    title: productLabel,
+    projectId,
+    commandSummary: `继续已有商品任务：${productLabel}`,
+    missingFacts: missingSummary ? [missingSummary] : ["补充商品链接、来源图片或真实规格"],
+  };
+  setView("cockpit", {
+    preserveFlowKey: true,
+    aiCeoTaskContextMode: "active_product_task",
+    aiCeoTaskContextExpanded: true,
+    aiCeoTaskContextCommandId: safeTaskId,
+    aiCeoTaskContextProjectId: projectId,
+    aiCeoTaskContextStartedAt: task.created_at || task.updated_at || "",
+    aiCeoTaskContextStartedAtReliable: Boolean(task.created_at || task.updated_at),
+  });
+  showActionToast("已打开 AI CEO。请补充这条任务的商品链接、图片或规格；不会自动运行 AI，也不会新建任务。");
+  return true;
+}
+
+function activateSaasListingMode(mode = "single") {
+  const nextMode = String(mode || "").trim().toLowerCase();
+  if (nextMode === "bulk") {
+    state.saasListingMode = "bulk";
+    setView("bulk", { preserveFlowKey: true, listingMode: "bulk" });
+    return true;
+  }
+  state.saasListingMode = nextMode === "recent" ? "recent" : "single";
+  setView("product", { preserveFlowKey: true, listingMode: state.saasListingMode });
+  return true;
 }
 
 function saasWorkflowProductLabel(task = null) {
@@ -21858,6 +22275,12 @@ function setSaasAiCeoTaskContextState(mode = "plain_consultation", expanded = fa
   const next = saasAiCeoTaskContextState({ mode, expanded });
   state.aiCeoTaskContextMode = next.mode;
   state.aiCeoTaskContextExpanded = next.expanded;
+  const boundExplicitTaskId = Object.prototype.hasOwnProperty.call(binding, "commandId")
+    ? String(binding.commandId || "")
+    : "";
+  if (next.mode !== "plain_consultation" && String(state.aiCeoExplicitTaskContext?.taskId || "") !== boundExplicitTaskId) {
+    state.aiCeoExplicitTaskContext = null;
+  }
   if (Object.prototype.hasOwnProperty.call(binding, "commandId")) {
     state.aiCeoTaskContextCommandId = String(binding.commandId || "");
   }
@@ -21875,6 +22298,7 @@ function setSaasAiCeoTaskContextState(mode = "plain_consultation", expanded = fa
     state.aiCeoTaskContextProjectId = "";
     state.aiCeoTaskContextStartedAt = "";
     state.aiCeoTaskContextStartedAtReliable = false;
+    state.aiCeoExplicitTaskContext = null;
   }
   return next;
 }
@@ -21887,6 +22311,22 @@ function saasAiCeoCommandUsesProductTaskContext(command = state.saasLastCeoComma
 }
 
 function saasAiCeoTaskContextProjection(command = state.saasLastCeoCommand) {
+  const explicit = state.aiCeoExplicitTaskContext && typeof state.aiCeoExplicitTaskContext === "object"
+    ? state.aiCeoExplicitTaskContext
+    : null;
+  if (explicit && String(explicit.taskId || "") === String(state.aiCeoTaskContextCommandId || "")) {
+    return {
+      productLabel: publicRuntimeText(explicit.title || "待补资料商品任务").slice(0, 96),
+      stageLabel: "补齐商品资料",
+      stageDetail: publicRuntimeText(`${explicit.commandSummary || "继续已有商品任务"}（任务 ${explicit.taskId}）`).slice(0, 160),
+      completedItems: [],
+      missingFacts: (Array.isArray(explicit.missingFacts) ? explicit.missingFacts : []).map((item) => publicRuntimeText(item).slice(0, 96)).filter(Boolean).slice(0, 4),
+      blockerTitle: "商品资料尚未形成可恢复草稿",
+      nextView: "product",
+      nextLabel: "返回最近商品任务",
+      nextKey: "recent",
+    };
+  }
   const boundCommandId = String(state.aiCeoTaskContextCommandId || "");
   const boundProjectId = String(state.aiCeoTaskContextProjectId || "");
   const currentCommand = normalizeSaasCeoCommand(command);
@@ -26337,6 +26777,11 @@ function syncSaasProjectRoute(view = state.view || "cockpit") {
     const url = new URL(window.location.href);
     url.searchParams.set("start", "app");
     url.searchParams.set("view", normalizeSaasProtectedView(view));
+    if (normalizeSaasProtectedView(view) === "product" && state.saasListingMode === "recent") {
+      url.searchParams.set("mode", "recent");
+    } else {
+      url.searchParams.delete("mode");
+    }
     const projectId = saasCurrentMerchantProjectId();
     if (projectId) url.searchParams.set("project", projectId);
     else url.searchParams.delete("project");
@@ -26502,7 +26947,7 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/ai-ceo/chat-history?limit=30", {
         ai_ceo_chat_history: { scope: "unavailable", cross_store: false, turns: [] },
       }, 10000),
-      saasFetch("/tasks?limit=20"),
+      saasFetch(`/tasks?limit=20&store_id=${encodeURIComponent(store.store_id)}`),
       saasFetch("/confirmations?limit=40"),
       optionalSaasFetchFast("/auth/sessions", { sessions: [] }, 10000),
       optionalSaasFetchFast("/health", state.saasServiceHealth || { status: "unknown" }, 10000),
@@ -33722,6 +34167,16 @@ function sanitizeSaasInactiveMerchantViews(activeView = "") {
 
 function setView(nextView, options = {}) {
   nextView = normalizeSaasProtectedView(nextView);
+  const previousView = state.view;
+  if (nextView === "bulk") {
+    state.saasListingMode = "bulk";
+  } else if (nextView === "product") {
+    const routeMode = previousView === "product" ? "" : safeQueryParam("mode");
+    state.saasListingMode = normalizeSaasListingMode(
+      options.listingMode || routeMode || (previousView === "product" ? state.saasListingMode : "single"),
+      "product",
+    );
+  }
   if (nextView === "cockpit") {
     if (Object.prototype.hasOwnProperty.call(options, "aiCeoTaskContextMode")) {
       setSaasAiCeoTaskContextState(
@@ -33744,7 +34199,7 @@ function setView(nextView, options = {}) {
   document.documentElement.dataset.view = nextView;
   views.forEach((view) => view.classList.toggle("is-active", view.id === `view-${nextView}`));
   sanitizeSaasInactiveMerchantViews(nextView);
-  const navView = nextView === "dna" ? "connect" : nextView;
+  const navView = nextView === "dna" ? "connect" : nextView === "bulk" ? "product" : nextView;
   document
     .querySelectorAll(".nav-item")
     .forEach((item) => item.classList.toggle("is-active", item.dataset.view === navView));
@@ -35619,6 +36074,7 @@ function updateBulkPipeline(stage = state.bulkStage) {
 
 function renderBulkFactory() {
   restorePreservedViewMarkup("bulk", "#bulkPreferenceGrid");
+  mountSaasListingModeNav("bulk", "bulk");
   updateBulkPipeline();
   updateBulkPreview();
   renderSaasModuleAiGoalStripIntoView("bulk", { anchorSelector: ".bulk-decision-workbench, .bulk-output-snapshot, #bulkPreferenceGrid" });
@@ -36029,9 +36485,8 @@ function handleBulkAction(action, item = "") {
   }
 
   if (action === "report") {
-    recordBulkActivity("批量铺货汇报", "批次汇报已写入 AI 汇报，可查看 eBay 机会、货源匹配、拦截原因和下一步确认事项。");
-    setView("activity");
-    showActionToast("已打开 AI 汇报：批次汇报已写入。");
+    activateSaasListingMode("recent");
+    showActionToast("已打开最近商品任务；这里只显示真实保存的商品工作，不会新建汇报或重跑 AI。");
     return;
   }
 
@@ -42156,6 +42611,12 @@ function bindEvents() {
   });
 
   document.querySelector("#view-bulk")?.addEventListener("click", (event) => {
+    const listingMode = event.target.closest("[data-listing-mode]");
+    if (listingMode) {
+      event.preventDefault();
+      activateSaasListingMode(listingMode.dataset.listingMode || "single");
+      return;
+    }
     const prefButton = event.target.closest("[data-bulk-pref]");
     if (prefButton) {
       event.preventDefault();
@@ -42220,6 +42681,24 @@ function bindEvents() {
   });
 
   document.querySelector("#view-product")?.addEventListener("click", (event) => {
+    const listingMode = event.target.closest("[data-listing-mode]");
+    if (listingMode) {
+      event.preventDefault();
+      activateSaasListingMode(listingMode.dataset.listingMode || "single");
+      return;
+    }
+    const recentTask = event.target.closest("[data-open-recent-product-task]");
+    if (recentTask) {
+      event.preventDefault();
+      openSaasRecentProductTask(recentTask.dataset.openRecentProductTask || "");
+      return;
+    }
+    const continueRecentTask = event.target.closest("[data-continue-recent-product-task]");
+    if (continueRecentTask) {
+      event.preventDefault();
+      continueSaasRecentProductTaskFacts(continueRecentTask.dataset.continueRecentProductTask || "");
+      return;
+    }
     const focusProductSection = (sectionName, trigger, options = {}) => {
       const { shouldScroll = false } = options;
       document.querySelectorAll(".product-manager-tab[data-product-jump]").forEach((tab) => {
@@ -42538,6 +43017,7 @@ function bindEvents() {
   document.querySelector("#storeSwitch").addEventListener("change", (event) => {
     const selectedStoreId = String(event.target.value || "");
     if (selectedStoreId.startsWith("saas:")) {
+      setSaasAiCeoTaskContextState("plain_consultation", false);
       resetSaasProductFeedbackViewState();
       try {
         localStorage.setItem(saasStorageKeys.storeId, selectedStoreId.slice(5));
