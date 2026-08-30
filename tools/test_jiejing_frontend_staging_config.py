@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import io
 import json
 import re
 import subprocess
 import sys
+import zipfile
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -18,6 +22,199 @@ ROOT = Path(__file__).resolve().parents[1]
 def fail(message: str) -> int:
     print(f"FAIL {message}")
     return 1
+
+
+def validate_prepare_bundle_contract() -> str:
+    with TemporaryDirectory(prefix="jiejing-clean-bundle-fixture-") as temp_dir:
+        fixture = Path(temp_dir)
+        (fixture / "tools").mkdir()
+        (fixture / "deploy").mkdir()
+        prepare_source = (ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py").read_text(
+            encoding="utf-8"
+        )
+        (fixture / "tools" / "jiejing_prepare_public_staging_bundle.py").write_text(
+            prepare_source,
+            encoding="utf-8",
+        )
+        app_js = "console.log('clean fixture');\n"
+        styles_css = "body { color: #123; }\n"
+        app_digest = hashlib.sha256(app_js.encode("utf-8")).hexdigest()[:12]
+        style_digest = hashlib.sha256(styles_css.encode("utf-8")).hexdigest()[:12]
+        family = "fixture-atomic-release"
+        fixture_files = {
+            "app.js": app_js,
+            "styles.css": styles_css,
+            "index.html": (
+                f'<link rel="preload" href="./app.js?v={family}-{app_digest}" as="script">\n'
+                f'<link rel="preload" href="./styles.css?v={family}-{style_digest}" as="style">\n'
+            ),
+            "app.html": (
+                f'<link rel="stylesheet" href="./styles.css?v={family}-{style_digest}">\n'
+                f'<script src="./app.js?v={family}-{app_digest}"></script>\n'
+            ),
+        }
+        for name, contents in fixture_files.items():
+            (fixture / name).write_text(contents, encoding="utf-8")
+        whitelist = [
+            "deploy/apply-staging-patch.sh",
+            "index.html",
+            "app.html",
+            "app.js",
+            "styles.css",
+        ]
+        apply_text = "FILES=(\n" + "".join(f'  "{name}"\n' for name in whitelist) + ")\n"
+        (fixture / "deploy" / "apply-staging-patch.sh").write_text(apply_text, encoding="utf-8")
+        (fixture / ".gitignore").write_text("output/\n__pycache__/\n", encoding="utf-8")
+        for command in (
+            ["git", "init", "-q"],
+            ["git", "config", "user.email", "fixture@jiejing.invalid"],
+            ["git", "config", "user.name", "Jiejing Fixture"],
+            ["git", "add", "."],
+            ["git", "commit", "-q", "-m", "fixture"],
+        ):
+            completed = subprocess.run(
+                command,
+                cwd=fixture,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+            if completed.returncode != 0:
+                return "clean fixture git setup failed"
+        source_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=fixture,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+            timeout=30,
+        ).stdout.strip()
+        prepare = fixture / "tools" / "jiejing_prepare_public_staging_bundle.py"
+        bundle_dry_run = subprocess.run(
+            [sys.executable, str(prepare), "--dry-run"],
+            cwd=fixture,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if bundle_dry_run.returncode != 0:
+            return "clean public staging bundle dry-run was rejected"
+        try:
+            bundle_manifest = json.loads(bundle_dry_run.stdout)
+        except json.JSONDecodeError:
+            return "public staging bundle dry-run did not emit readable JSON"
+        if bundle_manifest.get("source_commit") != source_commit:
+            return "bundle manifest is not bound to the clean source commit"
+        files_sha256 = bundle_manifest.get("files_sha256")
+        if not isinstance(files_sha256, dict) or set(files_sha256) != set(whitelist):
+            return "bundle manifest does not hash the complete whitelist"
+        for name in whitelist:
+            committed = subprocess.run(
+                ["git", "show", f"{source_commit}:{name}"],
+                cwd=fixture,
+                capture_output=True,
+                check=True,
+                timeout=30,
+            ).stdout
+            expected = hashlib.sha256(committed).hexdigest()
+            if files_sha256.get(name) != expected:
+                return f"bundle whitelist hash does not match fixed commit blob: {name}"
+        frontend_hashes = bundle_manifest.get("frontend_files_sha256")
+        atomic_frontend_files = {"index.html", "app.html", "app.js", "styles.css"}
+        if not isinstance(frontend_hashes, dict) or set(frontend_hashes) != atomic_frontend_files:
+            return "bundle manifest does not expose the four frontend hashes"
+        bundle_build = subprocess.run(
+            [sys.executable, str(prepare)],
+            cwd=fixture,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if bundle_build.returncode != 0:
+            return "clean public staging bundle build was rejected"
+        bundle_match = re.search(r"^BUNDLE_PATH=(.+)$", bundle_build.stdout, flags=re.MULTILINE)
+        manifest_match = re.search(r"^MANIFEST_PATH=(.+)$", bundle_build.stdout, flags=re.MULTILINE)
+        if not bundle_match or not manifest_match:
+            return "bundle build did not return exact artifact paths"
+        bundle_path = Path(bundle_match.group(1).strip())
+        manifest_path = Path(manifest_match.group(1).strip())
+        built_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        with zipfile.ZipFile(bundle_path, "r") as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)) or set(names) != set(whitelist):
+                return "built bundle entries do not exactly match the whitelist"
+            for name in whitelist:
+                observed = hashlib.sha256(archive.read(name)).hexdigest()
+                if observed != built_manifest.get("files_sha256", {}).get(name):
+                    return f"built bundle hash mismatch: {name}"
+        spec = importlib.util.spec_from_file_location("jiejing_prepare_fixture", prepare)
+        if spec is None or spec.loader is None:
+            return "unable to load bundle prepare race fixture"
+        prepare_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(prepare_module)
+        original_committed_files = prepare_module._committed_bundle_files
+
+        def swap_and_restore(source: str, files: list[Path]) -> dict[str, bytes]:
+            committed = original_committed_files(source, files)
+            target = fixture / "app.js"
+            original = target.read_bytes()
+            target.write_bytes(original + b"// transient race\n")
+            target.write_bytes(original)
+            return committed
+
+        prepare_module._committed_bundle_files = swap_and_restore
+        whitelist_path = fixture / "deploy" / "apply-staging-patch.sh"
+        original_whitelist_bytes = whitelist_path.read_bytes()
+        expanded_whitelist = original_whitelist_bytes.decode("utf-8").replace(
+            ")\n",
+            '  "worktree-only-forged.txt"\n)\n',
+            1,
+        )
+        whitelist_path.write_text(expanded_whitelist, encoding="utf-8")
+        try:
+            pinned_whitelist = prepare_module._apply_patch_file_list(source_commit)
+        finally:
+            whitelist_path.write_bytes(original_whitelist_bytes)
+        if pinned_whitelist != whitelist or "worktree-only-forged.txt" in pinned_whitelist:
+            return "bundle whitelist followed a transient worktree expansion"
+        original_argv = sys.argv
+        sys.argv = [str(prepare), "--dry-run"]
+        try:
+            with redirect_stdout(io.StringIO()):
+                prepare_module.main()
+        except RuntimeError as exc:
+            if "whitelist file changed during bundle preparation" not in str(exc):
+                return f"bundle race produced imprecise rejection: {exc}"
+        else:
+            return "transient whitelist swap-and-restore race was accepted"
+        finally:
+            sys.argv = original_argv
+        (fixture / "app.js").write_text(app_js + "// dirty\n", encoding="utf-8")
+        dirty_prepare = subprocess.run(
+            [sys.executable, str(prepare), "--dry-run"],
+            cwd=fixture,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if dirty_prepare.returncode == 0 or "dirty git worktree" not in (
+            dirty_prepare.stdout + dirty_prepare.stderr
+        ):
+            return "bundle prepare must fail closed on a dirty worktree"
+    return ""
 
 
 def main() -> int:
@@ -62,6 +259,9 @@ def main() -> int:
             "app.js and styles.css must share one atomic frontend release family: "
             f"{app_release_family!r} != {style_release_family!r}"
         )
+    prepare_contract_failure = validate_prepare_bundle_contract()
+    if prepare_contract_failure:
+        return fail(prepare_contract_failure)
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -351,7 +551,7 @@ def main() -> int:
         'data-home-ai-ceo-line="ads"',
         'data-home-ai-ceo-line="service"',
         'data-home-ai-ceo-line="finance"',
-        'data-home-auto-rotate="true"',
+        'data-home-auto-rotate="false"',
         'aria-pressed="true"',
         'aria-pressed="false"',
         ":focus-visible",

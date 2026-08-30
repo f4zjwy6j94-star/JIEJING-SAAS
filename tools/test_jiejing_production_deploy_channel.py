@@ -3,14 +3,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import hashlib
+import io
+import json
 import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import warnings
 import zipfile
 
 
@@ -22,6 +28,9 @@ PATCH_APPLY = ROOT / "deploy" / "apply-staging-patch.sh"
 CI = ROOT / ".github" / "workflows" / "jiejing-ci.yml"
 RUNBOOK = ROOT / "docs" / "JIEJING_PRODUCTION_DEPLOY_RUNBOOK_20260823.md"
 PRECLOUD_GATE = ROOT / "tools" / "jiejing_precloud_deployment_gate.py"
+BASH_REQUIRED_MESSAGE = (
+    "bash executable is required for production deploy channel runtime contract fixtures"
+)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
@@ -36,7 +45,10 @@ PHASE3_BUNDLE_FILES = {
 }
 
 BASE_BUNDLE_FILES = {
+    "index.html",
+    "app.html",
     "app.js",
+    "styles.css",
     "Dockerfile.saas",
     "deploy/docker-compose.production-pilot.yml",
     "deploy/jiejing-production-release-apply.sh",
@@ -45,10 +57,16 @@ BASE_BUNDLE_FILES = {
     "tools/jiejing_secret_scan.py",
 }
 
-
 def fail(message: str) -> int:
     print(f"FAIL {message}")
     return 1
+
+
+def require_bash_contract(resolver=shutil.which) -> str:
+    bash_path = resolver("bash")
+    if not bash_path:
+        raise RuntimeError(BASH_REQUIRED_MESSAGE)
+    return str(bash_path)
 
 
 def read(path: Path) -> str:
@@ -93,6 +111,513 @@ def validate_required_bundle_files() -> list[str]:
                     failures.append(f"missing {omitted} produced imprecise error: {exc}")
             else:
                 failures.append(f"bundle missing {omitted} was accepted")
+    return failures
+
+
+def validate_atomic_frontend_manifest() -> list[str]:
+    module = load_deploy_module()
+    failures: list[str] = []
+    family = "20260831-atomic-workbench"
+    app_js = b"console.log('atomic frontend');\r\n"
+    styles_css = b"body { color: #123; }\r\n"
+    app_digest = hashlib.sha256(app_js.replace(b"\r\n", b"\n")).hexdigest()[:12]
+    styles_digest = hashlib.sha256(styles_css.replace(b"\r\n", b"\n")).hexdigest()[:12]
+    app_version = f"{family}-{app_digest}"
+    styles_version = f"{family}-{styles_digest}"
+    files = {
+        "index.html": (
+            f'<link rel="prefetch" href="./app.js?v={app_version}" as="script">\n'
+            f'<link rel="prefetch" href="./styles.css?v={styles_version}" as="style">\n'
+            f'<script data-lazy="./app.js?v={app_version}"></script>\n'
+            f'<meta data-lazy-style="./styles.css?v={styles_version}">\n'
+        ).encode("utf-8"),
+        "app.html": (
+            f'<link rel="stylesheet" href="./styles.css?v={styles_version}">\n'
+            f'<script src="./app.js?v={app_version}"></script>\n'
+        ).encode("utf-8"),
+        "app.js": app_js,
+        "styles.css": styles_css,
+    }
+    manifest = {
+        "frontend_files_sha256": {
+            name: hashlib.sha256(contents).hexdigest() for name, contents in files.items()
+        },
+        "source_commit": "a" * 40,
+        "file_count": len(files),
+        "files": list(files),
+        "files_sha256": {
+            name: hashlib.sha256(contents).hexdigest() for name, contents in files.items()
+        },
+    }
+    with tempfile.TemporaryDirectory(prefix="jiejing-atomic-frontend-contract-") as temp_dir:
+        bundle = Path(temp_dir) / "bundle.zip"
+        with zipfile.ZipFile(bundle, "w") as archive:
+            for name, contents in files.items():
+                archive.writestr(name, contents)
+        try:
+            module.validate_atomic_frontend_release(bundle, manifest)
+        except (AttributeError, TypeError, ValueError) as exc:
+            failures.append(f"valid atomic frontend manifest rejected:{exc}")
+        try:
+            module.validate_bundle_manifest(bundle, manifest, set(files), "a" * 40)
+        except (AttributeError, TypeError, ValueError) as exc:
+            failures.append(f"valid complete bundle manifest rejected:{exc}")
+        for label, broken in (
+            ("stale source", {**manifest, "source_commit": "b" * 40}),
+            (
+                "missing file hash",
+                {
+                    **manifest,
+                    "files_sha256": {
+                        name: digest
+                        for name, digest in manifest["files_sha256"].items()
+                        if name != "app.html"
+                    },
+                },
+            ),
+            (
+                "extra file hash",
+                {
+                    **manifest,
+                    "files_sha256": {
+                        **manifest["files_sha256"],
+                        "unexpected.txt": "0" * 64,
+                    },
+                },
+            ),
+            ("missing manifest file", {**manifest, "files": list(files)[:-1]}),
+            ("wrong file count", {**manifest, "file_count": len(files) + 1}),
+        ):
+            try:
+                module.validate_bundle_manifest(bundle, broken, set(files), "a" * 40)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            failures.append(f"unsafe complete bundle manifest accepted:{label}")
+        broken_manifests = [
+            {},
+            {
+                "frontend_files_sha256": {
+                    name: digest
+                    for name, digest in manifest["frontend_files_sha256"].items()
+                    if name != "app.html"
+                }
+            },
+            {"frontend_files_sha256": {**manifest["frontend_files_sha256"], "app.js": "0" * 64}},
+            {"frontend_files_sha256": {**manifest["frontend_files_sha256"], "extra.html": "0" * 64}},
+        ]
+        for broken in broken_manifests:
+            try:
+                module.validate_atomic_frontend_release(bundle, broken)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            failures.append("missing, mismatched, or over-broad frontend manifest was accepted")
+
+        def expect_frontend_rejected(label: str, changed_files: dict[str, bytes]) -> None:
+            changed_bundle = Path(temp_dir) / f"{label}.zip"
+            with zipfile.ZipFile(changed_bundle, "w") as archive:
+                for name, contents in changed_files.items():
+                    archive.writestr(name, contents)
+            changed_manifest = {
+                "frontend_files_sha256": {
+                    name: hashlib.sha256(contents).hexdigest()
+                    for name, contents in changed_files.items()
+                }
+            }
+            try:
+                module.validate_atomic_frontend_release(changed_bundle, changed_manifest)
+            except (AttributeError, TypeError, ValueError):
+                return
+            failures.append(f"unsafe frontend reference accepted:{label}")
+
+        expect_frontend_rejected(
+            "mixed-family",
+            {
+                **files,
+                "index.html": files["index.html"].replace(
+                    family.encode("utf-8"), b"other-family"
+                ),
+            },
+        )
+        expect_frontend_rejected(
+            "lazy-string-only",
+            {
+                **files,
+                "index.html": (
+                    f'<div data-lazy="./app.js?v={app_version}" '
+                    f'data-style="./styles.css?v={styles_version}"></div>\n'
+                ).encode("utf-8"),
+            },
+        )
+        expect_frontend_rejected(
+            "extra-unversioned",
+            {
+                **files,
+                "app.html": files["app.html"] + b'<script src="./app.js"></script>\n',
+            },
+        )
+        expect_frontend_rejected(
+            "absolute-load",
+            {
+                **files,
+                "app.html": files["app.html"]
+                + f'<script src="https://cdn.example.test/app.js?v={app_version}"></script>\n'.encode(
+                    "utf-8"
+                ),
+            },
+        )
+
+        validation_files = {
+            name: files.get(name, b"placeholder\n")
+            for name in BASE_BUNDLE_FILES | PHASE3_BUNDLE_FILES
+        }
+        full_bundle = Path(temp_dir) / "full-candidate.zip"
+        with zipfile.ZipFile(full_bundle, "w") as archive:
+            for name, contents in validation_files.items():
+                archive.writestr(name, contents)
+        full_manifest = {
+            "scope": "public_staging_patch_whitelist_v1",
+            "real_platform_writes_enabled": False,
+            "source_commit": "a" * 40,
+            "file_count": len(validation_files),
+            "files": list(validation_files),
+            "files_sha256": {
+                name: hashlib.sha256(contents).hexdigest()
+                for name, contents in validation_files.items()
+            },
+            "frontend_files_sha256": {
+                name: hashlib.sha256(validation_files[name]).hexdigest()
+                for name in ("index.html", "app.html", "app.js", "styles.css")
+            },
+            "zip_sha256": module.sha256(full_bundle),
+        }
+        full_manifest_path = Path(temp_dir) / "full-candidate.manifest.json"
+        full_manifest_path.write_text(json.dumps(full_manifest), encoding="utf-8")
+        fixture_source_hashes = {
+            name: hashlib.sha256(contents).hexdigest()
+            for name, contents in validation_files.items()
+        }
+        try:
+            _, initial_bundle_sha, initial_manifest_sha = module.validate_local_release_candidate(
+                full_bundle,
+                full_manifest_path,
+                set(validation_files),
+                "a" * 40,
+                source_files_sha256=fixture_source_hashes,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            failures.append(f"valid sealed release candidate rejected:{exc}")
+            initial_bundle_sha = module.sha256(full_bundle)
+            initial_manifest_sha = module.sha256(full_manifest_path)
+
+        original_bundle_bytes = full_bundle.read_bytes()
+        full_bundle.write_bytes(original_bundle_bytes + b"tampered-after-initial-validation")
+        try:
+            module.validate_local_release_candidate(
+                full_bundle,
+                full_manifest_path,
+                set(validation_files),
+                "a" * 40,
+                expected_bundle_sha256=initial_bundle_sha,
+                expected_manifest_sha256=initial_manifest_sha,
+                source_files_sha256=fixture_source_hashes,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            if "candidate_bundle_changed" not in str(exc):
+                failures.append(f"changed bundle produced imprecise rejection:{exc}")
+        else:
+            failures.append("bundle changed after initial validation was accepted")
+        full_bundle.write_bytes(original_bundle_bytes)
+
+        original_manifest_bytes = full_manifest_path.read_bytes()
+        full_manifest_path.write_bytes(original_manifest_bytes + b" \n")
+        try:
+            module.validate_local_release_candidate(
+                full_bundle,
+                full_manifest_path,
+                set(validation_files),
+                "a" * 40,
+                expected_bundle_sha256=initial_bundle_sha,
+                expected_manifest_sha256=initial_manifest_sha,
+                source_files_sha256=fixture_source_hashes,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            if "candidate_manifest_changed" not in str(exc):
+                failures.append(f"changed manifest produced imprecise rejection:{exc}")
+        else:
+            failures.append("manifest changed after initial validation was accepted")
+        full_manifest_path.write_bytes(original_manifest_bytes)
+
+        original_git_value = module.git_value
+        source_state = {"head": "a" * 40, "dirty": ""}
+
+        def fixture_git_value(*args: str) -> str:
+            if args[:2] == ("rev-parse", "HEAD"):
+                return source_state["head"]
+            if args and args[0] == "status":
+                return source_state["dirty"]
+            return original_git_value(*args)
+
+        module.git_value = fixture_git_value
+        try:
+            module.assert_source_state("a" * 40)
+            source_state["head"] = "b" * 40
+            try:
+                module.assert_source_state("a" * 40)
+            except ValueError as exc:
+                if "source_commit_changed" not in str(exc):
+                    failures.append(f"changed HEAD produced imprecise rejection:{exc}")
+            else:
+                failures.append("HEAD changed before upload was accepted")
+        finally:
+            module.git_value = original_git_value
+
+        current_source_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+            timeout=30,
+        ).stdout.strip()
+        committed_whitelist_bytes = module.git_blob_bytes(
+            current_source_commit,
+            "deploy/apply-staging-patch.sh",
+        )
+        original_root = module.ROOT
+        original_git_blob_bytes = module.git_blob_bytes
+        transient_root = Path(temp_dir) / "transient-worktree-root"
+        (transient_root / "deploy").mkdir(parents=True)
+        transient_worktree_whitelist = committed_whitelist_bytes.decode("utf-8").replace(
+            ")\n",
+            '  "worktree-only-forged.txt"\n)\n',
+            1,
+        )
+        (transient_root / "deploy" / "apply-staging-patch.sh").write_text(
+            transient_worktree_whitelist,
+            encoding="utf-8",
+        )
+        module.ROOT = transient_root
+        module.git_blob_bytes = lambda source, path: committed_whitelist_bytes
+        try:
+            pinned_deploy_whitelist = module.apply_patch_file_list(current_source_commit)
+        finally:
+            module.git_blob_bytes = original_git_blob_bytes
+            module.ROOT = original_root
+        if "worktree-only-forged.txt" in pinned_deploy_whitelist:
+            failures.append("deploy whitelist followed a transient worktree expansion")
+        forged_targets = {
+            "deploy/jiejing-production-release-apply.sh",
+            "app.js",
+        }
+        committed_target_bytes = {
+            name: module.git_blob_bytes(current_source_commit, name)
+            for name in forged_targets
+        }
+        forged_contents = {
+            **committed_target_bytes,
+            "deploy/jiejing-production-release-apply.sh": (
+                b"#!/usr/bin/env bash\necho FORGED_APPLY_ENTERED\n"
+            ),
+        }
+        forged_bundle = Path(temp_dir) / "forged-self-consistent.zip"
+        with zipfile.ZipFile(forged_bundle, "w") as archive:
+            for name, contents in forged_contents.items():
+                archive.writestr(name, contents)
+        forged_manifest = {
+            "source_commit": current_source_commit,
+            "file_count": len(forged_contents),
+            "files": list(forged_contents),
+            "files_sha256": {
+                name: hashlib.sha256(contents).hexdigest()
+                for name, contents in forged_contents.items()
+            },
+        }
+        try:
+            module.validate_bundle_manifest(
+                forged_bundle,
+                forged_manifest,
+                set(forged_contents),
+                current_source_commit,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            failures.append(f"self-consistent forged manifest fixture invalid:{exc}")
+        try:
+            module.validate_bundle_matches_source_commit(
+                forged_bundle,
+                set(forged_contents),
+                current_source_commit,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            expected_error = (
+                "bundle_source_commit_mismatch:"
+                "deploy/jiejing-production-release-apply.sh"
+            )
+            if expected_error not in str(exc):
+                failures.append(f"forged apply script produced imprecise rejection:{exc}")
+        else:
+            failures.append("self-consistent forged apply script matched the source commit")
+
+        try:
+            require_bash_contract()
+        except RuntimeError as exc:
+            failures.append(str(exc))
+        else:
+            with tempfile.TemporaryDirectory(
+                prefix="jiejing-remote-integrity-fixture-", dir=ROOT
+            ) as remote_temp_dir:
+                remote_temp = Path(remote_temp_dir)
+                source_zip = remote_temp / "source.zip"
+                source_manifest = remote_temp / "source.manifest"
+                source_zip.write_bytes(original_bundle_bytes)
+                source_manifest.write_bytes(original_manifest_bytes)
+                expected_received_zip_sha = module.sha256(source_zip)
+                expected_received_manifest_sha = module.sha256(source_manifest)
+                token = os.urandom(4).hex()
+                remote_base = f"/tmp/jiejing-production-integrity-{token}"
+                received_zip_upload = remote_base + ".zip.uploading"
+                received_manifest_upload = remote_base + ".manifest.json.uploading"
+                received_zip = remote_base + ".zip"
+                received_manifest = remote_base + ".manifest.json"
+                received_dir = remote_base + ".d"
+                prelude = module.build_remote_integrity_prelude(
+                    remote_zip_upload=received_zip_upload,
+                    remote_zip=received_zip,
+                    expected_bundle_sha256=expected_received_zip_sha,
+                    remote_manifest_upload=received_manifest_upload,
+                    remote_manifest=received_manifest,
+                    expected_manifest_sha256=expected_received_manifest_sha,
+                    remote_dir=received_dir,
+                )
+                source_zip_relative = source_zip.relative_to(ROOT).as_posix()
+                source_manifest_relative = source_manifest.relative_to(ROOT).as_posix()
+                copy_inputs = (
+                    f"cp '{source_zip_relative}' '{received_zip_upload}'\n"
+                    f"cp '{source_manifest_relative}' '{received_manifest_upload}'\n"
+                )
+                source_zip.write_bytes(original_bundle_bytes + b"tampered-in-transit")
+                remote_result = run_bash_fixture(
+                    copy_inputs + prelude + "\necho APPLY_ENTERED\n",
+                    remote_temp,
+                    "remote-integrity-fixture.sh",
+                )
+                combined = remote_result.stdout + remote_result.stderr
+                if remote_result.returncode == 0 or "APPLY_ENTERED" in combined:
+                    failures.append("tampered received bundle entered remote apply")
+                if "REMOTE_ARTIFACT_SHA256_MISMATCH=" not in combined:
+                    failures.append(
+                        "tampered received bundle lacked deterministic hash rejection:"
+                        + combined[-500:]
+                    )
+                cleanup_check_script = "\n".join(
+                    [
+                        "#!/usr/bin/env bash",
+                        "set -euo pipefail",
+                        *[f"[[ ! -e '{path}' ]]" for path in (
+                            received_zip_upload,
+                            received_zip,
+                            received_manifest_upload,
+                            received_manifest,
+                            received_dir,
+                        )],
+                    ]
+                )
+                cleanup_check = run_bash_fixture(
+                    cleanup_check_script,
+                    remote_temp,
+                    "remote-hash-cleanup-check.sh",
+                )
+                if cleanup_check.returncode != 0:
+                    failures.append("hash mismatch left remote temporary artifacts")
+
+                source_zip.write_bytes(original_bundle_bytes)
+                mock_unzip = (
+                    "unzip() {\n"
+                    "  if [[ \"$1\" == \"-tq\" ]]; then return 0; fi\n"
+                    "  if [[ \"$1\" == \"-q\" ]]; then mkdir -p \"$4\"; return 0; fi\n"
+                    "  return 2\n"
+                    "}\n"
+                )
+                apply_failure = run_bash_fixture(
+                    copy_inputs
+                    + mock_unzip
+                    + prelude
+                    + "\necho APPLY_ENTERED\nfalse\n",
+                    remote_temp,
+                    "remote-apply-failure-fixture.sh",
+                )
+                apply_combined = apply_failure.stdout + apply_failure.stderr
+                if apply_failure.returncode == 0 or "APPLY_ENTERED" not in apply_combined:
+                    failures.append(
+                        "remote apply-failure fixture did not enter controlled apply:"
+                        + apply_combined[-500:]
+                    )
+                cleanup_check = run_bash_fixture(
+                    cleanup_check_script,
+                    remote_temp,
+                    "remote-apply-cleanup-check.sh",
+                )
+                if cleanup_check.returncode != 0:
+                    failures.append("apply failure left remote temporary artifacts")
+
+        duplicate_bundle = Path(temp_dir) / "duplicate-any-entry.zip"
+        duplicate_files = {**validation_files, "notes.txt": b"first\n"}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with zipfile.ZipFile(duplicate_bundle, "w") as archive:
+                for name, contents in duplicate_files.items():
+                    archive.writestr(name, contents)
+                archive.writestr("notes.txt", b"second\n")
+        try:
+            module.validate_zip(duplicate_bundle, allowed_files=set(duplicate_files))
+        except (AttributeError, TypeError, ValueError) as exc:
+            if "duplicate_entries" not in str(exc):
+                failures.append(f"duplicate zip entry produced imprecise rejection:{exc}")
+        else:
+            failures.append("duplicate non-frontend zip entry was accepted")
+
+        unexpected_bundle = Path(temp_dir) / "unexpected-entry.zip"
+        with zipfile.ZipFile(unexpected_bundle, "w") as archive:
+            for name, contents in validation_files.items():
+                archive.writestr(name, contents)
+            archive.writestr("unexpected.txt", b"not reviewed\n")
+        try:
+            module.validate_zip(unexpected_bundle, allowed_files=set(validation_files))
+        except (AttributeError, TypeError, ValueError) as exc:
+            if "bundle_whitelist_mismatch" not in str(exc):
+                failures.append(f"non-whitelist entry produced imprecise rejection:{exc}")
+        else:
+            failures.append("non-whitelisted zip entry was accepted")
+
+        unsafe_bundle = Path(temp_dir) / "unsafe-entry.zip"
+        unsafe_files = {**validation_files, "../escape.txt": b"escape\n"}
+        with zipfile.ZipFile(unsafe_bundle, "w") as archive:
+            for name, contents in unsafe_files.items():
+                archive.writestr(name, contents)
+        try:
+            module.validate_zip(unsafe_bundle, allowed_files=set(unsafe_files))
+        except (AttributeError, TypeError, ValueError) as exc:
+            if "unsafe_path:../escape.txt" not in str(exc):
+                failures.append(f"traversal entry produced imprecise rejection:{exc}")
+        else:
+            failures.append("zip traversal entry was accepted")
+
+        symlink_bundle = Path(temp_dir) / "symlink-entry.zip"
+        symlink_files = {**validation_files, "frontend-link": b"app.js"}
+        with zipfile.ZipFile(symlink_bundle, "w") as archive:
+            for name, contents in validation_files.items():
+                archive.writestr(name, contents)
+            info = zipfile.ZipInfo("frontend-link")
+            info.create_system = 3
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            archive.writestr(info, b"app.js")
+        try:
+            module.validate_zip(symlink_bundle, allowed_files=set(symlink_files))
+        except (AttributeError, TypeError, ValueError) as exc:
+            if "symlink:frontend-link" not in str(exc):
+                failures.append(f"symlink entry produced imprecise rejection:{exc}")
+        else:
+            failures.append("zip symlink entry was accepted")
     return failures
 
 
@@ -180,8 +705,10 @@ def validate_remote_stdout_contract() -> list[str]:
 
 
 def validate_private_env_runtime_fixture(apply: str) -> list[str]:
-    if shutil.which("bash") is None:
-        return []
+    try:
+        require_bash_contract()
+    except RuntimeError as exc:
+        return [str(exc)]
     try:
         functions = extract_bash_functions(
             apply,
@@ -293,8 +820,10 @@ printf '%s\n' PRIVATE_ENV_FIXTURE_PASS
 
 
 def validate_application_rollback_runtime_fixture(apply: str) -> list[str]:
-    if shutil.which("bash") is None:
-        return []
+    try:
+        require_bash_contract()
+    except RuntimeError as exc:
+        return [str(exc)]
     try:
         functions = extract_bash_functions(
             apply,
@@ -569,8 +1098,10 @@ printf '%s\n' APPLICATION_ROLLBACK_FIXTURE_PASS
 
 
 def validate_finalization_lock_runtime_fixture(apply: str) -> list[str]:
-    if shutil.which("bash") is None:
-        return []
+    try:
+        require_bash_contract()
+    except RuntimeError as exc:
+        return [str(exc)]
     try:
         function = extract_bash_functions(
             apply, ("finalize_evidence_refresh_transaction",)
@@ -657,6 +1188,7 @@ def extract_bash_functions(source: str, names: tuple[str, ...]) -> str:
 
 
 def run_bash_fixture(script: str, temp: Path, name: str) -> subprocess.CompletedProcess[str]:
+    bash_executable = require_bash_contract()
     harness = temp / name
     harness.write_text(script, encoding="utf-8", newline="\n")
     try:
@@ -665,7 +1197,7 @@ def run_bash_fixture(script: str, temp: Path, name: str) -> subprocess.Completed
         pass
     relative = harness.relative_to(ROOT).as_posix()
     return subprocess.run(
-        ["bash", relative],
+        [bash_executable, relative],
         cwd=ROOT,
         text=True,
         encoding="utf-8",
@@ -717,8 +1249,10 @@ rm -rf --one-file-system -- "$resolved"
 
 
 def validate_bash_runtime_fixture(apply: str) -> list[str]:
-    if shutil.which("bash") is None:
-        return []
+    try:
+        require_bash_contract()
+    except RuntimeError as exc:
+        return [str(exc)]
     failures: list[str] = []
     functions = extract_bash_functions(
         apply,
@@ -1183,7 +1717,34 @@ printf '%s\n' SHOULD_NOT_REACH
     return failures
 
 
-def main() -> int:
+def validate_missing_bash_fails_whole_test() -> list[str]:
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        result = main(
+            bash_resolver=lambda _name: None,
+            run_prerequisite_self_test=False,
+        )
+    rendered = output.getvalue()
+    if result != 1:
+        return ["missing bash did not fail the complete deploy-channel contract test"]
+    if f"FAIL {BASH_REQUIRED_MESSAGE}" not in rendered:
+        return ["missing bash failure did not expose the required prerequisite clearly"]
+    return []
+
+
+def main(
+    bash_resolver=shutil.which,
+    *,
+    run_prerequisite_self_test: bool = True,
+) -> int:
+    try:
+        require_bash_contract(bash_resolver)
+    except RuntimeError as exc:
+        return fail(str(exc))
+    if run_prerequisite_self_test:
+        prerequisite_failures = validate_missing_bash_fails_whole_test()
+        if prerequisite_failures:
+            return fail("; ".join(prerequisite_failures))
     try:
         client = read(CLIENT)
         apply = read(APPLY)
@@ -1203,6 +1764,26 @@ def main() -> int:
         'EXPECTED_CONFIRM = "deploy app.jiejing.shop production"',
         "bundle_sha256_mismatch",
         "manifest_scope_invalid",
+        "validate_bundle_manifest(bundle, manifest, allowed_files, expected_source_commit)",
+        "validate_local_release_candidate(",
+        "apply_patch_file_list(source_sha)",
+        'git_blob_bytes(source_commit, "deploy/apply-staging-patch.sh")',
+        "source_commit_file_hashes(source_sha, allowed_files)",
+        "validate_bundle_matches_source_commit(",
+        "bundle_source_commit_mismatch:",
+        "assert_source_state(source_sha)",
+        "build_remote_integrity_prelude(",
+        "REMOTE_ARTIFACT_SHA256_MISMATCH",
+        "trap cleanup_remote_artifacts EXIT",
+        r'rm -f -- \"$REMOTE_ZIP_UPLOAD\" \"$REMOTE_ZIP\"',
+        r'rm -f -- \"$REMOTE_MANIFEST_UPLOAD\" \"$REMOTE_MANIFEST\"',
+        r'rm -rf -- \"$REMOTE_DIR\"',
+        "remote_manifest_upload",
+        "validate_atomic_frontend_release(bundle, manifest)",
+        "manifest_source_commit_mismatch",
+        "manifest_file_hash_scope_invalid",
+        "duplicate_entries",
+        "frontend_files_sha256",
         "validate_bundle_javascript(bundle)",
         "local_node_unavailable",
         "bundle_javascript_invalid",
@@ -1376,10 +1957,44 @@ def main() -> int:
         missing.extend(f"{prefix}:{marker}" for marker in markers if marker not in text)
     if missing:
         return fail("production deploy channel missing markers: " + ",".join(missing))
+    initial_source_check = client.index("assert_source_state(source_sha)")
+    pinned_whitelist = client.index("apply_patch_file_list(source_sha)", initial_source_check)
+    source_blob_validation = client.index("source_commit_file_hashes(source_sha, allowed_files)")
+    initial_validation = client.index(
+        "manifest_sha256 = validate_local_release_candidate("
+    )
+    sealed_validation = client.index("validate_local_release_candidate(", initial_validation + 1)
+    final_source_check = client.index("assert_source_state(source_sha)", sealed_validation)
+    if "upload(args, bundle, remote_zip)" in client:
+        return fail("production upload must use sealed temporary artifacts, not mutable source paths")
+    sealed_bundle_upload = client.index("upload(args, sealed_bundle, remote_zip_upload)")
+    sealed_manifest_upload = client.index("upload(args, sealed_manifest, remote_manifest_upload)")
+    post_upload_source_check = client.index(
+        "assert_source_state(source_sha)", sealed_manifest_upload
+    )
+    remote_prelude = client.index("build_remote_integrity_prelude(", post_upload_source_check)
+    remote_apply = client.index('"sudo -n env "', remote_prelude)
+    if not (
+        initial_source_check
+        < pinned_whitelist
+        < source_blob_validation
+        < initial_validation
+        < sealed_validation
+        < final_source_check
+        < sealed_bundle_upload
+        < sealed_manifest_upload
+        < post_upload_source_check
+        < remote_prelude
+        < remote_apply
+    ):
+        return fail("sealed local and received remote artifacts are not revalidated before apply")
 
     bundle_failures = validate_required_bundle_files()
     if bundle_failures:
         return fail("; ".join(bundle_failures))
+    atomic_frontend_failures = validate_atomic_frontend_manifest()
+    if atomic_frontend_failures:
+        return fail("; ".join(atomic_frontend_failures))
     stdout_contract_failures = validate_remote_stdout_contract()
     if stdout_contract_failures:
         return fail("; ".join(stdout_contract_failures))
