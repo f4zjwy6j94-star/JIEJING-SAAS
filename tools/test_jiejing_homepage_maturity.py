@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+from html import unescape
 from pathlib import Path
 
 
@@ -11,7 +12,43 @@ ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "index.html").read_text(encoding="utf-8")
 
 
+def visible_text_blocks(source: str) -> list[str]:
+    block_closed = re.sub(
+        r"</(?:p|li|article|section|aside|header|footer|div|figure)\s*>",
+        "\n",
+        source,
+        flags=re.I,
+    )
+    visible = unescape(re.sub(r"<[^>]+>", " ", block_closed))
+    return [
+        re.sub(r"\s+", " ", block).strip()
+        for block in re.split(r"(?<=[。！？!?])|\n+", visible)
+        if re.sub(r"\s+", " ", block).strip()
+    ]
+
+
+def assert_future_platform_copy(source: str) -> None:
+    forbidden = re.compile(r"已支持|现已支持|立即使用|直接发布|当前可用")
+    for platform in ("TikTok", "Amazon"):
+        for block in (item for item in visible_text_blocks(source) if re.search(platform, item, re.I)):
+            assert "后续开放" in block, f"{platform} must be explicitly marked 后续开放 in its block: {block}"
+            assert not forbidden.search(block), f"{platform} future block also claims current availability: {block}"
+
+
 def main() -> None:
+    assert_future_platform_copy("<p>TikTok、Amazon 后续开放。</p>")
+    for counterexample in (
+        "<p>TikTok 后续开放；当前可用。</p>",
+        "<div>Amazon 后续开放；现已支持。</div>",
+        "<p>TikTok 当前可用。</p>",
+        "<p>Amazon 即将开放。</p>",
+    ):
+        try:
+            assert_future_platform_copy(counterexample)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"platform availability counterexample escaped the guard: {counterexample}")
     body_match = re.search(r'<body\b[^>]*\bclass\s*=\s*"[^"]*\bpublic-home-v3\b[^"]*"[^>]*>', INDEX, re.I)
     assert body_match
     assert len(re.findall(r'data-home-section="[^"]+"', INDEX)) == 6
@@ -78,6 +115,42 @@ def main() -> None:
     workflow_start = re.search(r'<section\b(?=[^>]*data-home-section="workflow")[^>]*>', INDEX, re.I).start()
     merchants_start = re.search(r'<section\b(?=[^>]*data-home-section="merchants")[^>]*>', INDEX[workflow_start:], re.I).start() + workflow_start
     workflow_source = INDEX[workflow_start:merchants_start]
+    assert 'data-home-workflow="merchant-loop-v1"' in workflow_source
+    workflow_steps = re.findall(
+        r'<button\b(?=[^>]*data-home-workflow-step="([^"]+)")(?=[^>]*aria-pressed="(?:true|false)")[^>]*>',
+        workflow_source,
+        re.I,
+    )
+    assert workflow_steps == ["goal", "research", "facts", "listing", "media", "confirm"]
+    workflow_step_tags = re.findall(r'<button\b[^>]*data-home-workflow-step="[^"]+"[^>]*>', workflow_source, re.I)
+    assert sum('aria-pressed="true"' in tag for tag in workflow_step_tags) == 1
+    workflow_panels = re.findall(r'data-home-workflow-panel="([^"]+)"', workflow_source)
+    assert workflow_panels == workflow_steps
+    assert 'data-home-workflow-live="active-step"' in workflow_source
+    assert re.search(r'data-home-workflow-live="active-step"[^>]*aria-live="polite"|aria-live="polite"[^>]*data-home-workflow-live="active-step"', workflow_source)
+    assert "setupHomepageMerchantWorkflow" in INDEX
+    assert "商家确认后经 eBay 官方连接执行" in workflow_source
+    assert 'data-home-workflow-cta="workspace"' in workflow_source
+    for internal_copy in (
+        "readiness",
+        "provider",
+        "packet",
+        "worker",
+        "Vault",
+        "项目完成度",
+        "内部运行记录",
+        "Token",
+        "account_id",
+        "store_id",
+        "order_id",
+        "chat_id",
+        "conversation_id",
+        "真实账号",
+        "真实订单",
+        "真实聊天",
+    ):
+        assert internal_copy.lower() not in workflow_source.lower()
+    assert_future_platform_copy(workflow_source)
     assert 'data-home-material-studio="listing-media-v3"' in workflow_source
     for stage in ("input", "generation", "review", "listing"):
         assert f'data-home-material-stage="{stage}"' in workflow_source

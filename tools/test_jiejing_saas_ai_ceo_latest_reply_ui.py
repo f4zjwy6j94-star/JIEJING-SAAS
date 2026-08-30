@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -16,9 +17,52 @@ def fail(message: str) -> int:
     return 1
 
 
+def top_level_function(source: str, name: str) -> str:
+    start = source.index(f"function {name}")
+    next_function = re.search(r"^(?:async\s+)?function\s+", source[start + 1 :], re.M)
+    end = len(source) if next_function is None else start + 1 + next_function.start()
+    return source[start:end]
+
+
 def main() -> int:
     app = APP.read_text(encoding="utf-8")
     css = CSS.read_text(encoding="utf-8")
+
+    adaptive_markers = [
+        "function saasAiCeoTaskContextState",
+        "function renderSaasAiCeoTaskContextMarkup",
+        'data-ai-ceo-task-context="adaptive_task_context_v1"',
+        "data-ai-ceo-task-context-state",
+        "data-ai-ceo-task-context-toggle",
+        "data-ai-ceo-task-context-summary",
+        "data-ai-ceo-task-context-detail",
+        "data-ai-ceo-task-next-action",
+        "aiCeoTaskContextMode",
+        "aiCeoTaskContextExpanded",
+        "plain_consultation",
+        "active_product_task",
+        "explicit_project_entry",
+        "collapsed",
+    ]
+    for marker in adaptive_markers:
+        if marker not in app:
+            return fail(f"missing adaptive AI CEO task-context contract: {marker}")
+
+    mount_contract = top_level_function(app, "mountSaasMerchantProjectStatusStrip")
+    allowed_views_match = re.search(r"\[([^\]]+)\]\.includes\(viewId\)", mount_contract, re.S)
+    if not allowed_views_match:
+        return fail("merchant project status mount must expose a scoped allowed-view list")
+    allowed_views = re.findall(r'["\']([^"\']+)["\']', allowed_views_match.group(1))
+    if "cockpit" in allowed_views:
+        return fail("historical project status must not mount the legacy strip inside AI CEO")
+    if allowed_views != ["product", "media", "confirm"]:
+        return fail(f"merchant project status strip must stay on product/media/confirm only: {allowed_views}")
+
+    task_context_markup = top_level_function(app, "renderSaasAiCeoTaskContextMarkup")
+    if task_context_markup.count("data-ai-ceo-task-next-action") != 1:
+        return fail("AI CEO task context must expose exactly one next action")
+    if "data-ai-ceo-task-context-toggle" not in task_context_markup or "aria-expanded" not in task_context_markup:
+        return fail("AI CEO task context toggle must publish its expanded state")
 
     required_app = [
         "const jiejingTrustedHtmlBlockedPattern = /<script\\b",
@@ -146,14 +190,13 @@ def main() -> int:
         "素材目标已带入",
         "客服订单目标已带入",
         "高风险动作已拦住",
-        "AI CEO 路由确认",
         "我理解",
         "推荐去",
         "安全边界",
         "只整理草稿，真实动作仍确认",
         "先确认，未点头不执行",
-        '<details class="saas-ceo-route-closure"',
-        "查看处理步骤",
+        'data-ai-ceo-route-task-card="ai_ceo_route_task_card_v2"',
+        "saas-ceo-routing-summary",
         "function renderSaasAiCeoSourceRecordsMarkup",
         "function normalizeSaasAiCeoWorkRecords",
         "function normalizeSaasAiCeoConfirmationItems",
@@ -164,7 +207,6 @@ def main() -> int:
         "function isSaasAiCeoPlainConsultationTurn",
         "function shouldRecordSaasCeoCommandSourceRecord",
         "saas-ai-ceo-work-detail",
-        "查看工作详情",
         "source_records",
         "work_records",
         "confirmation_items",
@@ -202,32 +244,6 @@ def main() -> int:
         "正在处理...",
         "这是一条旧消息：当时没有保存可展示回复。",
         "external_data_source_required",
-        "function renderSaasAiCeoFirstRunHandoff",
-        "first_run_ai_ceo_handoff_v1",
-        "first_day_ai_ceo_path_v2",
-        'data-does-not-trigger-real-write="true"',
-        "上传第一份商品资料",
-        "默认空白工作台",
-        "先提交自己的商品资料，不使用预置商品",
-        "function renderSaasMerchantLaunchReadinessPath",
-        "merchant_launch_readiness_path_v1",
-        "正式经营准备",
-        "没有完成店铺连接和正式收款前，也可以先把商品经营链路准备好",
-        "先用 AI CEO",
-        "沉淀商品项目",
-        "补店铺与收款",
-        "确认后再执行",
-        "我还没接 eBay，先帮我规划上线前能做什么",
-        "first_day_one_task_focus_v1",
-        "提交资料",
-        "核对草稿",
-        "决定下一步",
-        "添加商品图片、货源链接或文字说明。",
-        "saas-ai-ceo-one-task-option",
-        'data-ceo-prompt="${escapeHtml(prompt)}"',
-        "我有商品图片，请先整理资料缺口",
-        "我有货源链接，请生成一份待核对草稿",
-        "我先用文字说明商品，请告诉我还缺什么",
     ]
     for needle in required_app:
         if needle not in app:
@@ -259,22 +275,11 @@ def main() -> int:
         "min-height: 0;",
         "2026-06-24 AI CEO minimal routing v2",
         ".saas-ai-ceo-input-hint",
-        ".saas-ai-ceo-one-task-focus",
-        ".saas-ai-ceo-one-task-grid",
-        ".saas-ai-ceo-one-task-option",
-        ".saas-ai-ceo-launch-readiness-path",
-        ".saas-ai-ceo-launch-readiness-grid",
-        ".saas-ai-ceo-launch-readiness-actions",
         ".saas-ceo-routing-main",
         ".saas-ceo-routing-why",
-        ".saas-ceo-route-closure summary",
         ".saas-module-ai-goal-strip",
         ".saas-module-ai-goal-steps",
         "box-shadow: 0 14px 34px rgba(22, 50, 44, 0.08)",
-        ".saas-ai-ceo-first-run-handoff",
-        ".saas-ai-ceo-first-day-path",
-        ".saas-ai-ceo-first-run-actions",
-        "2026-06-26 mobile AI CEO handoff polish",
         ".saas-ai-ceo-thread .message.ai > span",
         ".saas-ai-ceo-thread .message.ai .saas-ai-ceo-pending-status span",
         "border-radius: 999px;",

@@ -9,6 +9,7 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
+const { assertSafeMutationBase } = require("./jiejing_browser_smoke_mutation_guard");
 
 let base = process.env.JIEJING_TEST_BASE || "";
 const localStaticRoot = path.resolve(process.env.JIEJING_LOCAL_STATIC_ROOT || path.join(__dirname, ".."));
@@ -369,7 +370,7 @@ async function runSmoke() {
   await page.waitForSelector('#view-product.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 60000 });
 
   const viewResults = {};
-  for (const view of ["product", "media", "confirm", "cockpit"]) {
+  for (const view of ["product", "media", "confirm"]) {
     await page.evaluate((nextView) => setView(nextView), view);
     await page.waitForSelector(`#view-${view}.is-active [data-merchant-project-status="merchant_project_status_v1"]`, { timeout: 20000 });
     viewResults[view] = await page.evaluate(
@@ -392,6 +393,105 @@ async function runSmoke() {
       { view, projectId, expectedStage: expectedSnapshot.current_stage },
     );
   }
+  await page.evaluate(() => setView("cockpit"));
+  await page.waitForSelector("#view-cockpit.is-active", { timeout: 20000 });
+  const cockpitHistoryOnly = await page.evaluate(() => {
+    const activeView = document.querySelector("#view-cockpit.is-active");
+    const chat = activeView?.querySelector(".saas-ai-ceo-chatgpt-layout");
+    return {
+      legacy_project_strip_count: activeView?.querySelectorAll('[data-merchant-project-status="merchant_project_status_v1"]').length || 0,
+      task_context_count: activeView?.querySelectorAll('[data-ai-ceo-task-context="adaptive_task_context_v1"]').length || 0,
+      chat_width_ratio: activeView && chat ? chat.getBoundingClientRect().width / activeView.getBoundingClientRect().width : 0,
+      horizontal_overflow: activeView ? Math.max(0, activeView.scrollWidth - activeView.clientWidth) : -1,
+    };
+  });
+  await page.evaluate(() => setView("cockpit", { aiCeoTaskContextMode: "active_product_task", aiCeoTaskContextExpanded: true }));
+  await page.waitForSelector(
+    '#view-cockpit.is-active [data-ai-ceo-task-context="adaptive_task_context_v1"][data-ai-ceo-task-context-state="active_product_task"]',
+    { timeout: 20000 },
+  );
+  const activeProductTaskDesktop = await page.evaluate(() => {
+    const root = document.querySelector("#view-cockpit.is-active .saas-ai-ceo-chatgpt-layout");
+    const chat = root?.querySelector(".saas-ai-ceo-thread");
+    const context = root?.querySelector('[data-ai-ceo-task-context="adaptive_task_context_v1"]');
+    const toggle = root?.querySelector("[data-ai-ceo-task-context-toggle]");
+    const rootWidth = root?.getBoundingClientRect().width || 0;
+    return {
+      state: context?.dataset.aiCeoTaskContextState || "",
+      aria_expanded: toggle?.getAttribute("aria-expanded") || "",
+      next_action_count: context?.querySelectorAll("[data-ai-ceo-task-next-action]").length || 0,
+      chat_ratio: rootWidth && chat ? chat.getBoundingClientRect().width / rootWidth : 0,
+      context_ratio: rootWidth && context ? context.getBoundingClientRect().width / rootWidth : 0,
+      width_ratio: rootWidth / document.documentElement.clientWidth,
+      horizontal_overflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
+    };
+  });
+  await page.click("#view-cockpit.is-active [data-ai-ceo-task-context-toggle]");
+  await page.waitForFunction(
+    () => document.querySelector("#view-cockpit.is-active [data-ai-ceo-task-context-toggle]")?.getAttribute("aria-expanded") === "false",
+    null,
+    { timeout: 10000 },
+  );
+  const collapsedProductTaskDesktop = await page.evaluate(() => {
+    const root = document.querySelector("#view-cockpit.is-active .saas-ai-ceo-chatgpt-layout");
+    const chat = root?.querySelector(".saas-ai-ceo-thread");
+    const detail = root?.querySelector("[data-ai-ceo-task-context-detail]");
+    const rootWidth = root?.getBoundingClientRect().width || 0;
+    return {
+      aria_expanded: root?.querySelector("[data-ai-ceo-task-context-toggle]")?.getAttribute("aria-expanded") || "",
+      detail_hidden: Boolean(detail?.hidden || detail?.getClientRects().length === 0),
+      chat_ratio: rootWidth && chat ? chat.getBoundingClientRect().width / rootWidth : 0,
+    };
+  });
+  await page.evaluate(() => setView("cockpit", { aiCeoTaskContextMode: "explicit_project_entry", aiCeoTaskContextExpanded: true }));
+  await page.waitForSelector(
+    '#view-cockpit.is-active [data-ai-ceo-task-context-state="explicit_project_entry"] [data-ai-ceo-task-context-detail]',
+    { timeout: 10000 },
+  );
+  const explicitProjectEntry = await page.evaluate(() => ({
+    state: document.querySelector("#view-cockpit.is-active [data-ai-ceo-task-context]")?.dataset.aiCeoTaskContextState || "",
+    aria_expanded: document.querySelector("#view-cockpit.is-active [data-ai-ceo-task-context-toggle]")?.getAttribute("aria-expanded") || "",
+  }));
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.evaluate(() => setView("cockpit", { aiCeoTaskContextMode: "active_product_task", aiCeoTaskContextExpanded: true }));
+  const activeProductTaskTablet = await page.evaluate(() => {
+    const root = document.querySelector("#view-cockpit.is-active .saas-ai-ceo-chatgpt-layout");
+    const chat = root?.querySelector(".saas-ai-ceo-thread");
+    const detail = root?.querySelector("[data-ai-ceo-task-context-detail]");
+    const rootWidth = root?.getBoundingClientRect().width || 0;
+    return {
+      chat_ratio: rootWidth && chat ? chat.getBoundingClientRect().width / rootWidth : 0,
+      detail_position: detail ? getComputedStyle(detail).position : "",
+      detail_width_ratio: detail ? detail.getBoundingClientRect().width / document.documentElement.clientWidth : 0,
+      aria_expanded: root?.querySelector("[data-ai-ceo-task-context-toggle]")?.getAttribute("aria-expanded") || "",
+      horizontal_overflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
+    };
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => setView("cockpit", { aiCeoTaskContextMode: "active_product_task", aiCeoTaskContextExpanded: false }));
+  const mobileSummaryBefore = await page.evaluate(() => ({
+    summary_visible: Boolean(document.querySelector("#view-cockpit.is-active [data-ai-ceo-task-context-summary]")?.getClientRects().length),
+    aria_expanded: document.querySelector("#view-cockpit.is-active [data-ai-ceo-task-context-toggle]")?.getAttribute("aria-expanded") || "",
+  }));
+  await page.click("#view-cockpit.is-active [data-ai-ceo-task-context-toggle]");
+  await page.waitForFunction(
+    () => document.querySelector("#view-cockpit.is-active [data-ai-ceo-task-context-toggle]")?.getAttribute("aria-expanded") === "true",
+    null,
+    { timeout: 10000 },
+  );
+  const mobileDetailAfter = await page.evaluate(() => {
+    const detail = document.querySelector("#view-cockpit.is-active [data-ai-ceo-task-context-detail]");
+    return {
+      detail_visible: Boolean(detail?.getClientRects().length),
+      detail_position: detail ? getComputedStyle(detail).position : "",
+      width_ratio: detail ? detail.getBoundingClientRect().width / document.documentElement.clientWidth : 0,
+      aria_expanded: document.querySelector("#view-cockpit.is-active [data-ai-ceo-task-context-toggle]")?.getAttribute("aria-expanded") || "",
+      horizontal_overflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
+    };
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const legacyActivityRoute = await page.evaluate(() => {
     setView("activity");
     const url = new URL(window.location.href);
@@ -465,7 +565,7 @@ async function runSmoke() {
     { name: "mobile", width: 390, height: 844 },
   ]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    for (const view of ["product", "confirm", "cockpit"]) {
+    for (const view of ["product", "confirm"]) {
       await page.evaluate((nextView) => setView(nextView), view);
       await page.waitForSelector(`#view-${view}.is-active [data-merchant-project-status="merchant_project_status_v1"]`, {
         timeout: 20000,
@@ -491,6 +591,30 @@ async function runSmoke() {
         ),
       );
     }
+    await page.evaluate(() => setView("cockpit", { aiCeoTaskContextMode: "plain_consultation" }));
+    await page.waitForSelector("#view-cockpit.is-active", { timeout: 20000 });
+    responsiveResults.push(
+      await page.evaluate(
+        ({ viewport }) => {
+          const root = document.documentElement;
+          const activeView = document.querySelector("#view-cockpit.is-active");
+          const chat = activeView?.querySelector(".saas-ai-ceo-chatgpt-layout");
+          return {
+            viewport: viewport.name,
+            view: "cockpit",
+            strip_present: Boolean(activeView?.querySelector('[data-merchant-project-status="merchant_project_status_v1"]')),
+            task_context_present: Boolean(activeView?.querySelector('[data-ai-ceo-task-context="adaptive_task_context_v1"]')),
+            chat_width_ratio: activeView && chat ? chat.getBoundingClientRect().width / activeView.getBoundingClientRect().width : 0,
+            horizontal_overflow: Math.max(0, root.scrollWidth - root.clientWidth),
+            active_view_overflow: activeView ? Math.max(0, activeView.scrollWidth - activeView.clientWidth) : -1,
+            fake_later_action_count: activeView
+              ? Array.from(activeView.querySelectorAll("button")).filter((button) => button.textContent.trim() === "稍后处理").length
+              : -1,
+          };
+        },
+        { viewport },
+      ),
+    );
   }
 
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -504,14 +628,51 @@ async function runSmoke() {
   );
   const responsiveChecksPass = responsiveResults.every(
     (item) =>
-      item.strip_present &&
+      (item.view === "cockpit" ? !item.strip_present && !item.task_context_present && item.chat_width_ratio >= 0.9 : item.strip_present) &&
       item.horizontal_overflow === 0 &&
       item.active_view_overflow === 0 &&
       item.fake_later_action_count === 0,
   );
+  const cockpitHistoryOnlyPass =
+    cockpitHistoryOnly.legacy_project_strip_count === 0 &&
+    cockpitHistoryOnly.task_context_count === 0 &&
+    cockpitHistoryOnly.chat_width_ratio >= 0.9 &&
+    cockpitHistoryOnly.horizontal_overflow === 0;
+  const activeTaskContextPass =
+    activeProductTaskDesktop.state === "active_product_task" &&
+    activeProductTaskDesktop.aria_expanded === "true" &&
+    activeProductTaskDesktop.next_action_count === 1 &&
+    activeProductTaskDesktop.chat_ratio >= 0.62 &&
+    activeProductTaskDesktop.chat_ratio <= 0.74 &&
+    activeProductTaskDesktop.context_ratio >= 0.26 &&
+    activeProductTaskDesktop.context_ratio <= 0.38 &&
+    activeProductTaskDesktop.width_ratio > 0 &&
+    activeProductTaskDesktop.width_ratio <= 1 &&
+    activeProductTaskDesktop.horizontal_overflow === 0 &&
+    collapsedProductTaskDesktop.aria_expanded === "false" &&
+    collapsedProductTaskDesktop.detail_hidden &&
+    collapsedProductTaskDesktop.chat_ratio >= 0.9 &&
+    explicitProjectEntry.state === "explicit_project_entry" &&
+    explicitProjectEntry.aria_expanded === "true" &&
+    activeProductTaskTablet.chat_ratio >= 0.9 &&
+    ["fixed", "absolute"].includes(activeProductTaskTablet.detail_position) &&
+    activeProductTaskTablet.detail_width_ratio > 0 &&
+    activeProductTaskTablet.detail_width_ratio <= 1 &&
+    activeProductTaskTablet.aria_expanded === "true" &&
+    activeProductTaskTablet.horizontal_overflow === 0 &&
+    mobileSummaryBefore.summary_visible &&
+    mobileSummaryBefore.aria_expanded === "false" &&
+    mobileDetailAfter.detail_visible &&
+    ["fixed", "absolute"].includes(mobileDetailAfter.detail_position) &&
+    mobileDetailAfter.width_ratio >= 0.9 &&
+    mobileDetailAfter.width_ratio <= 1 &&
+    mobileDetailAfter.horizontal_overflow === 0 &&
+    mobileDetailAfter.aria_expanded === "true";
   const ok =
     viewChecksPass &&
     responsiveChecksPass &&
+    cockpitHistoryOnlyPass &&
+    activeTaskContextPass &&
     afterReload.service_trace_present &&
     afterReload.project_match &&
     afterReload.snapshot_match &&
@@ -531,6 +692,8 @@ async function runSmoke() {
   const failedChecks = Object.entries({
     view_checks: viewChecksPass,
     responsive_checks: responsiveChecksPass,
+    cockpit_history_only_is_full_width: cockpitHistoryOnlyPass,
+    active_task_context_behaves_across_viewports: activeTaskContextPass,
     reload_service_trace: afterReload.service_trace_present,
     reload_project_route: afterReload.project_match,
     reload_project_snapshot: afterReload.snapshot_match,
@@ -561,6 +724,13 @@ async function runSmoke() {
     legacy_activity_route: legacyActivityRoute,
     service_trace_ui: serviceTraceUi,
     responsive_results: responsiveResults,
+    cockpit_history_only: cockpitHistoryOnly,
+    active_product_task_desktop: activeProductTaskDesktop,
+    collapsed_product_task_desktop: collapsedProductTaskDesktop,
+    explicit_project_entry: explicitProjectEntry,
+    active_product_task_tablet: activeProductTaskTablet,
+    mobile_summary_before: mobileSummaryBefore,
+    mobile_detail_after: mobileDetailAfter,
     status_requests: statusRequests,
     page_errors: pageErrors,
     bad_responses: badResponses,
@@ -575,9 +745,12 @@ async function runSmoke() {
 async function main() {
   let ownedBackend = null;
   try {
-    if (!base) {
+    if (base) {
+      assertSafeMutationBase(base);
+    } else {
       ownedBackend = await startOwnedBackend();
       base = ownedBackend.backendBase;
+      assertSafeMutationBase(base);
     }
     await runSmoke();
   } finally {
@@ -585,7 +758,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

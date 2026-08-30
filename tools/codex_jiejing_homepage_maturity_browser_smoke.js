@@ -18,6 +18,7 @@ const approvedMaterialAssets = [
 ];
 const approvedHeroNodes = ["market", "listing", "media", "ads", "service", "finance"];
 const approvedHeroLabels = ["市场与货源", "Listing 草稿", "素材工坊", "广告费用", "客服物流", "财务风控"];
+const approvedWorkflowSteps = ["goal", "research", "facts", "listing", "media", "confirm"];
 
 function localStaticPath(requestUrl) {
   const pathname = decodeURIComponent(new URL(requestUrl).pathname.replace(/^\/+/, "")) || "index.html";
@@ -103,6 +104,32 @@ function materialTransitionIsConsistent(previous, current) {
     current.purpose_text !== previous.purpose_text;
 }
 
+async function workflowSnapshot(page) {
+  return page.evaluate(() => {
+    const scope = document.querySelector('[data-home-workflow="merchant-loop-v1"]');
+    const steps = Array.from(scope?.querySelectorAll("button[data-home-workflow-step]") || []);
+    const panels = Array.from(scope?.querySelectorAll("[data-home-workflow-panel]") || []);
+    const activeSteps = steps.filter((step) => step.getAttribute("aria-pressed") === "true");
+    const visiblePanels = panels.filter((panel) => !panel.hidden && panel.getClientRects().length > 0);
+    const live = scope?.querySelector('[data-home-workflow-live="active-step"]');
+    return {
+      step_order: steps.map((step) => step.dataset.homeWorkflowStep),
+      panel_order: panels.map((panel) => panel.dataset.homeWorkflowPanel),
+      active_step_count: activeSteps.length,
+      active_step: activeSteps[0]?.dataset.homeWorkflowStep || "",
+      visible_panel_count: visiblePanels.length,
+      visible_panel: visiblePanels[0]?.dataset.homeWorkflowPanel || "",
+      live_text: live?.textContent.trim() || "",
+      keyboard_ready: steps.every((step) => step.tagName === "BUTTON" && step.hasAttribute("aria-pressed")),
+      synchronized: Boolean(
+        activeSteps.length === 1 && visiblePanels.length === 1 &&
+        activeSteps[0].dataset.homeWorkflowStep === visiblePanels[0].dataset.homeWorkflowPanel &&
+        live?.textContent.trim()
+      ),
+    };
+  });
+}
+
 async function heroInteractionSnapshot(page, key) {
   return page.evaluate((activeKey) => {
     const scope = document.querySelector('[data-home-section="hero"]');
@@ -174,6 +201,18 @@ async function keyboardNavigateToMaterialOption(page, key) {
   return { reached: false, key: "", interactive: false, focus_visible: false };
 }
 
+async function keyboardNavigateAndActivateWorkflowStep(page, key) {
+  for (let index = 0; index < 50; index += 1) {
+    await page.keyboard.press("Tab");
+    const focusedKey = await page.evaluate(() => document.activeElement?.dataset?.homeWorkflowStep || "");
+    if (focusedKey === key) {
+      await page.keyboard.press("Enter");
+      return true;
+    }
+  }
+  return false;
+}
+
 async function inspectViewport(browser, viewport, name, reducedMotion = "no-preference") {
   const context = await browser.newContext({ viewport, deviceScaleFactor: 1, reducedMotion });
   await installStaticRoute(context);
@@ -189,6 +228,10 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
     if (response.status() >= 500) badResponses.push({ url: response.url(), status: response.status() });
   });
   await page.goto(`${base}/index.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.waitForSelector('[data-home-workflow="merchant-loop-v1"]', { timeout: 20000 });
+  const initialWorkflow = await workflowSnapshot(page);
+  await page.locator('button[data-home-workflow-step="media"]').click();
+  const mediaWorkflow = await workflowSnapshot(page);
   await page.waitForSelector('[data-home-material-studio="listing-media-v3"]', { timeout: 20000 });
   await page.locator('[data-home-material-studio="listing-media-v3"] img').evaluateAll(async (images) => {
     images.forEach((image) => { image.loading = "eager"; });
@@ -209,6 +252,10 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
     const heroLineMarkers = Array.from(heroScope?.querySelectorAll("[data-home-ai-ceo-line]") || []);
     const heroLinePaths = Array.from(heroSvg?.querySelectorAll("path[data-home-ai-ceo-line]") || []);
     const materialOptions = Array.from(workflowScope?.querySelectorAll("button[data-home-material-option]") || []);
+    const workflowSteps = Array.from(workflowScope?.querySelectorAll("button[data-home-workflow-step]") || []);
+    const workflowPanels = Array.from(workflowScope?.querySelectorAll("[data-home-workflow-panel]") || []);
+    const activeWorkflowSteps = workflowSteps.filter((step) => step.getAttribute("aria-pressed") === "true");
+    const visibleWorkflowPanels = workflowPanels.filter((panel) => !panel.hidden && panel.getClientRects().length > 0);
     const homepageText = Array.from(document.querySelectorAll("[data-home-section]"))
       .map((section) => section.innerText)
       .join(" ");
@@ -256,6 +303,19 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
       hero_result_visible: heroScope?.querySelector('[data-home-ai-ceo-result="active-result"]')?.getClientRects().length > 0,
       login_is_text: Boolean(login?.classList.contains("button-text")),
       work_record_marketing_count: homepageText.includes("工作记录") ? 1 : 0,
+      workflow_contract_count: workflowScope?.querySelectorAll('[data-home-workflow="merchant-loop-v1"]').length || 0,
+      workflow_step_order: workflowSteps.map((step) => step.dataset.homeWorkflowStep),
+      workflow_panel_order: workflowPanels.map((panel) => panel.dataset.homeWorkflowPanel),
+      workflow_step_count: workflowSteps.length,
+      workflow_initial_active_count: activeWorkflowSteps.length,
+      workflow_initial_visible_panel_count: visibleWorkflowPanels.length,
+      workflow_initial_synchronized: Boolean(
+        activeWorkflowSteps.length === 1 && visibleWorkflowPanels.length === 1 &&
+        activeWorkflowSteps[0].dataset.homeWorkflowStep === visibleWorkflowPanels[0].dataset.homeWorkflowPanel
+      ),
+      workflow_steps_keyboard_ready: workflowSteps.every((step) => step.tagName === "BUTTON" && step.hasAttribute("aria-pressed")),
+      workflow_live_ready: Boolean(workflowScope?.querySelector('[data-home-workflow-live="active-step"][aria-live="polite"]')),
+      workflow_workspace_cta_count: workflowScope?.querySelectorAll('[data-home-workflow-cta="workspace"]').length || 0,
       material_stage_order: Array.from(workflowScope?.querySelectorAll("[data-home-material-stage]") || []).map((item) => item.dataset.homeMaterialStage),
       material_task_order: Array.from(workflowScope?.querySelectorAll("[data-home-material-task]") || []).map((item) => item.dataset.homeMaterialTask),
       material_input_visible: workflowScope?.querySelector('[data-home-material-stage="input"]')?.getClientRects().length > 0,
@@ -285,6 +345,8 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
       horizontal_overflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
     };
   });
+  state.workflow_default_goal = initialWorkflow.synchronized && initialWorkflow.active_step === "goal";
+  state.workflow_pointer_switch = mediaWorkflow.synchronized && mediaWorkflow.active_step === "media";
   if (name !== "reduced-motion") {
     await page.screenshot({ path: path.join("output", "browser-smoke", `homepage-maturity-${name}.png`), fullPage: true });
   }
@@ -344,6 +406,18 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
     const clickHeroState = await heroInteractionSnapshot(page, "finance");
     state.hero_keyboard_relation_active = heroInteractionIsConsistent(focusHeroState, true);
     state.hero_pointer_relation_active = heroInteractionIsConsistent(hoverHeroState) && heroInteractionIsConsistent(clickHeroState);
+    state.workflow_keyboard_navigated = await keyboardNavigateAndActivateWorkflowStep(page, "confirm");
+    const keyboardWorkflow = await workflowSnapshot(page);
+    state.workflow_keyboard_switch = keyboardWorkflow.synchronized && keyboardWorkflow.active_step === "confirm";
+    await page.click('[data-home-workflow-cta="workspace"]');
+    await page.waitForSelector("#nextStepModal.is-open", { timeout: 10000 });
+    state.workflow_cta_opens_entry = await page.evaluate(() => ({
+      auth_mode: document.body.classList.contains("is-auth-mode"),
+      login_form_visible: document.querySelector("#entryLoginForm")?.hidden === false,
+      modal_title: document.querySelector("#nextStepTitle")?.textContent.trim() || "",
+    }));
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector("#nextStepModal")?.classList.contains("is-open"), null, { timeout: 10000 });
     await page.click('[data-home-primary-cta="jiejing_ai_ceo_workspace_v2"]');
     await page.waitForSelector("#nextStepModal.is-open", { timeout: 10000 });
     state.primary_cta_opens_auth = await page.evaluate(() => document.body.classList.contains("is-auth-mode"));
@@ -394,6 +468,8 @@ async function inspectTouchInteractions(browser) {
     if (response.status() >= 500) badResponses.push({ url: response.url(), status: response.status() });
   });
   await page.goto(`${base}/index.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.locator('button[data-home-workflow-step="media"]').tap();
+  const workflowTap = await workflowSnapshot(page);
   const studio = page.locator('[data-home-material-studio="listing-media-v3"]');
   await studio.waitFor({ state: "visible", timeout: 20000 });
   const rotateInterval = Number(await studio.getAttribute("data-home-rotate-interval-ms"));
@@ -415,11 +491,12 @@ async function inspectTouchInteractions(browser) {
   await context.close();
   return {
     material_tap_was_first_user_input: materialTapStopsRotation,
+    workflow_tap_active: workflowTap.synchronized && workflowTap.active_step === "media",
     hero_tap_active: heroInteractionIsConsistent(heroTap),
     page_errors: pageErrors,
     console_issues: consoleIssues,
     bad_responses: badResponses,
-    ok: materialTapStopsRotation && heroInteractionIsConsistent(heroTap) && pageErrors.length === 0 && consoleIssues.length === 0 && badResponses.length === 0,
+    ok: materialTapStopsRotation && workflowTap.synchronized && workflowTap.active_step === "media" && heroInteractionIsConsistent(heroTap) && pageErrors.length === 0 && consoleIssues.length === 0 && badResponses.length === 0,
   };
 }
 
@@ -438,6 +515,8 @@ async function inspectKeyboardFirstStop(browser) {
     if (response.status() >= 500) badResponses.push({ url: response.url(), status: response.status() });
   });
   await page.goto(`${base}/index.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
+  const workflowKeyboardReached = await keyboardNavigateAndActivateWorkflowStep(page, "media");
+  const workflowKeyboardState = await workflowSnapshot(page);
   const studio = page.locator('[data-home-material-studio="listing-media-v3"]');
   await studio.waitFor({ state: "visible", timeout: 20000 });
   const rotateInterval = Number(await studio.getAttribute("data-home-rotate-interval-ms"));
@@ -458,10 +537,11 @@ async function inspectKeyboardFirstStop(browser) {
   await context.close();
   return {
     keyboard_first_activation: "Enter",
+    workflow_keyboard_activation: workflowKeyboardReached && workflowKeyboardState.synchronized && workflowKeyboardState.active_step === "media",
     keyboard_first_stops_rotation: keyboardFirstStopsRotation,
     page_errors: pageErrors,
     bad_responses: badResponses,
-    ok: keyboardFirstStopsRotation && pageErrors.length === 0 && badResponses.length === 0,
+    ok: workflowKeyboardReached && workflowKeyboardState.synchronized && workflowKeyboardState.active_step === "media" && keyboardFirstStopsRotation && pageErrors.length === 0 && badResponses.length === 0,
   };
 }
 
@@ -491,6 +571,8 @@ async function inspectJavascriptDisabled(browser) {
   });
   const state = await page.evaluate(() => {
     const scope = document.querySelector('[data-home-material-studio="listing-media-v3"]');
+    const workflow = document.querySelector('[data-home-workflow="merchant-loop-v1"]');
+    const workflowPanels = Array.from(workflow?.querySelectorAll("[data-home-workflow-panel]") || []);
     const canvas = scope?.querySelector('[data-home-material-canvas="active-result"]');
     const image = canvas?.matches("img") ? canvas : canvas?.querySelector("img");
     const title = scope?.querySelector('[data-home-material-title="active-title"]');
@@ -498,6 +580,8 @@ async function inspectJavascriptDisabled(browser) {
     const status = scope?.querySelector('[data-home-material-status="listing-draft"]');
     const caption = scope?.querySelector(".home-example-caption");
     return {
+      workflow_panel_order: workflowPanels.map((panel) => panel.dataset.homeWorkflowPanel),
+      workflow_panels_readable: workflowPanels.length === 6 && workflowPanels.every((panel) => panel.getClientRects().length > 0 && panel.textContent.trim()),
       studio_visible: scope?.getClientRects().length > 0,
       first_image_visible: image?.getClientRects().length > 0,
       first_image_loaded: Boolean(image?.complete && image?.naturalWidth > 0),
@@ -511,7 +595,7 @@ async function inspectJavascriptDisabled(browser) {
   return {
     ...state,
     bad_responses: badResponses,
-    ok: state.studio_visible && state.first_image_visible && state.first_image_loaded && state.first_title_visible && state.first_purpose_visible && state.listing_status_visible && state.caption_exact && badResponses.length === 0,
+    ok: JSON.stringify(state.workflow_panel_order) === JSON.stringify(approvedWorkflowSteps) && state.workflow_panels_readable && state.studio_visible && state.first_image_visible && state.first_image_loaded && state.first_title_visible && state.first_purpose_visible && state.listing_status_visible && state.caption_exact && badResponses.length === 0,
   };
 }
 
@@ -598,6 +682,18 @@ async function main() {
         item.legacy_hero_container_count === 0 &&
         item.login_is_text &&
         item.work_record_marketing_count === 0 &&
+        item.workflow_contract_count === 1 &&
+        item.workflow_step_count === 6 &&
+        JSON.stringify(item.workflow_step_order) === JSON.stringify(approvedWorkflowSteps) &&
+        JSON.stringify(item.workflow_panel_order) === JSON.stringify(approvedWorkflowSteps) &&
+        item.workflow_initial_active_count === 1 &&
+        item.workflow_initial_visible_panel_count === 1 &&
+        item.workflow_initial_synchronized &&
+        item.workflow_steps_keyboard_ready &&
+        item.workflow_live_ready &&
+        item.workflow_workspace_cta_count === 1 &&
+        item.workflow_default_goal &&
+        item.workflow_pointer_switch &&
         JSON.stringify(item.material_stage_order) === JSON.stringify(["input", "generation", "review", "listing"]) &&
         JSON.stringify(item.material_task_order) === JSON.stringify(["main", "scene", "selling-points", "detail"]) &&
         item.material_input_visible &&
@@ -619,7 +715,7 @@ async function main() {
         item.page_errors.length === 0 &&
         item.console_issues.length === 0 &&
         item.bad_responses.length === 0 &&
-        (item.name !== "desktop" || (item.primary_cta_opens_auth === true && item.material_rotate_interval_valid === true && item.material_auto_rotates === true && item.material_first_user_switch === true && item.material_all_options_exercised === true && item.material_keyboard_focus_ready === true && item.material_enter_selection === true && item.material_space_selection === true && item.material_user_stops_rotation === true && item.hero_keyboard_navigated === true && item.hero_keyboard_relation_active === true && item.hero_pointer_relation_active === true)) &&
+        (item.name !== "desktop" || (item.primary_cta_opens_auth === true && item.material_rotate_interval_valid === true && item.material_auto_rotates === true && item.material_first_user_switch === true && item.material_all_options_exercised === true && item.material_keyboard_focus_ready === true && item.material_enter_selection === true && item.material_space_selection === true && item.material_user_stops_rotation === true && item.hero_keyboard_navigated === true && item.hero_keyboard_relation_active === true && item.hero_pointer_relation_active === true && item.workflow_keyboard_navigated === true && item.workflow_keyboard_switch === true && item.workflow_cta_opens_entry?.auth_mode === true && item.workflow_cta_opens_entry?.login_form_visible === true && Boolean(item.workflow_cta_opens_entry?.modal_title))) &&
         (item.name !== "reduced-motion" || (item.reduced_motion_static === true && item.reduced_motion_no_rotation === true)),
     );
     console.log(JSON.stringify({ ok, results, keyboard_first: keyboardFirst, touch_interactions: touchInteractions, javascript_disabled: javascriptDisabled, expired_session_hint: expiredSessionHint, no_login_performed: true, no_real_world_action: true }, null, 2));

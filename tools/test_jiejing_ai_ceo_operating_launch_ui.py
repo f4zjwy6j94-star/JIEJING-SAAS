@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,29 @@ def main() -> int:
     app_html = (ROOT / "app.html").read_text(encoding="utf-8")
     styles = (ROOT / "styles.css").read_text(encoding="utf-8")
 
+    adaptive_layout_markers = [
+        ".saas-ai-ceo-chatgpt-layout.has-task-context",
+        ".saas-ai-ceo-task-context",
+        ".saas-ai-ceo-task-context-summary",
+        ".is-task-context-collapsed",
+        "@media (max-width: 1100px)",
+        "@media (max-width: 700px)",
+    ]
+    for marker in adaptive_layout_markers:
+        if marker not in styles:
+            return fail(f"styles.css missing adaptive AI CEO layout marker: {marker}")
+    desktop_task_rule = re.search(r"\.saas-ai-ceo-chatgpt-layout\.has-task-context\s*\{([^}]+)\}", styles, re.S)
+    if not desktop_task_rule or "grid-template-columns" not in desktop_task_rule.group(1):
+        return fail("desktop task-context selector must define a two-column grid; browser smoke verifies the 68/32 result")
+
+    for guard_marker in [
+        "has-task-context",
+        "is-task-context-collapsed",
+        'body.saas-public-mvp[data-view="cockpit"]',
+    ]:
+        if guard_marker not in app_html:
+            return fail(f"app.html startup guard missing adaptive AI CEO marker: {guard_marker}")
+
     required_app_markers = [
         "function saasAiCeoTurnOperatingRows",
         "function renderSaasAiCeoOperatingRowsMarkup",
@@ -29,13 +53,10 @@ def main() -> int:
         "风险",
         "待确认动作",
         "执行结果",
-        "function renderSaasCommercialLaunchGatePanel",
-        "billing_quota",
-        "stable_domain_tls",
-        "publish_safety_system",
-        "store_sync_visibility",
+        "function renderSaasCoreModuleDiagnosticsPanel",
+        "复杂状态归到设置，工作台只保留经营动作",
+        "设置里查看",
         "post_publish_cockpit",
-        "final_commercial_smoke",
         'renderSaasPublishInputField("eBay fee", "ebay_fee"',
         'renderSaasPublishInputField("退货预留", "return_risk_reserve"',
         'renderSaasPublishInputField("汇率", "exchange_rate"',
@@ -56,27 +77,21 @@ def main() -> int:
         ".saas-post-publish-plan",
         ".saas-post-publish-evidence-strip",
         ".saas-failure-knowledge-strip",
-        ".saas-commercial-launch-grid",
+        ".saas-core-module-diagnostics-grid",
+        ".saas-settings-home-hub",
     ]
     for marker in required_style_markers:
         if marker not in styles:
             return fail(f"styles.css missing marker: {marker}")
 
     required_app_html_markers = [
-        'id="jiejing-cockpit-layout-guard"',
-        "grid-template-columns: minmax(0, 1fr)",
-        "saas-ai-ceo-cockpit-status",
-        "saas-first-order-loop",
-        "body.saas-public-mvp[data-view=\"cockpit\"] .saas-ai-ceo-composer input",
+        'rel="stylesheet" href="./styles.css',
+        'data-ui-generation="premium-merchant-workbench-v1"',
+        'id="view-cockpit"',
     ]
     for marker in required_app_html_markers:
         if marker not in app_html:
             return fail(f"app.html missing cockpit layout guard marker: {marker}")
-
-    stylesheet_index = app_html.find('rel="stylesheet" href="./styles.css')
-    guard_index = app_html.find('id="jiejing-cockpit-layout-guard"')
-    if stylesheet_index < 0 or guard_index < 0 or guard_index < stylesheet_index:
-        return fail("cockpit layout guard must load after styles.css so legacy rules cannot collapse the composer")
 
     forbidden_merchant_copy = [
         "DeepSeek 负责想图，FAL 负责出图",

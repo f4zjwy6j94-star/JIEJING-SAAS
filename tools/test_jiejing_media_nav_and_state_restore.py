@@ -31,15 +31,34 @@ def main() -> int:
     nav_end = app_html.index("</nav>", nav_start)
     nav_html = app_html[nav_start:nav_end]
     nav_views = re.findall(r'data-view="([^"]+)"', nav_html)
-    expected_nav_views = ["cockpit", "product", "bulk", "media", "confirm", "service", "activity", "connect"]
+    expected_nav_views = ["cockpit", "product", "media", "confirm", "service", "connect"]
     if nav_views != expected_nav_views:
-        return fail(f"left navigation should expose the merchant workflow plus account-scoped run records: {nav_views}")
-    for removed_view in ["workflow", "report"]:
+        return fail(f"left navigation should expose the six merchant work areas: {nav_views}")
+    for removed_view in ["bulk", "activity", "workflow", "report"]:
         if f'data-view="{removed_view}"' in nav_html:
             return fail(f"left navigation must not expose retired module: {removed_view}")
-    for retained_view in ["view-workflow", "view-activity"]:
+    for retained_view in ["view-bulk", "view-workflow", "view-activity"]:
         if f'id="{retained_view}"' not in app_html:
             return fail(f"retired sidebar content must remain available for re-homing: {retained_view}")
+
+    for alias in ['activity: "cockpit"', 'report: "cockpit"', 'reports: "cockpit"', 'batch: "bulk"']:
+        if alias not in app_js:
+            return fail(f"legacy route must remain normalized without restoring a primary nav item: {alias}")
+
+    for listing_mode_marker in [
+        'data-listing-mode="single"',
+        'data-listing-mode="bulk"',
+        'data-listing-mode="recent"',
+        'aria-current="page"',
+        "单个商品",
+        "批量选品与草稿",
+        "最近任务",
+        "data-recent-product-task-id",
+        "data-recent-product-task-type",
+        "data-open-recent-product-task",
+    ]:
+        if listing_mode_marker not in app_js:
+            return fail(f"listing workspace must expose the three internal modes: {listing_mode_marker}")
 
     media_body = function_body(app_js, "renderMediaProjectTabs", "renderListingDraftGallery")
     for marker in [

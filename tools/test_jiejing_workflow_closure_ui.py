@@ -16,6 +16,14 @@ def main() -> int:
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
     app_html = (ROOT / "app.html").read_text(encoding="utf-8")
 
+    require(app_js, 'data-listing-mode="single"', "single-product workspace mode navigation")
+    require(app_js, 'data-listing-mode="bulk"', "bulk workspace mode navigation")
+    require(app_js, 'data-listing-mode="recent"', "recent-task workspace mode navigation")
+    require(app_js, 'aria-current="page"', "active workspace mode semantics")
+    require(app_js, "function renderSaasRecentProductTasks", "saved product-workflow task projection")
+    require(app_js, "data-recent-product-task-type", "recent task type is observable to the browser contract")
+    require(app_js, "saasListingDraftFromReport", "recent task resumes the existing Listing draft")
+
     for needle, label in [
         ('capability.live_image_generation_enabled === true', "live image readiness signal"),
         ("素材清单实际返回 ${deliveredCount} 个结果", "actual manifest result count"),

@@ -1,11 +1,15 @@
 #!/usr/bin/env node
-/* ASCII-only no-write smoke for Bulk -> Listing -> Media -> Listing handoff. */
+/* Isolated-account smoke for Bulk -> Listing -> Media -> Listing handoff.
+   It requires a dedicated local fixture backend and creates account/task/media
+   state, so production is always forbidden. An environment 404 is setup failure,
+   not an A-scheme product RED. */
 
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
+const { assertSafeMutationBase } = require("./jiejing_browser_smoke_mutation_guard");
 
-const base = process.env.JIEJING_TEST_BASE || "https://app.jiejing.shop";
+const base = process.env.JIEJING_TEST_BASE || "http://127.0.0.1:8788";
 const browserChannel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
 const localStaticRoot = process.env.JIEJING_LOCAL_STATIC_ROOT ? path.resolve(process.env.JIEJING_LOCAL_STATIC_ROOT) : "";
 const viewportWidth = Number(process.env.JIEJING_SMOKE_VIEWPORT_WIDTH || 1440);
@@ -210,6 +214,7 @@ async function waitForReady(page, selector, timeoutMs = 60000) {
 }
 
 async function main() {
+  assertSafeMutationBase(base);
   smokeStage = "creating_safe_test_account";
   const session = await makeSession();
   smokeStage = "loading_workbench";
@@ -229,10 +234,14 @@ async function main() {
   const requestFailures = [];
   const badResponses = [];
   const forbiddenRequests = [];
+  const workflowMutationRequests = [];
   const screenshotFailures = [];
   page.on("pageerror", (error) => pageErrors.push(String(error.message || error).slice(0, 500)));
   page.on("request", (request) => {
     const url = request.url();
+    if (request.method() !== "GET" && /\/tasks(?:[/?]|$)|\/reports(?:[/?]|$)|\/merchant-ceo(?:[/?]|$)/i.test(url)) {
+      workflowMutationRequests.push({ method: request.method(), url });
+    }
     if (
       /signin\.ebay|auth\.ebay|ebay\.com\/signin|\/oauth\/authorize|\/oauth\/callback|stripe\.com|paypal\.com|checkout\.stripe\.com|\/billing\/checkout-session|\/billing\/provider-rehearsal|\/ebay\/publish|\/ads\/|\/refund|\/procurement|\/inventory\/write/i.test(
         url,
@@ -284,12 +293,17 @@ async function main() {
   const bulkInitial = await page.evaluate(() => {
     const root = document.querySelector("#view-bulk.is-active");
     const text = root?.innerText || "";
+    const listingModes = Array.from(root?.querySelectorAll("[data-listing-mode]") || []);
     const riskyActionLabels = Array.from(root?.querySelectorAll("button:not([disabled]), a[href]") || [])
       .map((item) => (item.textContent || "").replace(/\s+/g, " ").trim())
       .filter((label) => /(直接发布|一键发布|上传到 eBay|发布到 eBay)/.test(label) && !/(不|不会|确认单|体检)/.test(label));
     return {
       visible: Boolean(root && root.offsetParent !== null),
       has_generate_button: Boolean(root?.querySelector('[data-bulk-action="generate-candidates"]')),
+      listing_mode_order: listingModes.map((item) => item.dataset.listingMode),
+      bulk_mode_active: listingModes.filter((item) => item.getAttribute("aria-current") === "page").map((item) => item.dataset.listingMode),
+      product_primary_nav_active: document.querySelector('.nav-item[data-view="product"]')?.classList.contains("is-active") === true,
+      bulk_primary_nav_count: document.querySelectorAll('.nav-item[data-view="bulk"]').length,
       has_direct_publish_button: riskyActionLabels.length > 0,
       has_safety_copy: text.includes("不会自动执行"),
       preview: text.trim().slice(0, 240),
@@ -374,10 +388,13 @@ async function main() {
     const root = document.querySelector("#view-product.is-active");
     const active = state.saasListingComposerDraft || {};
     const text = root?.innerText || "";
+    const listingModes = Array.from(root?.querySelectorAll("[data-listing-mode]") || []);
     const riskyActionLabels = Array.from(root?.querySelectorAll("button:not([disabled]), a[href]") || [])
       .map((item) => (item.textContent || "").replace(/\s+/g, " ").trim())
       .filter((label) => /(直接发布|一键发布|上传到 eBay|发布到 eBay)/.test(label) && !/(不|不会|确认单|体检)/.test(label));
     return {
+      listing_mode_order: listingModes.map((item) => item.dataset.listingMode),
+      single_mode_active: listingModes.filter((item) => item.getAttribute("aria-current") === "page").map((item) => item.dataset.listingMode),
       active_listing_draft: state.activeListingDraft || "",
       active_media_draft: state.activeMediaDraft || "",
       active_title_cn: active?.product || active?.title || "",
@@ -394,6 +411,83 @@ async function main() {
       preview: text.trim().slice(0, 240),
     };
   });
+
+  const recentFixture = await page.evaluate(() => {
+    const stamp = Date.now();
+    const reportId = `report-recent-existing-${stamp}`;
+    const productTaskId = `task-recent-product-${stamp}`;
+    const unrelatedTaskId = `task-recent-service-${stamp}`;
+    const report = {
+      report_id: reportId,
+      task_id: productTaskId,
+      report_type: "listing.package",
+      status: "completed",
+      created_at: new Date(stamp - 1000).toISOString(),
+      report: {
+        title: "Existing saved travel organizer",
+        summary: "Existing report fixture for resume-only browser validation.",
+      },
+    };
+    const productTask = {
+      task_id: productTaskId,
+      task_type: "product_workflow",
+      title: "Existing saved travel organizer",
+      status: "blocked_facts",
+      source_report_id: reportId,
+      report_id: reportId,
+      updated_at: new Date(stamp).toISOString(),
+    };
+    const unrelatedTask = {
+      task_id: unrelatedTaskId,
+      task_type: "customer_service",
+      title: "Must not appear in recent products",
+      status: "open",
+      updated_at: new Date(stamp + 1).toISOString(),
+    };
+    state.saasTasks = [unrelatedTask, productTask, ...(Array.isArray(state.saasTasks) ? state.saasTasks : [])];
+    state.saasReports = [report, ...(Array.isArray(state.saasReports) ? state.saasReports : [])];
+    renderProductListingCenter();
+    return {
+      report_id: reportId,
+      product_task_id: productTaskId,
+      unrelated_task_id: unrelatedTaskId,
+      task_count: state.saasTasks.length,
+      report_count: state.saasReports.length,
+    };
+  });
+  const recentMutationRequestStart = workflowMutationRequests.length;
+  await page.click('#view-product.is-active [data-listing-mode="recent"]');
+  await page.waitForSelector(
+    `#view-product.is-active [data-recent-product-task-id="${recentFixture.product_task_id}"]`,
+    { timeout: 20000 },
+  );
+  const recentList = await page.evaluate(() => ({
+    task_ids: Array.from(document.querySelectorAll("#view-product.is-active [data-recent-product-task-id]")).map(
+      (item) => item.dataset.recentProductTaskId,
+    ),
+    task_types: Array.from(document.querySelectorAll("#view-product.is-active [data-recent-product-task-type]")).map(
+      (item) => item.dataset.recentProductTaskType,
+    ),
+  }));
+  await page.click(
+    `#view-product.is-active [data-open-recent-product-task="${recentFixture.product_task_id}"]`,
+  );
+  await page.waitForFunction(
+    ({ reportId, taskId }) =>
+      state.saasListingComposerDraft?.source_report_id === reportId &&
+      state.saasActiveRecentProductTaskId === taskId,
+    { reportId: recentFixture.report_id, taskId: recentFixture.product_task_id },
+    { timeout: 20000 },
+  );
+  const recentResume = await page.evaluate(() => ({
+    active_task_id: state.saasActiveRecentProductTaskId || "",
+    source_report_id: state.saasListingComposerDraft?.source_report_id || "",
+    task_count: Array.isArray(state.saasTasks) ? state.saasTasks.length : -1,
+    report_count: Array.isArray(state.saasReports) ? state.saasReports.length : -1,
+    active_mode: document.querySelector('#view-product.is-active [data-listing-mode][aria-current="page"]')?.dataset.listingMode || "",
+  }));
+  await page.waitForTimeout(750);
+  const recentMutationRequests = workflowMutationRequests.slice(recentMutationRequestStart);
 
   await page.evaluate(() => {
     document.querySelector('#view-product.is-active [data-saas-action="open-media"], #view-product.is-active [data-product-action="media"]')?.click();
@@ -774,7 +868,15 @@ async function main() {
 
   const [healthApi, readinessApi] = await Promise.all([api("/health"), api("/readiness/product-saas")]);
   const checks = {
-    bulk_initial_visible_and_safe: bulkInitial.visible && bulkInitial.has_generate_button && bulkInitial.has_safety_copy && !bulkInitial.has_direct_publish_button,
+    bulk_initial_visible_and_safe:
+      bulkInitial.visible &&
+      bulkInitial.has_generate_button &&
+      bulkInitial.has_safety_copy &&
+      !bulkInitial.has_direct_publish_button &&
+      JSON.stringify(bulkInitial.listing_mode_order) === JSON.stringify(["single", "bulk", "recent"]) &&
+      JSON.stringify(bulkInitial.bulk_mode_active) === JSON.stringify(["bulk"]) &&
+      bulkInitial.product_primary_nav_active === true &&
+      bulkInitial.bulk_primary_nav_count === 0,
     bulk_candidates_generated: bulkGenerated.preview_count > 0 && bulkGenerated.has_accept_button && bulkGenerated.has_grouping_copy && bulkGenerated.has_safety_copy,
     bulk_handoff_reaches_listing:
       productAfterBulk.source_type === "bulk_handoff" &&
@@ -784,7 +886,21 @@ async function main() {
       productAfterBulk.logistics.includes("Yiwu") &&
       productAfterBulk.handoff_status === "sent" &&
       productAfterBulk.title_is_not_generic_ai_ceo_report &&
-      productAfterBulk.has_media_button,
+      productAfterBulk.has_media_button &&
+      JSON.stringify(productAfterBulk.listing_mode_order) === JSON.stringify(["single", "bulk", "recent"]) &&
+      JSON.stringify(productAfterBulk.single_mode_active) === JSON.stringify(["single"]),
+    recent_filters_real_product_workflow_tasks:
+      recentList.task_ids.includes(recentFixture.product_task_id) &&
+      !recentList.task_ids.includes(recentFixture.unrelated_task_id) &&
+      recentList.task_types.length === recentList.task_ids.length &&
+      recentList.task_types.every((taskType) => taskType === "product_workflow"),
+    recent_resumes_existing_identity_without_rerun:
+      recentResume.active_task_id === recentFixture.product_task_id &&
+      recentResume.source_report_id === recentFixture.report_id &&
+      recentResume.task_count === recentFixture.task_count &&
+      recentResume.report_count === recentFixture.report_count &&
+      recentResume.active_mode === "single" &&
+      recentMutationRequests.length === 0,
     media_opens_same_bulk_draft:
       mediaOpened.active_media_draft.startsWith("listing-project-") &&
       mediaOpened.active_media_draft === mediaOpened.listing_project_key &&
@@ -858,6 +974,10 @@ async function main() {
     bulkInitial,
     bulkGenerated,
     productAfterBulk,
+    recentFixture,
+    recentList,
+    recentResume,
+    recentMutationRequests,
     mediaOpened,
     sourceUpload,
     mediaGenerated,
@@ -897,19 +1017,21 @@ async function main() {
   console.log(JSON.stringify(result, null, 2));
 }
 
-main().catch((error) => {
-  console.error(
-    JSON.stringify(
-      {
-        ok: false,
-        message: error.message,
-        stage: smokeStage,
-        details: error.details || {},
-        outDir,
-      },
-      null,
-      2,
-    ),
-  );
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(
+      JSON.stringify(
+        {
+          ok: false,
+          message: error.message,
+          stage: smokeStage,
+          details: error.details || {},
+          outDir,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  });
+}
