@@ -67,16 +67,15 @@ async function makeSession() {
   const token = registered.json.token;
   const user = registered.json.user || {};
   const company = registered.json.company || {};
-  const activatedBilling = await api("/billing/test-event", {
-    token,
-    method: "POST",
-    body: {
-      plan_key: "operator",
-      action: "activate",
-    },
-  });
-  if (!activatedBilling.ok) {
-    fail(`billing test activation failed: ${activatedBilling.status}`, { body: activatedBilling.json });
+  const trialActivation = registered.json.platform_trial_activation;
+  const platformTrialActivation = {
+    present: Boolean(trialActivation && typeof trialActivation === "object"),
+    status: String(trialActivation?.status || ""),
+    platform_trial_allowed: trialActivation?.platform_trial_allowed === true,
+    secret_exposed: trialActivation?.secret_exposed === true,
+  };
+  if (platformTrialActivation.secret_exposed) {
+    fail("registration trial metadata exposed a secret");
   }
   const created = await api("/stores", {
     token,
@@ -100,6 +99,7 @@ async function makeSession() {
     email,
     userId: user.user_id || "",
     companyId: company.company_id || user.default_company_id || "",
+    platformTrialActivation,
     store: created.json.store || {},
   };
 }
@@ -130,7 +130,39 @@ function contentTypeFor(filePath) {
   return "application/octet-stream";
 }
 
-async function setupContext(browser, session, appHtml) {
+function buildFrontendMediaFixtureJob(jobSpec = {}, assetUrl = "", storeId = "") {
+  const mediaJobId = `media-fixture-${Date.now()}`;
+  const now = new Date().toISOString();
+  return {
+    media_job_id: mediaJobId,
+    store_id: storeId,
+    idempotency_key: String(jobSpec.idempotency_key || mediaJobId),
+    status: "waiting_review",
+    job: { job_spec: jobSpec },
+    live_provider_called: true,
+    spend_now_allowed: false,
+    secret_exposed: false,
+    fixture_only: true,
+    external_provider_called: false,
+    asset_manifest_validation: { status: "manifest_ready" },
+    asset_manifest: [
+      {
+        asset_id: `${mediaJobId}-image-1`,
+        asset_type: "product_image",
+        url: assetUrl,
+        url_or_file_path: assetUrl,
+        dimensions: "720x720",
+        commercial_use_status: "needs_review",
+        fact_review_status: "needs_review",
+        listing_use_status: "not_ready_for_listing_until_review",
+      },
+    ],
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+async function setupContext(browser, session, appHtml, mediaFixtureState, controlledSourcePath) {
   const context = await browser.newContext({ viewport: { width: viewportWidth, height: viewportHeight }, deviceScaleFactor: 1 });
   const baseUrl = new URL(base);
   await context.addCookies([
@@ -154,6 +186,78 @@ async function setupContext(browser, session, appHtml) {
   );
   if (localStaticRoot) {
     await context.route(`${base}/**`, (route) => {
+      const request = route.request();
+      const requestUrl = new URL(request.url());
+      const method = request.method();
+      const fulfillJson = (status, payload) =>
+        route.fulfill({
+          status,
+          contentType: "application/json; charset=utf-8",
+          headers: { "cache-control": "no-store" },
+          body: JSON.stringify(payload),
+        });
+      if (requestUrl.pathname === "/__jiejing-smoke__/controlled-media.png") {
+        if (!fs.existsSync(controlledSourcePath)) return route.fulfill({ status: 404, body: "fixture not ready" });
+        return route.fulfill({ status: 200, contentType: "image/png", body: fs.readFileSync(controlledSourcePath) });
+      }
+      if (method === "POST" && /\/stores\/[^/]+\/provider-jobs\/queue$/.test(requestUrl.pathname)) {
+        const jobSpec = request.postDataJSON() || {};
+        mediaFixtureState.job = buildFrontendMediaFixtureJob(
+          jobSpec,
+          `${base}/__jiejing-smoke__/controlled-media.png`,
+          session.store.store_id,
+        );
+        mediaFixtureState.requests.push({ method, path: requestUrl.pathname, fixture: "queue" });
+        return fulfillJson(200, { media_asset_job: mediaFixtureState.job, fixture_only: true });
+      }
+      if (method === "POST" && /\/media-asset-jobs\/[^/]+\/review$/.test(requestUrl.pathname)) {
+        if (!mediaFixtureState.job) return fulfillJson(404, { error: "fixture media job missing" });
+        const reviewedAt = new Date().toISOString();
+        mediaFixtureState.job = {
+          ...mediaFixtureState.job,
+          status: "approved_for_listing",
+          merchant_review: {
+            contract_version: "2026-07-11-media-review-v2",
+            decision: "approve_for_listing_draft",
+            confirmations: {
+              fact_consistency_confirmed: true,
+              commercial_rights_confirmed: true,
+              platform_rules_checked: true,
+              motion_and_usage_consistency_confirmed: true,
+            },
+            reviewed_by: "fixture-merchant",
+            listing_draft_only: true,
+            triggers_real_platform_write: false,
+            secret_exposed: false,
+          },
+          asset_review: {
+            status: "approved_for_listing_draft",
+            listing_use_status: "approved_for_listing_draft",
+            reviewed_at: reviewedAt,
+            fixture_only: true,
+          },
+          asset_manifest: mediaFixtureState.job.asset_manifest.map((asset) => ({
+            ...asset,
+            commercial_use_status: "confirmed_by_merchant",
+            fact_review_status: "confirmed_by_merchant",
+            listing_use_status: "approved_for_listing_draft",
+            review_status: "approved_for_listing_draft",
+          })),
+          updated_at: reviewedAt,
+        };
+        mediaFixtureState.requests.push({ method, path: requestUrl.pathname, fixture: "review" });
+        return fulfillJson(200, { media_asset_job: mediaFixtureState.job, fixture_only: true });
+      }
+      if (method === "GET" && /\/media-asset-jobs\/[^/]+$/.test(requestUrl.pathname)) {
+        mediaFixtureState.requests.push({ method, path: requestUrl.pathname, fixture: "job" });
+        return mediaFixtureState.job
+          ? fulfillJson(200, { media_asset_job: mediaFixtureState.job, fixture_only: true })
+          : fulfillJson(404, { error: "fixture media job missing" });
+      }
+      if (method === "GET" && /\/stores\/[^/]+\/media-asset-jobs$/.test(requestUrl.pathname)) {
+        mediaFixtureState.requests.push({ method, path: requestUrl.pathname, fixture: "list" });
+        return fulfillJson(200, { media_asset_jobs: mediaFixtureState.job ? [mediaFixtureState.job] : [], fixture_only: true });
+      }
       const filePath = localStaticPath(route.request().url());
       if (!filePath || !fs.existsSync(filePath)) {
         route.continue();
@@ -225,8 +329,15 @@ async function main() {
     fail(`app html fetch failed: ${appHtmlResponse.status}`);
   }
   const appHtml = await appHtmlResponse.text();
+  const sourceFixturePath = path.join(outDir, "controlled-merchant-source.png");
+  const mediaFixtureState = { job: null, requests: [] };
+  const mediaFixtureApi = () => ({
+    ok: true,
+    status: 200,
+    json: { media_asset_jobs: mediaFixtureState.job ? [mediaFixtureState.job] : [], fixture_only: true },
+  });
   const browser = await chromium.launch({ channel: browserChannel, headless: true, timeout: 60000 });
-  const context = await setupContext(browser, session, appHtml);
+  const context = await setupContext(browser, session, appHtml, mediaFixtureState, sourceFixturePath);
   const page = await context.newPage();
   page.setDefaultTimeout(45000);
 
@@ -243,7 +354,7 @@ async function main() {
       workflowMutationRequests.push({ method: request.method(), url });
     }
     if (
-      /signin\.ebay|auth\.ebay|ebay\.com\/signin|\/oauth\/authorize|\/oauth\/callback|stripe\.com|paypal\.com|checkout\.stripe\.com|\/billing\/checkout-session|\/billing\/provider-rehearsal|\/ebay\/publish|\/ads\/|\/refund|\/procurement|\/inventory\/write/i.test(
+      /signin\.ebay|auth\.ebay|ebay\.com\/signin|\/oauth\/authorize|\/oauth\/callback|stripe\.com|paypal\.com|checkout\.stripe\.com|\/billing\/test-event|\/billing\/checkout-session|\/billing\/provider-rehearsal|\/ebay\/publish|\/ads\/|\/refund|\/procurement|\/inventory\/write/i.test(
         url,
       )
     ) {
@@ -411,6 +522,13 @@ async function main() {
       preview: text.trim().slice(0, 240),
     };
   });
+  const bulkProductFixture = await page.evaluate(() => ({
+    composer: JSON.parse(JSON.stringify(state.saasListingComposerDraft || {})),
+    active_listing_draft: state.activeListingDraft || "",
+    active_media_draft: state.activeMediaDraft || "",
+    listing_source_mode: state.saasListingSourceMode || "",
+    source_handoff_status: state.sourceHandoffStatus || "",
+  }));
 
   const recentFixture = await page.evaluate(() => {
     const stamp = Date.now();
@@ -433,6 +551,7 @@ async function main() {
       report: {
         title: "Existing saved travel organizer",
         summary: "Existing report fixture for resume-only browser validation.",
+        listing_project_identity: projectIdentity,
       },
     };
     const productTask = {
@@ -533,6 +652,35 @@ async function main() {
   await page.waitForTimeout(750);
   const recentMutationRequests = workflowMutationRequests.slice(recentMutationRequestStart);
 
+  const bulkReturnMutationRequestStart = workflowMutationRequests.length;
+  await page.evaluate((fixture) => {
+    state.saasListingComposerDraft = JSON.parse(JSON.stringify(fixture.composer || {}));
+    state.activeListingDraft = fixture.active_listing_draft || "";
+    state.activeMediaDraft = fixture.active_media_draft || "";
+    state.saasListingSourceMode = fixture.listing_source_mode || "bulk_handoff";
+    state.sourceHandoffStatus = fixture.source_handoff_status || "sent";
+    state.saasActiveListingMode = "single";
+    state.mediaTaskEntry = "project";
+    saveSaasProtectedStateSnapshot();
+    setView("product");
+    renderProductListingCenter();
+  }, bulkProductFixture);
+  await page.waitForFunction(
+    (expectedProduct) =>
+      state.view === "product" &&
+      state.saasListingComposerDraft?.source_type === "bulk_handoff" &&
+      state.saasListingComposerDraft?.product === expectedProduct,
+    acceptanceProduct,
+    { timeout: 20000 },
+  );
+  const bulkReturn = await page.evaluate(() => ({
+    product: state.saasListingComposerDraft?.product || "",
+    source_type: state.saasListingComposerDraft?.source_type || "",
+    active_media_draft: state.activeMediaDraft || "",
+    active_mode: document.querySelector('#view-product.is-active [data-listing-mode][aria-current="page"]')?.dataset.listingMode || "",
+  }));
+  const bulkReturnMutationRequests = workflowMutationRequests.slice(bulkReturnMutationRequestStart);
+
   await page.evaluate(() => {
     document.querySelector('#view-product.is-active [data-saas-action="open-media"], #view-product.is-active [data-product-action="media"]')?.click();
   });
@@ -570,7 +718,6 @@ async function main() {
   });
 
   smokeStage = "uploading_grounded_media_source";
-  const sourceFixturePath = path.join(outDir, "controlled-merchant-source.png");
   const fixturePage = await context.newPage();
   await fixturePage.setViewportSize({ width: 720, height: 720 });
   await fixturePage.setContent(
@@ -614,6 +761,18 @@ async function main() {
     }
     document.querySelector("#view-media.is-active #mediaGenerateImagesDraft")?.click();
   }, { includeVideo });
+  await page.waitForSelector("#mediaAcceptanceModal:not([hidden]) #mediaAcceptanceConfirm", { timeout: 10000 });
+  const mediaGenerationAcceptance = await page.evaluate(() => {
+    const modal = document.querySelector("#mediaAcceptanceModal:not([hidden])");
+    const text = modal?.innerText || "";
+    return {
+      visible: Boolean(modal),
+      confirms_rights: text.includes("商业使用") || text.includes("图片权利"),
+      preserves_draft_boundary: text.includes("不会自动发布") && text.includes("不会") && text.includes("eBay"),
+      confirm_label: document.querySelector("#mediaAcceptanceConfirm")?.textContent?.trim() || "",
+    };
+  });
+  await page.locator("#mediaAcceptanceModal:not([hidden]) #mediaAcceptanceConfirm").click();
   smokeStage = "generating_media_assets";
   await page.waitForFunction(
     () => ["submitted", "generated", "done"].includes(state.mediaGenerationStatus) && (document.querySelector("#mediaProductionStatus")?.textContent || "").length > 0,
@@ -636,9 +795,7 @@ async function main() {
       { timeout: assetWaitTimeout },
     )
     .catch(() => {});
-  let mediaJobsApi = await api(`/stores/${encodeURIComponent(session.store.store_id)}/media-asset-jobs?limit=8`, {
-    token: session.token,
-  });
+  let mediaJobsApi = mediaFixtureApi();
   let backendMediaJobs = Array.isArray(mediaJobsApi.json?.media_asset_jobs) ? mediaJobsApi.json.media_asset_jobs : [];
   let latestBackendMediaJob = backendMediaJobs[0] || {};
   let backendMediaJob = {
@@ -652,9 +809,11 @@ async function main() {
       ? latestBackendMediaJob.asset_manifest.map((asset) => String(asset?.asset_type || ""))
       : [],
     validation_status: latestBackendMediaJob.asset_manifest_validation?.status || "",
-    live_provider_called: latestBackendMediaJob.live_provider_called,
+    ui_contract_assets_returned: latestBackendMediaJob.live_provider_called === true,
     spend_now_allowed: latestBackendMediaJob.spend_now_allowed,
     secret_exposed: latestBackendMediaJob.secret_exposed,
+    fixture_only: latestBackendMediaJob.fixture_only === true,
+    external_provider_called: latestBackendMediaJob.external_provider_called === true,
   };
   await page
     .screenshot({ path: path.join(outDir, "05-media-generated-assets.png"), fullPage: true, timeout: 15000 })
@@ -779,9 +938,7 @@ async function main() {
     null,
     { timeout: 30000 },
   );
-  mediaJobsApi = await api(`/stores/${encodeURIComponent(session.store.store_id)}/media-asset-jobs?limit=8`, {
-    token: session.token,
-  });
+  mediaJobsApi = mediaFixtureApi();
   backendMediaJobs = Array.isArray(mediaJobsApi.json?.media_asset_jobs) ? mediaJobsApi.json.media_asset_jobs : [];
   latestBackendMediaJob = backendMediaJobs[0] || {};
   backendMediaJob = {
@@ -795,11 +952,64 @@ async function main() {
       ? latestBackendMediaJob.asset_manifest.map((asset) => String(asset?.asset_type || ""))
       : [],
     validation_status: latestBackendMediaJob.asset_manifest_validation?.status || "",
-    live_provider_called: latestBackendMediaJob.live_provider_called,
+    ui_contract_assets_returned: latestBackendMediaJob.live_provider_called === true,
     spend_now_allowed: latestBackendMediaJob.spend_now_allowed,
     secret_exposed: latestBackendMediaJob.secret_exposed,
+    fixture_only: latestBackendMediaJob.fixture_only === true,
+    external_provider_called: latestBackendMediaJob.external_provider_called === true,
   };
 
+  smokeStage = "reloading_approved_media_audit";
+  await page.reload({ waitUntil: "commit", timeout: 90000 });
+  await page.waitForSelector("body", { timeout: 30000 });
+  await page.waitForLoadState("networkidle", { timeout: 45000 }).catch(() => {});
+  await page.waitForFunction(
+    () =>
+      document.documentElement.classList.contains("app-ready") &&
+      !document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]") &&
+      typeof setView === "function",
+    null,
+    { timeout: 90000 },
+  );
+  await page.evaluate(() => setView("media"));
+  await waitForReady(page, "#view-media.is-active");
+  await page.waitForFunction(
+    () => {
+      const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+      const button = document.querySelector("#view-media.is-active #mediaConfirmDraft");
+      return job?.status === "approved_for_listing" && button?.disabled === false && button?.dataset?.mediaWritebackGate === "revalidation_required";
+    },
+    null,
+    { timeout: 30000 },
+  );
+  const approvedMediaAfterReload = await page.evaluate(() => {
+    const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+    const gate = saasApprovedMediaWritebackGate(job);
+    let snapshot = null;
+    try {
+      snapshot = JSON.parse(localStorage.getItem(saasProtectedSnapshotStorageKey()) || "null");
+    } catch (_error) {
+      snapshot = null;
+    }
+    const snapshotJob = Array.isArray(snapshot?.media_asset_jobs)
+      ? snapshot.media_asset_jobs.find((item) => item?.media_job_id === job?.media_job_id)
+      : null;
+    const button = document.querySelector("#view-media.is-active #mediaConfirmDraft");
+    return {
+      media_job_id: job?.media_job_id || "",
+      status: job?.status || "",
+      gate_allowed: gate.allowed === true,
+      gate_reason: gate.reason || "",
+      button_disabled: Boolean(button?.disabled),
+      button_gate: button?.dataset?.mediaWritebackGate || "",
+      source_upload_present: Boolean(state.saasMediaSourceUpload),
+      merchant_review_decision: job?.merchant_review?.decision || "",
+      commercial_rights_confirmed: job?.merchant_review?.confirmations?.commercial_rights_confirmed === true,
+      snapshot_merchant_review_decision: snapshotJob?.merchant_review?.decision || "",
+    };
+  });
+
+  const mediaWritebackRevalidationRequestStart = mediaFixtureState.requests.length;
   const mediaWritebackClick = await page.evaluate(() => {
     const button = document.querySelector("#view-media.is-active #mediaConfirmDraft");
     const before = {
@@ -889,6 +1099,9 @@ async function main() {
     }));
     fail("approved media was not written back to Listing after reload", { mediaWritebackWaitError, mediaWritebackDebug });
   }
+  const mediaWritebackRevalidationRequests = mediaFixtureState.requests
+    .slice(mediaWritebackRevalidationRequestStart)
+    .filter((item) => item.method === "GET" && item.fixture === "job");
   await page
     .screenshot({ path: path.join(outDir, "06-product-after-media-writeback.png"), fullPage: true, timeout: 15000 })
     .catch((error) => screenshotFailures.push({ view: "product-after-media-writeback", error: String(error.message || error).slice(0, 300) }));
@@ -952,6 +1165,12 @@ async function main() {
       Boolean(recentNoReportContext.title) &&
       recentNoReportContext.missing_facts.includes("包装尺寸") &&
       recentMutationRequests.length === 0,
+    bulk_return_restores_original_product_without_rerun:
+      bulkReturn.product === acceptanceProduct &&
+      bulkReturn.source_type === "bulk_handoff" &&
+      bulkReturn.active_media_draft.startsWith("saas-bulk-") &&
+      bulkReturn.active_mode === "single" &&
+      bulkReturnMutationRequests.length === 0,
     media_opens_same_bulk_draft:
       mediaOpened.active_media_draft.startsWith("listing-project-") &&
       mediaOpened.active_media_draft === mediaOpened.listing_project_key &&
@@ -970,19 +1189,39 @@ async function main() {
       sourceUpload.provider_reference_ready === true &&
       sourceUpload.source_url_retained === false &&
       sourceUpload.secret_exposed === false,
+    media_generation_acceptance_is_explicit_and_safe:
+      mediaGenerationAcceptance.visible &&
+      mediaGenerationAcceptance.confirms_rights &&
+      mediaGenerationAcceptance.preserves_draft_boundary &&
+      mediaGenerationAcceptance.confirm_label.includes("确认"),
     media_generation_creates_reviewable_assets:
       ["submitted", "generated", "done"].includes(mediaGenerated.media_generation_status) &&
       mediaGenerated.has_review_copy &&
       mediaGenerated.has_no_direct_publish_button,
-    media_generation_created_backend_asset_job:
+    media_generation_created_reviewable_frontend_fixture:
       backendMediaJob.ok &&
       backendMediaJob.count >= 1 &&
       backendMediaJob.job_status === "approved_for_listing" &&
       backendMediaJob.manifest_count > 0 &&
       backendMediaJob.validation_status === "manifest_ready" &&
-      backendMediaJob.live_provider_called === true &&
+      backendMediaJob.ui_contract_assets_returned === true &&
+      backendMediaJob.fixture_only === true &&
+      backendMediaJob.external_provider_called === false &&
       backendMediaJob.spend_now_allowed === false &&
       backendMediaJob.secret_exposed === false,
+    approved_media_audit_survives_reload_and_unlocks_same_draft:
+      approvedMediaAfterReload.status === "approved_for_listing" &&
+      approvedMediaAfterReload.gate_allowed === true &&
+      approvedMediaAfterReload.gate_reason === "approved_for_listing_draft" &&
+      approvedMediaAfterReload.button_disabled === false &&
+      approvedMediaAfterReload.button_gate === "revalidation_required" &&
+      approvedMediaAfterReload.source_upload_present === false &&
+      approvedMediaAfterReload.merchant_review_decision === "approve_for_listing_draft" &&
+      approvedMediaAfterReload.commercial_rights_confirmed === true &&
+      approvedMediaAfterReload.snapshot_merchant_review_decision === "approve_for_listing_draft",
+    media_writeback_revalidates_authoritative_backend_job:
+      mediaWritebackRevalidationRequests.length === 1 &&
+      mediaWritebackRevalidationRequests[0].path === `/media-asset-jobs/${approvedMediaAfterReload.media_job_id}`,
     media_job_survives_reload_for_same_listing:
       Boolean(mediaBeforeReload.media_job_id) &&
       mediaAfterReload.media_job_id === mediaBeforeReload.media_job_id &&
@@ -1004,6 +1243,12 @@ async function main() {
       readinessApi.ok &&
       readinessApi.json?.readiness?.production_ready === false && readinessApi.json?.readiness?.can_accept_real_customers === false,
     no_forbidden_requests: forbiddenRequests.length === 0,
+    no_paid_or_external_media_call:
+      mediaFixtureState.requests.some((item) => item.fixture === "queue") &&
+      mediaFixtureState.requests.some((item) => item.fixture === "review") &&
+      backendMediaJob.fixture_only === true &&
+      backendMediaJob.external_provider_called === false,
+    registration_trial_metadata_safe: session.platformTrialActivation.secret_exposed === false,
     no_secret_exposed:
       !JSON.stringify({ bulkInitial, bulkGenerated, productAfterBulk, mediaOpened, mediaGenerated, mediaBeforeReload, mediaAfterReload, backendMediaJob, productAfterMedia })
         .toLowerCase()
@@ -1020,6 +1265,7 @@ async function main() {
     session: {
       email_masked: session.email.replace(/^(.{2}).*(@.*)$/, "$1***$2"),
       store_id: session.store.store_id,
+      platform_trial_activation: session.platformTrialActivation,
     },
     checks,
     bulkInitial,
@@ -1030,12 +1276,18 @@ async function main() {
     recentNoReportContext,
     recentResume,
     recentMutationRequests,
+    bulkReturn,
+    bulkReturnMutationRequests,
     mediaOpened,
     sourceUpload,
+    mediaGenerationAcceptance,
     mediaGenerated,
     mediaBeforeReload,
     mediaAfterReload,
+    approvedMediaAfterReload,
+    mediaWritebackRevalidationRequests,
     backendMediaJob,
+    mediaFixtureRequests: mediaFixtureState.requests,
     productAfterMedia,
     api: {
       real_platform_writes_enabled: healthApi.json?.real_platform_writes_enabled,

@@ -3640,44 +3640,7 @@ function bindRestoredMediaStudioEvents() {
   });
   bindOnce(view.querySelector("#mediaGenerateImagesDraft"), "click", handleMediaGenerateImagesDraftClick);
   bindOnce(view.querySelector("#mediaScriptDraft"), "click", handleMediaScriptDraftClick);
-  bindOnce(view.querySelector("#mediaConfirmDraft"), "click", () => {
-    const mediaWritebackClickAt = Date.now();
-    if (mediaWritebackClickAt - Number(state.saasMediaWritebackClickHandledAt || 0) < 1500) return;
-    state.saasMediaWritebackClickHandledAt = mediaWritebackClickAt;
-    const mediaConfigForWriteback = readMediaGenerationConfig();
-    const writeback = applySaasMediaManifestToListingDraft({ entry: mediaConfigForWriteback.entry });
-    if (!writeback) return;
-    addAiMessage(
-      mediaConfigForWriteback.entry === "single"
-        ? "本次素材已保存，并送回 Listing 草稿作为图片候选。正式发布前仍要确认图片权利、实物一致性和平台规则。"
-        : "素材已送回 Listing 草稿。下一步先补价格、物流、类目和权利确认，再生成发布确认单。",
-    );
-    setActivityFeedback("素材已送回 Listing 草稿；这一步只补草稿和体检线索，不会写入 eBay。");
-    state.mediaGenerationStatus = "done";
-    renderMediaQualityBoard(mediaConfigForWriteback);
-    state.activeFlowKey = "product";
-    closeModals();
-    setView("product", { preserveFlowKey: true });
-    renderProductListingCenter();
-    setProductInlineFeedback("素材已送回 Listing 草稿：图片 URL 已进入字段体检，真实发布仍要经过权利复核和确认中心。");
-    showActionToast("素材已送回 Listing 草稿：先补价格、物流和权利确认，再生成发布确认单。");
-    return;
-    const config = readMediaGenerationConfig();
-    addAiMessage(
-      config.entry === "single"
-        ? "本次独立图片素材已保存为独立任务。后续可以转成正式商品项目，再补市场判断、刊登字段和利润测算。"
-        : "素材包已回写到产品刊登草稿。真实发布前仍会检查尺寸、重量、材质、政策、价格和发布确认。",
-    );
-    setActivityFeedback("素材包已回写到产品刊登。发布前校验和确认规则不会跳过。");
-    state.mediaGenerationStatus = "done";
-    renderMediaQualityBoard(config);
-    state.activeFlowKey = "product";
-    closeModals();
-    setView("product", { preserveFlowKey: true });
-    renderProductListingCenter();
-    setProductInlineFeedback("素材包已回写到 Listing：主图、场景图、详情页和视频脚本可以继续用于 eBay 草稿；真实发布仍要经过字段校验和决策中心。");
-    showActionToast("素材包已回写到 Listing：下一步检查 eBay 刊登资料和发布前确认。");
-  });
+  bindOnce(view.querySelector("#mediaConfirmDraft"), "click", handleSaasMediaWritebackClick);
 }
 
 function saasMediaReportRows(ctx = saasMerchantWorkbenchContext()) {
@@ -4242,6 +4205,155 @@ function saasMediaManifestAssetsForListing(job = latestSaasMediaAssetJobWithMani
     .filter(Boolean);
 }
 
+function saasApprovedMediaWritebackGate(job = null, draft = state.saasListingComposerDraft) {
+  const deny = (reason) => ({ allowed: false, reason, job, assets: [] });
+  if (!job || typeof job !== "object") return deny("missing_job");
+  const mediaJobId = String(job.media_job_id || "").trim();
+  const activeStoreId = String(activeSaasStore()?.store_id || "").trim();
+  const jobStoreId = String(job.store_id || "").trim();
+  if (!mediaJobId || !String(job.updated_at || "").trim()) return deny("job_revision_missing");
+  if (!activeStoreId || !jobStoreId || jobStoreId !== activeStoreId) return deny("store_mismatch");
+  if (!saasMediaAssetJobMatchesListingProject(job, draft)) return deny("project_mismatch");
+  if (job.status !== "approved_for_listing") return deny("job_not_approved");
+  if (job.live_provider_called !== true) return deny("provider_result_missing");
+  if (job.asset_manifest_validation?.status !== "manifest_ready") return deny("manifest_not_ready");
+  if (saasMediaAssetJobIsConceptOnly(job)) return deny("concept_only");
+  if (job.spend_now_allowed === true || job.secret_exposed === true) return deny("unsafe_job_boundary");
+
+  const facts = saasMediaAssetJobProductFacts(job);
+  const referenceImages = Array.isArray(facts.reference_images) ? facts.reference_images : [];
+  const hasGroundedProductFacts =
+    Boolean(String(facts.source_asset_id || "").trim()) ||
+    facts.private_source_transport === "backend_asset_id" ||
+    referenceImages.some((url) => /^https:\/\//i.test(String(url || "").trim()));
+  if (!hasGroundedProductFacts) return deny("product_facts_not_grounded");
+
+  const manifest = Array.isArray(job.asset_manifest) ? job.asset_manifest : [];
+  if (!manifest.length) return deny("manifest_empty");
+  if (
+    !manifest.every(
+      (asset) =>
+        asset &&
+        typeof asset === "object" &&
+        Boolean(saasSafeListingAssetUrl(asset.url_or_file_path || asset.url || asset.file_path)),
+    )
+  ) {
+    return deny("unsafe_asset_url");
+  }
+
+  const merchantReview = job.merchant_review && typeof job.merchant_review === "object" ? job.merchant_review : {};
+  const confirmations =
+    merchantReview.confirmations && typeof merchantReview.confirmations === "object" ? merchantReview.confirmations : {};
+  const assetReview = job.asset_review && typeof job.asset_review === "object" ? job.asset_review : {};
+  const hasVideoAsset = manifest.some((asset) => {
+    const assetType = String(asset?.asset_type || asset?.type || "");
+    const url = String(asset?.url_or_file_path || asset?.url || asset?.file_path || "");
+    return /video/i.test(assetType) || /\.(mp4|webm|mov)(\?|$)/i.test(url);
+  });
+  if (
+    merchantReview.decision !== "approve_for_listing_draft" ||
+    merchantReview.listing_draft_only !== true ||
+    merchantReview.triggers_real_platform_write !== false ||
+    merchantReview.secret_exposed === true ||
+    !String(merchantReview.reviewed_by || "").trim() ||
+    confirmations.fact_consistency_confirmed !== true ||
+    confirmations.commercial_rights_confirmed !== true ||
+    confirmations.platform_rules_checked !== true ||
+    (hasVideoAsset && confirmations.motion_and_usage_consistency_confirmed !== true)
+  ) {
+    return deny("merchant_review_not_audited");
+  }
+  if (
+    assetReview.status !== "approved_for_listing_draft" ||
+    assetReview.listing_use_status !== "approved_for_listing_draft" ||
+    !String(assetReview.reviewed_at || "").trim()
+  ) {
+    return deny("asset_review_not_audited");
+  }
+  if (
+    !manifest.every(
+      (asset) =>
+        asset.fact_review_status === "confirmed_by_merchant" &&
+        asset.commercial_use_status === "confirmed_by_merchant" &&
+        asset.listing_use_status === "approved_for_listing_draft" &&
+        asset.review_status === "approved_for_listing_draft",
+    )
+  ) {
+    return deny("manifest_review_not_audited");
+  }
+  const assets = saasMediaManifestAssetsForListing(job);
+  return assets.length ? { allowed: true, reason: "approved_for_listing_draft", job, assets } : deny("manifest_empty");
+}
+
+let saasMediaWritebackRevalidationProof = null;
+let saasMediaWritebackActionPromise = null;
+
+function saasMediaWritebackAuthorityFingerprint(job = {}) {
+  const manifest = Array.isArray(job.asset_manifest) ? job.asset_manifest : [];
+  const review = job.merchant_review && typeof job.merchant_review === "object" ? job.merchant_review : {};
+  const assetReview = job.asset_review && typeof job.asset_review === "object" ? job.asset_review : {};
+  return String(
+    hashString(
+      JSON.stringify({
+        media_job_id: job.media_job_id || "",
+        store_id: job.store_id || "",
+        updated_at: job.updated_at || "",
+        status: job.status || "",
+        manifest_validation: job.asset_manifest_validation?.status || "",
+        merchant_review: {
+          decision: review.decision || "",
+          reviewed_by: review.reviewed_by || "",
+          confirmations: review.confirmations || {},
+          listing_draft_only: review.listing_draft_only === true,
+          triggers_real_platform_write: review.triggers_real_platform_write === true,
+        },
+        asset_review: {
+          status: assetReview.status || "",
+          listing_use_status: assetReview.listing_use_status || "",
+          reviewed_at: assetReview.reviewed_at || "",
+        },
+        manifest: manifest.map((asset) => ({
+          asset_id: asset?.asset_id || asset?.id || "",
+          asset_type: asset?.asset_type || asset?.type || "",
+          url: asset?.url_or_file_path || asset?.url || asset?.file_path || "",
+          fact_review_status: asset?.fact_review_status || "",
+          commercial_use_status: asset?.commercial_use_status || "",
+          listing_use_status: asset?.listing_use_status || "",
+          review_status: asset?.review_status || "",
+        })),
+      }),
+    ),
+  );
+}
+
+function issueSaasMediaWritebackRevalidationProof(job = {}) {
+  const listingProject = saasCurrentListingProjectIdentity();
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  saasMediaWritebackRevalidationProof = {
+    token,
+    job,
+    media_job_id: String(job.media_job_id || ""),
+    store_id: String(job.store_id || ""),
+    listing_project_key: String(listingProject.key || ""),
+    fingerprint: saasMediaWritebackAuthorityFingerprint(job),
+    expires_at: Date.now() + 10000,
+  };
+  return token;
+}
+
+function consumeSaasMediaWritebackRevalidationProof(job = null, token = "") {
+  const proof = saasMediaWritebackRevalidationProof;
+  saasMediaWritebackRevalidationProof = null;
+  if (!proof || !job || proof.job !== job || !token || token !== proof.token || Date.now() > proof.expires_at) return false;
+  const listingProject = saasCurrentListingProjectIdentity();
+  return Boolean(
+    proof.media_job_id === String(job.media_job_id || "") &&
+      proof.store_id === String(activeSaasStore()?.store_id || "") &&
+      proof.listing_project_key === String(listingProject.key || "") &&
+      proof.fingerprint === saasMediaWritebackAuthorityFingerprint(job),
+  );
+}
+
 function saasListingMediaWritebackForDraft(draft = state.saasListingComposerDraft) {
   const writeback = draft?.media_writeback && typeof draft.media_writeback === "object" ? draft.media_writeback : null;
   if (!writeback) return null;
@@ -4284,20 +4396,28 @@ function saasListingMediaWritebackRightsReady(draft = state.saasListingComposerD
   return /ready|approved|confirmed|pass|可用于/i.test(joined);
 }
 
-function applySaasMediaManifestToListingDraft({ entry = "" } = {}) {
-  const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
-  const latestUnscopedJob = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: false });
-  const assets = saasMediaManifestAssetsForListing(job);
-  if (!job || !assets.length) {
-    if (latestUnscopedJob && !saasMediaAssetJobMatchesListingProject(latestUnscopedJob)) {
-      showActionToast("最近的素材属于另一个商品，已阻止回写。请为当前 Listing 重新生成或选择对应素材。");
-      return null;
-    }
-    showActionToast("还没有可回写的真实素材。先在素材工坊生成图片，并等它进入素材清单。");
+function applySaasMediaManifestToListingDraft({ entry = "", authoritativeJob = null, revalidationToken = "" } = {}) {
+  if (!consumeSaasMediaWritebackRevalidationProof(authoritativeJob, revalidationToken)) {
+    showActionToast("素材状态需要重新向后端校验；本地缓存不能授权回写 Listing。");
     return null;
   }
-  if (job.status !== "approved_for_listing") {
-    showActionToast("先点开素材逐项确认实物一致、商业使用权和平台规则，再回写 Listing 草稿。");
+  const job = authoritativeJob;
+  const writebackGate = saasApprovedMediaWritebackGate(job);
+  const assets = writebackGate.assets;
+  if (!writebackGate.allowed) {
+    if (writebackGate.reason === "store_mismatch" || writebackGate.reason === "project_mismatch") {
+      showActionToast("后端返回的素材不属于当前店铺或当前商品，已阻止回写。");
+      return null;
+    }
+    if (writebackGate.reason === "concept_only" || writebackGate.reason === "product_facts_not_grounded") {
+      showActionToast("当前素材没有可核验的真实商品来源，不能回写 Listing。请先上传有权使用的商品来源图并重新生成。");
+      return null;
+    }
+    if (["job_not_approved", "merchant_review_not_audited", "asset_review_not_audited", "manifest_review_not_audited"].includes(writebackGate.reason)) {
+      showActionToast("先点开素材逐项确认实物一致、商业使用权和平台规则，再回写 Listing 草稿。");
+      return null;
+    }
+    showActionToast("还没有通过安全校验的可回写素材。请确认素材清单完整、地址安全，并完成审核。");
     return null;
   }
   const existingDraft = state.saasListingComposerDraft;
@@ -4383,6 +4503,105 @@ function applySaasMediaManifestToListingDraft({ entry = "" } = {}) {
   state.saasListingSourceMode = state.saasListingSourceMode || "media_asset_writeback";
   saveSaasProtectedStateSnapshot();
   return writeback;
+}
+
+function saasMediaWritebackBlockMessage(reason = "") {
+  if (reason === "store_mismatch" || reason === "project_mismatch") {
+    return "后端当前素材不属于这个店铺或商品，已阻止回写。";
+  }
+  if (reason === "concept_only" || reason === "product_facts_not_grounded") {
+    return "后端当前素材没有可核验的真实商品来源，不能回写 Listing。";
+  }
+  if (["job_not_approved", "merchant_review_not_audited", "asset_review_not_audited", "manifest_review_not_audited"].includes(reason)) {
+    return "后端当前素材尚未完成实物一致性、商业使用权和平台规则审核，不能回写 Listing。";
+  }
+  return "后端当前素材状态没有通过回写校验，请刷新素材任务后重试。";
+}
+
+async function revalidateAndApplySaasMediaManifestToListingDraft({ entry = "" } = {}) {
+  const candidate = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+  const mediaJobId = String(candidate?.media_job_id || "").trim();
+  const activeStoreId = String(activeSaasStore()?.store_id || "").trim();
+  if (!mediaJobId || !activeStoreId) {
+    showActionToast("没有可向后端校验的当前商品素材；本地缓存不会授权回写。");
+    return null;
+  }
+  try {
+    const payload = await saasFetch(`/media-asset-jobs/${encodeURIComponent(mediaJobId)}`);
+    const authoritativeJob = payload?.media_asset_job && typeof payload.media_asset_job === "object" ? payload.media_asset_job : null;
+    if (!authoritativeJob || String(authoritativeJob.media_job_id || "") !== mediaJobId) {
+      showActionToast("后端没有返回当前素材任务，已阻止回写 Listing。");
+      return null;
+    }
+    if (
+      String(authoritativeJob.store_id || "") !== activeStoreId ||
+      !saasMediaAssetJobMatchesListingProject(authoritativeJob)
+    ) {
+      showActionToast("后端返回的素材不属于当前店铺或当前商品，已阻止回写。");
+      return null;
+    }
+    markSaasMediaJobsAsCurrentSessionBackendEvidence(authoritativeJob);
+    upsertSaasMediaAssetJobForDisplay(authoritativeJob, mediaJobId);
+    const refreshedJob = (state.saasMediaAssetJobs || []).find(
+      (job) => job === authoritativeJob && String(job.media_job_id || "") === mediaJobId,
+    );
+    const gate = saasApprovedMediaWritebackGate(refreshedJob);
+    if (!gate.allowed) {
+      showActionToast(saasMediaWritebackBlockMessage(gate.reason));
+      return null;
+    }
+    const revalidationToken = issueSaasMediaWritebackRevalidationProof(refreshedJob);
+    return applySaasMediaManifestToListingDraft({
+      entry,
+      authoritativeJob: refreshedJob,
+      revalidationToken,
+    });
+  } catch (error) {
+    showActionToast(`无法向后端确认当前素材状态，已阻止回写：${publicRuntimeText(error?.message || error).slice(0, 100)}`);
+    return null;
+  }
+}
+
+function finishSaasMediaWritebackUi(writeback, mediaConfigForWriteback = {}) {
+  if (!writeback) return false;
+  addAiMessage(
+    mediaConfigForWriteback.entry === "single"
+      ? "本次素材已保存，并送回 Listing 草稿作为图片候选。正式发布前仍要确认图片权利、实物一致性和平台规则。"
+      : "素材已送回 Listing 草稿。下一步先补价格、物流、类目和权利确认，再生成发布确认单。",
+  );
+  setActivityFeedback("素材已送回 Listing 草稿；这一步只补草稿和体检线索，不会写入 eBay。");
+  state.mediaGenerationStatus = "done";
+  renderMediaQualityBoard(mediaConfigForWriteback);
+  state.activeFlowKey = "product";
+  closeModals();
+  setView("product", { preserveFlowKey: true });
+  renderProductListingCenter();
+  setProductInlineFeedback("素材已送回 Listing 草稿：图片 URL 已进入字段体检，真实发布仍要经过权利复核和确认中心。");
+  showActionToast("素材已送回 Listing 草稿：先补价格、物流和权利确认，再生成发布确认单。");
+  return true;
+}
+
+async function handleSaasMediaWritebackClick(event = null) {
+  event?.preventDefault?.();
+  if (saasMediaWritebackActionPromise) return saasMediaWritebackActionPromise;
+  const mediaConfigForWriteback = readMediaGenerationConfig();
+  const button = document.querySelector("#view-media.is-active #mediaConfirmDraft") || event?.currentTarget || null;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "正在向后端校验";
+  }
+  saasMediaWritebackActionPromise = (async () => {
+    const writeback = await revalidateAndApplySaasMediaManifestToListingDraft({ entry: mediaConfigForWriteback.entry });
+    return finishSaasMediaWritebackUi(writeback, mediaConfigForWriteback);
+  })();
+  try {
+    return await saasMediaWritebackActionPromise;
+  } finally {
+    saasMediaWritebackActionPromise = null;
+    if (state.view === "media") {
+      syncMediaGenerationActionState(readMediaGenerationConfig());
+    }
+  }
 }
 
 function renderSaasListingMediaWritebackPanel(draft = state.saasListingComposerDraft) {
@@ -12700,6 +12919,36 @@ function refreshSaasMediaGeneratedAssetSurfaces() {
   }
 }
 
+const saasMediaJobCurrentSessionBackendEvidence = new WeakSet();
+const saasMediaJobUntrustedUiCacheEvidence = new WeakSet();
+
+function markSaasMediaJobsAsCurrentSessionBackendEvidence(jobs = []) {
+  (Array.isArray(jobs) ? jobs : [jobs]).forEach((job) => {
+    if (!job || typeof job !== "object") return;
+    saasMediaJobCurrentSessionBackendEvidence.add(job);
+    saasMediaJobUntrustedUiCacheEvidence.delete(job);
+  });
+  return jobs;
+}
+
+function markSaasMediaJobsAsUntrustedUiCache(jobs = []) {
+  (Array.isArray(jobs) ? jobs : [jobs]).forEach((job) => {
+    if (!job || typeof job !== "object") return;
+    saasMediaJobUntrustedUiCacheEvidence.add(job);
+    saasMediaJobCurrentSessionBackendEvidence.delete(job);
+  });
+  return jobs;
+}
+
+function saasMediaJobHasCurrentSessionBackendEvidence(job = null) {
+  return Boolean(
+    job &&
+      typeof job === "object" &&
+      saasMediaJobCurrentSessionBackendEvidence.has(job) &&
+      !saasMediaJobUntrustedUiCacheEvidence.has(job),
+  );
+}
+
 function upsertSaasMediaAssetJobForDisplay(job = {}, replaceId = "") {
   if (!job || typeof job !== "object") return;
   const jobId = String(job.media_job_id || job.idempotency_key || job.queue_job_id || "");
@@ -12791,9 +13040,11 @@ async function approveLatestSaasMediaAssetJobForListingDraft() {
     });
     const reviewed = payload?.media_asset_job;
     if (!reviewed) throw new Error("后端没有返回素材审核记录");
+    markSaasMediaJobsAsCurrentSessionBackendEvidence(reviewed);
     upsertSaasMediaAssetJobForDisplay(reviewed, mediaJobId);
     state.mediaGenerationStatus = "generated";
     setText("#mediaProductionStatus", "素材已审核 · 可以回写 Listing 草稿");
+    syncMediaGenerationActionState(readMediaGenerationConfig());
     showActionToast("素材审核已记录：现在可以回写 Listing 草稿，不会写入 eBay。");
     return reviewed;
   } catch (error) {
@@ -12822,6 +13073,7 @@ async function retrySaasMediaAssetJob(mediaJobId, button = null) {
     });
     const mediaJob = payload?.media_asset_job && typeof payload.media_asset_job === "object" ? payload.media_asset_job : null;
     if (!mediaJob?.media_job_id) throw new Error("后端没有返回新素材版本");
+    markSaasMediaJobsAsCurrentSessionBackendEvidence(mediaJob);
     upsertSaasMediaAssetJobForDisplay(mediaJob);
     state.mediaGenerationStatus = "submitted";
     setText("#mediaProductionStatus", `${saasMediaAssetJobVersionLabel(mediaJob)} 已创建 · 正在后台生成`);
@@ -13056,6 +13308,10 @@ function syncMediaGenerationActionState(config = readMediaGenerationConfig()) {
   const button = document.querySelector("#mediaGenerateImagesDraft");
   if (!button) return null;
   const groundingGate = saasMediaGenerationGroundingGate(currentMediaStudioProductFacts(config), config);
+  const latestManifestJob = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+  const writebackGate = saasApprovedMediaWritebackGate(latestManifestJob);
+  const hasCurrentSessionBackendEvidence = saasMediaJobHasCurrentSessionBackendEvidence(latestManifestJob);
+  const listingWritebackAllowed = writebackGate.allowed && hasCurrentSessionBackendEvidence;
   button.disabled = !groundingGate.allowed;
   button.textContent = groundingGate.allowed
     ? groundingGate.conceptOnly
@@ -13074,17 +13330,38 @@ function syncMediaGenerationActionState(config = readMediaGenerationConfig()) {
     : "needs_source";
   const writebackButton = document.querySelector("#mediaConfirmDraft");
   if (writebackButton) {
-    const listingWritebackAllowed = groundingGate.allowed && !groundingGate.conceptOnly;
     writebackButton.disabled = !listingWritebackAllowed;
-    writebackButton.textContent = groundingGate.conceptOnly ? "概念图不可回写 Listing" : "回写产品刊登";
-    writebackButton.title = groundingGate.conceptOnly
-      ? "概念探索没有真实商品来源图，只能用于判断方向，不能作为刊登素材"
-      : listingWritebackAllowed
-        ? "审核素材与实物一致后，回写产品刊登草稿"
-        : "先上传有权使用的真实商品来源图";
-    writebackButton.dataset.mediaWritebackGate = listingWritebackAllowed ? "source_grounded" : "blocked";
+    writebackButton.textContent = listingWritebackAllowed
+      ? "校验并回写产品刊登"
+      : writebackGate.allowed && !hasCurrentSessionBackendEvidence
+        ? "刷新后校验素材再回写"
+      : groundingGate.conceptOnly
+        ? "概念图不可回写 Listing"
+        : latestManifestJob
+          ? "完成素材审核后回写"
+          : "生成并审核素材后回写";
+    writebackButton.title = listingWritebackAllowed
+      ? "点击后会重新向后端读取当前素材状态；校验通过才只回写产品刊登草稿"
+      : writebackGate.allowed && !hasCurrentSessionBackendEvidence
+        ? "这是本地展示缓存，不能授权回写；等待已登录会话刷新后端素材状态"
+      : groundingGate.conceptOnly
+        ? "概念探索没有真实商品来源图，只能用于判断方向，不能作为刊登素材"
+        : latestManifestJob
+          ? "先完成当前商品素材的实物一致性、商业使用权和平台规则审核"
+          : "先基于有权使用的真实商品来源图生成素材并完成审核";
+    writebackButton.dataset.mediaWritebackGate = listingWritebackAllowed
+      ? "revalidation_required"
+      : writebackGate.allowed && !hasCurrentSessionBackendEvidence
+        ? "untrusted_ui_cache"
+        : writebackGate.reason || "blocked";
   }
-  if (groundingGate.conceptOnly) {
+  if (listingWritebackAllowed) {
+    setText(
+      "#mediaDecisionSummary",
+      "当前商品的素材已完成来源、实物一致性、商业使用权和平台规则审核；可以回写 Listing 草稿，真实发布仍需进入确认中心。",
+    );
+    setText("#mediaProductionTarget", "已审核素材可以回写产品刊登草稿");
+  } else if (groundingGate.conceptOnly) {
     setText(
       "#mediaDecisionSummary",
       `当前任务：${config.entryLabel}，${config.count}概念参考图。没有真实商品来源图；结果只用于判断构图和场景方向，不可回写 Listing。`,
@@ -13223,6 +13500,7 @@ async function pollSaasMediaAssetJobUntilReview({ mediaJobId, sourceText, config
       }
       const mediaJob = response?.media_asset_job && typeof response.media_asset_job === "object" ? response.media_asset_job : null;
       if (!mediaJob) continue;
+      markSaasMediaJobsAsCurrentSessionBackendEvidence(mediaJob);
       upsertSaasMediaAssetJobForDisplay(mediaJob, optimisticId);
       const status = String(mediaJob.status || "");
       const liveAssetsReturned =
@@ -13325,6 +13603,7 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
     });
     const mediaJob = response.media_asset_job && typeof response.media_asset_job === "object" ? response.media_asset_job : null;
     if (!mediaJob?.media_job_id) throw new Error("media asset job missing from backend response");
+    markSaasMediaJobsAsCurrentSessionBackendEvidence(mediaJob);
     upsertSaasMediaAssetJobForDisplay(mediaJob, optimisticId);
     const liveAssetsReturned = mediaJob.live_provider_called === true && Array.isArray(mediaJob.asset_manifest) && mediaJob.asset_manifest.length > 0;
     state.mediaGenerationStatus = liveAssetsReturned ? "generated" : "submitted";
@@ -15080,6 +15359,7 @@ function buildSaasProtectedStateSnapshot() {
           "asset_manifest",
           "asset_manifest_validation",
           "asset_review",
+          "merchant_review",
           "cost_guard",
           "production_gate",
           "merchant_visible_states",
@@ -15219,6 +15499,7 @@ function hydrateSaasProtectedStateFromCache() {
     state.activeMediaDraft = publicRuntimeText(snapshot.active_media_draft || state.activeMediaDraft || "").slice(0, 160);
     state.mediaTaskEntry = snapshot.media_task_entry === "single" ? "single" : state.mediaTaskEntry || "project";
     state.saasMediaAssetJobs = Array.isArray(snapshot.media_asset_jobs) ? snapshot.media_asset_jobs : state.saasMediaAssetJobs || [];
+    markSaasMediaJobsAsUntrustedUiCache(state.saasMediaAssetJobs);
     state.saasReports = Array.isArray(snapshot.reports) ? snapshot.reports : state.saasReports || [];
     state.saasConfirmations = Array.isArray(snapshot.confirmations) ? snapshot.confirmations : state.saasConfirmations || [];
     state.saasConfirmationsLiveLoaded = false;
@@ -27199,7 +27480,8 @@ async function refreshSaasState(options = {}) {
     state.saasLastPublicSearchHandoff =
       (state.saasTasks || []).find((task) => task && typeof task === "object" && task.task_type === "product_workflow" && task.input?.public_search_provider_handoff)
         ?.input?.public_search_provider_handoff || state.saasLastPublicSearchHandoff;
-    state.saasMediaAssetJobs = mediaAssetJobs.media_asset_jobs || [];
+    state.saasMediaAssetJobs = Array.isArray(mediaAssetJobs.media_asset_jobs) ? mediaAssetJobs.media_asset_jobs : [];
+    markSaasMediaJobsAsCurrentSessionBackendEvidence(state.saasMediaAssetJobs);
     state.saasReports = reports.reports || [];
     restoreSaasListingComposerDraftFromBackendReports();
     const liveConfirmations = confirmations.confirmations || [];
@@ -43173,44 +43455,7 @@ function bindEvents() {
   });
   document.querySelector("#mediaGenerateImagesDraft")?.addEventListener("click", handleMediaGenerateImagesDraftClick);
   document.querySelector("#mediaScriptDraft")?.addEventListener("click", handleMediaScriptDraftClick);
-  document.querySelector("#mediaConfirmDraft")?.addEventListener("click", () => {
-    const mediaWritebackClickAt = Date.now();
-    if (mediaWritebackClickAt - Number(state.saasMediaWritebackClickHandledAt || 0) < 1500) return;
-    state.saasMediaWritebackClickHandledAt = mediaWritebackClickAt;
-    const mediaConfigForWriteback = readMediaGenerationConfig();
-    const writeback = applySaasMediaManifestToListingDraft({ entry: mediaConfigForWriteback.entry });
-    if (!writeback) return;
-    addAiMessage(
-      mediaConfigForWriteback.entry === "single"
-        ? "本次素材已保存，并送回 Listing 草稿作为图片候选。正式发布前仍要确认图片权利、实物一致性和平台规则。"
-        : "素材已送回 Listing 草稿。下一步先补价格、物流、类目和权利确认，再生成发布确认单。",
-    );
-    setActivityFeedback("素材已送回 Listing 草稿；这一步只补草稿和体检线索，不会写入 eBay。");
-    state.mediaGenerationStatus = "done";
-    renderMediaQualityBoard(mediaConfigForWriteback);
-    state.activeFlowKey = "product";
-    closeModals();
-    setView("product", { preserveFlowKey: true });
-    renderProductListingCenter();
-    setProductInlineFeedback("素材已送回 Listing 草稿：图片 URL 已进入字段体检，真实发布仍要经过权利复核和确认中心。");
-    showActionToast("素材已送回 Listing 草稿：先补价格、物流和权利确认，再生成发布确认单。");
-    return;
-    const config = readMediaGenerationConfig();
-    addAiMessage(
-      config.entry === "single"
-        ? "本次独立图片素材已保存为独立任务。后续可以转成正式商品项目，再补市场判断、刊登字段和利润测算。"
-        : "素材包已回写到产品刊登草稿。真实发布前仍会检查尺寸、重量、材质、政策、价格和发布确认。",
-    );
-    setActivityFeedback("素材包已回写到产品刊登。发布前校验和确认规则不会跳过。");
-    state.mediaGenerationStatus = "done";
-    renderMediaQualityBoard(config);
-    state.activeFlowKey = "product";
-    closeModals();
-    setView("product", { preserveFlowKey: true });
-    renderProductListingCenter();
-    setProductInlineFeedback("素材包已回写到产品刊登：主图、场景图、详情页和视频脚本可以继续用于 eBay 草稿；真实发布仍要经过字段校验和确认中心。");
-    showActionToast("素材包已回写到产品刊登：下一步检查 eBay 刊登资料和发布前确认。");
-  });
+  document.querySelector("#mediaConfirmDraft")?.addEventListener("click", handleSaasMediaWritebackClick);
 
   document.querySelector("#activityProjectGrid").addEventListener("click", (event) => {
     const card = event.target.closest("[data-project]");
