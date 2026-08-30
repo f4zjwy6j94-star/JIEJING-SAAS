@@ -489,6 +489,11 @@ def validate_atomic_frontend_manifest() -> list[str]:
                     expected_manifest_sha256=expected_received_manifest_sha,
                     remote_dir=received_dir,
                 )
+                cleanup_start = prelude.index("cleanup_remote_artifacts() {")
+                cleanup_end = prelude.index("\n}", cleanup_start)
+                cleanup_function = prelude[cleanup_start:cleanup_end]
+                if 'exit "$' in cleanup_function or 'return "$final_rc"' not in cleanup_function:
+                    failures.append("remote EXIT cleanup can recurse through exit instead of returning")
                 source_zip_relative = source_zip.relative_to(ROOT).as_posix()
                 source_manifest_relative = source_manifest.relative_to(ROOT).as_posix()
                 copy_inputs = (
@@ -496,14 +501,14 @@ def validate_atomic_frontend_manifest() -> list[str]:
                     f"cp '{source_manifest_relative}' '{received_manifest_upload}'\n"
                 )
                 source_zip.write_bytes(original_bundle_bytes + b"tampered-in-transit")
-                remote_result = run_bash_fixture(
+                remote_result = run_bash_login_fixture(
                     copy_inputs + prelude + "\necho APPLY_ENTERED\n",
                     remote_temp,
-                    "remote-integrity-fixture.sh",
+                    "remote-integrity-login-fixture.sh",
                 )
                 combined = remote_result.stdout + remote_result.stderr
-                if remote_result.returncode == 0 or "APPLY_ENTERED" in combined:
-                    failures.append("tampered received bundle entered remote apply")
+                if remote_result.returncode != 1 or "APPLY_ENTERED" in combined:
+                    failures.append("tampered received bundle did not fail closed with rc=1")
                 if "REMOTE_ARTIFACT_SHA256_MISMATCH=" not in combined:
                     failures.append(
                         "tampered received bundle lacked deterministic hash rejection:"
@@ -538,20 +543,22 @@ def validate_atomic_frontend_manifest() -> list[str]:
                     "  return 2\n"
                     "}\n"
                 )
-                apply_failure = run_bash_fixture(
+                apply_failure = run_bash_login_fixture(
                     copy_inputs
                     + mock_unzip
                     + prelude
                     + "\necho APPLY_ENTERED\nfalse\n",
                     remote_temp,
-                    "remote-apply-failure-fixture.sh",
+                    "remote-apply-failure-login-fixture.sh",
                 )
                 apply_combined = apply_failure.stdout + apply_failure.stderr
-                if apply_failure.returncode == 0 or "APPLY_ENTERED" not in apply_combined:
+                if apply_failure.returncode != 1 or "APPLY_ENTERED" not in apply_combined:
                     failures.append(
-                        "remote apply-failure fixture did not enter controlled apply:"
+                        "remote apply-failure fixture did not preserve rc=1:"
                         + apply_combined[-500:]
                     )
+                if "pop_var_context" in apply_combined:
+                    failures.append("remote apply failure triggered bash trap context corruption")
                 cleanup_check = run_bash_fixture(
                     cleanup_check_script,
                     remote_temp,
@@ -559,6 +566,118 @@ def validate_atomic_frontend_manifest() -> list[str]:
                 )
                 if cleanup_check.returncode != 0:
                     failures.append("apply failure left remote temporary artifacts")
+
+                dry_run_success = run_bash_login_fixture(
+                    copy_inputs
+                    + mock_unzip
+                    + prelude
+                    + "\necho REMOTE_DRY_RUN_RUNTIME_PASS\n",
+                    remote_temp,
+                    "remote-dry-run-success-login-fixture.sh",
+                )
+                dry_run_combined = dry_run_success.stdout + dry_run_success.stderr
+                if (
+                    dry_run_success.returncode != 0
+                    or "REMOTE_DRY_RUN_RUNTIME_PASS" not in dry_run_combined
+                ):
+                    failures.append(
+                        "remote dry-run success fixture failed rc="
+                        + str(dry_run_success.returncode)
+                        + " output="
+                        + dry_run_combined[-500:]
+                    )
+                if "pop_var_context" in dry_run_combined:
+                    failures.append("remote dry-run success triggered bash trap context corruption")
+                cleanup_check = run_bash_fixture(
+                    cleanup_check_script,
+                    remote_temp,
+                    "remote-success-cleanup-check.sh",
+                )
+                if cleanup_check.returncode != 0:
+                    failures.append("successful remote dry-run left temporary artifacts")
+
+                cleanup_failure = run_bash_login_fixture(
+                    copy_inputs
+                    + mock_unzip
+                    + "FAIL_REMOTE_CLEANUP=0\n"
+                    + "rm() {\n"
+                    + "  if [[ \"$FAIL_REMOTE_CLEANUP\" == \"1\" ]]; then return 23; fi\n"
+                    + "  command rm \"$@\"\n"
+                    + "}\n"
+                    + prelude
+                    + "\nFAIL_REMOTE_CLEANUP=1\necho CLEANUP_FAILURE_ARMED\n",
+                    remote_temp,
+                    "remote-cleanup-failure-login-fixture.sh",
+                )
+                cleanup_failure_combined = cleanup_failure.stdout + cleanup_failure.stderr
+                if (
+                    cleanup_failure.returncode != 23
+                    or "CLEANUP_FAILURE_ARMED" not in cleanup_failure_combined
+                ):
+                    failures.append(
+                        "cleanup failure after successful remote command did not become rc=23:"
+                        + str(cleanup_failure.returncode)
+                        + ":"
+                        + cleanup_failure_combined[-500:]
+                    )
+                cleanup_failure_reset = (
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    + "\n".join(
+                        f"rm -rf -- '{path}'"
+                        for path in (
+                            received_zip_upload,
+                            received_zip,
+                            received_manifest_upload,
+                            received_manifest,
+                            received_dir,
+                        )
+                    )
+                    + "\n"
+                )
+                cleanup_failure_reset_result = run_bash_fixture(
+                    cleanup_failure_reset,
+                    remote_temp,
+                    "remote-cleanup-failure-fixture-reset.sh",
+                )
+                if cleanup_failure_reset_result.returncode != 0:
+                    failures.append("cleanup-failure fixture reset left remote artifacts")
+
+                original_failure_wins = run_bash_login_fixture(
+                    copy_inputs
+                    + mock_unzip
+                    + "FAIL_REMOTE_CLEANUP=0\n"
+                    + "rm() {\n"
+                    + "  if [[ \"$FAIL_REMOTE_CLEANUP\" == \"1\" ]]; then return 23; fi\n"
+                    + "  command rm \"$@\"\n"
+                    + "}\n"
+                    + prelude
+                    + "\nFAIL_REMOTE_CLEANUP=1\necho ORIGINAL_FAILURE_ARMED\nfalse\n",
+                    remote_temp,
+                    "remote-original-failure-wins-login-fixture.sh",
+                )
+                original_failure_combined = (
+                    original_failure_wins.stdout + original_failure_wins.stderr
+                )
+                if (
+                    original_failure_wins.returncode != 1
+                    or "ORIGINAL_FAILURE_ARMED" not in original_failure_combined
+                ):
+                    failures.append(
+                        "cleanup failure overwrote original remote rc=1 with rc="
+                        + str(original_failure_wins.returncode)
+                        + ":"
+                        + original_failure_combined[-500:]
+                    )
+                if "pop_var_context" in original_failure_combined:
+                    failures.append("original failure triggered bash trap context corruption")
+                original_failure_reset_result = run_bash_fixture(
+                    cleanup_failure_reset,
+                    remote_temp,
+                    "remote-original-failure-fixture-reset.sh",
+                )
+                if original_failure_reset_result.returncode != 0:
+                    failures.append("original-failure fixture reset left remote artifacts")
 
         duplicate_bundle = Path(temp_dir) / "duplicate-any-entry.zip"
         duplicate_files = {**validation_files, "notes.txt": b"first\n"}
@@ -1205,6 +1324,22 @@ def run_bash_fixture(script: str, temp: Path, name: str) -> subprocess.Completed
         capture_output=True,
         check=False,
         timeout=30,
+    )
+
+
+def run_bash_login_fixture(
+    script: str, temp: Path, name: str
+) -> subprocess.CompletedProcess[str]:
+    payload = temp / f"{name}.payload"
+    payload.write_text(script, encoding="utf-8", newline="\n")
+    relative_payload = payload.relative_to(ROOT).as_posix()
+    return run_bash_fixture(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"payload=\"$(cat -- '{relative_payload}')\"\n"
+        "bash -lc \"$payload\"\n",
+        temp,
+        name,
     )
 
 
