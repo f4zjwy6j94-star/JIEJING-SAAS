@@ -1360,7 +1360,11 @@ def _company_usage(repository: SaaSRepository, *, company_id: str) -> dict[str, 
     queue_jobs = repository.list_queue_jobs(company_id=company_id, limit=10000)
     reports = repository.list_reports(company_id=company_id)
     month_prefix = datetime.now(timezone.utc).strftime("%Y-%m")
-    monthly_tasks = [item for item in tasks if str(item.get("created_at") or "").startswith(month_prefix)]
+    monthly_tasks = [
+        item
+        for item in tasks
+        if _timestamp_utc_month(str(item.get("created_at") or "")) == month_prefix
+    ]
     provider_tasks = [
         item
         for item in monthly_tasks
@@ -1369,7 +1373,7 @@ def _company_usage(repository: SaaSRepository, *, company_id: str) -> dict[str, 
     model_reports = [
         item
         for item in reports
-        if str(item.get("created_at") or "").startswith(month_prefix)
+        if _timestamp_utc_month(str(item.get("created_at") or "")) == month_prefix
         and str(item.get("report_type") or "") in {"market.report", "listing.package", "market.data_packet", "product.listing"}
     ]
     return {
@@ -1381,6 +1385,21 @@ def _company_usage(repository: SaaSRepository, *, company_id: str) -> dict[str, 
         "queue_job_count_sampled": len(queue_jobs),
         "secret_exposed": False,
     }
+
+
+def _timestamp_utc_month(value: str) -> str:
+    """Return the UTC calendar month for one persisted ISO timestamp."""
+
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m")
 
 
 def _quota_status(*, plan: dict[str, Any], usage: dict[str, Any]) -> list[dict[str, Any]]:

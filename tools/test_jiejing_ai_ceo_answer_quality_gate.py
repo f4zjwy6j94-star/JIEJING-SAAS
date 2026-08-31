@@ -322,8 +322,148 @@ def main() -> None:
     assert _explicit_new_listing_project_request(new_project_message) is True
     assert _explicit_new_listing_project_request("请创建一个全新的 Listing 项目。") is True
     assert _explicit_new_listing_project_request("请另起一个独立商品项目。") is True
+    assert _explicit_new_listing_project_request("请新建一个平板电脑支架的独立项目。") is True
+    assert _explicit_new_listing_project_request("不要重复新建旧项目，请新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("请新建一个商品项目，目标是平板电脑支架，并且独立于旧项目。") is True
+    assert _explicit_new_listing_project_request("是否可以帮我新建一个全新的商品项目？") is True
+    assert _explicit_new_listing_project_request("可以帮我新建商品项目吗？") is True
+    assert _explicit_new_listing_project_request("能帮我新建一个全新商品项目吗？") is True
+    assert _explicit_new_listing_project_request("麻烦帮我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("我想新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("请新建一个全新商品项目好吗？") is True
+    assert _explicit_new_listing_project_request("你能帮我新建一个全新商品项目吗？") is True
+    assert _explicit_new_listing_project_request("我想让你新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("请你帮我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("帮忙新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("我想让你帮我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("我想请你帮我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("请帮忙新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("麻烦你帮忙新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("我希望你帮我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("给我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("麻烦给我创建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("请协助我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("请帮我重新创建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("帮我单独建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("新开一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("另开一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("帮我建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("那就新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("确认新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("立即创建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("开始新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("再帮我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("请单独创建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("请新增一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("我想开一个新的 Listing 项目。") is True
+    assert _explicit_new_listing_project_request("劳烦帮我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("请替我新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("我打算请执行新建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("另外建一个全新商品项目。") is True
+    assert _explicit_new_listing_project_request("帮我开一个全新商品项目。") is True
     assert _explicit_new_listing_project_request("继续当前项目，不得新建重复商品项目或 Offer。") is False
     assert _explicit_new_listing_project_request("继续当前项目，禁止创建全新 Listing 项目。") is False
+    assert _explicit_new_listing_project_request("这个全新的商品项目已经创建好了，请继续完善 Listing。") is False
+    assert _explicit_new_listing_project_request("确认刚才创建的全新商品项目，补充标题。") is False
+    assert _explicit_new_listing_project_request("刚才新建的全新商品项目为什么没有显示？") is False
+    assert _explicit_new_listing_project_request("为什么要新建一个全新商品项目？") is False
+    assert _explicit_new_listing_project_request("我没有让你新建一个全新的商品项目。") is False
+    assert _explicit_new_listing_project_request("不要把这句话理解成新建一个全新的商品项目。") is False
+    assert _explicit_new_listing_project_request("我确认不是要新建一个全新的商品项目。") is False
+    assert _explicit_new_listing_project_request("新建一个全新商品项目会覆盖旧草稿吗？") is False
+    assert _explicit_new_listing_project_request("我想了解新建一个全新商品项目的流程。") is False
+    assert _explicit_new_listing_project_request("新建一个全新商品项目有什么风险？") is False
+    assert _explicit_new_listing_project_request("新建一个全新商品项目是不是已经完成了？") is False
+    assert _explicit_new_listing_project_request("你新建一个全新商品项目了吗？") is False
+    assert _explicit_new_listing_project_request("你帮我新建一个全新商品项目了吗？") is False
+    assert _explicit_new_listing_project_request("你帮我新建一个全新商品项目了没有？") is False
+    assert _explicit_new_listing_project_request("可以介绍一下新建商品项目的好处吗？") is False
+    assert _explicit_new_listing_project_request("能讲讲新建商品项目和继续当前项目的区别吗？") is False
+    assert _explicit_new_listing_project_request("新建商品项目适合什么场景？") is False
+    assert _explicit_new_listing_project_request("新建商品项目需要什么资料？") is False
+    assert _explicit_new_listing_project_request("新建商品项目要多少钱？") is False
+    assert _explicit_new_listing_project_request("新建商品项目有哪些步骤？") is False
+    assert _explicit_new_listing_project_request("新建商品项目的前提是什么？") is False
+    assert _explicit_new_listing_project_request("新建商品项目需要什么资料") is False
+    assert _explicit_new_listing_project_request("新建商品项目要多少钱") is False
+    assert _explicit_new_listing_project_request("新建商品项目有哪些步骤") is False
+    assert _explicit_new_listing_project_request("新建商品项目的前提是什么") is False
+    assert _explicit_new_listing_project_request("新建商品项目需要什么资料，能告诉我吗？") is False
+    assert _explicit_new_listing_project_request("可以新建一个全新商品项目，也可以继续旧项目，你判断。") is False
+    for approval_message in (
+        "我确定要创建一个全新商品项目",
+        "我确认要新开一个全新商品项目",
+        "按这个方案新建一个全新商品项目",
+        "确认按上述方案新建一个全新商品项目",
+        "我同意新建一个全新商品项目，开始吧",
+        "批准创建一个全新商品项目",
+        "确认执行：新建一个全新商品项目",
+        "就按新建一个全新商品项目执行",
+        "就按这个方案新建商品项目",
+        "我同意，就按这个方案新建商品项目",
+        "好，就按这个方案新建商品项目",
+        "同意新建商品项目",
+        "同意创建商品项目",
+        "确定新建商品项目",
+        "确定创建商品项目",
+        "没问题，开始创建一个全新商品项目",
+        "确认建一个全新商品项目",
+        "确定开一个全新商品项目",
+        "我同意建立一个全新商品项目",
+        "再开一个全新商品项目",
+        "开一个全新商品项目",
+        "新起一个全新商品项目",
+        "直接新开一个全新商品项目",
+        "请另外开一个全新商品项目",
+        "帮我单独开一个全新商品项目",
+        "就这样创建一个全新商品项目",
+    ):
+        assert _explicit_new_listing_project_request(approval_message) is True, approval_message
+    for consultation_message in (
+        "新建商品项目收费吗",
+        "新建商品项目在哪里操作",
+        "新建商品项目多久能完成",
+        "新建商品项目难不难",
+        "新建商品项目值得吗",
+        "新建商品项目是谁来审核",
+        "新建商品项目何时生效",
+        "新建商品项目需要准备资料吗",
+        "新建商品项目能保留旧草稿吗",
+        "客户问，能不能新建一个全新商品项目",
+        "客户想问，能不能新建一个全新商品项目",
+        "用户在问，能不能新建一个全新商品项目",
+        "客户的问题是，能不能新建一个全新商品项目",
+        "我想咨询，能不能新建一个全新商品项目",
+        "我有个问题，能不能新建一个全新商品项目",
+        "我想确认一下，能不能新建一个全新商品项目",
+        "我问你，能不能新建一个全新商品项目",
+        "想问一下，能不能新建一个全新商品项目",
+        "例如，请新建一个全新商品项目",
+        "比如，帮我新建一个全新商品项目",
+        "例句，给我创建一个全新商品项目",
+        "示例，请新增一个全新商品项目",
+        "文案可以写，直接新开一个全新商品项目",
+        "用户可能输入，请另外开一个全新商品项目",
+        "旧项目不行的话，那就新建一个全新商品项目",
+        "若旧项目不可用，请新建一个全新商品项目",
+        "买家好奇，能不能新建一个全新商品项目",
+        "我好奇，能不能新建一个全新商品项目",
+        "我想请教，能不能新建一个全新商品项目",
+        "请教一下，能不能新建一个全新商品项目",
+        "我确认下，能不能新建一个全新商品项目",
+        "我想核实，能不能新建一个全新商品项目",
+        "我想知道，能不能新建一个全新商品项目",
+        "老板让我转告，直接新建一个全新商品项目",
+        "有人建议我，请新建一个全新商品项目",
+        "举个例子，请新建一个全新商品项目",
+        "比如说，帮我新建一个全新商品项目",
+        "把提示文案改成：请新建一个全新商品项目",
+        "假若旧项目不能用，请新建一个全新商品项目",
+        "万一旧项目失败，直接新建一个全新商品项目",
+        "前提是旧数据无法恢复，再新建一个全新商品项目",
+        "直接新建一个全新商品项目或继续旧项目，任选一种",
+    ):
+        assert _explicit_new_listing_project_request(consultation_message) is False, consultation_message
 
     strict_message = (
         "请给我三个轻小件、不带电的 eBay 选品方向。现在没有供应商、实物和商品参数，"

@@ -4450,10 +4450,50 @@ def _explicit_new_listing_project_request(message: str) -> bool:
     text = _normalized_text(message)
     if not text:
         return False
+    text = re.sub(r"重新(?:创建|新建)", "创建", text, flags=re.IGNORECASE)
+    text = re.sub(r"单独(?:创建|新建|建|开)", "另建", text, flags=re.IGNORECASE)
+    text = re.sub(r"另外(?:创建|新建|建|开)", "另建", text, flags=re.IGNORECASE)
+    text = re.sub(r"新增", "新建", text, flags=re.IGNORECASE)
+    text = re.sub(r"新开", "新建", text, flags=re.IGNORECASE)
+    text = re.sub(r"另开", "另建", text, flags=re.IGNORECASE)
+    text = re.sub(r"建立", "创建", text, flags=re.IGNORECASE)
+    text = re.sub(r"新起", "另起", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(^|(?:确认|确定|再|直接|开始|马上|立即|同意|批准|请|帮我|给我))\s*建(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        r"\1新建",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(^|(?:确认|确定|再|直接|开始|马上|立即|同意|批准|请|帮我|给我))\s*开(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        r"\1新建",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(帮我|给我)建(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        r"\1新建",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(帮我|给我)开(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        r"\1新建",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"我想开(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        "我想新建",
+        text,
+        flags=re.IGNORECASE,
+    )
     positive_patterns = (
-        r"(?:新建|创建|另建|另起|开启|启动).{0,14}(?:独立|全新|新的).{0,10}(?:商品|listing).{0,8}(?:项目|草稿)",
-        r"(?:新建|创建|另建|另起).{0,10}(?:商品|listing).{0,8}(?:项目|草稿).{0,24}(?:不复用|不要复用|独立于|区别于)",
-        r"(?:独立|全新|新的).{0,10}(?:商品|listing).{0,8}(?:项目|草稿).{0,12}(?:新建|创建|另建|另起)",
+        r"(?:新建|创建|另建|另起|开启|启动)[^。；;！!？?，,]{0,18}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)",
+        r"(?:新建|创建|另建|另起|开启|启动)[^。；;！!？?，,]{0,14}?(?:独立|全新|新的)[^。；;！!？?，,]{0,10}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)",
+        r"(?:新建|创建|另建|另起)[^。；;！!？?，,]{0,10}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)[^。；;！!？?，,]{0,24}?(?:不复用|不要复用|独立于|区别于)",
+        r"(?:独立|全新|新的)[^。；;！!？?，,]{0,10}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)[^。；;！!？?，,]{0,12}?(?:新建|创建|另建|另起)",
+        r"(?:新建|创建|另建|另起|开启|启动)[^。；;！!？?，,]{0,24}?(?:独立|全新|新的)[^。；;！!？?，,]{0,8}?(?:项目|草稿)",
     )
     negative_action = re.compile(
         r"(?:不|不要|不得|禁止|严禁|无需|不用|避免)\s*(?:再|重复)?\s*(?:新建|创建|另建|另起|开启|启动)",
@@ -4469,9 +4509,134 @@ def _explicit_new_listing_project_request(message: str) -> bool:
                 text.rfind("!", 0, match.start()),
                 text.rfind("？", 0, match.start()),
                 text.rfind("?", 0, match.start()),
+                text.rfind("，", 0, match.start()),
+                text.rfind(",", 0, match.start()),
+            )
+            clause_ends = [
+                index
+                for separator in ("。", "；", ";", "！", "!", "？", "?", "，", ",")
+                if (index := text.find(separator, match.end())) >= 0
+            ]
+            clause_end = min(clause_ends) if clause_ends else len(text)
+            clause = text[clause_start + 1 : clause_end]
+            action_prefix = clause[: max(0, match.start() - (clause_start + 1))].strip()
+            direct_imperative = bool(
+                re.search(
+                    r"^(?:(?:确认执行[：:]?|(?:我)?(?:确定|决定|确认|同意|批准|认可)(?:要)?|我希望你|我希望|我打算|确认按(?:这个|上述|以上|前述|该|此)方案|就按(?:这个|上述|以上|前述|该|此)方案|按(?:这个|上述|以上|前述|该|此)方案|就按|就这样|那就|直接|立即|马上|开始|再|劳烦|请替我|替我|请执行|执行|请协助我|协助我|请你|请|你|给我|帮我|帮忙|我要|我需要|我想要|我想|想要|让你|现在就|现在|这次|麻烦你|麻烦|是否可以|能否|可以|可不可以|能不能|能)\s*)*$",
+                    action_prefix,
+                    flags=re.IGNORECASE,
+                )
+            )
+            has_explicit_execution_prefix = bool(action_prefix) and direct_imperative
+            polite_request = direct_imperative and bool(
+                re.search(
+                    r"(?:是否可以|能否|可以|可不可以|能不能|能)",
+                    action_prefix,
+                    flags=re.IGNORECASE,
+                )
+            )
+            reordered_imperative = bool(
+                re.search(
+                    r"^(?:请\s*)?(?:把|将).{0,24}(?:新建|创建|另建|另起)",
+                    clause.strip(),
+                    flags=re.IGNORECASE,
+                )
+            )
+            historical_or_question = re.compile(
+                r"(?:为什么|为何|怎么|如何|是否|是不是|有没有).{0,18}(?:新建|创建|另建|另起|开启|启动)|"
+                r"(?:刚才|上次|之前|此前|已经|已).{0,18}(?:新建|创建|另建|另起|开启|启动)|"
+                r"(?:新建|创建|另建|另起)(?:的|过的|好了|完成了)|"
+                r"(?:项目|草稿).{0,8}(?:已经|已)(?:新建|创建|建立)",
+                flags=re.IGNORECASE,
             )
             clause_prefix = text[clause_start + 1 : match.end()]
-            if not negative_action.search(clause_prefix):
+            match_end_in_clause = match.end() - (clause_start + 1)
+            clause_suffix = clause[max(0, match_end_in_clause) :]
+            sentence_ends = [
+                index
+                for separator in ("。", "；", ";", "！", "!", "？", "?")
+                if (index := text.find(separator, match.end())) >= 0
+            ]
+            sentence_end = min(sentence_ends) if sentence_ends else len(text)
+            sentence_suffix = text[match.end() : sentence_end]
+            sentence_start = max(
+                text.rfind("。", 0, match.start()),
+                text.rfind("；", 0, match.start()),
+                text.rfind(";", 0, match.start()),
+                text.rfind("！", 0, match.start()),
+                text.rfind("!", 0, match.start()),
+                text.rfind("？", 0, match.start()),
+                text.rfind("?", 0, match.start()),
+            )
+            sentence_text = text[sentence_start + 1 : sentence_end]
+            sentence_prefix = text[sentence_start + 1 : match.start()]
+            semantic_question = re.search(
+                r"(?:什么|哪些|多少|几(?:个|种|项|步|次|条)|为何|为什么|怎么|如何|哪里|哪儿|何时|什么时候|多久|谁(?:来|负责)?|是否|是不是|有没有|可否|告诉我|介绍|讲讲|说明|好处|区别|差别|适合|场景|用途)",
+                sentence_suffix,
+                flags=re.IGNORECASE,
+            )
+            generic_question_shape = re.search(
+                r"(?:吗|么|呢)\s*$|(?:难不难|值不值得|需不需要|能不能|可不可以|会不会|有没有|是不是|要不要)",
+                sentence_suffix.strip(),
+                flags=re.IGNORECASE,
+            )
+            choice_or_conditional = re.search(
+                r"(?:也可以|或者|还是|二选一|你判断|由你判断|看情况|视情况|如果|假如|要不要)|"
+                r"(?:^|[，,])\s*(?:若(?!干)|倘若|假若|要是|一旦|除非|万一|前提是)|"
+                r"[^。；;！!？?，,]{1,18}的话\s*[，,]|"
+                r"(?:或|或者).{0,32}(?:任选|任选一种|选择|你定|你决定)",
+                sentence_text,
+                flags=re.IGNORECASE,
+            )
+            reported_speech = re.search(
+                r"(?:客户|商家|用户|买家|同事|老板|朋友|他|她|他们|别人|有人|对方)(?:的)?(?:问题(?:是|为)|\s*(?:想|在|正在|可能)?\s*(?:问|说|咨询|了解|确认|知道|提问|提到|表示|好奇|请教|核实)|\s*(?:让|要|叫|请)(?:我|人)?\s*(?:转告|传达|复述)|\s*(?:建议|提醒)(?:我)?)[^。；;！!？?]{0,32}$|"
+                r"(?:^|[，,])\s*(?:我有(?:个|一个)?问题|我想确认一下|我确认下|我问你|请问|请教一下|我好奇|我想请教|我想核实|我想知道|(?:我)?(?:想|要)?(?:问|咨询|了解)(?:你|一下|下)?)[^。；;！!？?]{0,32}$",
+                sentence_prefix,
+                flags=re.IGNORECASE,
+            )
+            example_or_copy_frame = re.search(
+                r"^(?:例如|比如(?:说)?|举例(?:来说)?|举个例子|例句|示例|文案(?:可以|可)?写|用户可能(?:会)?(?:输入|说)|假设(?:用户|商家)?(?:输入|说))\s*[，,:：]|"
+                r"^(?:把|将).{0,16}(?:提示|示例|按钮|对话|输入)?文案.{0,12}(?:改成|写成|设置为)\s*[：:]",
+                sentence_text.strip(),
+                flags=re.IGNORECASE,
+            )
+            question_terminated = clause_end < len(text) and text[clause_end] in ("？", "?")
+            polite_question_suffix = re.fullmatch(
+                r"(?:|吗|呢|好吗|行吗|可以吗|好不好)",
+                clause_suffix.strip(),
+                flags=re.IGNORECASE,
+            )
+            question_is_explicit_execution = bool(
+                has_explicit_execution_prefix and polite_question_suffix and not reported_speech
+            )
+            trimmed_sentence_suffix = sentence_suffix.strip()
+            bare_execution = not action_prefix and (
+                not trimmed_sentence_suffix
+                or bool(
+                    re.search(
+                        r"^(?:[，,]\s*)?(?:目标(?:是|为)|产品(?:是|为)|商品(?:是|为)|品类|类目|名称|sku|规格|参数|售价|成本|数量|面向|用于|用途|要求|其他(?:信息|资料|参数)|独立于|不复用|不要复用|不要|不得|并且|同时|全部|其余|开始|执行|现在开始|就这样)",
+                        trimmed_sentence_suffix,
+                        flags=re.IGNORECASE,
+                    )
+                )
+            )
+            explanatory_suffix = re.search(
+                r"(?:会不会|是否会|是不是|有什么|有何|为什么|为何|怎么|如何|流程|风险|含义|意思|好处|区别|差别|适合|场景|用途|介绍|讲讲|说明|比较)|"
+                r"会.{0,24}[吗呢]\s*$|^(?:了[吗么]|了没有|过[吗么]|好(?:了[吗么]|了没有)|(?:完成|成功)(?:了[吗呢么]|了没有|[吗呢么])?)",
+                clause_suffix,
+                flags=re.IGNORECASE,
+            ) or ((semantic_question or generic_question_shape) and not question_is_explicit_execution) or (
+                question_terminated and not question_is_explicit_execution
+            )
+            if (
+                (has_explicit_execution_prefix or polite_request or reordered_imperative or bare_execution)
+                and not negative_action.search(clause_prefix)
+                and not choice_or_conditional
+                and not reported_speech
+                and not example_or_copy_frame
+                and (not historical_or_question.search(clause) or polite_request)
+                and not explanatory_suffix
+            ):
                 return True
     return False
 

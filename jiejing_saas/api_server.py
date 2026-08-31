@@ -278,6 +278,65 @@ PLATFORM_TRIAL_ACTIVATION_MAX_PER_IP_DEFAULT = 3
 PLATFORM_TRIAL_ACTIVATION_MAX_GLOBAL_DEFAULT = 200
 
 
+def _ai_ceo_chat_request_fingerprint(
+    *,
+    secret: bytes,
+    canonical_request: dict[str, Any],
+) -> str:
+    """HMAC a canonical request envelope without resolving mutable assets."""
+
+    fingerprint_bytes = json.dumps(
+        canonical_request,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hmac.new(
+        secret,
+        b"ai-ceo-chat-request-fingerprint-v1\0" + fingerprint_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _resolve_ai_ceo_chat_final_response(
+    *,
+    attempted_payload: dict[str, Any],
+    attempted_status: HTTPStatus,
+    finalized_request: dict[str, Any],
+    request_task_id: str,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    """Return only the response owned by the winning terminal transition."""
+
+    existing_output = (
+        finalized_request.get("output")
+        if isinstance(finalized_request.get("output"), dict)
+        else {}
+    )
+    existing_payload = (
+        existing_output.get("response_payload")
+        if isinstance(existing_output.get("response_payload"), dict)
+        else {}
+    )
+    existing_status = int(existing_output.get("response_status") or HTTPStatus.CONFLICT)
+    if existing_status < 200 or existing_status > 599:
+        existing_status = int(HTTPStatus.CONFLICT)
+    finalize_applied = finalized_request.get("_idempotent_finalize_applied") is True
+    if not existing_payload and finalize_applied:
+        fallback_payload = _redact_secret_like(attempted_payload)
+        existing_payload = fallback_payload if isinstance(fallback_payload, dict) else {}
+        existing_status = int(attempted_status)
+    return (
+        {
+            **existing_payload,
+            "idempotent_replay": not finalize_applied,
+            "request_task_id": request_task_id,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        },
+        HTTPStatus(existing_status),
+    )
+
+
 def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[str, Any] | None:
     """Return a merchant-safe handoff summary for AI CEO market reports."""
 
@@ -7507,12 +7566,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not self._require_permission(identity, "create_task"):
                 return
             body = self._read_json_body()
+            command_body = body.get("command") if isinstance(body.get("command"), dict) else {}
+            command_id = str(command_body.get("id") or command_body.get("command_id") or "").strip()
+            legacy_command_key = f"ai-ceo:{command_id}" if re.fullmatch(r"[A-Za-z0-9._:-]{1,145}", command_id) else ""
+            idempotency_key = str(body.get("idempotency_key") or legacy_command_key).strip()
+            if idempotency_key and not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", idempotency_key):
+                self._send_error(HTTPStatus.BAD_REQUEST, "AI CEO 请求包含无效的幂等标识。")
+                return
             store_id = parts[1]
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
-            command_body = body.get("command") if isinstance(body.get("command"), dict) else {}
             message = str(body.get("message") or command_body.get("text") or command_body.get("command_text") or "")
             raw_source_asset_ids = body.get("source_asset_ids")
             if raw_source_asset_ids is not None and not isinstance(raw_source_asset_ids, list):
@@ -7528,28 +7593,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             product_vision_assets: list[dict[str, Any]] = []
             product_vision_signed_urls: list[str] = []
-            try:
-                for asset_id in source_asset_ids:
-                    asset, _content = self.media_source_asset_store.read_for_provider(
-                        asset_id=asset_id,
-                        company_id=identity["company_id"],
-                        store_id=store_id,
-                    )
-                    product_vision_assets.append(
-                        {
-                            "asset_id": asset.asset_id,
-                            "sha256": asset.sha256,
-                            "original_filename": asset.original_filename,
-                            "content_type": asset.content_type,
-                            "size_bytes": asset.size_bytes,
-                            "width": asset.width,
-                            "height": asset.height,
-                        }
-                    )
-                    product_vision_signed_urls.append(self.media_source_asset_store.signed_url(asset.asset_id))
-            except MediaSourceAssetError:
-                self._send_error(HTTPStatus.NOT_FOUND, "商品图片不存在、已过期或不属于当前店铺。")
-                return
             if source_asset_ids and not message.strip():
                 message = "请识别这些商品图片，整理来源事实、冲突项和待核对 Listing 草稿。"
             conversation_history = body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else []
@@ -7580,6 +7623,94 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 source="authenticated_merchant_request",
             )
 
+            fingerprint_payload = {
+                "contract_version": "ai_ceo_chat_request_fingerprint_v1",
+                "message": message,
+                "command": command_body,
+                "conversation_history": conversation_history,
+                "source_asset_ids": source_asset_ids,
+                "listing_project_identity": listing_project_identity,
+                "active_listing_context": active_listing_context,
+                "supplier_fact_attestation": supplier_fact_attestation,
+                "client_now": str(body.get("client_now") or ""),
+                "client_timezone": str(body.get("client_timezone") or ""),
+            }
+            payload_fingerprint = _ai_ceo_chat_request_fingerprint(
+                secret=self.sessions.secret,
+                canonical_request=fingerprint_payload,
+            )
+            if not idempotency_key:
+                # Backward compatibility for first-party callers that predate
+                # the explicit key. Exact request envelopes remain idempotent;
+                # the production frontend always sends a durable explicit key.
+                idempotency_key = f"legacy:{payload_fingerprint}"
+            request_claim = self.repository.claim_ai_ceo_chat_request(
+                company_id=identity["company_id"],
+                store_id=store_id,
+                user_id=identity["user_id"],
+                idempotency_key=idempotency_key,
+                payload_fingerprint=payload_fingerprint,
+            )
+            request_task = request_claim["request_task"]
+            if request_claim["claim_state"] == "conflict":
+                self._send_json(
+                    {
+                        "error": "同一幂等标识不能用于不同的 AI CEO 请求。",
+                        "error_code": "ai_ceo_idempotency_payload_conflict",
+                        "ai_ceo_chat": {
+                            "status": "idempotency_payload_conflict",
+                            "answer": "这次请求与已保存的同一操作标识不一致，捷境已停止处理。请重新发起本轮任务；本次没有调用模型，也没有生成草稿。",
+                            "route": "ebay_workflow",
+                            "route_label": "请求一致性保护",
+                            "source_records": [],
+                            "work_records": [],
+                            "confirmation_items": [],
+                            "blocked_by": ["idempotency_payload_conflict"],
+                        },
+                        "request_task_id": request_task.get("task_id"),
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            if request_claim["claim_state"] == "in_progress":
+                self._send_json(
+                    {
+                        "ai_ceo_chat_request": {
+                            "status": "in_progress",
+                            "request_task_id": request_task.get("task_id"),
+                            "retry_after_ms": 1500,
+                        },
+                        "idempotent_replay": False,
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.ACCEPTED,
+                )
+                return
+            if request_claim["claim_state"] == "replay":
+                replay = request_claim.get("replay") if isinstance(request_claim.get("replay"), dict) else {}
+                replay_payload = replay.get("response_payload") if isinstance(replay.get("response_payload"), dict) else {}
+                replay_status = int(replay.get("response_status") or HTTPStatus.OK)
+                if replay_status < 200 or replay_status > 599:
+                    replay_status = int(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self._send_json(
+                    {
+                        **replay_payload,
+                        "idempotent_replay": True,
+                        "request_task_id": request_task.get("task_id"),
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus(replay_status),
+                )
+                return
+
             def attach_supplier_fact_attestation(chat_payload: dict[str, Any]) -> dict[str, Any]:
                 # The authenticated request, never provider/model prose, owns
                 # the merchant verification bit and the allowlisted values.
@@ -7605,6 +7736,27 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "listing_project_identity": listing_project_identity,
                         },
                     }
+                payload = {
+                    **payload,
+                    "request_task_id": request_task.get("task_id"),
+                    "idempotent_replay": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                }
+                finalized_request = self.repository.finalize_ai_ceo_chat_request(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    request_task_id=str(request_task.get("task_id") or ""),
+                    terminal_status="failed" if int(status) >= 500 else "completed",
+                    response_status=int(status),
+                    response_payload=payload,
+                )
+                payload, status = _resolve_ai_ceo_chat_final_response(
+                    attempted_payload=payload,
+                    attempted_status=status,
+                    finalized_request=finalized_request,
+                    request_task_id=str(request_task.get("task_id") or ""),
+                )
                 if not stream_requested:
                     self._send_json(payload, status=status)
                     return
@@ -7625,6 +7777,47 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "secret_exposed": False,
                     }
                 )
+
+            try:
+                for asset_id in source_asset_ids:
+                    asset, _content = self.media_source_asset_store.read_for_provider(
+                        asset_id=asset_id,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                    )
+                    product_vision_assets.append(
+                        {
+                            "asset_id": asset.asset_id,
+                            "sha256": asset.sha256,
+                            "original_filename": asset.original_filename,
+                            "content_type": asset.content_type,
+                            "size_bytes": asset.size_bytes,
+                            "width": asset.width,
+                            "height": asset.height,
+                        }
+                    )
+                    product_vision_signed_urls.append(self.media_source_asset_store.signed_url(asset.asset_id))
+            except MediaSourceAssetError:
+                send_chat_payload(
+                    {
+                        "error": "商品图片不存在、已过期或不属于当前店铺。",
+                        "error_code": "product_source_asset_unavailable",
+                        "ai_ceo_chat": {
+                            "status": "blocked_before_model_chat",
+                            "answer": "商品图片不存在、已过期或不属于当前店铺。本次没有调用模型，也没有生成草稿。",
+                            "route": "ebay_workflow",
+                            "route_label": "商品图片校验",
+                            "source_records": [],
+                            "work_records": [],
+                            "confirmation_items": [],
+                            "blocked_by": ["product_source_asset_unavailable"],
+                        },
+                        "usage_consumed": False,
+                        "listing_created": False,
+                    },
+                    status=HTTPStatus.NOT_FOUND,
+                )
+                return
 
             def emit_chat_stage(stage: str) -> None:
                 nonlocal stream_started, last_stream_stage
@@ -8085,7 +8278,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if model_resolution_mode == "platform_managed_default"
                 else "ai_ceo_task"
             )
+            quota_block_state: dict[str, Any] = {}
+
             def block_model_attempt_for_subscription_quota(evaluation: dict[str, Any]) -> None:
+                quota_block_state["evaluation"] = evaluation
                 update_model_attempt(
                     attempt_state="blocked_quota",
                     task_status="blocked",
@@ -8109,6 +8305,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "ai_ceo_market_report": None,
                         "ai_ceo_market_report_delivery": None,
                     },
+                    send_response=False,
                 )
             except Exception as exc:
                 if not self._is_database_unavailable_exception(exc):
@@ -8116,6 +8313,31 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 send_database_schema_blocked_attempt()
                 return
             if not quota_allowed:
+                send_chat_payload(
+                    {
+                        "error": "quota exhausted",
+                        "status": int(HTTPStatus.PAYMENT_REQUIRED),
+                        "quota": quota_block_state.get("evaluation") or {},
+                        "message": "当前套餐或额度暂时不能继续。本次未调用模型、未消耗次数、未生成草稿。",
+                        "ai_ceo_chat": {
+                            "status": "blocked_before_model_chat",
+                            "answer": "当前套餐或额度暂时不能继续。本次未调用模型、未消耗次数、未生成草稿。",
+                            "route": "ebay_workflow",
+                            "route_label": "套餐与额度",
+                            "source_records": [],
+                            "work_records": [],
+                            "confirmation_items": [],
+                            "blocked_by": ["subscription_quota_blocked"],
+                        },
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.PAYMENT_REQUIRED,
+                )
                 return
             update_model_attempt(
                 attempt_state="quota_checked",
@@ -12111,6 +12333,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         *,
         on_block: Callable[[dict[str, Any]], None] | None = None,
         extra_response: dict[str, Any] | None = None,
+        send_response: bool = True,
     ) -> bool:
         evaluation = evaluate_quota_action(
             self.settings,
@@ -12133,17 +12356,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             evaluation = {**evaluation, "private_beta_entitlement_recovery": recovery}
         if on_block is not None:
             on_block(evaluation)
-        self._send_json(
-            {
-                "error": "quota exhausted",
-                "status": int(HTTPStatus.PAYMENT_REQUIRED),
-                "quota": evaluation,
-                "real_platform_writes_enabled": False,
-                "secret_exposed": False,
-                **(extra_response if isinstance(extra_response, dict) else {}),
-            },
-            status=HTTPStatus.PAYMENT_REQUIRED,
-        )
+        if send_response:
+            self._send_json(
+                {
+                    "error": "quota exhausted",
+                    "status": int(HTTPStatus.PAYMENT_REQUIRED),
+                    "quota": evaluation,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                    **(extra_response if isinstance(extra_response, dict) else {}),
+                },
+                status=HTTPStatus.PAYMENT_REQUIRED,
+            )
         return False
 
     def _recover_missing_private_beta_entitlement(self, *, identity: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
@@ -14508,7 +14732,21 @@ def _redact_secret_like(value: Any) -> Any:
         out: dict[str, Any] = {}
         for key, item in value.items():
             lower = str(key).lower()
-            if any(marker in lower for marker in ("secret", "token", "password", "api_key", "apikey", "refresh")):
+            if isinstance(item, bool) or lower in {
+                "cached_tokens",
+                "completion_tokens",
+                "input_tokens",
+                "model_max_output_tokens",
+                "output_tokens",
+                "prompt_tokens",
+                "reasoning_tokens",
+                "total_tokens",
+                "model_secret_resolution",
+                "model_secret_ref_scope",
+                "secret_ref_scope",
+            }:
+                out[key] = _redact_secret_like(item)
+            elif any(marker in lower for marker in ("secret", "token", "password", "api_key", "apikey", "refresh")):
                 out[key] = "[REDACTED]"
             else:
                 out[key] = _redact_secret_like(item)

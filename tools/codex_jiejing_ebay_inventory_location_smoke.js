@@ -19,6 +19,45 @@ const store = {
   store_name: "Current fixture store",
 };
 const wrongStoreId = "store-wrong-location-ui";
+const listingProjectIdentity = {
+  key: "listing-project-inventory-location-ui",
+  source_report_id: "report-inventory-location-ui",
+  candidate_id: "candidate-inventory-location-ui",
+};
+const listingProduct = "Foldable Aluminum Tablet Stand";
+const listingReport = {
+  report_id: listingProjectIdentity.source_report_id,
+  company_id: companyId,
+  store_id: store.store_id,
+  task_id: "task-inventory-location-ui",
+  report_type: "listing.package",
+  created_at: new Date().toISOString(),
+  listing_project_identity: listingProjectIdentity,
+  report: {
+    product: listingProduct,
+    listing_project_identity: listingProjectIdentity,
+    listing_handoff: {
+      ready_for_listing_draft: true,
+      listing_fields: {
+        product: listingProduct,
+        title: listingProduct,
+        sku: "JJ-LOCATION-FIXTURE",
+        category_id: "176970",
+        condition: "NEW",
+        quantity: "1",
+        price_band: "24.99",
+        description_seed: "Local inventory-location browser fixture listing.",
+        item_specifics: { Brand: "Unbranded", Material: "Aluminum" },
+        selected_product_candidate: {
+          candidate_id: listingProjectIdentity.candidate_id,
+          name: listingProduct,
+          selected: true,
+        },
+        ready_for_listing_draft: true,
+      },
+    },
+  },
+};
 const locationInput = {
   merchant_location_key: "shenzhen-warehouse",
   name: "Shenzhen Warehouse",
@@ -155,7 +194,7 @@ function getPayload(pathname) {
     source_mode: "official_api",
     body: { present_resource_keys: ["account_business_policies", "inventory_items"], missing_resource_keys: [] },
   }] };
-  if (pathname === "/reports") return { reports: [] };
+  if (pathname === "/reports") return { reports: [listingReport] };
   if (pathname === "/health") return { status: "ok" };
   if (pathname === "/health/deep") return { operational_health: { status: "ready" } };
   if (pathname === "/readiness/product-saas") return { readiness: { beta_ready: true, production_ready: false, public_charging_allowed: false } };
@@ -320,7 +359,7 @@ async function main() {
   const browser = await chromium.launch({ channel: process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome", headless: true });
   const context = await browser.newContext({ viewport: { width: 1365, height: 900 } });
   const consoleErrors = [];
-  await context.addInitScript(({ apiBase, company, user, storeId }) => {
+  await context.addInitScript(({ apiBase, company, user, storeId, product, projectIdentity }) => {
     localStorage.setItem("jiejing_saas_api_base", apiBase);
     localStorage.setItem("jiejing_saas_backend_store_id", storeId);
     localStorage.setItem("jiejing_saas_backend_session_hint", "1");
@@ -339,18 +378,26 @@ async function main() {
       user: { user_id: user },
       stores: [{ store_id: storeId, platform: "ebay", marketplace: "EBAY_US" }],
       confirmations: [],
-      listing_composer_input: "Unbranded Blue Fitted Case for Apple iPhone 13 - New",
+      listing_composer_input: product,
       listing_composer_draft: {
         source_type: "ai_ceo_market_report",
-        product: "Unbranded Blue Fitted Case",
-        title: "Unbranded Blue Fitted Case for Apple iPhone 13 - New",
-        fields: {
-          title: "Unbranded Blue Fitted Case for Apple iPhone 13 - New",
-          description: "Local fixture listing draft",
-          category: "Cases, Covers & Skins",
-          item_specifics: "Brand: Unbranded\nColor: Blue",
+        source_report_id: projectIdentity.source_report_id,
+        listing_project_key: projectIdentity.key,
+        listing_project_identity: projectIdentity,
+        selected_product_candidate: {
+          candidate_id: projectIdentity.candidate_id,
+          name: product,
+          selected: true,
         },
-        publish_prefill: { sku: "JJ-LOCATION-FIXTURE", category_id: "20349", price: "12.99", currency: "USD" },
+        product,
+        title: product,
+        fields: {
+          title: product,
+          description: "Local fixture listing draft",
+          category: "Tablet & eBook Reader Stands",
+          item_specifics: "Brand: Unbranded\nMaterial: Aluminum",
+        },
+        publish_prefill: { sku: "JJ-LOCATION-FIXTURE", category_id: "176970", price: "24.99", currency: "USD" },
       },
     }));
     localStorage.setItem("jiejing_saas_known_accounts", JSON.stringify([{
@@ -362,7 +409,14 @@ async function main() {
       last_seen: new Date().toISOString(),
     }]));
     window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
-  }, { apiBase: base, company: companyId, user: userId, storeId: store.store_id });
+  }, {
+    apiBase: base,
+    company: companyId,
+    user: userId,
+    storeId: store.store_id,
+    product: listingProduct,
+    projectIdentity: listingProjectIdentity,
+  });
 
   try {
     confirmations = [];

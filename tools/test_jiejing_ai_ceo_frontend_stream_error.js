@@ -43,6 +43,40 @@ function extractAsyncFunction(name) {
   throw new Error(`unterminated ${name} function`);
 }
 
+function extractFunction(name) {
+  const marker = `function ${name}(`;
+  const start = source.indexOf(marker);
+  assert.notStrictEqual(start, -1, `${name} must exist in app.js`);
+  const signatureEnd = source.indexOf(") {", start);
+  assert.notStrictEqual(signatureEnd, -1, `${name} signature must terminate`);
+  const bodyStart = signatureEnd + 2;
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    const char = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote) {
+      if (char === "\\") escaped = true;
+      else if (char === quote) quote = "";
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  throw new Error(`unterminated ${name} function`);
+}
+
 const blockedPayload = {
   ai_ceo_chat: {
     status: "blocked",
@@ -77,6 +111,8 @@ const context = {
     };
   },
   recordOptionalSaasSoftTimeout: () => {},
+  publicRuntimeText: (value) => String(value || ""),
+  saasModelBlockedReasonText: (value) => String(value || ""),
   saasBackendErrorMessage: () => "quota blocked",
   setTimeout,
   shouldAttachSaasBearerToken: () => false,
@@ -85,6 +121,8 @@ const context = {
 
 vm.createContext(context);
 vm.runInContext(extractAsyncFunction("saasFetchNdjsonWithTimeout"), context);
+vm.runInContext(extractFunction("saasBackendErrorMessage"), context);
+vm.runInContext(extractFunction("saasAiCeoMerchantSafeFailureText"), context);
 
 (async () => {
   const result = await vm.runInContext(
@@ -100,7 +138,30 @@ vm.runInContext(extractAsyncFunction("saasFetchNdjsonWithTimeout"), context);
   );
   assert.strictEqual(protectedSessionChecks, 1, "mutation preflight must run exactly once");
   assert.strictEqual(fetchCalls, 1, "AI mutation request must be sent exactly once");
-  console.log("PASS AI CEO frontend immediate stream blocker: 5/5");
+  const permissionFailureText = await vm.runInContext(
+    `saasAiCeoMerchantSafeFailureText(new Error(saasBackendErrorMessage(403, "", { error: "missing permission: create_task" })))`,
+    context,
+  );
+  assert.match(
+    permissionFailureText,
+    /创建任务权限|联系管理员/,
+    "ordinary create_task denial must tell the merchant that the account lacks task creation permission or to contact an administrator",
+  );
+  assert.doesNotMatch(
+    permissionFailureText,
+    /AI|模型|连接/,
+    "ordinary create_task denial must not be misclassified as an AI connection or model-name problem",
+  );
+  const providerPermissionFailureText = await vm.runInContext(
+    `saasAiCeoMerchantSafeFailureText(new Error(saasBackendErrorMessage(403, "", { error: "missing permission to access model" })))`,
+    context,
+  );
+  assert.doesNotMatch(
+    providerPermissionFailureText,
+    /没有创建任务权限|团队负责人|调整角色/,
+    "a provider permission failure must not be misclassified as a Jiejing task-role denial",
+  );
+  console.log("PASS AI CEO frontend immediate stream blocker: 8/8");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

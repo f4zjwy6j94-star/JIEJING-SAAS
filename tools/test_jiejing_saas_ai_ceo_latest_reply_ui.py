@@ -137,7 +137,7 @@ def main() -> int:
         "saas-ai-ceo-thinking-dot",
         "function ensureCeoAssistantAnswerBody",
         "function saasAiCeoConversationHistoryForRequest",
-        "conversation_history: saasAiCeoConversationHistoryForRequest()",
+        "conversation_history: options.suppressConversationHistory === true ? [] : saasAiCeoConversationHistoryForRequest()",
         "不消耗捷境试用额度",
         "正在使用账号自己的 AI",
         "当前对话优先使用账号自己的 AI",

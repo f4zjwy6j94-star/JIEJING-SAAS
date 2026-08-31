@@ -714,6 +714,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
 
     def test_product_vision_handoff_persists_its_structured_listing_project_identity(self) -> None:
         vision_handoff = function_body(APP_JS, "applySaasAiCeoProductFactPacket")
+        normalize_identity = function_body(APP_JS, "saasNormalizeListingProjectIdentity")
         result = run_node_json(
             "\n".join(
                 [
@@ -721,7 +722,9 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const saasListingComposerDraftFromText = () => ({ product: 'Vision Product', title: 'Vision Product', fields: {} });",
                     "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
                     "const saasCurrentListingProjectIdentity = (draft) => ({ key: `project-${draft.source_report_id}`, source_report_id: draft.source_report_id, source_id: draft.source_report_id, candidate_id: '' });",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
                     "const saveSaasProtectedStateSnapshot = () => {};",
+                    normalize_identity,
                     vision_handoff,
                     "const draft = applySaasAiCeoProductFactPacket({ product_name: 'Vision Product', listing_copy: {} }, 'merchant images', { report_id: 'vision-facts-a' });",
                     "console.log(JSON.stringify({ draft, activeMediaDraft: state.activeMediaDraft }));",
@@ -1321,6 +1324,9 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertEqual("backend_product_fact_restore", result.get("sourceMode"))
 
     def test_product_vision_chat_gets_a_longer_timeout_without_slowing_text_chat(self) -> None:
+        request_command_snapshot = function_body(APP_JS, "sanitizeSaasAiCeoRequestCommandSnapshot")
+        request_idempotency_key = function_body(APP_JS, "saasAiCeoIdempotencyKey")
+        request_envelope = function_body(APP_JS, "buildSaasAiCeoChatRequestEnvelope")
         request_chat = function_body(APP_JS, "requestSaasAiCeoChat")
         result = run_node_json(
             "\n".join(
@@ -1329,14 +1335,18 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const normalizeSaasCeoCommand = (value) => value;",
                     "const hasSaasProtectedSessionCandidate = () => true;",
                     "const sanitizeSaasCeoCommandSourceText = (value) => String(value || '');",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
                     "const saasAiCeoConversationHistoryForRequest = () => [];",
                     "const isSaasRealPlatformWritesEnabled = () => false;",
                     "const supplierFactsForSaasAiCeoCommand = () => ({});",
                     "const capturedTimeouts = [];",
                     "const saasFetchNdjsonWithTimeout = async (_path, _options, timeoutMs) => { capturedTimeouts.push(timeoutMs); return {}; };",
+                    request_command_snapshot,
+                    request_idempotency_key,
+                    request_envelope,
                     request_chat,
                     "(async () => {",
-                    "  const command = { store_id: 'store_unit', text: '整理商品资料', route: 'listing', intent: 'listing', summary: '', title: '' };",
+                    "  const command = { id: 'command-unit-timeout', store_id: 'store_unit', text: '整理商品资料', route: 'listing', intent: 'listing', summary: '', title: '', routes: [] };",
                     "  await requestSaasAiCeoChat(command, {}, []);",
                     "  await requestSaasAiCeoChat(command, {}, ['asset_1', 'asset_2', 'asset_3', 'asset_4', 'asset_5', 'asset_6', 'asset_7']);",
                     "  console.log(JSON.stringify({ capturedTimeouts }));",
@@ -1348,6 +1358,10 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
 
     def test_chat_request_carries_only_the_active_listing_snapshot(self) -> None:
         active_context = function_body(APP_JS, "saasAiCeoActiveListingContext")
+        normalize_identity = function_body(APP_JS, "saasNormalizeListingProjectIdentity")
+        request_command_snapshot = function_body(APP_JS, "sanitizeSaasAiCeoRequestCommandSnapshot")
+        request_idempotency_key = function_body(APP_JS, "saasAiCeoIdempotencyKey")
+        request_envelope = function_body(APP_JS, "buildSaasAiCeoChatRequestEnvelope")
         request_chat = function_body(APP_JS, "requestSaasAiCeoChat")
         result = run_node_json(
             "\n".join(
@@ -1368,6 +1382,8 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const saasAiCeoConversationHistoryForRequest = () => [];",
                     "const isSaasRealPlatformWritesEnabled = () => false;",
                     "const supplierFactsForSaasAiCeoCommand = () => ({});",
+                    "const saasMerchantProjectRouteId = () => '';",
+                    "const activeSaasStore = () => ({ store_id: 'store-unit' });",
                     "const saasCurrentListingProjectIdentity = () => ({ key: 'project-incense', product: '禅意佛手托莲花倒流香炉', source_report_id: 'report-incense', candidate_id: 'candidate-incense' });",
                     "const saasListingDraftAuthoritativeSku = () => 'JJ-INCENSE-01';",
                     "const latestSaasMediaAssetJobWithManifest = () => null;",
@@ -1377,13 +1393,17 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const saasListingMediaWritebackRightsReady = () => true;",
                     "const saasCurrentUnpublishedDraftReceipt = () => ({ offerId: '245675556011', sku: 'JJ-INCENSE-01', executionId: 'exec-incense', confirmationId: 'confirm-incense', status: 'UNPUBLISHED' });",
                     "const publicRuntimeText = (value = '') => String(value || '');",
+                    normalize_identity,
                     active_context,
+                    request_command_snapshot,
+                    request_idempotency_key,
+                    request_envelope,
                     request_chat,
                     "let capturedBody = null;",
                     "let capturedTimeout = 0;",
                     "const saasFetchNdjsonWithTimeout = async (_path, options, timeoutMs) => { capturedBody = JSON.parse(options.body); capturedTimeout = timeoutMs; return {}; };",
                     "(async () => {",
-                    "  await requestSaasAiCeoChat({ store_id: 'store-unit', text: '继续当前 SKU 和 Offer 做第二遍验收', route: 'listing', intent: 'listing', summary: '', title: '' });",
+                    "  await requestSaasAiCeoChat({ id: 'command-active-listing', store_id: 'store-unit', text: '继续当前 SKU 和 Offer 做第二遍验收', route: 'listing', intent: 'listing', summary: '', title: '', routes: [] });",
                     "  console.log(JSON.stringify({ ...capturedBody, capturedTimeout }));",
                     "})().catch((error) => { console.error(error); process.exit(1); });",
                 ]
@@ -1461,6 +1481,9 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         build_intake = function_body(APP_JS, "buildSaasAiCeoSupplierFactIntake")
         confirm_intake = function_body(APP_JS, "confirmManualSourceFactsForAiCeo")
         command_payload = function_body(APP_JS, "supplierFactsForSaasAiCeoCommand")
+        request_command_snapshot = function_body(APP_JS, "sanitizeSaasAiCeoRequestCommandSnapshot")
+        request_idempotency_key = function_body(APP_JS, "saasAiCeoIdempotencyKey")
+        request_envelope = function_body(APP_JS, "buildSaasAiCeoChatRequestEnvelope")
         request_chat = function_body(APP_JS, "requestSaasAiCeoChat")
         result = run_node_json(
             "\n".join(
@@ -1472,6 +1495,9 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     build_intake,
                     confirm_intake,
                     command_payload,
+                    request_command_snapshot,
+                    request_idempotency_key,
+                    request_envelope,
                     request_chat,
                     "const manual = { material: 'food-grade silicone', package_weight: '120 g', package_dimensions: '12 x 10 x 4 cm', source_location: 'Shenzhen, China', purchase_price: 'CNY 8.50' };",
                     "const confirmed = confirmManualSourceFactsForAiCeo(manual);",
@@ -1485,12 +1511,13 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const normalizeSaasCeoCommand = (value) => value;",
                     "const hasSaasProtectedSessionCandidate = () => true;",
                     "const sanitizeSaasCeoCommandSourceText = (value) => String(value || '');",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
                     "const saasAiCeoConversationHistoryForRequest = () => [];",
                     "const isSaasRealPlatformWritesEnabled = () => false;",
                     "const saasFetchNdjsonWithTimeout = async (_path, options) => { capturedBody = JSON.parse(options.body); return {}; };",
                     "(async () => {",
                     "  state.saasAiCeoSupplierFactAttestation = confirmed;",
-                    "  await requestSaasAiCeoChat({ store_id: 'store_unit', text: '为 eBay 生成 Listing', route: 'listing', intent: 'listing', summary: '', title: '' });",
+                    "  await requestSaasAiCeoChat({ id: 'command-supplier-facts', store_id: 'store_unit', text: '为 eBay 生成 Listing', route: 'listing', intent: 'listing', summary: '', title: '', routes: [] });",
                     "  console.log(JSON.stringify({ confirmed, declined, ebayPayload, unknownFactsPayload, shopifyPayload, capturedBody, confirmationCount }));",
                     "})().catch((error) => { console.error(error); process.exit(1); });",
                 ]

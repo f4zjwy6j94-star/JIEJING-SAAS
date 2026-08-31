@@ -121,6 +121,7 @@ AI_CEO_MARKET_LISTING_HANDOFF_CONTRACT_VERSION = "2026-07-04-ai-ceo-market-to-li
 AI_CEO_MARKET_EBAY_FIELD_MAP_CONTRACT = "ai_ceo_market_research_to_ebay_inventory_offer_v1"
 AI_CEO_SUPPLIER_FACT_ATTESTATION_CONTRACT_VERSION = "jiejing_ai_ceo_supplier_fact_attestation_v1"
 AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE = "authenticated_merchant_request"
+AI_CEO_CHAT_REQUEST_LEASE_SECONDS = 15 * 60
 AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS = (
     "material",
     "package_weight_g",
@@ -2839,6 +2840,217 @@ class SaaSRepository:
         if not task:
             raise KeyError("task id collision")
         return task
+
+    def claim_ai_ceo_chat_request(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        idempotency_key: str,
+        payload_fingerprint: str,
+    ) -> dict[str, Any]:
+        """Atomically claim one tenant-scoped AI CEO chat request."""
+        self.initialize()
+        normalized_key = str(idempotency_key or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", normalized_key):
+            raise ValueError("invalid idempotency key")
+        normalized_fingerprint = str(payload_fingerprint or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized_fingerprint):
+            raise ValueError("invalid payload fingerprint")
+        scope_material = f"ai-ceo-chat-request-v1\0{company_id}\0{store_id}\0{normalized_key}"
+        scope_hash = hashlib.sha256(scope_material.encode("utf-8")).hexdigest()
+        task_id = f"task_ai_ceo_request_{scope_hash[:40]}"
+        created_at = now_iso()
+        input_data = {
+            "contract_version": "ai_ceo_chat_request_idempotency_v1",
+            "idempotency_key_hash": scope_hash,
+            "payload_fingerprint": normalized_fingerprint,
+            "secret_exposed": False,
+            "real_platform_writes_enabled": False,
+        }
+        with self._connect() as conn:
+            inserted = conn.execute(
+                """
+                insert or ignore into tasks (
+                  task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
+                  status, created_at, updated_at, input_json, output_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    company_id,
+                    store_id,
+                    user_id,
+                    None,
+                    "ai_ceo_chat_request",
+                    "AI CEO chat request",
+                    "running",
+                    created_at,
+                    created_at,
+                    json.dumps(input_data, ensure_ascii=False, default=json_default),
+                    "{}",
+                ),
+            )
+            row = conn.execute("select * from tasks where task_id = ?", (task_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("AI CEO chat request claim could not be read")
+        request_task = self._task_row_to_dict(row)
+        existing_input = request_task.get("input") if isinstance(request_task.get("input"), dict) else {}
+        if (
+            request_task.get("company_id") != company_id
+            or request_task.get("store_id") != store_id
+            or request_task.get("task_type") != "ai_ceo_chat_request"
+            or existing_input.get("idempotency_key_hash") != scope_hash
+        ):
+            return {"claim_state": "conflict", "request_task": request_task}
+        if existing_input.get("payload_fingerprint") != normalized_fingerprint:
+            return {"claim_state": "conflict", "request_task": request_task}
+        if int(inserted.rowcount or 0) == 1:
+            return {"claim_state": "claimed", "request_task": request_task}
+        output = request_task.get("output") if isinstance(request_task.get("output"), dict) else {}
+        if request_task.get("status") in {"completed", "failed", "blocked"} and output.get("idempotent_replay_ready") is True:
+            return {"claim_state": "replay", "request_task": request_task, "replay": output}
+        request_updated_at = _parse_iso_datetime(str(request_task.get("updated_at") or ""))
+        lease_expired = bool(
+            request_task.get("status") == "running"
+            and request_updated_at is not None
+            and (datetime.now(timezone.utc) - request_updated_at).total_seconds()
+            > AI_CEO_CHAT_REQUEST_LEASE_SECONDS
+        )
+        if lease_expired:
+            reconciled_at = now_iso()
+            reconciliation_payload = {
+                "ai_ceo_chat_request": {
+                    "status": "reconciliation_required",
+                    "request_task_id": task_id,
+                    "execution_result_known": False,
+                    "automatic_model_retry_performed": False,
+                },
+                "ai_ceo_chat": {
+                    "status": "request_reconciliation_required",
+                    "answer": (
+                        "上一次请求超过安全处理时间，执行结果暂时无法确认。"
+                        "为避免重复调用模型，捷境没有自动重试。请先查看本次工作记录和调研报告；"
+                        "确认没有已有结果后，再重新发起任务。"
+                    ),
+                    "route": "ebay_workflow",
+                    "route_label": "执行结果对账",
+                    "source_records": [],
+                    "work_records": [],
+                    "confirmation_items": [],
+                    "blocked_by": ["ai_ceo_request_execution_unknown"],
+                },
+                "execution_result_known": False,
+                "automatic_model_retry_performed": False,
+                "usage_consumed": None,
+                "usage_consumed_known": False,
+                "listing_created": False,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            reconciliation_output = {
+                "contract_version": "ai_ceo_chat_request_idempotency_v1",
+                "response_status": 409,
+                "response_payload": reconciliation_payload,
+                "idempotent_replay_ready": True,
+                "reconciliation_required": True,
+                "execution_result_known": False,
+                "automatic_model_retry_performed": False,
+                "secret_exposed": False,
+                "real_platform_writes_enabled": False,
+            }
+            previous_updated_at = request_task.get("updated_at")
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    update tasks set status = ?, updated_at = ?, output_json = ?
+                    where task_id = ? and company_id = ? and store_id = ? and task_type = ?
+                      and status = ? and updated_at = ?
+                    """,
+                    (
+                        "blocked",
+                        reconciled_at,
+                        json.dumps(reconciliation_output, ensure_ascii=False, default=json_default),
+                        task_id,
+                        company_id,
+                        store_id,
+                        "ai_ceo_chat_request",
+                        "running",
+                        previous_updated_at,
+                    ),
+                )
+                refreshed_row = conn.execute(
+                    "select * from tasks where task_id = ? and company_id = ? and store_id = ?",
+                    (task_id, company_id, store_id),
+                ).fetchone()
+            if refreshed_row is None:
+                raise RuntimeError("AI CEO chat request reconciliation could not be read")
+            request_task = self._task_row_to_dict(refreshed_row)
+            output = request_task.get("output") if isinstance(request_task.get("output"), dict) else {}
+            if request_task.get("status") in {"completed", "failed", "blocked"} and output.get("idempotent_replay_ready") is True:
+                return {"claim_state": "replay", "request_task": request_task, "replay": output}
+        return {"claim_state": "in_progress", "request_task": request_task}
+
+    def finalize_ai_ceo_chat_request(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        request_task_id: str,
+        terminal_status: str,
+        response_status: int,
+        response_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist a safe terminal response before it is returned to the caller."""
+        normalized_status = str(terminal_status or "").strip().lower()
+        if normalized_status not in {"completed", "failed", "blocked"}:
+            raise ValueError("invalid AI CEO chat request terminal status")
+        normalized_response_status = int(response_status)
+        if normalized_response_status < 200 or normalized_response_status > 599:
+            raise ValueError("invalid AI CEO chat response status")
+        safe_payload = _redact_secret_like(response_payload if isinstance(response_payload, dict) else {})
+        if not isinstance(safe_payload, dict):
+            safe_payload = {}
+        safe_payload["secret_exposed"] = False
+        safe_payload["real_platform_writes_enabled"] = False
+        output = {
+            "contract_version": "ai_ceo_chat_request_idempotency_v1",
+            "response_status": normalized_response_status,
+            "response_payload": safe_payload,
+            "idempotent_replay_ready": True,
+            "secret_exposed": False,
+            "real_platform_writes_enabled": False,
+        }
+        updated_at = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from tasks where task_id = ? and company_id = ? and store_id = ?",
+                (request_task_id, company_id, store_id),
+            ).fetchone()
+            if row is None or row["task_type"] != "ai_ceo_chat_request":
+                raise KeyError("AI CEO chat request task not found")
+            finalized = conn.execute(
+                """
+                update tasks set status = ?, updated_at = ?, output_json = ?
+                where task_id = ? and company_id = ? and store_id = ? and task_type = ?
+                  and status = ?
+                """,
+                (
+                    normalized_status,
+                    updated_at,
+                    json.dumps(output, ensure_ascii=False, default=json_default),
+                    request_task_id,
+                    company_id,
+                    store_id,
+                    "ai_ceo_chat_request",
+                    "running",
+                ),
+            )
+        task = self.get_task(company_id=company_id, task_id=request_task_id)
+        if not task or task.get("store_id") != store_id:
+            raise RuntimeError("AI CEO chat request finalization could not be read")
+        return {**task, "_idempotent_finalize_applied": int(finalized.rowcount or 0) == 1}
 
     def create_queue_job(
         self,
@@ -17234,6 +17446,23 @@ SAFE_SECRET_FLAG_KEYS = {
     "raw_provider_response_persisted",
 }
 
+SAFE_TOKEN_COUNTER_KEYS = {
+    "cached_tokens",
+    "completion_tokens",
+    "input_tokens",
+    "model_max_output_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+}
+
+SAFE_SECRET_CONTAINER_KEYS = {
+    "model_secret_resolution",
+    "model_secret_ref_scope",
+    "secret_ref_scope",
+}
+
 
 _UNPUBLISHED_DRAFT_CLAIM_MINT_TOKEN = object()
 
@@ -17357,7 +17586,12 @@ def _redact_secret_like(value: Any) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             lower = str(key).lower()
-            if lower in SAFE_SECRET_FLAG_KEYS:
+            if (
+                isinstance(item, bool)
+                or lower in SAFE_SECRET_FLAG_KEYS
+                or lower in SAFE_TOKEN_COUNTER_KEYS
+                or lower in SAFE_SECRET_CONTAINER_KEYS
+            ):
                 redacted[key] = _redact_secret_like(item)
             elif any(marker in lower for marker in ("secret", "token", "password", "api_key", "apikey", "refresh")):
                 redacted[key] = "[REDACTED]"

@@ -240,6 +240,10 @@ const state = {
   saasListingComposerDraft: null,
   saasListingSourceMode: "",
   saasListingMode: "single",
+  saasPendingNewListingProjectRequest: null,
+  saasPendingNewListingProjectReconcileTimer: null,
+  saasPendingNewListingProjectReconcileGeneration: 0,
+  saasDetachedListingProjectDrafts: {},
   saasListingBackendWorkflow: null,
   saasListingBackendWorkflowStatus: "",
   saasListingBackendWorkflowError: "",
@@ -4052,18 +4056,49 @@ function resetSaasListingProjectTransientState() {
   state.saasMediaSourceUpload = null;
   state.saasMediaScriptDraft = null;
   state.activeMediaDraft = "";
+  state.mediaGenerationStatus = "idle";
+  state.mediaGenerationCount = 0;
+  state.mediaTaskEntry = "project";
   state.saasActiveMediaPreviewKey = "";
+  state.sourceIntakeMode = "ai_search";
+  state.sourceSearchStatus = "idle";
+  state.sourceManualStatus = "idle";
+  state.sourceApiStatus = "idle";
+  state.sourceHandoffStatus = "idle";
+  state.sourceHandoffDraft = "";
+  state.supplierFactsStatus = "idle";
+  state.manualSourceFacts = {};
+  state.manualProductFacts = {};
+  state.taxonomyStatus = "pending";
+  state.ebayPolicyStatus = "ready";
+  state.publishFlow = {
+    status: "idle",
+    draftId: "",
+    simulatedItemId: "",
+    listingUrl: "",
+    confirmedAt: "",
+  };
+  state.activeFlowKey = "";
+  state.activeListingDraft = "";
+  state.activeCockpitMarketDraft = "";
+  state.marketReportMode = "single";
+  state.saasListingProductFactSaveStatus = "";
   state.saasAiCeoSupplierFactAttestation = null;
   state.saasAiCeoAttachmentUploadGeneration = Number(state.saasAiCeoAttachmentUploadGeneration || 0) + 1;
   state.saasAiCeoPendingAttachments = [];
   state.saasAiCeoAttachmentUploading = false;
   state.saasLastPublicSearchHandoff = null;
+  state.saasBulkManualSourceText = "";
+  state.bulkApprovedPrefs = [];
   resetSaasListingPublishEvidenceForNewProject();
   resetSaasBulkWorkspaceForListingProject();
 }
 
 function resetSaasActiveProjectForStoreSwitch() {
   stopSaasAiCeoCrossDeviceSync();
+  stopSaasPendingNewListingProjectReconciliation();
+  state.saasPendingNewListingProjectRequest = null;
+  state.saasDetachedListingProjectDrafts = {};
   setSaasAiCeoTaskContextState("plain_consultation", false);
   resetSaasProductFeedbackViewState();
   state.saasListingComposerDraft = null;
@@ -15018,6 +15053,8 @@ function sanitizeSaasPacketSnapshot(packet = {}) {
 
 function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
   const rawReportPool = Array.isArray(options.reports) ? options.reports : state.saasReports || [];
+  const preferBackendLatest = options.preferBackendLatest === true;
+  const restoreDetachedDraft = options.restoreDetachedDraft === true;
   const requestedProjectId = String(options.projectId || "").trim();
   const routeProjectId = /^[A-Za-z0-9._:-]{1,160}$/.test(requestedProjectId)
     ? requestedProjectId
@@ -15037,7 +15074,7 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
   };
   const reportPool = rawReportPool.filter((item) => {
     const reportStoreId = String(item?.store_id || item?.report?.store_id || "").trim();
-    if (activeStoreId && reportStoreId && reportStoreId !== activeStoreId) return false;
+    if (activeStoreId && reportStoreId !== activeStoreId) return false;
     if (!routeProjectId) return true;
     return reportIdentityForRestore(item)?.key === routeProjectId;
   });
@@ -15130,6 +15167,10 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
     });
     return matchingLegacyNames.length === 1;
   };
+  if (preferBackendLatest && state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") {
+    state.saasListingComposerDraft = null;
+    state.saasListingSourceMode = "";
+  }
   if (routeProjectId && state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") {
     const currentIdentity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
     if (!currentIdentity?.key || currentIdentity.key !== routeProjectId) {
@@ -15236,6 +15277,10 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
   if (!state.activeMediaDraft || isLegacySampleMediaDraftKey(state.activeMediaDraft)) {
     state.activeMediaDraft = identity.key || "";
   }
+  if (restoreDetachedDraft) {
+    const restoredDetachedDraft = restoreSaasDetachedListingProjectDraftForBackendDraft(state.saasListingComposerDraft);
+    if (restoredDetachedDraft) return restoredDetachedDraft;
+  }
   return state.saasListingComposerDraft;
 }
 
@@ -15314,7 +15359,7 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
   return projected;
 }
 
-function applySaasAiCeoProductFactPacket(packet = null, merchantText = "", report = null) {
+function applySaasAiCeoProductFactPacket(packet = null, merchantText = "", report = null, options = {}) {
   if (!packet || typeof packet !== "object") return null;
   const seed = [packet.product_name || "商品图片识别", merchantText].filter(Boolean).join("\n");
   let draft = saasListingComposerDraftFromText(seed);
@@ -15331,7 +15376,8 @@ function applySaasAiCeoProductFactPacket(packet = null, merchantText = "", repor
   state.saasListingComposerDraft = draft;
   state.saasListingComposerInput = merchantText;
   state.saasListingSourceMode = "ai_ceo_product_vision";
-  const identity = saasCurrentListingProjectIdentity(draft);
+  const preferredIdentity = saasNormalizeListingProjectIdentity(options.listingProjectIdentity);
+  const identity = preferredIdentity || saasCurrentListingProjectIdentity(draft);
   if (identity?.key) {
     draft.listing_project_key = identity.key;
     draft.listing_project_identity = {
@@ -15556,10 +15602,268 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
   };
 }
 
+function sanitizeSaasDetachedListingProjectDraftsSnapshot(records = {}, options = {}) {
+  const currentStoreId = String(options.storeId || activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const currentCompanyId = String(options.companyId || state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const strictScope = options.strictScope === true;
+  const requireBackendWatermark = options.requireBackendWatermark === true;
+  const nowWithClockSkew = Date.now() + 5 * 60 * 1000;
+  return Object.values(records && typeof records === "object" ? records : {})
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => {
+      const draft = sanitizeSaasListingComposerDraftSnapshot(entry.draft);
+      const identity = saasNormalizeListingProjectIdentity(draft?.listing_project_identity);
+      const entryProjectId = String(entry.project_id || "").trim();
+      const entryStoreId = String(entry.store_id || "").trim();
+      const entryCompanyId = String(entry.company_id || "").trim();
+      const savedAt = String(entry.saved_at || "").slice(0, 40);
+      const backendReportAt = String(entry.backend_report_at || "").slice(0, 40);
+      const savedAtMs = Date.parse(savedAt);
+      const backendReportAtMs = Date.parse(backendReportAt);
+      if (!draft || !identity?.key || !saasListingDraftHasConcreteProduct(draft)) return null;
+      if (strictScope && (
+        !currentStoreId || !currentCompanyId ||
+        !entryProjectId || entryProjectId !== identity.key ||
+        !entryStoreId || entryStoreId !== currentStoreId ||
+        !entryCompanyId || entryCompanyId !== currentCompanyId ||
+        !Number.isFinite(savedAtMs) || savedAtMs > nowWithClockSkew ||
+        (requireBackendWatermark && (!Number.isFinite(backendReportAtMs) || backendReportAtMs > savedAtMs))
+      )) return null;
+      return {
+        project_id: identity.key,
+        store_id: String(entryStoreId || currentStoreId).slice(0, 160),
+        company_id: String(entryCompanyId || currentCompanyId).slice(0, 160),
+        saved_at: Number.isFinite(savedAtMs) ? savedAt : new Date().toISOString(),
+        backend_report_at: Number.isFinite(backendReportAtMs) ? backendReportAt : "",
+        draft,
+        input: sanitizeSaasWorkflowFeedbackText(entry.input || "", 2000),
+        source_mode: publicRuntimeText(entry.source_mode || "").slice(0, 80),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => String(right.saved_at || "").localeCompare(String(left.saved_at || "")))
+    .slice(0, 12);
+}
+
+function saasListingDraftSourceReportTimestamp(draft = null) {
+  const draftIdentity = saasCurrentListingProjectIdentity(draft);
+  if (!draftIdentity?.key) return "";
+  const currentStoreId = String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const reportTimes = (Array.isArray(state.saasReports) ? state.saasReports : []).flatMap((record) => {
+    if (!record) return [];
+    const reportStoreId = String(record.store_id || record.report?.store_id || "").trim();
+    const reportCompanyId = String(record.company_id || record.report?.company_id || "").trim();
+    const reportIdentity = saasListingProjectIdentityFromReport(record);
+    if (
+      !reportIdentity?.key || reportIdentity.key !== draftIdentity.key ||
+      !reportStoreId || reportStoreId !== currentStoreId ||
+      (reportCompanyId && reportCompanyId !== currentCompanyId)
+    ) return [];
+    const timestamp = String(record.updated_at || record.created_at || "").slice(0, 40);
+    const timestampMs = Date.parse(timestamp);
+    return Number.isFinite(timestampMs) ? [{ timestamp, timestampMs }] : [];
+  });
+  return reportTimes.sort((left, right) => right.timestampMs - left.timestampMs)[0]?.timestamp || "";
+}
+
+function stashSaasCurrentListingProjectDraft() {
+  const draft = state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object"
+    ? state.saasListingComposerDraft
+    : null;
+  const identity = saasCurrentListingProjectIdentity(draft);
+  const sanitizedDraft = sanitizeSaasListingComposerDraftSnapshot(draft);
+  if (!identity?.key || !sanitizedDraft) return false;
+  const currentStoreId = String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const existing = state.saasDetachedListingProjectDrafts && typeof state.saasDetachedListingProjectDrafts === "object"
+    ? state.saasDetachedListingProjectDrafts
+    : {};
+  const entries = sanitizeSaasDetachedListingProjectDraftsSnapshot({
+    ...existing,
+    [identity.key]: {
+      project_id: identity.key,
+      store_id: currentStoreId,
+      company_id: currentCompanyId,
+      saved_at: new Date().toISOString(),
+      backend_report_at: saasListingDraftSourceReportTimestamp(sanitizedDraft),
+      draft: sanitizedDraft,
+      input: state.saasListingComposerInput,
+      source_mode: state.saasListingSourceMode,
+    },
+  }, { companyId: currentCompanyId, storeId: currentStoreId, strictScope: true });
+  state.saasDetachedListingProjectDrafts = Object.fromEntries(entries.map((entry) => [entry.project_id, entry]));
+  return Boolean(state.saasDetachedListingProjectDrafts[identity.key]);
+}
+
+function detachedSaasListingProjectDraft(projectId = "") {
+  const safeProjectId = String(projectId || "").trim();
+  const currentStoreId = String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const [entry] = sanitizeSaasDetachedListingProjectDraftsSnapshot(
+    safeProjectId ? { [safeProjectId]: state.saasDetachedListingProjectDrafts?.[safeProjectId] } : {},
+    { companyId: currentCompanyId, storeId: currentStoreId, strictScope: true },
+  );
+  return entry?.project_id === safeProjectId ? entry : null;
+}
+
+function restoreSaasDetachedListingProjectDraftForBackendDraft(backendDraft = null) {
+  const backendIdentity = saasCurrentListingProjectIdentity(backendDraft);
+  const detachedDraft = detachedSaasListingProjectDraft(backendIdentity?.key || "");
+  if (!backendIdentity?.key || !detachedDraft) return null;
+  const detachedIdentity = saasNormalizeListingProjectIdentity(detachedDraft.draft?.listing_project_identity);
+  const backendReportAt = saasTimestampMillis(saasListingDraftSourceReportTimestamp(backendDraft));
+  const detachedBaselineAt = saasTimestampMillis(detachedDraft.backend_report_at || "");
+  const detachedSavedAt = saasTimestampMillis(detachedDraft.saved_at || "");
+  const identityMatches = Boolean(
+    detachedIdentity?.key === backendIdentity.key &&
+      (!backendIdentity.source_report_id || detachedIdentity.source_report_id === backendIdentity.source_report_id) &&
+      (!backendIdentity.candidate_id || detachedIdentity.candidate_id === backendIdentity.candidate_id),
+  );
+  const canRestore = Boolean(
+    identityMatches &&
+      backendReportAt > 0 &&
+      detachedBaselineAt === backendReportAt &&
+      detachedSavedAt >= backendReportAt &&
+      detachedSavedAt <= saasServerNowMs() + 5 * 60 * 1000,
+  );
+  if (!canRestore) {
+    delete state.saasDetachedListingProjectDrafts[backendIdentity.key];
+    return null;
+  }
+  state.saasListingComposerDraft = detachedDraft.draft;
+  state.saasListingComposerInput = detachedDraft.input || "";
+  state.saasListingSourceMode = detachedDraft.source_mode || "local_unsaved_draft";
+  return state.saasListingComposerDraft;
+}
+
+function saasDetachedListingProjectDraftsForProtectedSnapshot(activeStoreId = "") {
+  const currentStoreId = String(activeStoreId || activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const records = {
+    ...(state.saasDetachedListingProjectDrafts && typeof state.saasDetachedListingProjectDrafts === "object"
+      ? state.saasDetachedListingProjectDrafts
+      : {}),
+  };
+  const activeDraft = sanitizeSaasListingComposerDraftSnapshot(state.saasListingComposerDraft);
+  const activeIdentity = saasNormalizeListingProjectIdentity(activeDraft?.listing_project_identity);
+  const routeProjectId = saasMerchantProjectRouteId();
+  const backendReportAt = activeDraft ? saasListingDraftSourceReportTimestamp(activeDraft) : "";
+  if (
+    activeDraft &&
+    activeIdentity?.key &&
+    currentStoreId &&
+    currentCompanyId &&
+    (!routeProjectId || routeProjectId === activeIdentity.key) &&
+    Number.isFinite(Date.parse(backendReportAt))
+  ) {
+    records[activeIdentity.key] = {
+      project_id: activeIdentity.key,
+      store_id: currentStoreId,
+      company_id: currentCompanyId,
+      saved_at: new Date().toISOString(),
+      backend_report_at: backendReportAt,
+      draft: activeDraft,
+      input: state.saasListingComposerInput,
+      source_mode: state.saasListingSourceMode || "local_unsaved_draft",
+    };
+  }
+  return sanitizeSaasDetachedListingProjectDraftsSnapshot(records, {
+    companyId: currentCompanyId,
+    storeId: currentStoreId,
+    strictScope: true,
+    requireBackendWatermark: true,
+  });
+}
+
+function pruneSaasDetachedListingProjectDraftsAgainstBackend() {
+  const currentStoreId = String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const entries = sanitizeSaasDetachedListingProjectDraftsSnapshot(
+    state.saasDetachedListingProjectDrafts,
+    { companyId: currentCompanyId, storeId: currentStoreId, strictScope: true, requireBackendWatermark: true },
+  ).filter((entry) => {
+    const backendWatermark = saasListingDraftSourceReportTimestamp(entry.draft);
+    return Boolean(backendWatermark && Date.parse(entry.backend_report_at) === Date.parse(backendWatermark));
+  });
+  state.saasDetachedListingProjectDrafts = Object.fromEntries(entries.map((entry) => [entry.project_id, entry]));
+  return entries.length;
+}
+
+const SAAS_NEW_LISTING_PROJECT_ACTIVE_TTL_MS = 30 * 60 * 1000;
+const SAAS_NEW_LISTING_PROJECT_FAILED_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const SAAS_NEW_LISTING_PROJECT_MAX_RECONCILE_ATTEMPTS = 4;
+const SAAS_NEW_LISTING_PROJECT_RECONCILE_DELAYS_MS = [1500, 4000, 10000, 20000];
+
+function sanitizeSaasNewListingProjectFailureReason(reason = "") {
+  const safe = String(reason || "").trim().slice(0, 120);
+  return /^[A-Za-z0-9._:-]+$/.test(safe) ? safe : "";
+}
+
+function sanitizeSaasPendingNewListingProjectRequestSnapshot(record = null, options = {}) {
+  if (!record || typeof record !== "object") return null;
+  const currentStoreId = String(options.storeId || activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const currentCompanyId = String(options.companyId || state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const entryStoreId = String(record.storeId || record.store_id || "").trim();
+  const entryCompanyId = String(record.companyId || record.company_id || "").trim();
+  const commandId = String(record.commandId || "").trim();
+  const idempotencyKey = String(record.idempotencyKey || "").trim();
+  const phase = String(record.phase || "").trim();
+  const createdAt = String(record.createdAt || "").slice(0, 40);
+  const updatedAt = String(record.updatedAt || createdAt).slice(0, 40);
+  const createdAtMs = Date.parse(createdAt);
+  const updatedAtMs = Date.parse(updatedAt);
+  const referenceNow = saasServerNowMs();
+  const requestPayload = sanitizeSaasFrozenNewProjectRequestPayload(record.requestPayload, { storeId: currentStoreId });
+  const reconcileAttempts = Math.max(
+    0,
+    Math.min(SAAS_NEW_LISTING_PROJECT_MAX_RECONCILE_ATTEMPTS, Math.floor(Number(record.reconcileAttempts || 0) || 0)),
+  );
+  if (
+    !currentStoreId || !currentCompanyId ||
+    !entryStoreId || entryStoreId !== currentStoreId ||
+    !entryCompanyId || entryCompanyId !== currentCompanyId ||
+    !["pending", "in_progress", "uncertain", "failed"].includes(phase) ||
+    !commandId || requestPayload?.command?.id !== commandId ||
+    !/^[A-Za-z0-9._:-]{8,160}$/.test(idempotencyKey) || requestPayload?.idempotency_key !== idempotencyKey ||
+    !Number.isFinite(createdAtMs) || !Number.isFinite(updatedAtMs) ||
+    createdAtMs > referenceNow + 5 * 60 * 1000 || updatedAtMs > referenceNow + 5 * 60 * 1000
+  ) return null;
+  const activePhase = ["pending", "in_progress", "uncertain"].includes(phase);
+  if (phase === "failed" && referenceNow - updatedAtMs > SAAS_NEW_LISTING_PROJECT_FAILED_TTL_MS) return null;
+  const activeExpired = activePhase && referenceNow - createdAtMs > SAAS_NEW_LISTING_PROJECT_ACTIVE_TTL_MS;
+  const restoredPhase = activeExpired
+    ? "uncertain"
+    : options.restoring === true && ["pending", "in_progress"].includes(phase)
+      ? "uncertain"
+      : phase;
+  const failureReason = restoredPhase === "failed"
+    ? sanitizeSaasNewListingProjectFailureReason(record.failureReason)
+    : "";
+  return {
+    contractVersion: "ai_ceo_new_listing_project_pending_v1",
+    companyId: currentCompanyId,
+    storeId: currentStoreId,
+    commandId,
+    idempotencyKey,
+    originalText: sanitizeSaasCeoCommandSourceText(record.originalText || requestPayload.message),
+    previousProjectId: /^[A-Za-z0-9._:-]{1,160}$/.test(String(record.previousProjectId || ""))
+      ? String(record.previousProjectId)
+      : "",
+    sourceAssetIds: requestPayload.source_asset_ids,
+    requestPayload,
+    phase: restoredPhase,
+    reconcileAttempts: activeExpired ? SAAS_NEW_LISTING_PROJECT_MAX_RECONCILE_ATTEMPTS : reconcileAttempts,
+    failureReason,
+    createdAt,
+    updatedAt: activeExpired ? new Date(referenceNow).toISOString() : updatedAt,
+  };
+}
+
 function buildSaasProtectedStateSnapshot() {
   const activeStoreId = activeSaasStore()?.store_id || storedSaasStoreId();
   return {
-    version: "2026-07-12-listing-media-restore-v3",
+    version: "2026-09-01-project-isolation-idempotency-v5",
     saved_at: new Date().toISOString(),
     account_key: saasOnboardingAccountKey(),
     store_id: activeStoreId || "",
@@ -15602,6 +15906,14 @@ function buildSaasProtectedStateSnapshot() {
       ),
     data_packets: (state.saasDataPackets || []).slice(0, 5).map(sanitizeSaasPacketSnapshot),
     listing_composer_draft: sanitizeSaasListingComposerDraftSnapshot(state.saasListingComposerDraft),
+    detached_listing_project_drafts: saasDetachedListingProjectDraftsForProtectedSnapshot(activeStoreId),
+    pending_new_listing_project_request: sanitizeSaasPendingNewListingProjectRequestSnapshot(
+      state.saasPendingNewListingProjectRequest,
+      {
+        companyId: String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim(),
+        storeId: String(activeStoreId || "").trim(),
+      },
+    ),
     listing_source_mode: publicRuntimeText(state.saasListingSourceMode || "").slice(0, 80),
     active_media_draft: publicRuntimeText(state.activeMediaDraft || "").slice(0, 160),
     media_task_entry: state.mediaTaskEntry === "single" ? "single" : "project",
@@ -15721,11 +16033,21 @@ function hydrateSaasProtectedStateFromCache() {
     let snapshot = readSaasProtectedStateSnapshotFromStorage();
     if (
       !snapshot ||
-      !["2026-07-10-minimal-fast-restore-v2", "2026-07-12-listing-media-restore-v3"].includes(snapshot.version)
+      ![
+        "2026-07-10-minimal-fast-restore-v2",
+        "2026-07-12-listing-media-restore-v3",
+        "2026-09-01-project-isolation-v4",
+        "2026-09-01-project-isolation-idempotency-v5",
+      ].includes(snapshot.version)
     ) return false;
     if (!saasAccountStorageAliases().includes(String(snapshot.account_key || "").toLowerCase())) return false;
     const savedAt = Date.parse(snapshot.saved_at || "");
-    if (!Number.isFinite(savedAt) || Date.now() - savedAt > 1000 * 60 * 60 * 24 * 14) return false;
+    const snapshotReferenceNow = saasServerNowMs();
+    if (
+      !Number.isFinite(savedAt) ||
+      savedAt > snapshotReferenceNow + 5 * 60 * 1000 ||
+      snapshotReferenceNow - savedAt > 1000 * 60 * 60 * 24 * 14
+    ) return false;
     const restoredConfirmations = Array.isArray(snapshot.confirmations) ? snapshot.confirmations : [];
     const safeRestoredConfirmations = restoredConfirmations.filter(
       (confirmation) =>
@@ -15748,6 +16070,25 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasStores = Array.isArray(snapshot.stores) ? snapshot.stores : state.saasStores || [];
     state.saasConnections = Array.isArray(snapshot.connections) ? snapshot.connections : state.saasConnections || [];
     state.saasDataPackets = Array.isArray(snapshot.data_packets) ? snapshot.data_packets : state.saasDataPackets || [];
+    const snapshotStoreId = String(snapshot.store_id || "").trim();
+    const snapshotCompanyId = String(snapshot.company?.company_id || snapshot.identity?.company_id || "").trim();
+    const snapshotStoreExists = state.saasStores.some((store) => String(store?.store_id || "").trim() === snapshotStoreId);
+    const detachedEntries = ["2026-09-01-project-isolation-v4", "2026-09-01-project-isolation-idempotency-v5"].includes(snapshot.version) && snapshotStoreExists
+      ? sanitizeSaasDetachedListingProjectDraftsSnapshot(snapshot.detached_listing_project_drafts, {
+          companyId: snapshotCompanyId,
+          storeId: snapshotStoreId,
+          strictScope: true,
+          requireBackendWatermark: true,
+        })
+      : [];
+    state.saasDetachedListingProjectDrafts = Object.fromEntries(detachedEntries.map((entry) => [entry.project_id, entry]));
+    state.saasPendingNewListingProjectRequest = snapshot.version === "2026-09-01-project-isolation-idempotency-v5" && snapshotStoreExists
+      ? sanitizeSaasPendingNewListingProjectRequestSnapshot(snapshot.pending_new_listing_project_request, {
+          companyId: snapshotCompanyId,
+          storeId: snapshotStoreId,
+          restoring: true,
+        })
+      : null;
     const restoredListingDraft =
       snapshot.listing_composer_draft && typeof snapshot.listing_composer_draft === "object"
         ? snapshot.listing_composer_draft
@@ -15962,6 +16303,34 @@ function saasAccountStorageAliases() {
   );
 }
 
+function reconcileSaasCachedProjectStateForConfirmedAccount(confirmedAliases = [], previousAliases = []) {
+  const confirmed = new Set(
+    (Array.isArray(confirmedAliases) ? confirmedAliases : Array.from(confirmedAliases || []))
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const previous = new Set(
+    (Array.isArray(previousAliases) ? previousAliases : Array.from(previousAliases || []))
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const sameAccount = confirmed.size > 0 && Array.from(confirmed).some((alias) => previous.has(alias));
+  if (sameAccount) return true;
+  stopSaasPendingNewListingProjectReconciliation();
+  resetSaasListingProjectTransientState();
+  state.saasPendingNewListingProjectRequest = null;
+  state.saasDetachedListingProjectDrafts = {};
+  state.saasListingComposerDraft = null;
+  state.saasListingComposerInput = "";
+  state.saasListingSourceMode = "";
+  state.saasListingCeoHandoff = null;
+  state.activeListingDraft = "";
+  state.activeMediaDraft = "";
+  state.sourceHandoffDraft = "";
+  syncSaasProjectRoute(state.view || "cockpit", { clearProject: true });
+  return false;
+}
+
 function saasOnboardingDoneStorageKey() {
   return `${saasStorageKeys.onboardingDone}:${saasOnboardingAccountKey()}`;
 }
@@ -16070,6 +16439,7 @@ function shouldFetchDirectRuntimeApi() {
 function resetSaasProtectedWorkbenchState() {
   clearSaasProductFeedbackLiveIdentity();
   resetSaasProductFeedbackViewState();
+  resetSaasListingProjectTransientState();
   state.saasConnected = false;
   state.saasProtectedStateReady = false;
   state.saasProtectedStateFromCache = false;
@@ -16126,6 +16496,15 @@ function resetSaasProtectedWorkbenchState() {
   state.saasTasks = [];
   state.saasTaskSteps = [];
   state.saasMediaAssetJobs = [];
+  stopSaasPendingNewListingProjectReconciliation();
+  state.saasPendingNewListingProjectRequest = null;
+  state.saasDetachedListingProjectDrafts = {};
+  state.saasListingComposerDraft = null;
+  state.saasListingComposerInput = "";
+  state.saasListingSourceMode = "";
+  state.saasListingCeoHandoff = null;
+  state.activeListingDraft = "";
+  state.sourceHandoffDraft = "";
   state.saasQueueHealth = null;
   state.saasReports = [];
   state.saasConfirmations = [];
@@ -18427,6 +18806,7 @@ function openSaasRecentProductTask(taskId = "") {
     showActionToast("这条任务还没有可关联的已有草稿；捷境不会为打开记录而新建任务或重跑 AI。");
     return false;
   }
+  stashSaasCurrentListingProjectDraft();
   setSaasAiCeoTaskContextState("plain_consultation", false);
   resetSaasListingProjectTransientState();
   state.saasListingComposerDraft = draft;
@@ -18434,15 +18814,44 @@ function openSaasRecentProductTask(taskId = "") {
     reports: projectReports,
     projectId: saasCurrentListingProjectIdentity(draft)?.key || "",
   });
-  const restoredIdentity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
+  let restoredIdentity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
+  const detachedDraft = detachedSaasListingProjectDraft(restoredIdentity?.key || "");
+  const backendReportAt = Math.max(
+    0,
+    ...projectReports.map((record) => saasTimestampMillis(record?.updated_at || record?.created_at || "")),
+  );
+  const detachedBaselineAt = saasTimestampMillis(detachedDraft?.backend_report_at || "");
+  const detachedSavedAt = saasTimestampMillis(detachedDraft?.saved_at || "");
+  const restoreDetachedDraft = Boolean(
+    detachedDraft &&
+      backendReportAt > 0 &&
+      detachedBaselineAt === backendReportAt &&
+      detachedSavedAt >= backendReportAt &&
+      detachedSavedAt <= Date.now() + 5 * 60 * 1000,
+  );
+  if (detachedDraft && !restoreDetachedDraft) {
+    delete state.saasDetachedListingProjectDrafts[restoredIdentity?.key || ""];
+  }
+  if (restoreDetachedDraft) {
+    state.saasListingComposerDraft = detachedDraft.draft;
+    state.saasListingComposerInput = detachedDraft.input || state.saasListingComposerInput;
+    state.saasListingSourceMode = detachedDraft.source_mode || state.saasListingSourceMode;
+    restoredIdentity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
+  }
   state.activeMediaDraft = restoredIdentity?.key || "";
-  state.saasListingComposerInput = [draft.product || draft.title || "", saasReportSummary(report)].filter(Boolean).join("\n");
-  state.saasListingSourceMode = "recent_product_task";
+  state.saasListingComposerInput = restoreDetachedDraft
+    ? detachedDraft.input || state.saasListingComposerInput
+    : [draft.product || draft.title || "", saasReportSummary(report)].filter(Boolean).join("\n");
+  state.saasListingSourceMode = restoreDetachedDraft ? detachedDraft.source_mode || "local_unsaved_draft" : "recent_product_task";
   state.saasListingCeoHandoff = null;
   state.saasListingMode = "single";
   commitSaasActiveListingProjectContext("product");
   setView("product", { preserveFlowKey: true, listingMode: "single" });
-  showActionToast(`已恢复“${saasWorkflowProductLabel(task) || "商品任务"}”的已有草稿；没有重新运行 AI。`);
+  showActionToast(
+    restoreDetachedDraft
+      ? `已恢复“${saasWorkflowProductLabel(task) || "商品任务"}”的本机未保存编辑；没有重新运行 AI。`
+      : `已恢复“${saasWorkflowProductLabel(task) || "商品任务"}”的最新后端草稿；没有重新运行 AI。`,
+  );
   return true;
 }
 
@@ -22908,6 +23317,680 @@ function saasAiCeoCommandUsesProductTaskContext(command = state.saasLastCeoComma
   return current.intent === "confirm" && Boolean(saasCurrentMerchantProjectId());
 }
 
+function saasExplicitNewListingProjectRequest(text = "") {
+  const normalized = String(text || "")
+    .trim()
+    .replace(/重新(?:创建|新建)/gi, "创建")
+    .replace(/单独(?:创建|新建|建|开)/gi, "另建")
+    .replace(/另外(?:创建|新建|建|开)/gi, "另建")
+    .replace(/新增/gi, "新建")
+    .replace(/新开/gi, "新建")
+    .replace(/另开/gi, "另建")
+    .replace(/建立/gi, "创建")
+    .replace(/新起/gi, "另起")
+    .replace(/(^|(?:确认|确定|再|直接|开始|马上|立即|同意|批准|请|帮我|给我))\s*建(?=(?:一|个|这|那|全新|新的|独立|商品|listing))/gi, "$1新建")
+    .replace(/(^|(?:确认|确定|再|直接|开始|马上|立即|同意|批准|请|帮我|给我))\s*开(?=(?:一|个|这|那|全新|新的|独立|商品|listing))/gi, "$1新建")
+    .replace(/(帮我|给我)建(?=(?:一|个|这|那|全新|新的|独立|商品|listing))/gi, "$1新建")
+    .replace(/(帮我|给我)开(?=(?:一|个|这|那|全新|新的|独立|商品|listing))/gi, "$1新建")
+    .replace(/我想开(?=(?:一|个|这|那|全新|新的|独立|商品|listing))/gi, "我想新建");
+  if (!normalized) return false;
+  const positivePatterns = [
+    /(?:新建|创建|另建|另起|开启|启动)[^。；;！!？?，,]{0,18}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)/gi,
+    /(?:新建|创建|另建|另起|开启|启动)[^。；;！!？?，,]{0,14}?(?:独立|全新|新的)[^。；;！!？?，,]{0,10}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)/gi,
+    /(?:新建|创建|另建|另起)[^。；;！!？?，,]{0,10}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)[^。；;！!？?，,]{0,24}?(?:不复用|不要复用|独立于|区别于)/gi,
+    /(?:独立|全新|新的)[^。；;！!？?，,]{0,10}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)[^。；;！!？?，,]{0,12}?(?:新建|创建|另建|另起)/gi,
+    /(?:新建|创建|另建|另起|开启|启动)[^。；;！!？?，,]{0,24}?(?:独立|全新|新的)[^。；;！!？?，,]{0,8}?(?:项目|草稿)/gi,
+  ];
+  const negativeAction = /(?:不|不要|不得|禁止|严禁|无需|不用|避免)\s*(?:再|重复)?\s*(?:新建|创建|另建|另起|开启|启动)/i;
+  for (const pattern of positivePatterns) {
+    for (const match of normalized.matchAll(pattern)) {
+      const matchStart = Number(match.index || 0);
+      const clauseStart = Math.max(
+        normalized.lastIndexOf("。", matchStart),
+        normalized.lastIndexOf("；", matchStart),
+        normalized.lastIndexOf(";", matchStart),
+        normalized.lastIndexOf("！", matchStart),
+        normalized.lastIndexOf("!", matchStart),
+        normalized.lastIndexOf("？", matchStart),
+        normalized.lastIndexOf("?", matchStart),
+        normalized.lastIndexOf("，", matchStart),
+        normalized.lastIndexOf(",", matchStart),
+      );
+      const clauseEndCandidates = ["。", "；", ";", "！", "!", "？", "?", "，", ","]
+        .map((separator) => normalized.indexOf(separator, matchStart + String(match[0] || "").length))
+        .filter((index) => index >= 0);
+      const clauseEnd = clauseEndCandidates.length ? Math.min(...clauseEndCandidates) : normalized.length;
+      const clause = normalized.slice(clauseStart + 1, clauseEnd);
+      const actionPrefix = clause.slice(0, Math.max(0, matchStart - (clauseStart + 1))).trim();
+      const directImperative = /^(?:(?:确认执行[：:]?|(?:我)?(?:确定|决定|确认|同意|批准|认可)(?:要)?|我希望你|我希望|我打算|确认按(?:这个|上述|以上|前述|该|此)方案|就按(?:这个|上述|以上|前述|该|此)方案|按(?:这个|上述|以上|前述|该|此)方案|就按|就这样|那就|直接|立即|马上|开始|再|劳烦|请替我|替我|请执行|执行|请协助我|协助我|请你|请|你|给我|帮我|帮忙|我要|我需要|我想要|我想|想要|让你|现在就|现在|这次|麻烦你|麻烦|是否可以|能否|可以|可不可以|能不能|能)\s*)*$/i.test(actionPrefix);
+      const hasExplicitExecutionPrefix = Boolean(actionPrefix) && directImperative;
+      const politeRequest = directImperative && /(?:是否可以|能否|可以|可不可以|能不能|能)/i.test(actionPrefix);
+      const reorderedImperative = /^(?:请\s*)?(?:把|将).{0,24}(?:新建|创建|另建|另起)/i.test(clause.trim());
+      const historicalOrQuestion =
+        /(?:为什么|为何|怎么|如何|是否|是不是|有没有).{0,18}(?:新建|创建|另建|另起|开启|启动)|(?:刚才|上次|之前|此前|已经|已).{0,18}(?:新建|创建|另建|另起|开启|启动)|(?:新建|创建|另建|另起)(?:的|过的|好了|完成了)|(?:项目|草稿).{0,8}(?:已经|已)(?:新建|创建|建立)/i;
+      const clausePrefix = normalized.slice(clauseStart + 1, matchStart + String(match[0] || "").length);
+      const matchEndInClause = matchStart + String(match[0] || "").length - (clauseStart + 1);
+      const clauseSuffix = clause.slice(Math.max(0, matchEndInClause));
+      const sentenceEndCandidates = ["。", "；", ";", "！", "!", "？", "?"]
+        .map((separator) => normalized.indexOf(separator, matchStart + String(match[0] || "").length))
+        .filter((index) => index >= 0);
+      const sentenceEnd = sentenceEndCandidates.length ? Math.min(...sentenceEndCandidates) : normalized.length;
+      const sentenceSuffix = normalized.slice(matchStart + String(match[0] || "").length, sentenceEnd);
+      const sentenceStart = Math.max(
+        normalized.lastIndexOf("。", matchStart),
+        normalized.lastIndexOf("；", matchStart),
+        normalized.lastIndexOf(";", matchStart),
+        normalized.lastIndexOf("！", matchStart),
+        normalized.lastIndexOf("!", matchStart),
+        normalized.lastIndexOf("？", matchStart),
+        normalized.lastIndexOf("?", matchStart),
+      );
+      const sentenceText = normalized.slice(sentenceStart + 1, sentenceEnd);
+      const sentencePrefix = normalized.slice(sentenceStart + 1, matchStart);
+      const semanticQuestion = /(?:什么|哪些|多少|几(?:个|种|项|步|次|条)|为何|为什么|怎么|如何|哪里|哪儿|何时|什么时候|多久|谁(?:来|负责)?|是否|是不是|有没有|可否|告诉我|介绍|讲讲|说明|好处|区别|差别|适合|场景|用途)/i.test(sentenceSuffix);
+      const genericQuestionShape =
+        /(?:吗|么|呢)\s*$/i.test(sentenceSuffix.trim()) ||
+        /(?:难不难|值不值得|需不需要|能不能|可不可以|会不会|有没有|是不是|要不要)/i.test(sentenceSuffix);
+      const choiceOrConditional =
+        /(?:也可以|或者|还是|二选一|你判断|由你判断|看情况|视情况|如果|假如|要不要)/i.test(sentenceText) ||
+        /(?:^|[，,])\s*(?:若(?!干)|倘若|假若|要是|一旦|除非|万一|前提是)/i.test(sentenceText) ||
+        /[^。；;！!？?，,]{1,18}的话\s*[，,]/i.test(sentenceText) ||
+        /(?:或|或者).{0,32}(?:任选|任选一种|选择|你定|你决定)/i.test(sentenceText);
+      const reportedSpeech =
+        /(?:客户|商家|用户|买家|同事|老板|朋友|他|她|他们|别人|有人|对方)(?:的)?(?:问题(?:是|为)|\s*(?:想|在|正在|可能)?\s*(?:问|说|咨询|了解|确认|知道|提问|提到|表示|好奇|请教|核实)|\s*(?:让|要|叫|请)(?:我|人)?\s*(?:转告|传达|复述)|\s*(?:建议|提醒)(?:我)?)[^。；;！!？?]{0,32}$/i.test(sentencePrefix) ||
+        /(?:^|[，,])\s*(?:我有(?:个|一个)?问题|我想确认一下|我确认下|我问你|请问|请教一下|我好奇|我想请教|我想核实|我想知道|(?:我)?(?:想|要)?(?:问|咨询|了解)(?:你|一下|下)?)[^。；;！!？?]{0,32}$/i.test(sentencePrefix);
+      const exampleOrCopyFrame =
+        /^(?:例如|比如(?:说)?|举例(?:来说)?|举个例子|例句|示例|文案(?:可以|可)?写|用户可能(?:会)?(?:输入|说)|假设(?:用户|商家)?(?:输入|说))\s*[，,:：]/i.test(sentenceText.trim()) ||
+        /^(?:把|将).{0,16}(?:提示|示例|按钮|对话|输入)?文案.{0,12}(?:改成|写成|设置为)\s*[：:]/i.test(sentenceText.trim());
+      const questionTerminated = ["？", "?"].includes(normalized.charAt(clauseEnd));
+      const politeQuestionSuffix = /^(?:|吗|呢|好吗|行吗|可以吗|好不好)$/i.test(clauseSuffix.trim());
+      const questionIsExplicitExecution = hasExplicitExecutionPrefix && politeQuestionSuffix && !reportedSpeech;
+      const trimmedSentenceSuffix = sentenceSuffix.trim();
+      const bareExecution = !actionPrefix && (
+        !trimmedSentenceSuffix ||
+        /^(?:[，,]\s*)?(?:目标(?:是|为)|产品(?:是|为)|商品(?:是|为)|品类|类目|名称|sku|规格|参数|售价|成本|数量|面向|用于|用途|要求|其他(?:信息|资料|参数)|独立于|不复用|不要复用|不要|不得|并且|同时|全部|其余|开始|执行|现在开始|就这样)/i.test(trimmedSentenceSuffix)
+      );
+      const explanatorySuffix =
+        /(?:会不会|是否会|是不是|有什么|有何|为什么|为何|怎么|如何|流程|风险|含义|意思|好处|区别|差别|适合|场景|用途|介绍|讲讲|说明|比较)/i.test(clauseSuffix) ||
+        /会.{0,24}[吗呢]\s*$/i.test(clauseSuffix) ||
+        /^(?:了[吗么]|了没有|过[吗么]|好(?:了[吗么]|了没有)|(?:完成|成功)(?:了[吗呢么]|了没有|[吗呢么])?)/i.test(clauseSuffix.trim()) ||
+        ((semanticQuestion || genericQuestionShape) && !questionIsExplicitExecution) ||
+        (questionTerminated && !questionIsExplicitExecution);
+      if (
+        (hasExplicitExecutionPrefix || politeRequest || reorderedImperative || bareExecution) &&
+        !negativeAction.test(clausePrefix) &&
+        !choiceOrConditional &&
+        !reportedSpeech &&
+        !exampleOrCopyFrame &&
+        (!historicalOrQuestion.test(clause) || politeRequest) &&
+        !explanatorySuffix
+      ) return true;
+    }
+  }
+  return false;
+}
+
+function saasNewListingProjectRetryRequest(text = "") {
+  return /^(?:请\s*)?(?:重试|再试(?:一次)?|重新尝试|继续(?:刚才(?:的新项目任务)?|这个新项目)?|再来一次|补充|商品|目标|参数|规格|图片|链接)(?:[：:。！!，,\s]|$)/i.test(
+    String(text || "").trim(),
+  );
+}
+
+function sanitizeSaasAiCeoRequestCommandSnapshot(command = null) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!current?.id || !current?.store_id) return null;
+  return {
+    id: String(current.id).replace(/[^A-Za-z0-9._:-]/g, "-").slice(0, 120),
+    text: sanitizeSaasCeoCommandSourceText(current.text),
+    title: sanitizeSaasCeoCommandSourceText(current.title),
+    summary: sanitizeSaasCeoCommandSourceText(current.summary),
+    intent: publicRuntimeText(current.intent || "").slice(0, 80),
+    status: publicRuntimeText(current.status || "").slice(0, 80),
+    status_label: publicRuntimeText(current.status_label || "").slice(0, 120),
+    created_at: String(current.created_at || "").slice(0, 40),
+    store_id: String(current.store_id || "").slice(0, 160),
+    packet_id: String(current.packet_id || "").slice(0, 160),
+    source_label: publicRuntimeText(current.source_label || "").slice(0, 160),
+    ai_reply: "",
+    ai_reply_status: "",
+    ai_reply_model: null,
+    route: publicRuntimeText(current.route || "").slice(0, 80),
+    route_label: publicRuntimeText(current.route_label || "").slice(0, 120),
+    memory_policy: publicRuntimeText(current.memory_policy || "transient_no_long_term_memory").slice(0, 80),
+    long_term_memory: current.long_term_memory === true,
+    writes_merchant_rule: current.writes_merchant_rule === true,
+    decision_center_required: current.decision_center_required === true,
+    high_risk: current.high_risk === true,
+    routes: (Array.isArray(current.routes) ? current.routes : []).slice(0, 8).map((route) => ({
+      view: publicRuntimeText(route?.view || "").slice(0, 80),
+      key: publicRuntimeText(route?.key || "").slice(0, 80),
+      label: publicRuntimeText(route?.label || "").slice(0, 120),
+      note: sanitizeSaasWorkflowFeedbackText(route?.note || "", 300),
+      status: publicRuntimeText(route?.status || "").slice(0, 120),
+    })),
+  };
+}
+
+function saasAiCeoIdempotencyKey(commandId = "", seed = "") {
+  const safeCommandId = String(commandId || "").replace(/[^A-Za-z0-9._:-]/g, "-").slice(0, 145);
+  const direct = `ai-ceo:${safeCommandId}`;
+  if (safeCommandId && /^[A-Za-z0-9._:-]{8,160}$/.test(direct)) return direct;
+  const fallbackSeed = `${seed || commandId || "ai-ceo"}:${Date.now()}:${Math.random()}`;
+  return `ai-ceo:${Date.now().toString(36)}:${Math.abs(hashString(fallbackSeed)).toString(16)}`.slice(0, 160);
+}
+
+function saasNewListingProjectAttemptIdentity(originalText = "", sourceAssetIds = [], attemptSeed = "") {
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const normalizedText = sanitizeSaasCeoCommandSourceText(originalText).replace(/\s+/g, " ").trim().toLowerCase();
+  const normalizedAssets = Array.from(new Set(
+    (Array.isArray(sourceAssetIds) ? sourceAssetIds : [])
+      .map((assetId) => String(assetId || "").trim())
+      .filter(Boolean),
+  )).sort();
+  const bucketMs = 30 * 60 * 1000;
+  const bucket = Math.floor(saasServerNowMs() / bucketMs);
+  const seed = JSON.stringify([companyId, storeId, normalizedText, normalizedAssets, bucket, String(attemptSeed || "")]);
+  const firstHash = Math.abs(hashString(seed)).toString(16);
+  const secondHash = Math.abs(hashString(`${seed.split("").reverse().join("")}:jiejing`)).toString(16);
+  const token = `${firstHash}${secondHash}`.slice(0, 24);
+  return {
+    commandId: `ceo-new-project-${bucket.toString(36)}-${token}`.slice(0, 120),
+    idempotencyKey: `ai-ceo-new:${bucket.toString(36)}:${token}`.slice(0, 160),
+    clientNow: new Date(bucket * bucketMs).toISOString(),
+    sourceAssetIds: normalizedAssets.slice(0, 8),
+  };
+}
+
+function sanitizeSaasFrozenNewProjectRequestPayload(payload = null, options = {}) {
+  if (!payload || typeof payload !== "object") return null;
+  const storeId = String(options.storeId || activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const command = sanitizeSaasAiCeoRequestCommandSnapshot(payload.command);
+  const idempotencyKey = String(payload.idempotency_key || "").trim();
+  const clientNow = String(payload.client_now || "").slice(0, 40);
+  const clientNowMs = Date.parse(clientNow);
+  const sourceAssetIds = Array.from(new Set(
+    (Array.isArray(payload.source_asset_ids) ? payload.source_asset_ids : [])
+      .map((assetId) => String(assetId || "").trim())
+      .filter((assetId) => /^[A-Za-z0-9._:-]{1,180}$/.test(assetId)),
+  )).slice(0, 8);
+  if (
+    !storeId || !command || command.store_id !== storeId ||
+    !/^[A-Za-z0-9._:-]{8,160}$/.test(idempotencyKey) ||
+    !Number.isFinite(clientNowMs) || clientNowMs > Date.now() + 5 * 60 * 1000 ||
+    (Array.isArray(payload.conversation_history) && payload.conversation_history.length > 0) ||
+    payload.active_listing_context != null ||
+    payload.real_platform_writes_enabled === true ||
+    payload.supplier_facts != null || payload.supplier_fact_attestation != null ||
+    payload.supplier_facts_verified != null || payload.merchant_confirmation_received != null
+  ) return null;
+  return {
+    idempotency_key: idempotencyKey,
+    message: sanitizeSaasCeoCommandSourceText(payload.message || command.text),
+    command,
+    conversation_history: [],
+    client_now: clientNow,
+    client_timezone: publicRuntimeText(payload.client_timezone || "").slice(0, 120),
+    source_asset_ids: sourceAssetIds,
+    active_listing_context: null,
+    real_platform_writes_enabled: false,
+  };
+}
+
+function prepareSaasNewListingProjectRequest(text = "", sourceAssetIds = []) {
+  const pending = state.saasPendingNewListingProjectRequest && typeof state.saasPendingNewListingProjectRequest === "object"
+    ? state.saasPendingNewListingProjectRequest
+    : null;
+  const explicit = saasExplicitNewListingProjectRequest(text);
+  const suppliedSourceAssetIds = Array.from(new Set(
+    (Array.isArray(sourceAssetIds) ? sourceAssetIds : [])
+      .map((assetId) => String(assetId || "").trim())
+      .filter(Boolean),
+  )).sort().slice(0, 8);
+  const pendingSourceAssetIds = Array.from(new Set(
+    (Array.isArray(pending?.sourceAssetIds) ? pending.sourceAssetIds : [])
+      .map((assetId) => String(assetId || "").trim())
+      .filter(Boolean),
+  )).sort().slice(0, 8);
+  const explicitMatchesUncertain = Boolean(
+    explicit && pending?.phase === "uncertain" &&
+    sanitizeSaasCeoCommandSourceText(text) === String(pending.originalText || "") &&
+    (!suppliedSourceAssetIds.length || JSON.stringify(suppliedSourceAssetIds) === JSON.stringify(pendingSourceAssetIds)),
+  );
+  const explicitMatchesKnownFailure = Boolean(
+    explicit && pending?.phase === "failed" &&
+    sanitizeSaasCeoCommandSourceText(text) === String(pending.originalText || "") &&
+    (!suppliedSourceAssetIds.length || JSON.stringify(suppliedSourceAssetIds) === JSON.stringify(pendingSourceAssetIds)),
+  );
+  if (explicit && pending?.phase === "uncertain" && !explicitMatchesUncertain) {
+    return { active: false, blocked: true, commandText: text };
+  }
+  const retry = explicitMatchesUncertain || explicitMatchesKnownFailure || (
+    !explicit && ["failed", "uncertain"].includes(String(pending?.phase || "")) && saasNewListingProjectRetryRequest(text)
+  );
+  let attemptSeed = retry && pending?.phase === "failed"
+    ? String(pending.idempotencyKey || pending.updatedAt || pending.commandId || "known-failed-attempt")
+    : "";
+  const reuseUncertainRequest = Boolean(retry && pending?.phase === "uncertain" && pending?.requestPayload);
+  if (["preparing", "pending", "in_progress"].includes(String(pending?.phase || ""))) {
+    return { active: false, blocked: true, commandText: text };
+  }
+  if (!explicit && !retry) {
+    if (pending?.phase === "uncertain") {
+      return { active: false, commandText: text };
+    }
+    if (pending) {
+      stopSaasPendingNewListingProjectReconciliation();
+      if (!saasMerchantProjectRouteId() && pending.previousProjectId) {
+        syncSaasProjectRoute(state.view || "cockpit", { projectId: pending.previousProjectId });
+      }
+      state.saasPendingNewListingProjectRequest = null;
+      saveSaasProtectedStateSnapshot();
+    }
+    return { active: false, commandText: text };
+  }
+  const currentProjectId =
+    saasMerchantProjectRouteId() || (!pending ? saasCurrentMerchantProjectId() : "") || String(pending?.previousProjectId || "");
+  if (!attemptSeed && explicit && !retry) {
+    attemptSeed = `predecessor:${currentProjectId || "empty-account"}`;
+  }
+  const originalText = sanitizeSaasCeoCommandSourceText(explicit ? text : pending?.originalText || text);
+  const requestedSourceAssetIds = Array.from(
+    new Set([
+      ...(retry ? pendingSourceAssetIds : []),
+      ...suppliedSourceAssetIds,
+    ].map((assetId) => String(assetId || "").trim()).filter(Boolean)),
+  ).sort().slice(0, 8);
+  stopSaasPendingNewListingProjectReconciliation();
+  state.saasPendingNewListingProjectRequest = {
+    commandId: reuseUncertainRequest ? String(pending?.commandId || "") : "",
+    idempotencyKey: reuseUncertainRequest ? String(pending?.idempotencyKey || "") : "",
+    originalText,
+    previousProjectId: currentProjectId || String(pending?.previousProjectId || ""),
+    sourceAssetIds: requestedSourceAssetIds,
+    requestPayload: reuseUncertainRequest ? pending.requestPayload : null,
+    attemptSeed,
+    reconcileAttempts: reuseUncertainRequest ? Number(pending?.reconcileAttempts || 0) : 0,
+    failureReason: "",
+    phase: "preparing",
+    createdAt: reuseUncertainRequest ? String(pending?.createdAt || "") : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  syncSaasProjectRoute(state.view || "cockpit", { clearProject: true });
+  return {
+    active: true,
+    commandText: reuseUncertainRequest
+      ? String(pending?.requestPayload?.message || originalText)
+      : retry
+      ? `${originalText}\n\n商家要求重试上一条新建独立商品项目任务。补充说明：${sanitizeSaasCeoCommandSourceText(text)}`
+      : text,
+    sourceAssetIds: requestedSourceAssetIds,
+    retry,
+    reuseUncertainRequest,
+    requestPayload: reuseUncertainRequest ? pending.requestPayload : null,
+    attemptSeed,
+  };
+}
+
+function bindSaasNewListingProjectRequestToCommand(commandId = "", requestPayload = null) {
+  const pending = state.saasPendingNewListingProjectRequest;
+  if (!pending || typeof pending !== "object") return false;
+  const currentStoreId = String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const safeRequestPayload = sanitizeSaasFrozenNewProjectRequestPayload(requestPayload || pending.requestPayload, {
+    storeId: currentStoreId,
+  });
+  if (!safeRequestPayload || safeRequestPayload.command?.id !== String(commandId || "")) return false;
+  state.saasPendingNewListingProjectRequest = {
+    ...pending,
+    companyId: String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim(),
+    storeId: currentStoreId,
+    commandId: String(commandId || ""),
+    idempotencyKey: safeRequestPayload.idempotency_key,
+    requestPayload: safeRequestPayload,
+    reconcileAttempts: Math.max(
+      0,
+      Math.min(
+        SAAS_NEW_LISTING_PROJECT_MAX_RECONCILE_ATTEMPTS,
+        Math.floor(Number(pending.reconcileAttempts || 0) || 0),
+      ),
+    ),
+    failureReason: "",
+    phase: "pending",
+    updatedAt: new Date().toISOString(),
+  };
+  saveSaasProtectedStateSnapshot();
+  return true;
+}
+
+function markSaasNewListingProjectRequestFailed(commandId = "", phase = "failed", metadata = {}) {
+  const pending = state.saasPendingNewListingProjectRequest;
+  if (!pending || typeof pending !== "object" || String(pending.commandId || "") !== String(commandId || "")) return false;
+  const safePhase = phase === "uncertain" || phase === "in_progress" ? phase : "failed";
+  const requestedAttempts = Object.prototype.hasOwnProperty.call(metadata || {}, "reconcileAttempts")
+    ? Number(metadata.reconcileAttempts)
+    : Number(pending.reconcileAttempts || 0);
+  const reconcileAttempts = Math.max(
+    0,
+    Math.min(SAAS_NEW_LISTING_PROJECT_MAX_RECONCILE_ATTEMPTS, Math.floor(requestedAttempts || 0)),
+  );
+  const failureReason = safePhase === "failed"
+    ? sanitizeSaasNewListingProjectFailureReason(metadata?.failureReason || pending.failureReason || "request_failed") || "request_failed"
+    : "";
+  state.saasPendingNewListingProjectRequest = {
+    ...pending,
+    phase: safePhase,
+    reconcileAttempts,
+    failureReason,
+    updatedAt: new Date().toISOString(),
+  };
+  if (safePhase === "failed") stopSaasPendingNewListingProjectReconciliation();
+  if (!saasMerchantProjectRouteId() && pending.previousProjectId) {
+    syncSaasProjectRoute(state.view || "cockpit", { projectId: pending.previousProjectId });
+  }
+  saveSaasProtectedStateSnapshot();
+  return true;
+}
+
+function completeSaasNewListingProjectRequest(commandId = "") {
+  const pending = state.saasPendingNewListingProjectRequest;
+  if (!pending || typeof pending !== "object" || String(pending.commandId || "") !== String(commandId || "")) return false;
+  stopSaasPendingNewListingProjectReconciliation();
+  state.saasPendingNewListingProjectRequest = null;
+  saveSaasProtectedStateSnapshot();
+  return true;
+}
+
+function commitSaasNewListingProjectRequest(turn = null, commandId = "") {
+  const identity = saasNormalizeListingProjectIdentity(turn?.listing_project_identity);
+  if (!identity?.key) return false;
+  if (!bindSaasAiCeoTaskContextFromTurn(turn, { allowRouteChange: true, expand: true, render: false, syncRoute: true })) return false;
+  stashSaasCurrentListingProjectDraft();
+  resetSaasListingProjectTransientState();
+  state.saasListingComposerDraft = null;
+  state.saasListingComposerInput = "";
+  state.saasListingSourceMode = "";
+  state.saasListingCeoHandoff = null;
+  state.activeListingDraft = "";
+  state.sourceHandoffDraft = "";
+  bindSaasAiCeoTaskContextFromTurn(turn, { allowRouteChange: true, expand: true, syncRoute: true });
+  completeSaasNewListingProjectRequest(commandId);
+  saveSaasProtectedStateSnapshot();
+  return true;
+}
+
+function reconcileSaasPendingNewListingProjectRequestFromReports() {
+  const pending = state.saasPendingNewListingProjectRequest;
+  if (!pending || typeof pending !== "object" || !pending.commandId) return false;
+  const currentStoreId = String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const pendingCreatedAtMs = Date.parse(String(pending.createdAt || ""));
+  const report = (Array.isArray(state.saasReports) ? state.saasReports : []).find((record) => {
+    if (!record || record.report_type !== "ai_ceo.market_research") return false;
+    const body = record.report && typeof record.report === "object" ? record.report : {};
+    const reportCompanyId = String(record.company_id || body.company_id || "").trim();
+    const reportCreatedAtMs = Date.parse(String(record.created_at || record.updated_at || ""));
+    return (
+      String(record.store_id || body.store_id || "").trim() === currentStoreId &&
+      (!reportCompanyId || reportCompanyId === currentCompanyId) &&
+      (!Number.isFinite(pendingCreatedAtMs) || !Number.isFinite(reportCreatedAtMs) || reportCreatedAtMs >= pendingCreatedAtMs - 5 * 60 * 1000) &&
+      String(body.source_command_id || "").trim() === String(pending.commandId || "").trim()
+    );
+  });
+  const turn = report ? saasAiCeoMarketTurnFromReport(report) : null;
+  const identity = saasNormalizeListingProjectIdentity(turn?.listing_project_identity);
+  if (!turn || !identity?.key) return false;
+  if (!commitSaasNewListingProjectRequest(turn, pending.commandId)) return false;
+  upsertSaasAiCeoThreadTurn(turn);
+  updateSaasAiCeoLatestReply(turn);
+  return true;
+}
+
+function stopSaasPendingNewListingProjectReconciliation() {
+  if (state.saasPendingNewListingProjectReconcileTimer) {
+    clearTimeout(state.saasPendingNewListingProjectReconcileTimer);
+  }
+  state.saasPendingNewListingProjectReconcileTimer = null;
+  state.saasPendingNewListingProjectReconcileGeneration =
+    Number(state.saasPendingNewListingProjectReconcileGeneration || 0) + 1;
+}
+
+function saasPendingNewListingProjectFailureReason(payload = null, fallback = "request_failed") {
+  const body = payload && typeof payload === "object" ? payload : {};
+  const chat = body.ai_ceo_chat && typeof body.ai_ceo_chat === "object" ? body.ai_ceo_chat : {};
+  const logicalHttpStatus = Number(body._http_status || body.http_status || 0) || 0;
+  const candidate = [
+    body.error_code,
+    body.code,
+    ...(Array.isArray(chat.blocked_by) ? chat.blocked_by : []),
+    chat.status,
+    logicalHttpStatus ? `http_${logicalHttpStatus}` : "",
+    fallback,
+  ].map(sanitizeSaasNewListingProjectFailureReason).find(Boolean);
+  return candidate || "request_failed";
+}
+
+function saasPendingNewListingProjectOutcomeUnknown(payload = null) {
+  const body = payload && typeof payload === "object" ? payload : {};
+  const chat = body.ai_ceo_chat && typeof body.ai_ceo_chat === "object" ? body.ai_ceo_chat : {};
+  const request = body.ai_ceo_chat_request && typeof body.ai_ceo_chat_request === "object"
+    ? body.ai_ceo_chat_request
+    : {};
+  return Boolean(
+    body._transport_unknown === true ||
+    body.execution_result_known === false ||
+    chat.execution_result_known === false ||
+    ["in_progress", "outcome_unknown", "request_outcome_unknown"].includes(String(request.status || "")) ||
+    ["outcome_unknown", "request_outcome_unknown", "execution_result_unknown"].includes(String(chat.status || ""))
+  );
+}
+
+function commitSaasPendingNewListingProjectFromPayload(payload = null, commandId = "") {
+  if (!payload || typeof payload !== "object") return false;
+  const report = payload.ai_ceo_market_report && typeof payload.ai_ceo_market_report === "object"
+    ? payload.ai_ceo_market_report
+    : null;
+  if (report?.report_id) upsertSaasReportRecord(report);
+  const chat = payload.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : {};
+  const turn = report
+    ? saasAiCeoMarketTurnFromReport(report)
+    : normalizeSaasAiCeoLatestTurn({
+        user_text: state.saasPendingNewListingProjectRequest?.originalText || "",
+        assistant_text: chat.answer || "",
+        assistant_id: `new-project-reconcile-${String(commandId || "").replace(/[^A-Za-z0-9_-]/g, "")}`,
+        status: chat.status || "saved",
+        route: chat.route || "ebay_workflow",
+        route_label: chat.route_label || "AI CEO 市场调研",
+        store_id: state.saasPendingNewListingProjectRequest?.storeId || "",
+        source_records: Array.isArray(chat.source_records) ? chat.source_records : [],
+        work_records: Array.isArray(chat.work_records) ? chat.work_records : [],
+        confirmation_items: Array.isArray(chat.confirmation_items) ? chat.confirmation_items : [],
+        listing_project_identity: chat.listing_project_identity || null,
+        created_at: new Date().toISOString(),
+      });
+  const identity = saasNormalizeListingProjectIdentity(turn?.listing_project_identity);
+  if (!turn || !identity?.key || !commitSaasNewListingProjectRequest(turn, commandId)) return false;
+  upsertSaasAiCeoThreadTurn(turn);
+  updateSaasAiCeoLatestReply(turn);
+  return true;
+}
+
+async function runSaasPendingNewListingProjectReconcileAttempt(options = {}) {
+  const pending = state.saasPendingNewListingProjectRequest;
+  const expectedGeneration = Number(options.expectedGeneration);
+  const generationIsCurrent = () => !Number.isFinite(expectedGeneration) ||
+    Number(state.saasPendingNewListingProjectReconcileGeneration || 0) === expectedGeneration;
+  if (!generationIsCurrent()) return { status: "superseded" };
+  if (!pending || typeof pending !== "object") return { status: "idle" };
+  if (!["pending", "in_progress", "uncertain"].includes(String(pending.phase || ""))) {
+    return { status: String(pending.phase || "idle") };
+  }
+  const currentStoreId = String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim();
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const normalizedPending = sanitizeSaasPendingNewListingProjectRequestSnapshot(pending, {
+    storeId: currentStoreId,
+    companyId: currentCompanyId,
+  });
+  if (!normalizedPending) {
+    markSaasNewListingProjectRequestFailed(pending.commandId || "", "failed", { failureReason: "pending_scope_invalid" });
+    return { status: "failed", reason: "pending_scope_invalid" };
+  }
+  if (normalizedPending.phase === "failed") {
+    state.saasPendingNewListingProjectRequest = normalizedPending;
+    stopSaasPendingNewListingProjectReconciliation();
+    saveSaasProtectedStateSnapshot();
+    return { status: "failed", reason: normalizedPending.failureReason || "active_ttl_expired" };
+  }
+  if (normalizedPending.reconcileAttempts >= SAAS_NEW_LISTING_PROJECT_MAX_RECONCILE_ATTEMPTS) {
+    markSaasNewListingProjectRequestFailed(normalizedPending.commandId, "uncertain", {
+      reconcileAttempts: normalizedPending.reconcileAttempts,
+    });
+    stopSaasPendingNewListingProjectReconciliation();
+    return { status: "uncertain", reason: "reconcile_attempts_exhausted" };
+  }
+  const safePayload = sanitizeSaasFrozenNewProjectRequestPayload(normalizedPending.requestPayload, {
+    storeId: currentStoreId,
+  });
+  if (!safePayload || safePayload.command?.id !== String(pending.commandId || "")) {
+    markSaasNewListingProjectRequestFailed(pending.commandId || "", "failed", { failureReason: "frozen_request_invalid" });
+    return { status: "failed", reason: "frozen_request_invalid" };
+  }
+  const reconcileAttempts = normalizedPending.reconcileAttempts + 1;
+  state.saasPendingNewListingProjectRequest = {
+    ...normalizedPending,
+    phase: "in_progress",
+    reconcileAttempts,
+    failureReason: "",
+    requestPayload: safePayload,
+    updatedAt: new Date().toISOString(),
+  };
+  saveSaasProtectedStateSnapshot();
+
+  const reportsFetcher = typeof options.reportsFetcher === "function"
+    ? options.reportsFetcher
+    : () => saasFetchWithTimeout(`/reports?limit=24&fresh=${Date.now()}`, {}, 10000);
+  try {
+    const reportsPayload = await reportsFetcher();
+    const current = state.saasPendingNewListingProjectRequest;
+    if (!generationIsCurrent() || !current || String(current.commandId || "") !== String(normalizedPending.commandId || "")) {
+      return { status: "superseded" };
+    }
+    if (Array.isArray(reportsPayload?.reports)) state.saasReports = reportsPayload.reports;
+    if (reconcileSaasPendingNewListingProjectRequestFromReports()) return { status: "committed_from_reports" };
+  } catch (error) {
+    if (isSaasUnrecoverableSessionError(error)) {
+      markSaasNewListingProjectRequestFailed(normalizedPending.commandId, "failed", {
+        failureReason: "session_expired",
+        reconcileAttempts,
+      });
+      return { status: "failed", reason: "session_expired" };
+    }
+  }
+
+  const currentBeforeReplay = state.saasPendingNewListingProjectRequest;
+  if (!generationIsCurrent() || !currentBeforeReplay || String(currentBeforeReplay.commandId || "") !== String(normalizedPending.commandId || "")) {
+    return { status: "superseded" };
+  }
+  const chatRequester = typeof options.chatRequester === "function" ? options.chatRequester : requestSaasAiCeoChat;
+  let payload = null;
+  try {
+    payload = await chatRequester(safePayload.command, {}, safePayload.source_asset_ids, {
+      suppressActiveListingContext: true,
+      suppressConversationHistory: true,
+      suppressSupplierFacts: true,
+      frozenRequestPayload: safePayload,
+      reconcileTimeoutMs: 12000,
+      maxInlineReconcileAttempts: 0,
+    });
+  } catch (error) {
+    if (isSaasUnrecoverableSessionError(error)) {
+      markSaasNewListingProjectRequestFailed(normalizedPending.commandId, "failed", {
+        failureReason: "session_expired",
+        reconcileAttempts,
+      });
+      return { status: "failed", reason: "session_expired" };
+    }
+    payload = { _transport_unknown: true };
+  }
+  const currentAfterReplay = state.saasPendingNewListingProjectRequest;
+  if (!generationIsCurrent() || !currentAfterReplay || String(currentAfterReplay.commandId || "") !== String(normalizedPending.commandId || "")) {
+    return { status: "superseded" };
+  }
+  if (commitSaasPendingNewListingProjectFromPayload(payload, normalizedPending.commandId)) {
+    return { status: "committed_from_replay" };
+  }
+  const outcomeUnknown = saasPendingNewListingProjectOutcomeUnknown(payload);
+  if (outcomeUnknown) {
+    if (reconcileAttempts >= SAAS_NEW_LISTING_PROJECT_MAX_RECONCILE_ATTEMPTS) {
+      markSaasNewListingProjectRequestFailed(normalizedPending.commandId, "uncertain", {
+        reconcileAttempts,
+      });
+      stopSaasPendingNewListingProjectReconciliation();
+      return { status: "uncertain", reason: "reconcile_attempts_exhausted" };
+    }
+    markSaasNewListingProjectRequestFailed(normalizedPending.commandId, "uncertain", { reconcileAttempts });
+    if (options.scheduleNext !== false) scheduleSaasPendingNewListingProjectReconciliation();
+    return { status: "uncertain", reconcileAttempts };
+  }
+  const failureReason = saasPendingNewListingProjectFailureReason(payload);
+  markSaasNewListingProjectRequestFailed(normalizedPending.commandId, "failed", {
+    failureReason,
+    reconcileAttempts,
+  });
+  return { status: "failed", reason: failureReason };
+}
+
+function scheduleSaasPendingNewListingProjectReconciliation(options = {}) {
+  const pending = state.saasPendingNewListingProjectRequest;
+  if (!pending || !["pending", "in_progress", "uncertain"].includes(String(pending.phase || ""))) return false;
+  if (Number(pending.reconcileAttempts || 0) >= SAAS_NEW_LISTING_PROJECT_MAX_RECONCILE_ATTEMPTS) {
+    markSaasNewListingProjectRequestFailed(pending.commandId || "", "uncertain", {
+      reconcileAttempts: pending.reconcileAttempts,
+    });
+    stopSaasPendingNewListingProjectReconciliation();
+    return false;
+  }
+  stopSaasPendingNewListingProjectReconciliation();
+  const generation = Number(state.saasPendingNewListingProjectReconcileGeneration || 0);
+  const attemptIndex = Math.max(0, Math.min(
+    SAAS_NEW_LISTING_PROJECT_RECONCILE_DELAYS_MS.length - 1,
+    Number(pending.reconcileAttempts || 0),
+  ));
+  const requestedDelay = Number(options.delayMs);
+  const delayMs = Number.isFinite(requestedDelay) && requestedDelay >= 0
+    ? Math.min(requestedDelay, 60000)
+    : SAAS_NEW_LISTING_PROJECT_RECONCILE_DELAYS_MS[attemptIndex];
+  const commandId = String(pending.commandId || "");
+  state.saasPendingNewListingProjectReconcileTimer = setTimeout(() => {
+    state.saasPendingNewListingProjectReconcileTimer = null;
+    const current = state.saasPendingNewListingProjectRequest;
+    if (
+      Number(state.saasPendingNewListingProjectReconcileGeneration || 0) !== generation ||
+      !current ||
+      String(current.commandId || "") !== commandId ||
+      !["pending", "in_progress", "uncertain"].includes(String(current.phase || ""))
+    ) return;
+    void runSaasPendingNewListingProjectReconcileAttempt({ expectedGeneration: generation });
+  }, delayMs);
+  return true;
+}
+
+function resumeSaasUncertainNewListingProjectRequestAfterRefresh() {
+  const pending = state.saasPendingNewListingProjectRequest;
+  if (!pending || typeof pending !== "object") return false;
+  if (!["pending", "in_progress", "uncertain"].includes(String(pending.phase || ""))) return false;
+  const safePayload = sanitizeSaasFrozenNewProjectRequestPayload(pending.requestPayload, {
+    storeId: String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim(),
+  });
+  if (!safePayload || safePayload.command?.id !== String(pending.commandId || "")) {
+    markSaasNewListingProjectRequestFailed(pending.commandId || "", "failed", { failureReason: "frozen_request_invalid" });
+    return false;
+  }
+  markSaasNewListingProjectRequestFailed(pending.commandId || "", "uncertain", {
+    reconcileAttempts: pending.reconcileAttempts,
+  });
+  return scheduleSaasPendingNewListingProjectReconciliation({ delayMs: 0 });
+}
+
 function saasAiCeoTaskContextProjection(command = state.saasLastCeoCommand) {
   const explicit = state.aiCeoExplicitTaskContext && typeof state.aiCeoExplicitTaskContext === "object"
     ? state.aiCeoExplicitTaskContext
@@ -23696,9 +24779,15 @@ function sanitizeSaasCeoCommandSourceText(text = "") {
 }
 
 function saasAiCeoConversationHistoryForRequest() {
+  const currentProjectId = saasCurrentMerchantProjectId();
   return (Array.isArray(state.saasAiCeoThread) ? state.saasAiCeoThread : [])
     .map(normalizeSaasAiCeoLatestTurn)
     .filter((turn) => turn && !turn.pending && turn.user_text && turn.assistant_text)
+    .filter((turn) => {
+      if (!currentProjectId) return true;
+      const identity = saasNormalizeListingProjectIdentity(turn.listing_project_identity);
+      return identity?.key === currentProjectId;
+    })
     .slice(-8)
     .map((turn) => ({
       user_text: sanitizeSaasCeoCommandSourceText(turn.user_text).slice(0, 900),
@@ -23849,7 +24938,7 @@ function saasAiCeoActiveListingContext() {
   const matchingReports = (Array.isArray(state.saasReports) ? state.saasReports : [])
     .filter((record) => {
       const reportStoreId = String(record?.store_id || record?.report?.store_id || "").trim();
-      if (activeStoreId && reportStoreId && reportStoreId !== activeStoreId) return false;
+      if (activeStoreId && reportStoreId !== activeStoreId) return false;
       const reportIdentity = identityFromReport(record);
       const targetProjectId = routeProjectId || identity?.key || "";
       return Boolean(reportIdentity?.key && (!targetProjectId || reportIdentity.key === targetProjectId));
@@ -23982,18 +25071,71 @@ function saasAiCeoActiveListingContext() {
   };
 }
 
-async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = {}, sourceAssetIds = [], options = {}) {
+function buildSaasAiCeoChatRequestEnvelope(command = state.saasLastCeoCommand, sourceAssetIds = [], options = {}) {
   const current = normalizeSaasCeoCommand(command);
   const safeSourceAssetIds = (Array.isArray(sourceAssetIds) ? sourceAssetIds : [])
     .map((assetId) => String(assetId || "").trim())
     .filter(Boolean)
     .slice(0, 8);
+  if (!current?.store_id) return null;
+  if (options.frozenRequestPayload) {
+    const frozen = sanitizeSaasFrozenNewProjectRequestPayload(options.frozenRequestPayload, { storeId: current.store_id });
+    if (!frozen || frozen.command?.id !== current.id) return null;
+    return { payload: frozen, activeListingContext: null, safeSourceAssetIds: frozen.source_asset_ids };
+  }
+  const supplierFactPayload = options.suppressSupplierFacts === true ? {} : supplierFactsForSaasAiCeoCommand(current);
+  const activeListingContext = options.suppressActiveListingContext === true
+    ? null
+    : typeof saasAiCeoActiveListingContext === "function"
+      ? saasAiCeoActiveListingContext()
+      : null;
+  const safeCommand = sanitizeSaasAiCeoRequestCommandSnapshot(current);
+  if (!safeCommand) return null;
+  const requestedKey = String(options.idempotencyKey || "").trim();
+  const idempotencyKey = /^[A-Za-z0-9._:-]{8,160}$/.test(requestedKey)
+    ? requestedKey
+    : saasAiCeoIdempotencyKey(safeCommand.id, safeCommand.text);
+  return {
+    payload: {
+      idempotency_key: idempotencyKey,
+      message: safeCommand.text,
+      command: safeCommand,
+      conversation_history: options.suppressConversationHistory === true ? [] : saasAiCeoConversationHistoryForRequest(),
+      client_now: String(options.clientNow || new Date().toISOString()).slice(0, 40),
+      client_timezone: publicRuntimeText(
+        options.clientTimezone || Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone || "",
+      ).slice(0, 120),
+      source_asset_ids: safeSourceAssetIds,
+      active_listing_context: activeListingContext,
+      real_platform_writes_enabled: isSaasRealPlatformWritesEnabled(),
+      ...supplierFactPayload,
+    },
+    activeListingContext,
+    safeSourceAssetIds,
+  };
+}
+
+async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = {}, sourceAssetIds = [], options = {}) {
+  const current = normalizeSaasCeoCommand(command);
+  const envelope = buildSaasAiCeoChatRequestEnvelope(current, sourceAssetIds, options);
   if (!current || !current.store_id) {
     return {
       ai_ceo_chat: {
         status: "blocked_before_model_chat",
         answer: "还没有可用店铺上下文，请先恢复登录和店铺状态。",
       },
+    };
+  }
+  if (!envelope?.payload) {
+    return {
+      ai_ceo_chat: {
+        status: "blocked_before_model_chat",
+        answer: "本次请求上下文不完整，捷境已阻止提交；没有调用模型，也没有创建新项目。",
+      },
+      usage_consumed: false,
+      listing_created: false,
+      real_platform_writes_enabled: false,
+      secret_exposed: false,
     };
   }
   if (!hasSaasProtectedSessionCandidate()) {
@@ -24005,39 +25147,54 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
     };
   }
   try {
-    const supplierFactPayload = supplierFactsForSaasAiCeoCommand(current);
-    const activeListingContext =
-      typeof saasAiCeoActiveListingContext === "function" ? saasAiCeoActiveListingContext() : null;
+    const { payload: requestPayload, activeListingContext, safeSourceAssetIds } = envelope;
     const requiresWorkflowCompletionBudget = activeListingContext?.contract_version === "active_listing_context_v1";
-    const payload = await saasFetchNdjsonWithTimeout(
-      `/stores/${encodeURIComponent(current.store_id)}/merchant-ceo/chat?stream=1&fresh=${Date.now()}`,
-      {
-        method: "POST",
-        cache: "no-store",
-        headers: {
-          "cache-control": "no-store",
-          pragma: "no-cache",
-        },
-        body: JSON.stringify({
-          message: sanitizeSaasCeoCommandSourceText(current.text),
-          command: {
-            ...current,
-            text: sanitizeSaasCeoCommandSourceText(current.text),
-            summary: sanitizeSaasCeoCommandSourceText(current.summary),
-            title: sanitizeSaasCeoCommandSourceText(current.title),
+    const defaultRequestTimeoutMs = safeSourceAssetIds.length || requiresWorkflowCompletionBudget ? 180000 : 60000;
+    const requestedReconcileTimeoutMs = Number(options.reconcileTimeoutMs);
+    const requestTimeoutMs = Number.isFinite(requestedReconcileTimeoutMs) && requestedReconcileTimeoutMs >= 1000
+      ? Math.min(requestedReconcileTimeoutMs, defaultRequestTimeoutMs)
+      : defaultRequestTimeoutMs;
+    const requestedInlineAttempts = Number(options.maxInlineReconcileAttempts);
+    const maxInlineReconcileAttempts = Number.isFinite(requestedInlineAttempts) && requestedInlineAttempts >= 0
+      ? Math.min(3, Math.floor(requestedInlineAttempts))
+      : 1;
+    const reconcileDeadline = Date.now() + requestTimeoutMs;
+    let inlineReconcileAttempts = 0;
+    let payload = null;
+    do {
+      payload = await saasFetchNdjsonWithTimeout(
+        `/stores/${encodeURIComponent(current.store_id)}/merchant-ceo/chat?stream=1&fresh=${Date.now()}`,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "cache-control": "no-store",
+            pragma: "no-cache",
           },
-          conversation_history: saasAiCeoConversationHistoryForRequest(),
-          client_now: new Date().toISOString(),
-          client_timezone: Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone || "",
-          source_asset_ids: safeSourceAssetIds,
-          active_listing_context: activeListingContext,
-          real_platform_writes_enabled: isSaasRealPlatformWritesEnabled(),
-          ...supplierFactPayload,
-        }),
-      },
-      safeSourceAssetIds.length || requiresWorkflowCompletionBudget ? 180000 : 60000,
-      hooks,
-    );
+          body: JSON.stringify(requestPayload),
+        },
+        requestTimeoutMs,
+        hooks,
+      );
+      const requestStatus = String(payload?.ai_ceo_chat_request?.status || "");
+      if (requestStatus !== "in_progress") break;
+      hooks.onStage?.("idempotent_reconcile", payload.ai_ceo_chat_request);
+      const retryAfterMs = Math.max(500, Math.min(5000, Number(payload.ai_ceo_chat_request.retry_after_ms || 1500)));
+      if (inlineReconcileAttempts >= maxInlineReconcileAttempts || Date.now() + retryAfterMs >= reconcileDeadline) {
+        payload = { ...payload, _http_status: 202 };
+        break;
+      }
+      inlineReconcileAttempts += 1;
+      await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+    } while (Date.now() < reconcileDeadline);
+    const responseHttpStatus = Number(payload?._http_status || payload?.http_status || 0) || 0;
+    if (responseHttpStatus >= 400 && responseHttpStatus <= 599) {
+      payload = {
+        ...payload,
+        _known_terminal: true,
+        _transport_unknown: false,
+      };
+    }
     const enforceProjectIdentity = options.enforceProjectIdentity === true;
     const expectedIdentity = enforceProjectIdentity
       ? saasNormalizeListingProjectIdentity(activeListingContext?.listing_project_identity)
@@ -24069,7 +25226,7 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
         ai_ceo_market_report_delivery: null,
         product_vision_fact_packet: null,
         listing_created: false,
-        usage_consumed: payload?.usage_consumed === true,
+        usage_consumed: saasTriStateBoolean(payload?.usage_consumed),
         project_context_guard: {
           status: "blocked",
           reason: "response_identity_mismatch",
@@ -24086,7 +25243,39 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
       handleSaasUnrecoverableSession(error);
       throw error;
     }
+    const httpStatus = Number(error?.status || 0) || 0;
+    if (httpStatus >= 400 && httpStatus <= 599) {
+      const errorPayload = error?.payload && typeof error.payload === "object" ? error.payload : {};
+      const errorCode = sanitizeSaasNewListingProjectFailureReason(
+        errorPayload.error_code || errorPayload.code || `http_${httpStatus}`,
+      ) || `http_${httpStatus}`;
+      const blockedBy = Array.from(new Set([
+        ...(Array.isArray(errorPayload.blocked_by) ? errorPayload.blocked_by : []),
+        errorCode,
+      ].map(sanitizeSaasNewListingProjectFailureReason).filter(Boolean))).slice(0, 8);
+      return {
+        _http_status: httpStatus,
+        _known_terminal: true,
+        _transport_unknown: false,
+        error_code: errorCode,
+        ai_ceo_chat: {
+          status: errorCode,
+          answer: saasAiCeoMerchantSafeFailureText(error),
+          route: "ebay_workflow",
+          route_label: "请求校验",
+          source_records: [],
+          work_records: [],
+          confirmation_items: [],
+          blocked_by: blockedBy,
+        },
+        usage_consumed: saasTriStateBoolean(errorPayload.usage_consumed),
+        listing_created: false,
+        real_platform_writes_enabled: false,
+        secret_exposed: false,
+      };
+    }
     return {
+      _transport_unknown: true,
       ai_ceo_chat: {
         status: "model_call_failed",
         answer: saasAiCeoMerchantSafeFailureText(error),
@@ -24095,12 +25284,20 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
   }
 }
 
+function saasTriStateBoolean(value) {
+  return typeof value === "boolean" ? value : null;
+}
+
 function saasAiCeoMerchantSafeFailureText(error) {
   const raw = String(error?.message || error || "").toLowerCase();
   let title = "AI 连接暂时不可用";
   let reason = "这次没有拿到可展示回复。";
   let next = "你可以稍后重试，或到设置里的 AI 与素材查看连接状态。";
-  if (raw.includes("402") || raw.includes("quota") || raw.includes("payment") || raw.includes("billing") || raw.includes("balance") || raw.includes("credit")) {
+  if (/missing permission\s*:\s*create_task\b|\bcreate_task\b.{0,24}\bpermission\b|任务创建权限/.test(raw)) {
+    title = "当前账号没有创建任务权限";
+    reason = "当前店铺角色不能执行这项任务。";
+    next = "请切换到有任务权限的账号，或联系团队负责人调整角色或权限。";
+  } else if (raw.includes("402") || raw.includes("quota") || raw.includes("payment") || raw.includes("billing") || raw.includes("balance") || raw.includes("credit")) {
     title = "AI 额度或连接状态挡住了本次回复";
     reason = "这通常是当前套餐额度、用量上限或 AI 账号状态需要复核。";
     next = "先到设置里的 AI 与素材查看状态；不要重复填写连接信息，除非页面明确提示连接已失效。";
@@ -24198,8 +25395,58 @@ async function hydrateSaasCeoCommandFromBackend(storeId = activeSaasStore()?.sto
 }
 
 function handleSaasCeoCommandSubmit(text, options = {}) {
+  const newProjectRequest = prepareSaasNewListingProjectRequest(text, options.sourceAssetIds);
+  if (newProjectRequest.blocked) {
+    showActionToast("新的商品项目正在建立，请等待本次结果后再补充资料；不会重复提交。");
+    return null;
+  }
   const ctx = saasMerchantWorkbenchContext();
-  const command = buildSaasCeoCommand(text, ctx);
+  const reusedRequestPayload = newProjectRequest.reuseUncertainRequest
+    ? sanitizeSaasFrozenNewProjectRequestPayload(newProjectRequest.requestPayload, {
+        storeId: String(activeSaasStore()?.store_id || storedSaasStoreId() || "").trim(),
+      })
+    : null;
+  let command = reusedRequestPayload?.command || buildSaasCeoCommand(newProjectRequest.commandText, ctx);
+  let frozenNewProjectRequestPayload = reusedRequestPayload;
+  if (newProjectRequest.active && !frozenNewProjectRequestPayload) {
+    const attemptIdentity = saasNewListingProjectAttemptIdentity(
+      state.saasPendingNewListingProjectRequest?.originalText || newProjectRequest.commandText,
+      newProjectRequest.sourceAssetIds,
+      newProjectRequest.attemptSeed,
+    );
+    command = normalizeSaasCeoCommand({
+      ...command,
+      id: attemptIdentity.commandId,
+      created_at: attemptIdentity.clientNow,
+    });
+    frozenNewProjectRequestPayload = buildSaasAiCeoChatRequestEnvelope(
+      command,
+      attemptIdentity.sourceAssetIds,
+      {
+        idempotencyKey: attemptIdentity.idempotencyKey,
+        clientNow: attemptIdentity.clientNow,
+        suppressActiveListingContext: true,
+        suppressConversationHistory: true,
+        suppressSupplierFacts: true,
+      },
+    )?.payload || null;
+  }
+  if (
+    newProjectRequest.active &&
+    !bindSaasNewListingProjectRequestToCommand(command?.id || "", frozenNewProjectRequestPayload)
+  ) {
+    const abandonedPending = state.saasPendingNewListingProjectRequest;
+    stopSaasPendingNewListingProjectReconciliation();
+    state.saasPendingNewListingProjectRequest = null;
+    if (!saasMerchantProjectRouteId() && abandonedPending?.previousProjectId) {
+      syncSaasProjectRoute(state.view || "cockpit", { projectId: abandonedPending.previousProjectId });
+    }
+    saveSaasProtectedStateSnapshot();
+    showActionToast("新商品项目请求没有形成可安全重放的上下文，本次未调用模型。请重新提交商品目标。");
+    return null;
+  }
+  const submittedRouteProjectId = saasMerchantProjectRouteId();
+  const submittedProjectId = newProjectRequest.active ? "" : saasCurrentMerchantProjectId();
   state.saasLastCeoCommand = command;
   if (saasAiCeoCommandUsesProductTaskContext(command)) {
     const serverClockReliable = saasHasFreshServerClock();
@@ -24220,7 +25467,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
   const submittedAt = new Date(submittedAtMs).toISOString();
   const pendingMessageId = `ceo-ai-reply-${submittedAtMs.toString(16)}-${Math.abs(hashString(text)).toString(16)}`;
   const localInstantAnswer = buildSaasLocalClockAnswer(text);
-  if (localInstantAnswer) {
+  if (localInstantAnswer && !newProjectRequest.active) {
     const instantCommand = normalizeSaasCeoCommand({
       ...command,
       intent: "general_chat",
@@ -24277,7 +25524,11 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
     streamRenderTimer = null;
     if (streamRenderText) updateCeoAssistantStreamingMessage(pendingMessageId, streamRenderText);
   };
-  const submittedSourceAssetIds = Array.isArray(options.sourceAssetIds) ? options.sourceAssetIds.slice(0, 8) : [];
+  const submittedSourceAssetIds = newProjectRequest.active
+    ? frozenNewProjectRequestPayload?.source_asset_ids || newProjectRequest.sourceAssetIds
+    : Array.isArray(options.sourceAssetIds)
+      ? options.sourceAssetIds.slice(0, 8)
+      : [];
   state.saasLastCeoCommandPersistPromise = requestSaasAiCeoChat(command, {
     onStage: (stage) => {
       const latest = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
@@ -24295,6 +25546,10 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
     },
   }, submittedSourceAssetIds, {
     enforceProjectIdentity: options.enforceProjectIdentity === true,
+    suppressActiveListingContext: newProjectRequest.active,
+    suppressConversationHistory: newProjectRequest.active,
+    suppressSupplierFacts: newProjectRequest.active,
+    frozenRequestPayload: newProjectRequest.active ? frozenNewProjectRequestPayload : null,
   })
     .then((payload) => {
       if (streamRenderTimer) clearTimeout(streamRenderTimer);
@@ -24306,13 +25561,29 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
         payload?.product_vision_fact_packet && typeof payload.product_vision_fact_packet === "object"
           ? payload.product_vision_fact_packet
           : null;
-      if (productVisionFactPacket) {
-        applySaasAiCeoProductFactPacket(productVisionFactPacket, text, payload?.product_vision_report || null);
-      }
       let aiCeoMarketReport =
         payload?.ai_ceo_market_report && typeof payload.ai_ceo_market_report === "object" ? payload.ai_ceo_market_report : null;
       let aiCeoMarketReportDelivery = normalizeSaasAiCeoMarketReportDelivery(payload?.ai_ceo_market_report_delivery || null);
       const logicalHttpStatus = Number(payload?._http_status || payload?.http_status || 0) || 0;
+      const requestStillInProgress = String(payload?.ai_ceo_chat_request?.status || "") === "in_progress";
+      const requestOutcomeUnknown = saasPendingNewListingProjectOutcomeUnknown(payload);
+      if (requestStillInProgress || requestOutcomeUnknown) {
+        if (newProjectRequest.active) {
+          markSaasNewListingProjectRequestFailed(command?.id || "", "uncertain");
+          scheduleSaasPendingNewListingProjectReconciliation();
+        }
+        updateCeoAssistantPendingMessage(pendingMessageId, {
+          ...(state.saasAiCeoLatestTurn || {}),
+          assistant_id: pendingMessageId,
+          assistant_text: requestStillInProgress
+            ? "这次新商品项目仍在后端处理中。捷境已保留同一请求标识，刷新或稍后重试不会再次调用模型。"
+            : "这次请求的最终执行结果暂时无法确认。捷境会先按原请求对账，不会另起一次模型调用；请不要重复新建同一商品项目。",
+          status: requestStillInProgress ? "request_reconciling" : "request_outcome_unknown",
+          pending_stage: requestStillInProgress ? "idempotent_reconcile" : "",
+          pending: requestStillInProgress,
+        });
+        return command;
+      }
       const dependencyBlockedWithoutUsage =
         logicalHttpStatus >= 500 && payload?.usage_consumed === false && payload?.listing_created === false;
       const rawAnswer = saasAiCeoProductizedAnswerText(chat?.answer || "", chat?.status || "");
@@ -24432,6 +25703,52 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
         created_at: submittedAt,
       };
       const completedTurnWithReport = ensureSaasAiCeoMarketReportRecordFromTurn(completedTurn, aiCeoMarketReport) || completedTurn;
+      const responseIdentity = saasNormalizeListingProjectIdentity(completedTurnWithReport?.listing_project_identity);
+      const routeProjectIdAtResponse = saasMerchantProjectRouteId();
+      const pendingNewProjectAtResponse = state.saasPendingNewListingProjectRequest;
+      const ownsPendingNewProject = Boolean(
+        newProjectRequest.active &&
+          pendingNewProjectAtResponse &&
+          String(pendingNewProjectAtResponse.commandId || "") === String(command?.id || ""),
+      );
+      const pendingRouteCompatible = Boolean(
+        !routeProjectIdAtResponse ||
+          routeProjectIdAtResponse === responseIdentity?.key,
+      );
+      let newProjectCommitted = false;
+      if (ownsPendingNewProject) {
+        if (responseIdentity?.key && pendingRouteCompatible) {
+          newProjectCommitted = commitSaasNewListingProjectRequest(completedTurnWithReport, command?.id || "");
+        }
+        if (!newProjectCommitted && responseIdentity?.key) {
+          completeSaasNewListingProjectRequest(command?.id || "");
+        } else if (!newProjectCommitted) {
+          const transportUnknown = payload?._transport_unknown === true;
+          markSaasNewListingProjectRequestFailed(
+            command?.id || "",
+            transportUnknown ? "uncertain" : "failed",
+            transportUnknown ? {} : { failureReason: saasPendingNewListingProjectFailureReason(payload) },
+          );
+          if (transportUnknown) scheduleSaasPendingNewListingProjectReconciliation();
+        }
+      }
+      const routeStayedOnSubmittedProject = newProjectRequest.active
+        ? !routeProjectIdAtResponse ||
+          routeProjectIdAtResponse === responseIdentity?.key
+        : routeProjectIdAtResponse === submittedRouteProjectId;
+      const responseMatchesSubmittedProject = newProjectRequest.active
+        ? Boolean(newProjectCommitted && responseIdentity?.key)
+        : Boolean(submittedProjectId && responseIdentity?.key && responseIdentity.key === submittedProjectId);
+      const responseProjectCompatible = routeStayedOnSubmittedProject && responseMatchesSubmittedProject;
+      if (
+        productVisionFactPacket &&
+        responseProjectCompatible &&
+        ((!newProjectRequest.active && isCurrentChatTurn) || newProjectCommitted)
+      ) {
+        applySaasAiCeoProductFactPacket(productVisionFactPacket, text, payload?.product_vision_report || null, {
+          listingProjectIdentity: responseIdentity,
+        });
+      }
       if (isCurrentChatTurn) {
         updateSaasAiCeoLatestReply(completedTurnWithReport);
       } else {
@@ -24448,6 +25765,12 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
       if (streamRenderTimer) clearTimeout(streamRenderTimer);
       streamRenderTimer = null;
       const sessionExpired = isSaasUnrecoverableSessionError(error);
+      if (newProjectRequest.active) markSaasNewListingProjectRequestFailed(
+        command?.id || "",
+        sessionExpired ? "failed" : "uncertain",
+        sessionExpired ? { failureReason: "session_expired" } : {},
+      );
+      if (newProjectRequest.active && !sessionExpired) scheduleSaasPendingNewListingProjectReconciliation();
       const failureStatus = sessionExpired ? "session_expired" : "model_call_failed";
       const safeText = sessionExpired
         ? "捷境登录已失效，请重新登录。本次没有调用 AI、没有消耗素材点，也没有写入 eBay；这次目标已保留在本机。"
@@ -27471,7 +28794,10 @@ function saasMerchantProjectRouteId() {
 function saasCurrentMerchantProjectId() {
   const routeProjectId = saasMerchantProjectRouteId();
   if (routeProjectId) return routeProjectId;
-  const draftIdentity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
+  if (state.saasPendingNewListingProjectRequest) return "";
+  const draftIdentity = state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object"
+    ? saasCurrentListingProjectIdentity(state.saasListingComposerDraft)
+    : null;
   const draftProjectId = String(draftIdentity?.key || "").trim();
   if (/^[A-Za-z0-9._:-]{1,160}$/.test(draftProjectId)) return draftProjectId;
   const snapshotProjectId = String(state.saasMerchantProjectStatus?.project?.project_id || "").trim();
@@ -27752,6 +29078,9 @@ async function refreshSaasState(options = {}) {
       .map((value) => String(value || "").trim().toLowerCase())
       .filter(Boolean);
     const shouldPreserveActiveCeoState = confirmedAccountAliases.some((alias) => activeAccountAliasesBeforeRefresh.has(alias));
+    if (restoredCachedState && !shouldPreserveActiveCeoState) {
+      reconcileSaasCachedProjectStateForConfirmedAccount(confirmedAccountAliases, activeAccountAliasesBeforeRefresh);
+    }
     state.saasTeamMember = corePermissions.team_member || coreMe.team_member || null;
     state.saasPermissions = corePermissions.permissions || [];
     state.saasRoles = corePermissions.roles || [];
@@ -27995,7 +29324,20 @@ async function refreshSaasState(options = {}) {
     state.saasMediaAssetJobs = Array.isArray(mediaAssetJobs.media_asset_jobs) ? mediaAssetJobs.media_asset_jobs : [];
     markSaasMediaJobsAsCurrentSessionBackendEvidence(state.saasMediaAssetJobs);
     state.saasReports = reports.reports || [];
-    restoreSaasListingComposerDraftFromBackendReports();
+    const pendingNewProjectReconciled = reconcileSaasPendingNewListingProjectRequestFromReports();
+    state.saasDetachedListingProjectDrafts = Object.fromEntries(
+      sanitizeSaasDetachedListingProjectDraftsSnapshot(state.saasDetachedListingProjectDrafts, {
+        companyId: String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim(),
+        storeId: String(refreshedActiveStore?.store_id || store.store_id || "").trim(),
+        strictScope: true,
+        requireBackendWatermark: true,
+      }).map((entry) => [entry.project_id, entry]),
+    );
+    pruneSaasDetachedListingProjectDraftsAgainstBackend();
+    restoreSaasListingComposerDraftFromBackendReports({
+      preferBackendLatest: restoredCachedState,
+      restoreDetachedDraft: restoredCachedState,
+    });
     const liveConfirmations = confirmations.confirmations || [];
     await verifySaasUnpublishedDraftSaveConfirmations(liveConfirmations);
     await verifySaasInventoryLocationConfirmations(liveConfirmations);
@@ -28037,6 +29379,7 @@ async function refreshSaasState(options = {}) {
     }
     applySaasReportsToActivities();
     applySaasDataPacketsToActivities();
+    if (!pendingNewProjectReconciled) resumeSaasUncertainNewListingProjectRequestAfterRefresh();
     if (!silent) showActionToast("SaaS 后端状态已刷新：账号、店铺、任务、报告、确认和审计已同步。");
   } catch (error) {
     if (!isCurrentRefresh()) return;
@@ -41842,11 +43185,16 @@ function bindSaasAiCeoTaskContextFromTurn(turn = null, options = {}) {
   if (!identity?.key) return false;
   const activeStoreId = String(activeSaasStore()?.store_id || "").trim();
   const routeProjectId = saasMerchantProjectRouteId();
-  if (routeProjectId && identity.key !== routeProjectId) return false;
+  if (routeProjectId && identity.key !== routeProjectId && options.allowRouteChange !== true) return false;
   if (activeStoreId && String(latest.store_id || "").trim() !== activeStoreId) return false;
   let changed = state.aiCeoTaskContextMode !== "active_product_task" || state.aiCeoTaskContextProjectId !== identity.key;
   state.aiCeoTaskContextMode = "active_product_task";
   state.aiCeoTaskContextProjectId = identity.key;
+  if (options.syncRoute === true && routeProjectId !== identity.key) {
+    const snapshotProjectId = String(state.saasMerchantProjectStatus?.project?.project_id || "").trim();
+    if (snapshotProjectId && snapshotProjectId !== identity.key) state.saasMerchantProjectStatus = null;
+    if (syncSaasProjectRoute(state.view || "cockpit", { projectId: identity.key })) changed = true;
+  }
   if (!state.aiCeoTaskContextCommandId && state.saasLastCeoCommand?.id) {
     state.aiCeoTaskContextCommandId = state.saasLastCeoCommand.id;
     changed = true;
@@ -42928,7 +44276,8 @@ function handleCeoFormSubmit(event) {
   if (isSaasPublicMvpMode()) {
     const enforceProjectIdentity = event.currentTarget?.dataset?.enforceProjectIdentity === "true";
     if (event.currentTarget?.dataset) delete event.currentTarget.dataset.enforceProjectIdentity;
-    handleSaasCeoCommandSubmit(text, { sourceAssetIds, enforceProjectIdentity });
+    const acceptedCommand = handleSaasCeoCommandSubmit(text, { sourceAssetIds, enforceProjectIdentity });
+    if (!acceptedCommand) return;
     state.saasAiCeoPendingAttachments = [];
     renderSaasAiCeoPendingAttachments();
     if (input) input.value = "";
