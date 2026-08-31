@@ -30,6 +30,11 @@ from jiejing_saas.security import SessionManager  # noqa: E402
 OFFER_ID = "245675556011"
 SKU = "JJ-INCENSE-JC2023041300002-01"
 SOURCE_EXECUTION_ID = "exec_exact_saved_draft_1"
+LISTING_PROJECT_IDENTITY = {
+    "key": "listing-project-controlled-incense",
+    "source_report_id": "source-controlled-incense",
+    "candidate_id": "candidate-controlled-incense",
+}
 
 
 def _post(base_url: str, path: str, payload: dict[str, Any], token: str) -> tuple[int, dict[str, Any]]:
@@ -238,61 +243,6 @@ def main() -> int:
             user_id=user["user_id"],
             payload={"platform": "ebay", "store_name": "Exact draft fixture", "marketplace": "EBAY_US"},
         )
-        source_task = repository.create_task(
-            company_id=company_id,
-            store_id=store["store_id"],
-            user_id=user["user_id"],
-            task_type="ebay_draft_save_intake",
-            title="Saved exact eBay draft fixture",
-            input_data={"secret_exposed": False},
-        )
-        source_confirmation = repository.create_confirmation(
-            company_id=company_id,
-            store_id=store["store_id"],
-            task_id=source_task["task_id"],
-            runtime_run_id="merchant_ebay_draft_save_intake",
-            action_type="save_ebay_listing_draft",
-            title="Saved exact eBay draft fixture",
-            item={"publish_payload": _publish_payload(), "secret_exposed": False},
-            created_by=user["user_id"],
-        )
-        result = {
-            "status": "saved_to_ebay_draft",
-            "action_type": "save_ebay_listing_draft",
-            "task_id": source_task["task_id"],
-            "platform_result": {
-                "offer_id": OFFER_ID,
-                "offer_status": "UNPUBLISHED",
-                "sku": SKU,
-                "writes_to_ebay": True,
-                "published_to_ebay": False,
-                "public_listing_created": False,
-            },
-            "secret_exposed": False,
-        }
-        with repository._connect() as conn:  # noqa: SLF001 - exact repository fixture
-            conn.execute(
-                "update confirmations set status = 'executed' where confirmation_id = ?",
-                (source_confirmation["confirmation_id"],),
-            )
-            conn.execute("update tasks set status = 'completed' where task_id = ?", (source_task["task_id"],))
-            conn.execute(
-                """
-                insert into execution_results (
-                  execution_id, confirmation_id, task_id, action_type, status, created_at, result_json
-                ) values (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    SOURCE_EXECUTION_ID,
-                    source_confirmation["confirmation_id"],
-                    source_task["task_id"],
-                    "save_ebay_listing_draft",
-                    "saved_to_ebay_draft",
-                    now_iso(),
-                    json.dumps(result),
-                ),
-            )
-
         settings = SaaSSettings.from_env(
             db_path=root / "saas.sqlite",
             runtime_db_path=root / "runtime.sqlite",
@@ -334,6 +284,12 @@ def main() -> int:
             "payout_status": "available",
             "restrictions": [],
             "can_execute_real_writes": True,
+            "account_health": {
+                "status": "normal",
+                "selling_status": "active",
+                "payout_status": "available",
+                "restrictions": [],
+            },
             "secret_exposed": False,
         }
         server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
@@ -344,6 +300,107 @@ def main() -> int:
         intake_path = f"/stores/{store['store_id']}/existing-draft-publish-confirmation"
         intake_body = {"offer_id": OFFER_ID, "sku": SKU, "execution_id": SOURCE_EXECUTION_ID}
         try:
+            product_facts_status, product_facts = _post(
+                base_url,
+                f"/stores/{store['store_id']}/product-facts",
+                {
+                    "listing_project_identity": LISTING_PROJECT_IDENTITY,
+                    "merchant_product_fact_packet": {
+                        "merchant_confirmed_facts": {
+                            "product_name": "Backflow incense burner with lotus flower and hand design",
+                            "source_url": "https://supplier.example.test/controlled-incense-burner",
+                            "sku": SKU,
+                            "condition": "NEW",
+                            "material": "Resin",
+                            "package_weight_g": "451",
+                            "package_length_cm": "18",
+                            "package_width_cm": "17",
+                            "package_height_cm": "17",
+                            "unit_cost": "9.00",
+                            "selling_price": "29.99",
+                            "currency": "USD",
+                            "quantity": "1",
+                            "item_location": "shenzhen-warehouse",
+                            "image_urls": "https://example.test/generated-approved.jpg",
+                            "image_rights_confirmed": True,
+                        }
+                    },
+                },
+                token,
+            )
+            product_fact_report_id = str((product_facts.get("report") or {}).get("report_id") or "")
+            if product_facts_status != 201 or not product_fact_report_id:
+                raise AssertionError(
+                    f"controlled draft fixture must save authoritative merchant product facts: "
+                    f"{product_facts_status} {product_facts}"
+                )
+
+            source_draft_body = {
+                "product": "Backflow incense burner with lotus flower and hand design",
+                "listing_project_identity": LISTING_PROJECT_IDENTITY,
+                **_publish_payload(),
+                "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
+            }
+            source_status, source_draft = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-draft-confirmation",
+                source_draft_body,
+                token,
+            )
+            source_confirmation = source_draft.get("confirmation") or {}
+            source_publish_evidence = (
+                (source_confirmation.get("item") or {}).get("publish_payload") or {}
+            ).get("publish_evidence") or {}
+            if not (
+                source_status == 201
+                and source_confirmation.get("action_type") == "save_ebay_listing_draft"
+                and source_publish_evidence.get("server_resolved") is True
+                and (source_publish_evidence.get("refs") or {}).get("product_fact_report_id")
+                == product_fact_report_id
+            ):
+                raise AssertionError(
+                    "controlled draft fixture must cross the API source/rights evidence gate before execution: "
+                    f"{source_status} {source_draft}"
+                )
+
+            source_task_id = str(source_confirmation.get("task_id") or "")
+            result = {
+                "status": "saved_to_ebay_draft",
+                "action_type": "save_ebay_listing_draft",
+                "task_id": source_task_id,
+                "platform_result": {
+                    "offer_id": OFFER_ID,
+                    "offer_status": "UNPUBLISHED",
+                    "sku": SKU,
+                    "writes_to_ebay": True,
+                    "published_to_ebay": False,
+                    "public_listing_created": False,
+                },
+                "secret_exposed": False,
+            }
+            with repository._connect() as conn:  # noqa: SLF001 - exact executed-draft fixture
+                conn.execute(
+                    "update confirmations set status = 'executed' where confirmation_id = ?",
+                    (source_confirmation["confirmation_id"],),
+                )
+                conn.execute("update tasks set status = 'completed' where task_id = ?", (source_task_id,))
+                conn.execute(
+                    """
+                    insert into execution_results (
+                      execution_id, confirmation_id, task_id, action_type, status, created_at, result_json
+                    ) values (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        SOURCE_EXECUTION_ID,
+                        source_confirmation["confirmation_id"],
+                        source_task_id,
+                        "save_ebay_listing_draft",
+                        "saved_to_ebay_draft",
+                        now_iso(),
+                        json.dumps(result),
+                    ),
+                )
+
             with ThreadPoolExecutor(max_workers=2) as pool:
                 intake_results = list(pool.map(lambda _index: _post(base_url, intake_path, intake_body, token), range(2)))
             if any(status not in {200, 201} for status, _body in intake_results):

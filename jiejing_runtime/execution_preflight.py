@@ -8,12 +8,16 @@ action type.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 
 class ExecutionRequestLike(Protocol):
     action_type: str
+    company_id: str
+    store_id: str
     payload: dict[str, Any]
     confirmation_id: str | None
     confirmed_by: str | None
@@ -72,6 +76,7 @@ ACTION_REQUIREMENTS = {
         "supplier_facts.material",
         "supplier_facts.item_location",
         "asset_manifest.assets",
+        "publish_evidence",
         "finance_review.net_profit_money",
         "confirmation_record",
         "idempotency_key",
@@ -103,6 +108,7 @@ ACTION_REQUIREMENTS = {
         "business_policies.payment_policy_id",
         "business_policies.return_policy_id",
         "asset_manifest.assets",
+        "publish_evidence",
         "confirmation_record",
         "idempotency_key",
     ],
@@ -132,6 +138,9 @@ LOW_RISK_ACTIONS = {
 }
 
 
+PUBLISH_EVIDENCE_CONTRACT_VERSION = "2026-08-31-publish-source-rights-evidence-v1"
+
+
 @dataclass(slots=True)
 class PreflightIssue:
     key: str
@@ -146,7 +155,7 @@ class ExecutionPreflightChecker:
     """Checks whether a confirmed request is complete enough for execution."""
 
     name = "jiejing-execution-preflight"
-    version = "2026-07-14.1"
+    version = "2026-08-31.1"
 
     def review(self, request: ExecutionRequestLike) -> dict[str, Any]:
         action_type = self._canonical_action(request.action_type)
@@ -168,6 +177,14 @@ class ExecutionPreflightChecker:
         account_health_issue = self._account_health_issue(action_type, payload)
         if account_health_issue:
             issues.append(account_health_issue.to_dict())
+        if action_type in {"publish_listing", "save_ebay_listing_draft"}:
+            evidence_review = validate_publish_evidence(
+                payload,
+                company_id=str(getattr(request, "company_id", "") or ""),
+                store_id=str(getattr(request, "store_id", "") or ""),
+                listing_project_key=_listing_project_key(payload),
+            )
+            issues.extend(evidence_review["issues"])
         if action_type in LOW_RISK_ACTIONS and not issues:
             status = "ready_low_risk"
         elif issues:
@@ -312,3 +329,195 @@ class ExecutionPreflightChecker:
         if action_type in {"procurement_payment", "purchase_order", "address_write"}:
             return f"Procurement or address execution cannot proceed until {field} is present."
         return f"Execution cannot proceed until {field} is present."
+
+
+def validate_publish_evidence(
+    payload: dict[str, Any],
+    *,
+    company_id: str | None = None,
+    store_id: str | None = None,
+    listing_project_key: str | None = None,
+) -> dict[str, Any]:
+    """Strictly validate one backend-issued source and image-rights packet."""
+
+    payload = payload if isinstance(payload, dict) else {}
+    evidence = payload.get("publish_evidence") if isinstance(payload.get("publish_evidence"), dict) else {}
+    issues: list[dict[str, str]] = []
+
+    def add(key: str, message: str) -> None:
+        if any(item.get("key") == key for item in issues):
+            return
+        issues.append(PreflightIssue(key, message).to_dict())
+
+    if not evidence:
+        add(
+            "publish_evidence",
+            "Listing execution requires backend-resolved product-source and image-rights evidence.",
+        )
+        return {
+            "status": "blocked",
+            "ready": False,
+            "contract_version": PUBLISH_EVIDENCE_CONTRACT_VERSION,
+            "issues": issues,
+            "required_asset_count": 0,
+            "covered_asset_count": 0,
+        }
+
+    if evidence.get("contract_version") != PUBLISH_EVIDENCE_CONTRACT_VERSION:
+        add(
+            "publish_evidence.contract_version",
+            "Publish evidence uses an unsupported contract version and must be resolved again by the backend.",
+        )
+    if evidence.get("status") != "ready":
+        add("publish_evidence.status", "Publish evidence is not ready for an eBay write.")
+    if evidence.get("server_resolved") is not True:
+        add(
+            "publish_evidence.server_resolved",
+            "Listing execution requires publish evidence resolved by the Jiejing backend; browser assertions are not trusted.",
+        )
+
+    scope = evidence.get("scope") if isinstance(evidence.get("scope"), dict) else {}
+    expected_company_id = str(company_id or "").strip()
+    expected_store_id = str(store_id or "").strip()
+    expected_project_key = str(listing_project_key or _listing_project_key(payload)).strip()
+    if not expected_company_id or str(scope.get("company_id") or "").strip() != expected_company_id:
+        add(
+            "publish_evidence.scope.company_id",
+            "Publish evidence belongs to a different company and cannot authorize this eBay write.",
+        )
+    if not expected_store_id or str(scope.get("store_id") or "").strip() != expected_store_id:
+        add(
+            "publish_evidence.scope.store_id",
+            "Publish evidence belongs to a different store and cannot authorize this eBay write.",
+        )
+    if not expected_project_key or str(scope.get("listing_project_key") or "").strip() != expected_project_key:
+        add(
+            "publish_evidence.scope.listing_project_key",
+            "Publish evidence is not bound to the current Listing project.",
+        )
+
+    refs = evidence.get("refs") if isinstance(evidence.get("refs"), dict) else {}
+    report_id = str(refs.get("product_fact_report_id") or "").strip()
+    media_job_id = str(refs.get("media_job_id") or "").strip()
+    product_source = evidence.get("product_source") if isinstance(evidence.get("product_source"), dict) else {}
+    if not (
+        product_source.get("status") == "verified"
+        and product_source.get("source_mode") in {"merchant_source_supplied", "merchant_owned_product"}
+        and product_source.get("evidence_type") == "merchant_product_fact_report"
+        and report_id
+        and str(product_source.get("evidence_id") or "").strip() == report_id
+    ):
+        add(
+            "publish_evidence.product_source",
+            "A current merchant product-fact report must verify the product source before an eBay write.",
+        )
+
+    manifest = payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), dict) else {}
+    manifest_assets = manifest.get("assets") if isinstance(manifest.get("assets"), list) else []
+    expected_assets: list[tuple[str, str]] = []
+    for raw in manifest_assets:
+        item = raw if isinstance(raw, dict) else {}
+        asset_id = str(item.get("asset_id") or "").strip()
+        url = str(item.get("url") or item.get("url_or_file_path") or "").strip()
+        expected_assets.append((asset_id, hashlib.sha256(url.encode("utf-8")).hexdigest() if url else ""))
+
+    rights = evidence.get("image_rights") if isinstance(evidence.get("image_rights"), dict) else {}
+    if rights.get("status") != "verified":
+        add(
+            "publish_evidence.image_rights.status",
+            "Image rights must be verified by persisted merchant or approved-media evidence.",
+        )
+    covered_assets = rights.get("assets") if isinstance(rights.get("assets"), list) else []
+    required_count = rights.get("required_asset_count")
+    covered_count = rights.get("covered_asset_count")
+    expected_count = len(manifest_assets)
+    counts_are_ints = (
+        isinstance(required_count, int)
+        and not isinstance(required_count, bool)
+        and isinstance(covered_count, int)
+        and not isinstance(covered_count, bool)
+    )
+    if not (
+        expected_count > 0
+        and all(url_sha256 for _, url_sha256 in expected_assets)
+        and counts_are_ints
+        and required_count == expected_count
+        and covered_count == expected_count
+        and len(covered_assets) == expected_count
+        and rights.get("coverage_complete") is True
+    ):
+        add(
+            "publish_evidence.image_rights.coverage",
+            "Every image in the eBay asset manifest must have complete server-resolved commercial-rights coverage.",
+        )
+
+    actual_assets: list[tuple[str, str]] = []
+    asset_evidence_valid = True
+    allowed_evidence_types = {"merchant_product_fact_report", "approved_media_asset_job"}
+    for raw in covered_assets:
+        item = raw if isinstance(raw, dict) else {}
+        asset_id = str(item.get("asset_id") or "").strip()
+        url_sha256 = str(item.get("url_sha256") or "").strip().lower()
+        evidence_type = str(item.get("evidence_type") or "").strip()
+        evidence_id = str(item.get("evidence_id") or "").strip()
+        actual_assets.append((asset_id, url_sha256))
+        expected_evidence_id = report_id if evidence_type == "merchant_product_fact_report" else media_job_id
+        if (
+            evidence_type not in allowed_evidence_types
+            or not expected_evidence_id
+            or evidence_id != expected_evidence_id
+            or len(url_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in url_sha256)
+        ):
+            asset_evidence_valid = False
+    if not asset_evidence_valid or sorted(actual_assets) != sorted(expected_assets):
+        add(
+            "publish_evidence.image_rights.assets",
+            "Image-rights evidence does not match the exact asset IDs and URLs being sent to eBay.",
+        )
+
+    if evidence.get("secret_exposed") is not False:
+        add(
+            "publish_evidence.secret_exposed",
+            "Publish evidence must not contain or expose provider credentials.",
+        )
+    resolved_at = str(evidence.get("resolved_at") or "").strip()
+    if not resolved_at:
+        add("publish_evidence.resolved_at", "Publish evidence must include its backend resolution time.")
+    fingerprint = str(evidence.get("fingerprint") or "").strip().lower()
+    fingerprint_payload = {
+        key: value for key, value in evidence.items() if key not in {"resolved_at", "fingerprint"}
+    }
+    expected_fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if fingerprint != expected_fingerprint:
+        add(
+            "publish_evidence.fingerprint",
+            "Publish evidence changed after backend resolution and must be resolved again.",
+        )
+
+    return {
+        "status": "ready" if not issues else "blocked",
+        "ready": not issues,
+        "contract_version": PUBLISH_EVIDENCE_CONTRACT_VERSION,
+        "issues": issues,
+        "required_asset_count": required_count if isinstance(required_count, int) else 0,
+        "covered_asset_count": covered_count if isinstance(covered_count, int) else 0,
+    }
+
+
+def _listing_project_key(payload: dict[str, Any]) -> str:
+    identity = payload.get("listing_project_identity") if isinstance(payload.get("listing_project_identity"), dict) else {}
+    listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+    return str(
+        identity.get("key")
+        or payload.get("listing_project_key")
+        or listing.get("listing_project_key")
+        or ""
+    ).strip()

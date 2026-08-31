@@ -97,6 +97,42 @@ def main() -> int:
         )
         if not packet_result.get("data_packet", {}).get("packet_id"):
             return fail("publish intake setup should create a sanitized data packet")
+        listing_project_identity = {
+            "key": "listing-project-unit-fresh-bumper",
+            "source_report_id": "report-unit-fresh-bumper",
+            "candidate_id": "candidate-unit-fresh-bumper",
+        }
+        product_image_url = "https://EXAMPLE.test:443/fresh-bumper.jpg#browser-fragment"
+        product_facts = post_json(
+            f"{base_url}/stores/{store['store_id']}/product-facts",
+            {
+                "listing_project_identity": listing_project_identity,
+                "merchant_product_fact_packet": {
+                    "merchant_confirmed_facts": {
+                        "product_name": "Fresh silicone door bumper pads",
+                        "source_url": "https://supplier.example.test/fresh-bumper",
+                        "sku": "JJ-FRESH-INTAKE-001",
+                        "condition": "NEW",
+                        "material": "Silicone",
+                        "package_weight_g": "80",
+                        "package_length_cm": "12",
+                        "package_width_cm": "8",
+                        "package_height_cm": "2",
+                        "unit_cost": "2.50",
+                        "selling_price": "9.99",
+                        "currency": "USD",
+                        "quantity": "1",
+                        "item_location": "US",
+                        "image_urls": product_image_url,
+                        "image_rights_confirmed": True,
+                    }
+                },
+            },
+            token=token,
+        )
+        product_fact_report_id = product_facts.get("report", {}).get("report_id")
+        if not product_fact_report_id:
+            return fail(f"product facts should create an authoritative report: {product_facts}")
         with sqlite3.connect(SAAS_DB) as conn:
             confirmations_before_simulation_guard = conn.execute("select count(*) from confirmations").fetchone()[0]
         for route in (
@@ -119,16 +155,27 @@ def main() -> int:
             confirmations_after_simulation_guard = conn.execute("select count(*) from confirmations").fetchone()[0]
         if confirmations_after_simulation_guard != confirmations_before_simulation_guard:
             return fail("simulation-only requests must not create any eBay confirmation record")
+        status, arbitrary_rights = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-confirmation",
+            {
+                "product": "Unverified arbitrary image",
+                "listing_project_identity": listing_project_identity,
+                "listing": {"sku": "UNVERIFIED", "title": "Unverified arbitrary image"},
+                "asset_manifest": {"assets": [{"url": "https://untrusted.example.test/arbitrary.jpg"}]},
+                "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
+            },
+            token=token,
+        )
+        if status != 422 or arbitrary_rights.get("error") != "publish_evidence_not_ready":
+            return fail(f"arbitrary browser image without server evidence must be blocked: {status} {arbitrary_rights}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            if conn.execute("select count(*) from confirmations").fetchone()[0] != confirmations_after_simulation_guard:
+                return fail("blocked publish evidence must not create a confirmation")
         result = post_json(
             f"{base_url}/stores/{store['store_id']}/publish-confirmation",
             {
                 "product": "Fresh silicone door bumper pads",
-                "listing_project_identity": {
-                    "key": "listing-project-unit-fresh-bumper",
-                    "product": "Fresh silicone door bumper pads",
-                    "source_id": "report-unit-fresh-bumper",
-                    "candidate_id": "candidate-unit-fresh-bumper",
-                },
+                "listing_project_identity": listing_project_identity,
                 "listing": {
                     "sku": "JJ-FRESH-INTAKE-001",
                     "title": "Clear Silicone Cabinet Door Bumper Pads Quiet Stopper Set",
@@ -146,7 +193,8 @@ def main() -> int:
                     "material": "Silicone",
                     "item_location": "US",
                 },
-                "asset_manifest": {"assets": [{"url": "https://example.test/fresh-bumper.jpg"}]},
+                "asset_manifest": {"assets": [{"url": product_image_url}]},
+                "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
                 "finance_review": {"net_profit_money": {"value": "3.25", "currency": "USD"}},
             },
             token=token,
@@ -207,15 +255,17 @@ def main() -> int:
                 return fail(f"each readiness check should remain confirmation gated: {check}")
         item = confirmation.get("item", {})
         payload = item.get("publish_payload", {})
+        if payload.get("listing_project_identity", {}).get("key") != listing_project_identity["key"]:
+            return fail(f"approved payload must carry the server-normalized Listing project scope: {payload}")
+        if payload.get("asset_manifest", {}).get("assets", [{}])[0].get("url") != "https://example.test/fresh-bumper.jpg":
+            return fail(f"approved payload must persist the resolver's canonical asset URL: {payload}")
         if payload.get("business_policies", {}).get("return_policy_id") != "return-policy":
             return fail(f"publish intake should merge business policies from packet: {payload}")
         serialized = json.dumps(result, ensure_ascii=False).lower()
         if "refresh_token" in serialized or "api_key" in serialized or "access_token" in serialized:
             return fail("publish intake response must not expose secrets")
 
-        draft_result = post_json(
-            f"{base_url}/stores/{store['store_id']}/ebay-draft-confirmation",
-            {
+        draft_request = {
                 "product": "Fresh silicone door bumper pads",
                 "listing_project_identity": {
                     "key": "listing-project-unit-fresh-bumper",
@@ -226,9 +276,13 @@ def main() -> int:
                 "listing": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("listing", {}),
                 "supplier_facts": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("supplier_facts", {}),
                 "asset_manifest": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("asset_manifest", {}),
+                "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
                 "finance_review": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("finance_review", {}),
                 "idempotency_key": "draft-intake-unit-fresh-bumper",
-            },
+            }
+        draft_result = post_json(
+            f"{base_url}/stores/{store['store_id']}/ebay-draft-confirmation",
+            draft_request,
             token=token,
         )
         draft_confirmation = draft_result.get("confirmation", {})
@@ -257,6 +311,38 @@ def main() -> int:
         if "refresh_token" in draft_serialized or "api_key" in draft_serialized or "access_token" in draft_serialized:
             return fail("draft intake response must not expose secrets")
         draft_confirmation_id = draft_confirmation.get("confirmation_id")
+        with sqlite3.connect(SAAS_DB) as conn:
+            original_report_json = conn.execute(
+                "select report_json from reports where report_id = ?",
+                (product_fact_report_id,),
+            ).fetchone()[0]
+            revoked_report = json.loads(original_report_json)
+            revoked_packet = revoked_report["merchant_product_fact_packet"]
+            revoked_packet["merchant_confirmed_facts"]["image_rights_confirmed"] = False
+            for source_record in revoked_packet.get("source_records", []):
+                if source_record.get("type") == "merchant_product_image":
+                    source_record["rights_status"] = "pending"
+            conn.execute(
+                "update reports set report_json = ? where report_id = ?",
+                (json.dumps(revoked_report, ensure_ascii=False), product_fact_report_id),
+            )
+        status, revoked_decision = post_json_status(
+            f"{base_url}/confirmations/{draft_confirmation_id}/decision",
+            {"decision": "approve", "note": "Must be blocked after rights evidence is revoked."},
+            token=token,
+        )
+        if status != 409 or revoked_decision.get("error") != "publish_evidence_not_ready":
+            return fail(f"approval must revalidate revoked image rights: {status} {revoked_decision}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            if conn.execute(
+                "select status from confirmations where confirmation_id = ?",
+                (draft_confirmation_id,),
+            ).fetchone()[0] != "pending":
+                return fail("revoked evidence must leave the confirmation pending")
+            conn.execute(
+                "update reports set report_json = ? where report_id = ?",
+                (original_report_json, product_fact_report_id),
+            )
         draft_decision = post_json(
             f"{base_url}/confirmations/{draft_confirmation_id}/decision",
             {"decision": "approve", "note": "Contract test only; external writes remain disabled."},
@@ -271,9 +357,46 @@ def main() -> int:
             ).fetchone()[0]
         if approved_task_status != "approved_waiting_execution":
             return fail(f"approved draft task must show its real execution state: {approved_task_status}")
-        draft_execution = post_json(
+        with sqlite3.connect(SAAS_DB) as conn:
+            conn.execute(
+                "update reports set report_json = ? where report_id = ?",
+                (json.dumps(revoked_report, ensure_ascii=False), product_fact_report_id),
+            )
+        status, revoked_execution = post_json_status(
             f"{base_url}/confirmations/{draft_confirmation_id}/execute",
             {"platform": "ebay", "idempotency_key": "draft-intake-unit-fresh-bumper"},
+            token=token,
+        )
+        if status != 409 or revoked_execution.get("real_platform_write_attempted") is not False:
+            return fail(f"execution must stop before claim/write after evidence revocation: {status} {revoked_execution}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            if conn.execute(
+                "select status from confirmations where confirmation_id = ?",
+                (draft_confirmation_id,),
+            ).fetchone()[0] != "needs_revision":
+                return fail("revoked evidence must expire the old action-time approval")
+            conn.execute(
+                "update reports set report_json = ? where report_id = ?",
+                (original_report_json, product_fact_report_id),
+            )
+        replacement_draft = post_json(
+            f"{base_url}/stores/{store['store_id']}/ebay-draft-confirmation",
+            {**draft_request, "idempotency_key": "draft-intake-unit-fresh-bumper-replacement"},
+            token=token,
+        ).get("confirmation", {})
+        replacement_draft_id = replacement_draft.get("confirmation_id")
+        if replacement_draft.get("status") != "pending" or not replacement_draft_id:
+            return fail(f"restored evidence must require a fresh pending confirmation: {replacement_draft}")
+        replacement_decision = post_json(
+            f"{base_url}/confirmations/{replacement_draft_id}/decision",
+            {"decision": "approve", "note": "Fresh action-time approval after evidence restoration."},
+            token=token,
+        )
+        if replacement_decision.get("confirmation", {}).get("status") != "approved":
+            return fail(f"replacement draft confirmation must be independently approved: {replacement_decision}")
+        draft_execution = post_json(
+            f"{base_url}/confirmations/{replacement_draft_id}/execute",
+            {"platform": "ebay", "idempotency_key": "draft-intake-unit-fresh-bumper-replacement"},
             token=token,
         )
         stored_draft_execution = draft_execution.get("execution", {})
@@ -289,14 +412,14 @@ def main() -> int:
         with sqlite3.connect(SAAS_DB) as conn:
             completed_task_status = conn.execute(
                 "select status from tasks where task_id = ?",
-                (draft_confirmation.get("task_id"),),
+                (replacement_draft.get("task_id"),),
             ).fetchone()[0]
         if completed_task_status != "completed_no_platform_write":
             return fail(f"simulated draft task must close instead of remaining queued: {completed_task_status}")
         with sqlite3.connect(SAAS_DB) as conn:
             conn.execute(
                 "update tasks set status = 'queued' where task_id = ?",
-                (draft_confirmation.get("task_id"),),
+                (replacement_draft.get("task_id"),),
             )
         repository = SaaSRepository(SAAS_DB)
         dry_run = repository.reconcile_confirmation_managed_tasks(apply=False)
@@ -305,7 +428,7 @@ def main() -> int:
         with sqlite3.connect(SAAS_DB) as conn:
             still_queued = conn.execute(
                 "select status from tasks where task_id = ?",
-                (draft_confirmation.get("task_id"),),
+                (replacement_draft.get("task_id"),),
             ).fetchone()[0]
         if still_queued != "queued":
             return fail("task reconciliation dry-run mutated data")

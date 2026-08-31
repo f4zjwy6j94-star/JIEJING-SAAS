@@ -4147,11 +4147,9 @@ def _selection_answer_constraint_violations(
     ]
     candidate_names = [_safe_text(item.get("name") or "", limit=120) for item in candidates if isinstance(item, dict)]
     if any(
-        _normalized_candidate_name(excluded) in _normalized_candidate_name(candidate)
-        or _normalized_candidate_name(candidate) in _normalized_candidate_name(excluded)
+        _candidate_name_matches_exclusion(excluded, candidate)
         for excluded in excluded_names
         for candidate in candidate_names
-        if len(_normalized_candidate_name(excluded)) >= 2 and len(_normalized_candidate_name(candidate)) >= 2
     ):
         blocked_by.append("excluded_previous_candidate_reused")
 
@@ -4407,6 +4405,7 @@ def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
         "小众品",
         "热销小商品",
         "候选商品",
+        "候选",
         "产品方向",
         "商品方向",
         "product ideas",
@@ -4542,7 +4541,8 @@ def _explicitly_excluded_candidate_names(message: str) -> list[str]:
     text = _safe_text(message, limit=900)
     values: list[str] = []
     for match in re.finditer(
-        r"(?:淘汰|禁止复用|不要复用|不再使用)(.{1,140}?)(?=重新|更换|[。；;\n]|$)",
+        r"(?:淘汰|排除|禁止复用|不要复用|不再使用|禁止(?:推荐|选择|使用)|不得(?:推荐|选择|使用)|不要(?:再)?(?:推荐|选择|使用))"
+        r"(.{1,140}?)(?=重新|更换|[。；;\n]|$)",
         text,
         flags=re.IGNORECASE,
     ):
@@ -4571,6 +4571,33 @@ def _selection_candidate_names_from_text(answer: str) -> list[str]:
 
 def _normalized_candidate_name(value: str) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").lower())
+
+
+def _candidate_name_matches_exclusion(excluded_name: str, candidate_name: str) -> bool:
+    """Match an excluded product direction after removing descriptive packaging noise."""
+
+    excluded = _normalized_candidate_name(excluded_name)
+    candidate = _normalized_candidate_name(candidate_name)
+    if len(excluded) < 2 or len(candidate) < 2:
+        return False
+    if excluded in candidate or candidate in excluded:
+        return True
+
+    packaging_suffix = re.compile(r"(?:\d+(?:件|个|只|片|枚|套)?装|套装|组合装|组合|合集)$")
+    excluded_base = packaging_suffix.sub("", excluded)
+    candidate_base = packaging_suffix.sub("", candidate)
+    if len(excluded_base) < 2 or len(candidate_base) < 2:
+        return False
+    if excluded_base in candidate_base or candidate_base in excluded_base:
+        return True
+
+    generic_suffixes = {"商品", "产品", "用品", "配件", "工具", "饰品", "摆件", "套装", "组合", "系列", "小件"}
+    max_suffix = min(12, len(excluded_base), len(candidate_base))
+    for size in range(max_suffix, 1, -1):
+        suffix = excluded_base[-size:]
+        if candidate_base.endswith(suffix) and (size >= 3 or suffix not in generic_suffixes):
+            return True
+    return False
 
 
 def _selection_candidate_blocks(answer: str) -> list[str]:
@@ -4695,7 +4722,7 @@ def _project_selection_answer_to_contract(
     if len(candidates) < required_count:
         return ""
     excluded_names = [
-        _normalized_candidate_name(_safe_text(item, limit=80))
+        _safe_text(item, limit=80)
         for item in selection_contract.get("excluded_candidate_names", [])
         if _safe_text(item, limit=80)
     ]
@@ -4703,11 +4730,7 @@ def _project_selection_answer_to_contract(
     for item in candidates:
         name = _safe_text(item.get("name") or "", limit=120) if isinstance(item, dict) else ""
         normalized = _normalized_candidate_name(name)
-        if not normalized or any(
-            excluded in normalized or normalized in excluded
-            for excluded in excluded_names
-            if len(excluded) >= 2
-        ):
+        if not normalized or any(_candidate_name_matches_exclusion(excluded, name) for excluded in excluded_names):
             continue
         if name not in chosen:
             chosen.append(name)

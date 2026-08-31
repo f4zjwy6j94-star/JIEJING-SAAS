@@ -6467,6 +6467,27 @@ function readSaasPublishIntakeForm() {
   const title = value("title");
   const sku = value("sku") || `JJ-FRESH-${Date.now()}`;
   const listingProjectIdentity = saasCurrentListingProjectIdentity();
+  const currentDraft = state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object"
+    ? state.saasListingComposerDraft
+    : {};
+  const matchingProductFactReport = (state.saasReports || [])
+    .filter(
+      (record) =>
+        record?.report_type === "merchant.product_facts" &&
+        saasActivityReportMatchesCurrentProject(record, listingProjectIdentity.key),
+    )
+    .sort((a, b) => saasTimestampMillis(b.updated_at || b.created_at) - saasTimestampMillis(a.updated_at || a.created_at))[0] || null;
+  const productFactReportId = String(
+    currentDraft.source_product_fact_report_id || matchingProductFactReport?.report_id || "",
+  ).trim();
+  const mediaJobCandidate = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+  const mediaGate = saasApprovedMediaWritebackGate(mediaJobCandidate, currentDraft);
+  const approvedMediaJob = mediaGate.allowed ? mediaJobCandidate : null;
+  const approvedAssetsByUrl = new Map(
+    (mediaGate.allowed ? mediaGate.assets : [])
+      .map((asset) => [saasSafeListingAssetUrl(asset?.url || ""), asset])
+      .filter(([url]) => Boolean(url)),
+  );
   return {
     simulation_only: state.saasListingComposerDraft?.merchant_product_fact_packet?.simulation_only === true,
     product: value("product") || title || sku,
@@ -6499,12 +6520,20 @@ function readSaasPublishIntakeForm() {
       item_location: value("item_location"),
     },
     asset_manifest: {
-      assets: imageUrls.map((url, index) => ({
-        asset_type: "image",
-        role: index === 0 ? "main" : "gallery",
-        url,
-        source: "merchant_publish_confirmation_intake",
-      })),
+      assets: imageUrls.map((url, index) => {
+        const safeUrl = saasSafeListingAssetUrl(url);
+        const approvedAsset = approvedAssetsByUrl.get(safeUrl) || null;
+        return {
+          ...(approvedAsset?.asset_id ? { asset_id: String(approvedAsset.asset_id).slice(0, 100) } : {}),
+          asset_type: "image",
+          role: index === 0 ? "main" : "gallery",
+          url: safeUrl || url,
+        };
+      }),
+    },
+    publish_evidence_refs: {
+      product_fact_report_id: productFactReportId,
+      media_job_id: String(approvedMediaJob?.media_job_id || "").trim(),
     },
     finance_review: {
       procurement_cost_money: value("procurement_cost") ? { value: value("procurement_cost"), currency: value("currency") || "USD" } : null,
@@ -9052,6 +9081,7 @@ function saasMerchantProductFactDefinitions() {
       fields: [
         ["product_name", "商品名称", "例如：Silicone Cable Organizer", "text"],
         ["source_url", "货源或自有商品链接", "真实供应商链接；自有商品可留空", "url", true],
+        ["merchant_owned_product_confirmed", "自有商品归属确认", "没有货源链接时，勾选表示这是你有权销售的自有商品", "checkbox", true],
         ["sku", "SKU", "当前账号内唯一", "text"],
         ["brand", "品牌", "无品牌也请明确填写 Unbranded", "text"],
         ["mpn", "MPN", "没有可填写 Does Not Apply", "text"],
@@ -9126,6 +9156,7 @@ function saasMerchantProductFactRequiredKeys() {
 
 function saasMerchantProductFactValuePresent(key = "", value = "") {
   if (key === "image_rights_confirmed") return value === true;
+  if (key === "merchant_owned_product_confirmed") return value === true;
   const text = publicRuntimeText(value).trim();
   return Boolean(text) && !/^(待补|待确认|待发布|等待|unknown|todo|n\/a)$/i.test(text);
 }
@@ -15094,7 +15125,7 @@ function sanitizeSaasMerchantProductFactValues(values = {}) {
       .filter((key) => values[key] !== undefined && values[key] !== null)
       .map((key) => [
         key,
-        key === "image_rights_confirmed"
+        ["image_rights_confirmed", "merchant_owned_product_confirmed"].includes(key)
           ? values[key] === true
           : sanitizeSaasWorkflowFeedbackText(values[key], key === "image_urls" ? 2400 : key === "source_url" ? 700 : 240),
       ]),
@@ -22634,16 +22665,17 @@ function saasAiCeoTaskContextProjection(command = state.saasLastCeoCommand) {
   }).sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at))[0] || null;
   const draftCandidate = state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object" ? state.saasListingComposerDraft : null;
   const draft = saasCurrentListingProjectIdentity(draftCandidate)?.key === boundProjectId ? draftCandidate : null;
+  const projectReports = (state.saasReports || []).filter((record) => saasActivityReportProjectIdentity(record)?.key === boundProjectId);
   const productLabel = publicRuntimeText(
     project.product_name ||
       project.sku ||
       saasWorkflowProductLabel(latestTask) ||
+      saasProductLabelForRecord(projectReports[0]) ||
       draft?.product ||
       draft?.title ||
       draft?.fields?.title ||
       "当前商品任务",
   ).slice(0, 96);
-  const projectReports = (state.saasReports || []).filter((record) => saasActivityReportProjectIdentity(record)?.key === boundProjectId);
   const fallbackCoverage = saasAiCeoStageCoverage(projectReports, []);
   const completedItems = (stages.length ? stages : fallbackCoverage.stages || [])
     .filter((stage) => stage?.status === "completed" || stage?.done === true)
@@ -30436,12 +30468,19 @@ async function saveSaasMerchantProductFacts() {
   collected.unknownFacts.forEach((key) => delete retainedDerivedSuggestions[key]);
   const sourceRecords = Array.isArray(current.source_records) ? current.source_records.slice(0, 12) : [];
   const sourceUrl = collected.merchantConfirmed.source_url || "";
+  if (sourceUrl) {
+    collected.unknownFacts = collected.unknownFacts.filter((key) => key !== "merchant_owned_product_confirmed");
+  }
   if (sourceUrl && !sourceRecords.some((item) => item?.url === sourceUrl)) {
     sourceRecords.push({ type: "merchant_product_link", url: sourceUrl, rights_status: "not_applicable" });
   }
   draft.merchant_product_fact_packet = {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
-    source_mode: sourceUrl ? "merchant_source_supplied" : "merchant_owned_product",
+    source_mode: sourceUrl
+      ? "merchant_source_supplied"
+      : collected.merchantConfirmed.merchant_owned_product_confirmed === true
+      ? "merchant_owned_product"
+      : "source_missing",
     product_name: collected.merchantConfirmed.product_name || current.product_name || draft.product || draft.title || "",
     simulation_only: current.simulation_only === true,
     fact_scope: current.simulation_only === true ? "simulation_rehearsal" : "merchant_product",
@@ -30559,6 +30598,9 @@ async function saveSaasMerchantProductFacts() {
         restoredDraft.listing_project_identity = serverIdentity;
       }
       state.saasListingComposerDraft = restoredDraft;
+    }
+    if (response.report?.report_id && state.saasListingComposerDraft) {
+      state.saasListingComposerDraft.source_product_fact_report_id = String(response.report.report_id);
     }
     if (response.task) state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
     if (response.report) state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
@@ -31103,10 +31145,15 @@ function ensureSaasAiCeoMarketReportRecordFromTurn(turn = {}, existingRecord = n
   if (!report) return latest;
   upsertSaasReportRecord(report);
   const delivery = saasAiCeoMarketReportDeliveryFromRecord(report);
+  const reportBody = report.report && typeof report.report === "object" ? report.report : {};
+  const reportListingIdentity = saasNormalizeListingProjectIdentity(
+    report.listing_project_identity || reportBody.listing_project_identity,
+  );
   return normalizeSaasAiCeoLatestTurn({
     ...latest,
     market_report_id: report.report_id,
     market_report_delivery: delivery,
+    listing_project_identity: reportListingIdentity || latest.listing_project_identity,
   });
 }
 
@@ -39251,6 +39298,9 @@ function saasListingDraftFromManualSourceFacts(facts = {}) {
   const merchantConfirmed = {
     product_name: productName,
     ...(isFilledOperationalValue(facts.source_link) ? { source_url: String(facts.source_link).trim() } : {}),
+    ...(!isFilledOperationalValue(facts.source_link) && facts.dropship_rule === "owned_inventory"
+      ? { merchant_owned_product_confirmed: true }
+      : {}),
     ...(isFilledOperationalValue(facts.condition) ? { condition: String(facts.condition).trim().toUpperCase() } : {}),
     ...(intake.supplier_facts.material ? { material: String(intake.supplier_facts.material) } : {}),
     ...(intake.supplier_facts.package_weight_g ? { package_weight_g: String(intake.supplier_facts.package_weight_g) } : {}),
@@ -39278,7 +39328,11 @@ function saasListingDraftFromManualSourceFacts(facts = {}) {
   draft.title = productName;
   draft.merchant_product_fact_packet = {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
-    source_mode: merchantConfirmed.source_url ? "merchant_source_supplied" : "merchant_owned_product",
+    source_mode: merchantConfirmed.source_url
+      ? "merchant_source_supplied"
+      : merchantConfirmed.merchant_owned_product_confirmed === true
+      ? "merchant_owned_product"
+      : "source_missing",
     product_name: productName,
     source_confirmed_facts: {},
     merchant_confirmed_facts: merchantConfirmed,
@@ -39306,6 +39360,11 @@ async function persistSaasManualSourceFacts(facts = {}) {
     showActionToast("请先填写实际准备销售的商品名称；没有商品名称就无法建立项目记录。");
     return false;
   }
+  resetSaasListingPublishEvidenceForNewProject();
+  state.activeMediaDraft = draft.listing_project_key || draft.listing_project_identity?.key || "";
+  state.saasMediaSourceUploadEpoch = Number(state.saasMediaSourceUploadEpoch || 0) + 1;
+  state.saasMediaSourceUpload = null;
+  state.saasActiveMediaPreviewKey = "";
   state.manualSourceFacts = facts;
   state.saasListingComposerDraft = draft;
   state.saasListingComposerInput = [facts.product_name, facts.source_link].filter(Boolean).join("\n");
@@ -39341,6 +39400,7 @@ async function persistSaasManualSourceFacts(facts = {}) {
     }
     if (response.report) {
       state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
+      state.saasListingComposerDraft.source_product_fact_report_id = String(response.report.report_id || "");
     }
     state.sourceManualStatus = "saved";
     state.saasListingProductFactSaveStatus = "saved";

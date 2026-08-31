@@ -62,19 +62,79 @@ def _settings() -> SaaSSettings:
         os.environ.update(old)
 
 
+def _backend_publish_evidence(
+    *,
+    company_id: str,
+    store_id: str,
+    listing_project_key: str,
+    report_id: str,
+    image_url: str,
+) -> dict[str, object]:
+    evidence: dict[str, object] = {
+        "contract_version": "2026-08-31-publish-source-rights-evidence-v1",
+        "status": "ready",
+        "server_resolved": True,
+        "scope": {
+            "company_id": company_id,
+            "store_id": store_id,
+            "listing_project_key": listing_project_key,
+        },
+        "refs": {
+            "product_fact_report_id": report_id,
+            "media_job_id": "",
+        },
+        "product_source": {
+            "status": "verified",
+            "source_mode": "merchant_owned_product",
+            "evidence_type": "merchant_product_fact_report",
+            "evidence_id": report_id,
+        },
+        "image_rights": {
+            "status": "verified",
+            "required_asset_count": 1,
+            "covered_asset_count": 1,
+            "coverage_complete": True,
+            "assets": [
+                {
+                    "asset_id": "",
+                    "url_sha256": hashlib.sha256(image_url.encode("utf-8")).hexdigest(),
+                    "evidence_type": "merchant_product_fact_report",
+                    "evidence_id": report_id,
+                }
+            ],
+        },
+        "secret_exposed": False,
+    }
+    evidence["fingerprint"] = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    evidence["resolved_at"] = "2026-08-31T00:00:00Z"
+    return evidence
+
+
 def _request() -> ExecutionRequest:
+    company_id = "company_ebay_draft_save"
+    store_id = "store_ebay_draft_save"
+    listing_project_key = "listing-project-ebay-draft-save-001"
+    report_id = "report_ebay_draft_save_001"
+    image_url = "https://cdn.example.test/jj-draft-save-001.jpg"
     return ExecutionRequest(
         action_type="save_ebay_listing_draft",
         task_id="task_ebay_draft_save",
         user_id="user_ebay_draft_save",
-        company_id="company_ebay_draft_save",
-        store_id="store_ebay_draft_save",
+        company_id=company_id,
+        store_id=store_id,
         platform="ebay",
         confirmation_id="confirm_ebay_draft_save",
         confirmed_by="user_ebay_draft_save",
         confirmed_at="2026-07-14T20:00:00+08:00",
         idempotency_key="ebay-draft-save-001",
         payload={
+            "listing_project_identity": {
+                "key": listing_project_key,
+                "source_report_id": report_id,
+                "candidate_id": "candidate-ebay-draft-save-001",
+            },
             "account_health": {"status": "ready"},
             "listing": {
                 "sku": "JJ-DRAFT-SAVE-001",
@@ -95,8 +155,15 @@ def _request() -> ExecutionRequest:
                 "return_policy_id": "return-policy",
             },
             "asset_manifest": {
-                "assets": [{"url": "https://cdn.example.test/jj-draft-save-001.jpg"}],
+                "assets": [{"url": image_url}],
             },
+            "publish_evidence": _backend_publish_evidence(
+                company_id=company_id,
+                store_id=store_id,
+                listing_project_key=listing_project_key,
+                report_id=report_id,
+                image_url=image_url,
+            ),
         },
     )
 

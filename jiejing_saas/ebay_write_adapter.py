@@ -19,6 +19,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from jiejing_runtime.execution_preflight import validate_publish_evidence
+
 from .config import SaaSSettings
 from .ebay_http_client import EbayReadOnlyHttpClient, HttpTransport, _urlopen_transport
 from .ebay_oauth import UNPUBLISHED_DRAFT_SCOPES
@@ -44,6 +46,7 @@ WRITE_ACTIONS = [
             "business_policies.payment_policy_id",
             "business_policies.return_policy_id",
             "asset_manifest.assets",
+            "publish_evidence",
             "confirmation_record",
             "idempotency_key",
         ],
@@ -73,6 +76,7 @@ WRITE_ACTIONS = [
             "supplier_facts.package_weight_g",
             "supplier_facts.package_dimensions_cm",
             "asset_manifest.assets",
+            "publish_evidence",
             "finance_review.net_profit_money",
             "idempotency_key",
         ],
@@ -204,6 +208,7 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         "required_chain": [
             "approved_confirmation",
             "execution_preflight_passed",
+            "server_resolved_publish_source_rights_evidence",
             "vault_resolved_token_backend_only",
             "queued_execution_job",
             "idempotency_key",
@@ -239,6 +244,9 @@ def build_publish_readiness(
     preflight: dict[str, Any] | None = None,
     latest_execution_results: list[dict[str, Any]] | None = None,
     recent_confirmations: list[dict[str, Any]] | None = None,
+    expected_company_id: str | None = None,
+    expected_store_id: str | None = None,
+    expected_listing_project_key: str | None = None,
 ) -> dict[str, Any]:
     """Build a merchant-visible readiness checklist without calling eBay."""
 
@@ -352,6 +360,41 @@ def build_publish_readiness(
         ),
         blocking=not bool(urls),
         details={"image_url_count": len(urls), "invalid_asset_count": invalid_count},
+    )
+
+    evidence = payload.get("publish_evidence") if isinstance(payload.get("publish_evidence"), dict) else {}
+    evidence_scope = evidence.get("scope") if isinstance(evidence.get("scope"), dict) else {}
+    identity = payload.get("listing_project_identity") if isinstance(payload.get("listing_project_identity"), dict) else {}
+    evidence_review = validate_publish_evidence(
+        payload,
+        company_id=expected_company_id or str(evidence_scope.get("company_id") or ""),
+        store_id=expected_store_id or str(evidence_scope.get("store_id") or ""),
+        listing_project_key=(
+            expected_listing_project_key
+            or str(identity.get("key") or payload.get("listing_project_key") or evidence_scope.get("listing_project_key") or "")
+        ),
+    )
+    evidence_issues = evidence_review.get("issues") if isinstance(evidence_review.get("issues"), list) else []
+    evidence_ready = evidence_review.get("ready") is True
+    _add_check(
+        checks,
+        key="publish_source_rights_evidence",
+        label="商品来源与图片权利",
+        status="passed" if evidence_ready else "blocked",
+        summary=(
+            "商品来源和全部发布图片的权利证据已由捷境后端核验。"
+            if evidence_ready
+            else "缺少后端核验的商品来源或图片权利证据，不能保存 eBay 草稿或正式发布。"
+        ),
+        blocking=not evidence_ready,
+        details={
+            "contract_version": evidence_review.get("contract_version"),
+            "required_asset_count": evidence_review.get("required_asset_count"),
+            "covered_asset_count": evidence_review.get("covered_asset_count"),
+            "issues": evidence_issues,
+            "server_resolved": evidence.get("server_resolved") is True,
+            "secret_exposed": False,
+        },
     )
 
     duplicate_findings = _duplicate_product_findings(
@@ -978,6 +1021,13 @@ class EbayWriteHttpAdapter:
             return _blocked("unsupported_write_action", ["only_publish_listing_supported"])
         if preflight.get("status") != "ready_for_platform_adapter":
             return _blocked("preflight_not_ready", preflight.get("missing_fields") or ["execution_preflight_not_ready"], preflight=preflight)
+        evidence_review = _request_publish_evidence_review(request)
+        if evidence_review.get("ready") is not True:
+            return _blocked(
+                "publish_evidence_not_ready",
+                _publish_evidence_blockers(evidence_review),
+                preflight=preflight,
+            )
 
         connection = _find_publish_connection(connections)
         if not connection:
@@ -1099,6 +1149,13 @@ class EbayWriteHttpAdapter:
             return _blocked(
                 "preflight_not_ready",
                 preflight.get("missing_fields") or ["execution_preflight_not_ready"],
+                preflight=preflight,
+            )
+        evidence_review = _request_publish_evidence_review(request)
+        if evidence_review.get("ready") is not True:
+            return _blocked(
+                "publish_evidence_not_ready",
+                _publish_evidence_blockers(evidence_review),
                 preflight=preflight,
             )
         payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
@@ -1321,6 +1378,13 @@ class EbayWriteHttpAdapter:
             return _draft_blocked(
                 "preflight_not_ready",
                 preflight.get("missing_fields") or ["execution_preflight_not_ready"],
+                preflight=preflight,
+            )
+        evidence_review = _request_publish_evidence_review(request)
+        if evidence_review.get("ready") is not True:
+            return _draft_blocked(
+                "draft_publish_evidence_not_ready",
+                _publish_evidence_blockers(evidence_review),
                 preflight=preflight,
             )
 
@@ -2966,6 +3030,30 @@ def _cleanup_plan(*, sku: str, published_offer: dict[str, Any], offer_count: int
         "operations": operations,
         "secret_exposed": False,
     }
+
+
+def _request_publish_evidence_review(request: Any) -> dict[str, Any]:
+    payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+    identity = payload.get("listing_project_identity") if isinstance(payload.get("listing_project_identity"), dict) else {}
+    listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+    listing_project_key = str(
+        identity.get("key")
+        or payload.get("listing_project_key")
+        or listing.get("listing_project_key")
+        or ""
+    ).strip()
+    return validate_publish_evidence(
+        payload,
+        company_id=str(getattr(request, "company_id", "") or ""),
+        store_id=str(getattr(request, "store_id", "") or ""),
+        listing_project_key=listing_project_key,
+    )
+
+
+def _publish_evidence_blockers(review: dict[str, Any]) -> list[str]:
+    issues = review.get("issues") if isinstance(review.get("issues"), list) else []
+    blockers = [str(item.get("key") or "") for item in issues if isinstance(item, dict) and str(item.get("key") or "").strip()]
+    return blockers or ["publish_evidence_not_ready"]
 
 
 def _blocked(status: str, blockers: list[Any], *, preflight: dict[str, Any] | None = None) -> dict[str, Any]:

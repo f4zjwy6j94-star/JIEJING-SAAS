@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -24,8 +25,66 @@ def fail(message: str) -> int:
     return 1
 
 
-def _publish_payload() -> dict:
+def _backend_publish_evidence(
+    *,
+    company_id: str,
+    store_id: str,
+    listing_project_key: str,
+    report_id: str,
+    image_url: str,
+) -> dict:
+    evidence = {
+        "contract_version": "2026-08-31-publish-source-rights-evidence-v1",
+        "status": "ready",
+        "server_resolved": True,
+        "scope": {
+            "company_id": company_id,
+            "store_id": store_id,
+            "listing_project_key": listing_project_key,
+        },
+        "refs": {
+            "product_fact_report_id": report_id,
+            "media_job_id": "",
+        },
+        "product_source": {
+            "status": "verified",
+            "source_mode": "merchant_owned_product",
+            "evidence_type": "merchant_product_fact_report",
+            "evidence_id": report_id,
+        },
+        "image_rights": {
+            "status": "verified",
+            "required_asset_count": 1,
+            "covered_asset_count": 1,
+            "coverage_complete": True,
+            "assets": [
+                {
+                    "asset_id": "",
+                    "url_sha256": hashlib.sha256(image_url.encode("utf-8")).hexdigest(),
+                    "evidence_type": "merchant_product_fact_report",
+                    "evidence_id": report_id,
+                }
+            ],
+        },
+        "secret_exposed": False,
+    }
+    evidence["fingerprint"] = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    evidence["resolved_at"] = "2026-08-31T00:00:00Z"
+    return evidence
+
+
+def _publish_payload(*, company_id: str, store_id: str) -> dict:
+    image_url = "https://example.com/image.jpg"
+    listing_project_key = f"listing-project-account-health-{store_id}"
+    report_id = f"report_account_health_{store_id}"
     return {
+        "listing_project_identity": {
+            "key": listing_project_key,
+            "source_report_id": report_id,
+            "candidate_id": "candidate-account-health",
+        },
         "listing": {
             "sku": "JJ-ACCOUNT-INCIDENT-001",
             "title": "Fresh Account Health Test Product",
@@ -48,17 +107,24 @@ def _publish_payload() -> dict:
             "material": "Plastic",
             "item_location": "US",
         },
-        "asset_manifest": {"assets": [{"url": "https://example.com/image.jpg"}]},
+        "asset_manifest": {"assets": [{"url": image_url}]},
+        "publish_evidence": _backend_publish_evidence(
+            company_id=company_id,
+            store_id=store_id,
+            listing_project_key=listing_project_key,
+            report_id=report_id,
+            image_url=image_url,
+        ),
         "finance_review": {"net_profit_money": {"value": "3.20", "currency": "USD"}},
     }
 
 
-def _request(payload: dict, *, store_id: str) -> ExecutionRequest:
+def _request(payload: dict, *, company_id: str, store_id: str) -> ExecutionRequest:
     return ExecutionRequest(
         action_type="publish_listing",
         task_id=f"task_{store_id}",
         user_id="user_account_health",
-        company_id="company_account_health",
+        company_id=company_id,
         store_id=store_id,
         platform="ebay",
         confirmation_id=f"confirm_{store_id}",
@@ -250,9 +316,19 @@ def main() -> int:
         return fail(f"healthy official store_profile should be clear: {healthy}")
     if healthy.get("business_policy_statuses") != {"payment": True, "fulfillment": True, "return": True}:
         return fail(f"healthy evidence should expose all three policy statuses: {healthy}")
-    healthy_payload = merge_account_health_into_payload(_publish_payload(), healthy)
+    healthy_payload = merge_account_health_into_payload(
+        _publish_payload(
+            company_id=healthy_ctx["company_id"],
+            store_id=healthy_ctx["store"]["store_id"],
+        ),
+        healthy,
+    )
     healthy_preflight = ExecutionService(demo_mode=False).preflight(
-        _request(healthy_payload, store_id=healthy_ctx["store"]["store_id"])
+        _request(
+            healthy_payload,
+            company_id=healthy_ctx["company_id"],
+            store_id=healthy_ctx["store"]["store_id"],
+        )
     )
     if healthy_preflight.get("status") != "ready_for_platform_adapter":
         return fail(f"healthy account should allow publish preflight to continue: {healthy_preflight}")
@@ -395,9 +471,19 @@ def main() -> int:
     )
     if frozen.get("status") != "suspended" or frozen.get("incident_mode") is not True:
         return fail(f"suspended account should enter incident mode: {frozen}")
-    frozen_payload = merge_account_health_into_payload(_publish_payload(), frozen)
+    frozen_payload = merge_account_health_into_payload(
+        _publish_payload(
+            company_id=frozen_ctx["company_id"],
+            store_id=frozen_ctx["store"]["store_id"],
+        ),
+        frozen,
+    )
     frozen_preflight = ExecutionService(demo_mode=False).preflight(
-        _request(frozen_payload, store_id=frozen_ctx["store"]["store_id"])
+        _request(
+            frozen_payload,
+            company_id=frozen_ctx["company_id"],
+            store_id=frozen_ctx["store"]["store_id"],
+        )
     )
     issue_keys = {item.get("key") for item in frozen_preflight.get("issues", [])}
     if frozen_preflight.get("status") != "blocked_missing_execution_facts" or "account_health.status" not in issue_keys:

@@ -158,6 +158,7 @@ MERCHANT_PRODUCT_FACT_KEYS = (
     "handling_time_days",
     "image_urls",
     "image_rights_confirmed",
+    "merchant_owned_product_confirmed",
 )
 MERCHANT_PRODUCT_FACT_REQUIRED_KEYS = tuple(
     key
@@ -176,6 +177,7 @@ MERCHANT_PRODUCT_FACT_REQUIRED_KEYS = tuple(
         "packaging_type",
         "included_items",
         "handling_time_days",
+        "merchant_owned_product_confirmed",
     }
 )
 _DOMESTIC_BILLING_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
@@ -5122,6 +5124,16 @@ class SaaSRepository:
             listing_fields["source_record_count"] = source_count
         selected_candidate_id = str(selected_candidate.get("candidate_id") or "")
         candidate_count = len(product_candidates)
+        report_listing_project_identity = safe_listing_project_identity
+        if not report_listing_project_identity and product and selected_candidate_id:
+            project_seed = f"{report_id}|{selected_candidate_id}"
+            report_listing_project_identity = normalize_listing_project_identity(
+                {
+                    "key": f"listing-project-{hashlib.sha256(project_seed.encode('utf-8')).hexdigest()[:20]}",
+                    "source_report_id": report_id,
+                    "candidate_id": selected_candidate_id,
+                }
+            )
         merchant_intent = "ebay_product_research"
         evidence_status = "source_backed" if source_count else "missing_sources"
         turn_plan = chat.get("turn_plan") if isinstance(chat.get("turn_plan"), dict) else {}
@@ -5206,7 +5218,7 @@ class SaaSRepository:
             "merchant_product_source_required": merchant_product_source_required,
             "source_type": "ai_ceo_chat",
             "source_command_id": command_id or "",
-            "listing_project_identity": safe_listing_project_identity or None,
+            "listing_project_identity": report_listing_project_identity or None,
             "product": product,
             "product_candidates": product_candidates,
             "candidate_products": product_candidates,
@@ -5658,6 +5670,21 @@ class SaaSRepository:
                 tuple(params),
             ).fetchall()
         return [self._report_row_to_dict(row) for row in rows]
+
+    def get_report_for_company(self, *, company_id: str, report_id: str) -> dict[str, Any] | None:
+        """Return one report only when its owning task belongs to the company."""
+
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select r.*, t.company_id as company_id, t.store_id as store_id from reports r
+                join tasks t on t.task_id = r.task_id
+                where t.company_id = ? and r.report_id = ?
+                """,
+                (company_id, report_id),
+            ).fetchone()
+        return self._report_row_to_dict(row) if row else None
 
     def list_confirmations(self, *, company_id: str, status: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         self.initialize()
@@ -6899,6 +6926,162 @@ class SaaSRepository:
             **({"external_execution_claim_binding": claim_binding} if claim_binding else {}),
         }
 
+    def abort_publish_execution_claim_before_write(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+        user_id: str,
+        reason_code: str = "publish_evidence_revalidation_blocked",
+    ) -> dict[str, Any]:
+        """Restore a claimed publish confirmation when no platform call began.
+
+        This is deliberately narrower than generic claim recovery: it is only
+        valid for a ``publish_listing`` claim held by the current synchronous
+        handler, after a final authoritative pre-write check fails. The CAS on
+        the processing status prevents this zero-write recovery from changing
+        a confirmation that another state transition already handled.
+        """
+
+        safe_reason = (
+            reason_code
+            if reason_code in {
+                "publish_evidence_revalidation_blocked",
+                "publish_evidence_changed",
+            }
+            else "publish_evidence_revalidation_blocked"
+        )
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(row) if row else {}
+            if not (
+                str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
+                and str(confirmation.get("action_type") or "") == "publish_listing"
+            ):
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            transitioned = conn.execute(
+                """
+                update confirmations set status = 'needs_revision'
+                where company_id = ? and confirmation_id = ? and status = ? and action_type = 'publish_listing'
+                """,
+                (company_id, confirmation_id, EXTERNAL_EXECUTION_PROCESSING_STATUS),
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=confirmation.get("task_id"),
+                status="needs_revision",
+                expected_statuses={"manual_reconcile_required"},
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=confirmation.get("store_id"),
+                user_id=user_id,
+                actor_type="system",
+                action_type="external_execution.prewrite_aborted",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="The publish claim was restored before any platform write because authoritative evidence changed.",
+                details={
+                    "action_type": "publish_listing",
+                    "reason_code": safe_reason,
+                    "real_platform_write_attempted": False,
+                    "automatic_retry_allowed": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            **confirmation,
+            "status": "needs_revision",
+            "external_execution_claimed": False,
+            "real_platform_write_attempted": False,
+            "secret_exposed": False,
+        }
+
+    def mark_publish_confirmation_needs_revision(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+        user_id: str,
+        reason_code: str = "publish_evidence_changed",
+    ) -> dict[str, Any]:
+        """Expire an approved eBay action when its authoritative facts change."""
+
+        safe_reason = (
+            reason_code
+            if reason_code in {"publish_evidence_changed", "publish_evidence_revalidation_blocked"}
+            else "publish_evidence_changed"
+        )
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(row) if row else {}
+            if not (
+                str(confirmation.get("status") or "") == "approved"
+                and str(confirmation.get("action_type") or "")
+                in {"publish_listing", "save_ebay_listing_draft"}
+            ):
+                raise ConfirmationDecisionConflict("confirmation_evidence_revision_conflict")
+            transitioned = conn.execute(
+                """
+                update confirmations set status = 'needs_revision'
+                where company_id = ? and confirmation_id = ? and status = 'approved'
+                  and action_type in ('publish_listing', 'save_ebay_listing_draft')
+                """,
+                (company_id, confirmation_id),
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("confirmation_evidence_revision_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=confirmation.get("task_id"),
+                status="needs_revision",
+                expected_statuses={"approved_waiting_execution", "approved"},
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=confirmation.get("store_id"),
+                user_id=user_id,
+                actor_type="system",
+                action_type="confirmation.publish_evidence_changed",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="The approved eBay action now requires revision because authoritative source or image-rights evidence changed.",
+                details={
+                    "action_type": confirmation.get("action_type"),
+                    "reason_code": safe_reason,
+                    "real_platform_write_attempted": False,
+                    "requires_new_action_time_confirmation": True,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            **confirmation,
+            "status": "needs_revision",
+            "real_platform_write_attempted": False,
+            "requires_new_action_time_confirmation": True,
+            "secret_exposed": False,
+        }
+
     def retire_external_execution_after_verified_noop(
         self,
         *,
@@ -7438,6 +7621,7 @@ class SaaSRepository:
             "claim_consume_failed",
             "adapter_prewrite_exception",
             "prewrite_check_blocked",
+            "publish_evidence_changed",
         }
         safe_reason = reason_code if reason_code in safe_reasons else "prewrite_check_blocked"
         self.initialize()
@@ -7476,7 +7660,13 @@ class SaaSRepository:
                 )
                 == binding
             )
-            restored_status = "approved" if unchanged else "needs_revision"
+            restored_status = (
+                "needs_revision"
+                if safe_reason == "publish_evidence_changed"
+                else "approved"
+                if unchanged
+                else "needs_revision"
+            )
             aborted = conn.execute(
                 "update external_execution_claims set status = 'aborted' where claim_id = ? and status = 'claimed'",
                 (capability._claim_id,),
@@ -17347,7 +17537,7 @@ def normalize_merchant_product_fact_packet(
         cleaned: dict[str, Any] = {}
         for key in MERCHANT_PRODUCT_FACT_KEYS:
             raw_value = items.get(key)
-            if key == "image_rights_confirmed":
+            if key in {"image_rights_confirmed", "merchant_owned_product_confirmed"}:
                 if allow_confirmation and raw_value is True:
                     cleaned[key] = True
                 continue
@@ -17385,6 +17575,9 @@ def normalize_merchant_product_fact_packet(
     unknown = [key for key in MERCHANT_PRODUCT_FACT_REQUIRED_KEYS if key not in merchant_confirmed]
     source_records: list[dict[str, Any]] = []
     source_url = str(merchant_confirmed.get("source_url") or "")
+    merchant_owned_product_confirmed = merchant_confirmed.get("merchant_owned_product_confirmed") is True
+    if not source_url and not merchant_owned_product_confirmed:
+        unknown.append("merchant_owned_product_confirmed")
     if source_url:
         source_records.append(
             {
@@ -17404,15 +17597,26 @@ def normalize_merchant_product_fact_packet(
                 "secret_exposed": False,
             }
         )
-    total = len(MERCHANT_PRODUCT_FACT_REQUIRED_KEYS)
+    # A sellable product needs one explicit source path: a supplier URL or a
+    # merchant-owned-product attestation. This conditional requirement counts
+    # as one field without making both alternatives mandatory.
+    total = len(MERCHANT_PRODUCT_FACT_REQUIRED_KEYS) + 1
     ready_count = total - len(unknown)
     blocked_by = [f"merchant_product_fact_missing:{key}" for key in unknown]
+    if not source_url and not merchant_owned_product_confirmed:
+        blocked_by.append("merchant_product_source_unconfirmed")
     if simulation_only:
         blocked_by.append("simulation_only_product_facts")
     return {
         "contract_version": MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION,
         "source": "authenticated_merchant_request" if trusted_merchant_request else "untrusted_input",
-        "source_mode": "merchant_source_supplied" if source_url else "merchant_owned_product",
+        "source_mode": (
+            "merchant_source_supplied"
+            if source_url
+            else "merchant_owned_product"
+            if merchant_owned_product_confirmed
+            else "source_missing"
+        ),
         "product_name": str(merchant_confirmed.get("product_name") or derived.get("product_name") or "")[:120],
         # Source-confirmed facts require a separate extractor/provenance step;
         # the browser cannot award that status to its own values.

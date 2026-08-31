@@ -145,6 +145,12 @@ from .product_vision import (
     fal_product_vision_client_from_env,
     product_vision_prompt_context,
 )
+from .publish_source_rights import (
+    PublishSourceRightsEvidenceError,
+    canonicalize_publish_asset_manifest,
+    resolve_publish_source_rights_evidence,
+    validate_publish_source_rights_evidence,
+)
 from .merchant_project_status import build_merchant_project_status
 from .operational_health import build_operational_health
 from .owner_launch_control import build_owner_launch_control
@@ -4926,10 +4932,70 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             listing_project_identity = {
                 "key": _safe_publish_text(raw_project_identity.get("key"), limit=160),
                 "product": _safe_publish_text(raw_project_identity.get("product"), limit=160),
-                "source_id": _safe_publish_text(raw_project_identity.get("source_id"), limit=160),
+                "source_id": _safe_publish_text(
+                    raw_project_identity.get("source_id") or raw_project_identity.get("source_report_id"),
+                    limit=160,
+                ),
                 "candidate_id": _safe_publish_text(raw_project_identity.get("candidate_id"), limit=120),
                 "secret_exposed": False,
             }
+            try:
+                # Persist the server-owned project and URL spellings in the
+                # approved payload. Execution preflight must evaluate the same
+                # exact scope and URL hashes that the evidence resolver used.
+                publish_payload["listing_project_identity"] = {
+                    "key": listing_project_identity["key"],
+                    "source_report_id": listing_project_identity["source_id"],
+                    "candidate_id": listing_project_identity["candidate_id"],
+                }
+                publish_payload["asset_manifest"] = canonicalize_publish_asset_manifest(
+                    publish_payload.get("asset_manifest") or {}
+                )
+                if existing_draft_publish_intake:
+                    stored_publish_evidence = (
+                        publish_payload.get("publish_evidence")
+                        if isinstance(publish_payload.get("publish_evidence"), dict)
+                        else {}
+                    )
+                    validate_publish_source_rights_evidence(
+                        stored_publish_evidence,
+                        company_id=identity["company_id"],
+                        store_id=parts[1],
+                        listing_project_identity=listing_project_identity,
+                        asset_manifest=publish_payload.get("asset_manifest") or {},
+                    )
+                    evidence_refs = stored_publish_evidence.get("refs") or {}
+                else:
+                    evidence_refs = body.get("publish_evidence_refs") if isinstance(body.get("publish_evidence_refs"), dict) else {}
+                canonical_publish_evidence = resolve_publish_source_rights_evidence(
+                    self.repository,
+                    company_id=identity["company_id"],
+                    store_id=parts[1],
+                    listing_project_identity=listing_project_identity,
+                    asset_manifest=publish_payload.get("asset_manifest") or {},
+                    evidence_refs=evidence_refs,
+                )
+                if existing_draft_publish_intake and (
+                    str(canonical_publish_evidence.get("fingerprint") or "")
+                    != str(stored_publish_evidence.get("fingerprint") or "")
+                ):
+                    raise PublishSourceRightsEvidenceError(
+                        "publish_evidence_changed",
+                        "authoritative_evidence_fingerprint_changed",
+                    )
+                publish_payload["publish_evidence"] = canonical_publish_evidence
+            except PublishSourceRightsEvidenceError as exc:
+                self._send_json(
+                    {
+                        "error": exc.code,
+                        "status": int(_publish_evidence_error_status(exc)),
+                        "blockers": list(exc.blockers),
+                        "confirmation_created": False,
+                        "secret_exposed": False,
+                    },
+                    status=_publish_evidence_error_status(exc),
+                )
+                return
             task_title = _safe_publish_text(
                 body.get("product")
                 or publish_payload.get("listing", {}).get("title")
@@ -5116,6 +5182,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     preflight=preflight,
                     latest_execution_results=latest_execution_results,
                     recent_confirmations=readiness_confirmations,
+                    expected_company_id=identity["company_id"],
+                    expected_store_id=parts[1],
+                    expected_listing_project_key=listing_project_identity.get("key") or "",
                 )
             )
             reused_existing_confirmation = False
@@ -5196,6 +5265,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         else "通过发布体检后，后端执行服务才可用 eBay Inventory API 发布；失败会写入审计和平台规则记忆。"
                     ),
                     "publish_payload": publish_payload,
+                    "publish_payload_sha256": _draft_publish_payload_sha256(publish_payload),
+                    "publish_evidence_fingerprint": str(canonical_publish_evidence.get("fingerprint") or ""),
                     "publish_payload_summary": _publish_payload_summary(publish_payload),
                     "listing_project_identity": listing_project_identity,
                     "simulation_only": body.get("simulation_only") is True,
@@ -9693,6 +9764,42 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     and not self._require_permission(identity, "approve_high_risk")
                 ):
                     return
+                if decision_value == "approve" and existing_confirmation.get("action_type") in {
+                    "publish_listing",
+                    "save_ebay_listing_draft",
+                }:
+                    try:
+                        _revalidate_confirmation_publish_evidence(
+                            self.repository,
+                            company_id=identity["company_id"],
+                            confirmation=existing_confirmation,
+                        )
+                    except PublishSourceRightsEvidenceError as exc:
+                        if str(existing_confirmation.get("status") or "") == "approved":
+                            try:
+                                self.repository.mark_publish_confirmation_needs_revision(
+                                    company_id=identity["company_id"],
+                                    confirmation_id=existing_confirmation["confirmation_id"],
+                                    user_id=identity["user_id"],
+                                    reason_code=(
+                                        "publish_evidence_changed"
+                                        if exc.code == "publish_evidence_changed"
+                                        else "publish_evidence_revalidation_blocked"
+                                    ),
+                                )
+                            except ConfirmationDecisionConflict:
+                                pass
+                        self._send_json(
+                            {
+                                "error": exc.code,
+                                "status": int(_publish_evidence_error_status(exc, revalidation=True)),
+                                "blockers": list(exc.blockers),
+                                "confirmation_status": existing_confirmation.get("status"),
+                                "secret_exposed": False,
+                            },
+                            status=_publish_evidence_error_status(exc, revalidation=True),
+                        )
+                        return
                 record = self.repository.decide_confirmation(
                     company_id=identity["company_id"],
                     confirmation_id=parts[1],
@@ -9721,6 +9828,52 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if _is_domestic_billing_refund_confirmation(confirmation):
                 self._send_error(HTTPStatus.CONFLICT, "domestic_billing_refund_requires_dedicated_execution")
                 return
+            if confirmation.get("action_type") in {"publish_listing", "save_ebay_listing_draft"}:
+                try:
+                    _revalidate_confirmation_publish_evidence(
+                        self.repository,
+                        company_id=identity["company_id"],
+                        confirmation=confirmation,
+                    )
+                except PublishSourceRightsEvidenceError as exc:
+                    confirmation_status = str(confirmation.get("status") or "")
+                    if confirmation_status == "approved":
+                        try:
+                            revised = self.repository.mark_publish_confirmation_needs_revision(
+                                company_id=identity["company_id"],
+                                confirmation_id=confirmation["confirmation_id"],
+                                user_id=identity["user_id"],
+                                reason_code=(
+                                    "publish_evidence_changed"
+                                    if exc.code == "publish_evidence_changed"
+                                    else "publish_evidence_revalidation_blocked"
+                                ),
+                            )
+                            confirmation_status = str(revised.get("status") or confirmation_status)
+                        except ConfirmationDecisionConflict:
+                            pass
+                    self._send_json(
+                        {
+                            "error": exc.code,
+                            "status": int(_publish_evidence_error_status(exc, revalidation=True)),
+                            "blockers": list(exc.blockers),
+                            "preflight": {
+                                "status": "blocked_publish_evidence",
+                                "issues": [
+                                    {
+                                        "key": "publish_evidence",
+                                        "severity": "blocking",
+                                        "message": blocker,
+                                    }
+                                    for blocker in (exc.blockers or (exc.code,))
+                                ],
+                            },
+                            "confirmation_status": confirmation_status,
+                            "secret_exposed": False,
+                        },
+                        status=_publish_evidence_error_status(exc, revalidation=True),
+                    )
+                    return
             payload = _execution_payload_from_context(
                 repository=self.repository,
                 company_id=identity["company_id"],
@@ -9771,6 +9924,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             preflight=preflight,
                             latest_execution_results=latest_execution_results,
                             recent_confirmations=recent_confirmations,
+                            expected_company_id=identity["company_id"],
+                            expected_store_id=confirmation["store_id"],
+                            expected_listing_project_key=str(
+                                (confirmation.get("item") or {}).get("listing_project_identity", {}).get("key") or ""
+                            ),
                         )
                         if confirmation["action_type"] == "publish_listing"
                         else {}
@@ -9910,6 +10068,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             preflight=preflight,
                             latest_execution_results=latest_execution_results,
                             recent_confirmations=recent_confirmations,
+                            expected_company_id=identity["company_id"],
+                            expected_store_id=confirmation["store_id"],
+                            expected_listing_project_key=str(
+                                (confirmation.get("item") or {}).get("listing_project_identity", {}).get("key") or ""
+                            ),
                         )
                     ),
                     "confirmation": confirmation,
@@ -10083,6 +10246,42 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     return
                 self._send_error(HTTPStatus.BAD_REQUEST, "confirmation must be approved before execution service handoff")
                 return
+            if confirmation.get("action_type") in {"publish_listing", "save_ebay_listing_draft"}:
+                try:
+                    _revalidate_confirmation_publish_evidence(
+                        self.repository,
+                        company_id=identity["company_id"],
+                        confirmation=confirmation,
+                    )
+                except PublishSourceRightsEvidenceError as exc:
+                    confirmation_status = str(confirmation.get("status") or "")
+                    try:
+                        revised = self.repository.mark_publish_confirmation_needs_revision(
+                            company_id=identity["company_id"],
+                            confirmation_id=confirmation["confirmation_id"],
+                            user_id=identity["user_id"],
+                            reason_code=(
+                                "publish_evidence_changed"
+                                if exc.code == "publish_evidence_changed"
+                                else "publish_evidence_revalidation_blocked"
+                            ),
+                        )
+                        confirmation_status = str(revised.get("status") or confirmation_status)
+                    except ConfirmationDecisionConflict:
+                        pass
+                    self._send_json(
+                        {
+                            "error": exc.code,
+                            "status": int(_publish_evidence_error_status(exc, revalidation=True)),
+                            "blockers": list(exc.blockers),
+                            "external_execution_claimed": False,
+                            "confirmation_status": confirmation_status,
+                            "real_platform_write_attempted": False,
+                            "secret_exposed": False,
+                        },
+                        status=_publish_evidence_error_status(exc, revalidation=True),
+                    )
+                    return
             payload = _execution_payload_from_context(
                 repository=self.repository,
                 company_id=identity["company_id"],
@@ -10276,6 +10475,53 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                 ),
                             }
                         )
+                    # Close the claim-to-write window with one last
+                    # authoritative read after this handler owns the claim and
+                    # immediately before the adapter can make its first eBay
+                    # request. A deterministic zero-write failure restores the
+                    # claim instead of stranding it in manual reconciliation.
+                    if confirmation["action_type"] in {"publish_listing", "save_ebay_listing_draft"}:
+                        try:
+                            _revalidate_confirmation_publish_evidence(
+                                self.repository,
+                                company_id=identity["company_id"],
+                                confirmation=confirmation,
+                            )
+                        except PublishSourceRightsEvidenceError as exc:
+                            claim_restored = False
+                            try:
+                                if confirmation["action_type"] == "save_ebay_listing_draft":
+                                    restored = self.repository.abort_unpublished_draft_execution_claim(
+                                        capability=draft_claim_capability,
+                                        reason_code="publish_evidence_changed",
+                                    )
+                                else:
+                                    restored = self.repository.abort_publish_execution_claim_before_write(
+                                        company_id=identity["company_id"],
+                                        confirmation_id=confirmation["confirmation_id"],
+                                        user_id=identity["user_id"],
+                                        reason_code=(
+                                            "publish_evidence_changed"
+                                            if exc.code == "publish_evidence_changed"
+                                            else "publish_evidence_revalidation_blocked"
+                                        ),
+                                    )
+                                claim_restored = str(restored.get("status") or "") in {"approved", "needs_revision"}
+                            except ConfirmationDecisionConflict:
+                                claim_restored = False
+                            self._send_json(
+                                {
+                                    "error": exc.code,
+                                    "status": int(_publish_evidence_error_status(exc, revalidation=True)),
+                                    "blockers": list(exc.blockers),
+                                    "external_execution_claimed": not claim_restored,
+                                    "external_execution_claim_restored": claim_restored,
+                                    "real_platform_write_attempted": False,
+                                    "secret_exposed": False,
+                                },
+                                status=_publish_evidence_error_status(exc, revalidation=True),
+                            )
+                            return
                     try:
                         if confirmation["action_type"] == "save_ebay_listing_draft":
                             write_result = adapter.execute_prepared_listing_draft(
@@ -13146,6 +13392,57 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         }
 
 
+def _publish_evidence_error_status(
+    error: PublishSourceRightsEvidenceError,
+    *,
+    revalidation: bool = False,
+) -> HTTPStatus:
+    if revalidation:
+        return HTTPStatus.CONFLICT
+    if error.code == "publish_evidence_reference_invalid":
+        return HTTPStatus.BAD_REQUEST
+    if error.code == "publish_evidence_reference_not_found":
+        return HTTPStatus.NOT_FOUND
+    if error.code in {"publish_evidence_reference_not_unique", "publish_evidence_scope_mismatch"}:
+        return HTTPStatus.CONFLICT
+    return HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def _revalidate_confirmation_publish_evidence(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    confirmation: dict[str, Any],
+) -> dict[str, Any]:
+    """Re-resolve the approved server snapshot before every eBay boundary."""
+
+    if str(confirmation.get("action_type") or "") not in {"publish_listing", "save_ebay_listing_draft"}:
+        return {}
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}
+    identity = item.get("listing_project_identity") if isinstance(item.get("listing_project_identity"), dict) else {}
+    stored = payload.get("publish_evidence") if isinstance(payload.get("publish_evidence"), dict) else {}
+    manifest = payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), dict) else {}
+    validate_publish_source_rights_evidence(
+        stored,
+        company_id=company_id,
+        store_id=str(confirmation.get("store_id") or ""),
+        listing_project_identity=identity,
+        asset_manifest=manifest,
+    )
+    fresh = resolve_publish_source_rights_evidence(
+        repository,
+        company_id=company_id,
+        store_id=str(confirmation.get("store_id") or ""),
+        listing_project_identity=identity,
+        asset_manifest=manifest,
+        evidence_refs=stored.get("refs") if isinstance(stored.get("refs"), dict) else {},
+    )
+    if str(fresh.get("fingerprint") or "") != str(stored.get("fingerprint") or ""):
+        raise PublishSourceRightsEvidenceError("publish_evidence_changed", "authoritative_evidence_fingerprint_changed")
+    return fresh
+
+
 def _execution_payload_from_context(
     *,
     repository: SaaSRepository,
@@ -13710,9 +14007,17 @@ def _publish_confirmation_payload_from_body(
             url = str(item.get("url") or item.get("src") or "").strip()
             asset_type = _safe_publish_text(item.get("asset_type") or "image", limit=40)
             role = _safe_publish_text(item.get("role") or "gallery", limit=40)
+            asset_id = _safe_publish_text(item.get("asset_id"), limit=120)
         else:
             continue
-        assets.append({"asset_type": asset_type, "role": role, "url": url, "source": "merchant_publish_confirmation_intake"})
+        assets.append(
+            {
+                **({"asset_id": asset_id} if isinstance(item, dict) and asset_id else {}),
+                "asset_type": asset_type,
+                "role": role,
+                "url": url,
+            }
+        )
     finance = {
         "procurement_cost_money": _safe_publish_money(finance_in.get("procurement_cost_money")),
         "shipping_cost_money": _safe_publish_money(finance_in.get("shipping_cost_money")),

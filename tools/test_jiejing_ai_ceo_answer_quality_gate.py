@@ -446,6 +446,33 @@ def main() -> None:
     )
     assert accepted_acceptance_quality["accepted"] is True, accepted_acceptance_quality
 
+    live_rehearsal_message = (
+        "从零调研一个适合 eBay 的轻小、不带电、无品牌授权风险、非受限商品，"
+        "排除旧手机壳、倒流香炉、竹制手机支架、复古青铜书签；"
+        "给出市场判断、3 个候选、推荐 1 个及理由。"
+    )
+    live_rehearsal_contract = _selection_response_contract(
+        message=live_rehearsal_message,
+        route="ebay_workflow",
+    )
+    for excluded_name in ("旧手机壳", "倒流香炉", "竹制手机支架", "复古青铜书签"):
+        assert excluded_name in live_rehearsal_contract["excluded_candidate_names"], live_rehearsal_contract
+    semantically_reused_answer = (
+        "### 候选商品卡\n"
+        "候选商品 1：不锈钢咖啡量勺\n推荐度评分：72/100\n本轮结论：进入下一轮核验。\n"
+        "候选商品 2：硅胶折叠旅行水杯\n推荐度评分：68/100\n本轮结论：进入下一轮核验。\n"
+        "候选商品 3：黄铜书签套装\n推荐度评分：78/100\n本轮结论：推荐优先核验。\n"
+        "最终推荐：黄铜书签套装。"
+    )
+    semantically_reused_quality = validate_ai_ceo_answer_quality(
+        message=live_rehearsal_message,
+        route="ebay_workflow",
+        answer=semantically_reused_answer,
+        context={**context, "selection_contract": live_rehearsal_contract},
+    )
+    assert semantically_reused_quality["accepted"] is False, semantically_reused_quality
+    assert "excluded_previous_candidate_reused" in semantically_reused_quality["blocked_by"], semantically_reused_quality
+
     projectable_new_answer = (
         "### 候选商品卡\n"
         "候选商品 1：桌面理线套管\n推荐度评分：73/100\n为什么有需求：家庭办公是持续场景。\n"

@@ -34,6 +34,76 @@ def _canonical_sha256(value: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _attach_server_resolved_publish_evidence(
+    payload: dict[str, Any],
+    *,
+    company_id: str,
+    store_id: str,
+) -> None:
+    project_key = "readiness-exact-draft-project"
+    report_id = "report_readiness_exact_draft"
+    payload["listing_project_identity"] = {
+        "key": project_key,
+        "source_report_id": report_id,
+        "candidate_id": "candidate_readiness_exact_draft",
+    }
+    manifest = payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), dict) else {}
+    assets = manifest.get("assets") if isinstance(manifest.get("assets"), list) else []
+    covered_assets = []
+    for raw_asset in assets:
+        asset = raw_asset if isinstance(raw_asset, dict) else {}
+        asset_url = str(asset.get("url") or asset.get("url_or_file_path") or "").strip()
+        covered_assets.append(
+            {
+                "asset_id": str(asset.get("asset_id") or "").strip(),
+                "url_sha256": hashlib.sha256(asset_url.encode("utf-8")).hexdigest(),
+                "evidence_type": "merchant_product_fact_report",
+                "evidence_id": report_id,
+            }
+        )
+    evidence = {
+        "contract_version": "2026-08-31-publish-source-rights-evidence-v1",
+        "status": "ready",
+        "server_resolved": True,
+        "scope": {
+            "company_id": company_id,
+            "store_id": store_id,
+            "listing_project_key": project_key,
+        },
+        "refs": {
+            "product_fact_report_id": report_id,
+            "media_job_id": "",
+        },
+        "product_source": {
+            "status": "verified",
+            "source_mode": "merchant_source_supplied",
+            "evidence_type": "merchant_product_fact_report",
+            "evidence_id": report_id,
+        },
+        "image_rights": {
+            "status": "verified",
+            "required_asset_count": len(covered_assets),
+            "covered_asset_count": len(covered_assets),
+            "coverage_complete": True,
+            "assets": covered_assets,
+        },
+        "resolved_at": "2026-08-31T00:00:00Z",
+        "secret_exposed": False,
+    }
+    fingerprint_payload = {
+        key: value for key, value in evidence.items() if key not in {"resolved_at", "fingerprint"}
+    }
+    evidence["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    payload["publish_evidence"] = evidence
+
+
 def _oauth_transport(request: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
     del timeout
     if request.get_method() == "GET" and request.full_url.endswith("/commerce/identity/v1/user/"):
@@ -215,9 +285,23 @@ def _seed_draft_execution(
             "payment_policy_id": "readiness-payment",
             "return_policy_id": "readiness-return",
         },
-        "asset_manifest": {"assets": [{"url": "https://i.ebayimg.com/images/g/example/s-l1600.webp"}]},
+        "asset_manifest": {
+            "assets": [
+                {
+                    "asset_id": "asset_readiness_exact_draft_main",
+                    "asset_type": "image",
+                    "role": "main",
+                    "url": "https://i.ebayimg.com/images/g/example/s-l1600.webp",
+                }
+            ]
+        },
         "marketplace_id": "EBAY_US",
     }
+    _attach_server_resolved_publish_evidence(
+        publish_payload,
+        company_id=context["company_id"],
+        store_id=context["store_id"],
+    )
     task = repo.create_task(
         company_id=context["company_id"],
         store_id=context["store_id"],

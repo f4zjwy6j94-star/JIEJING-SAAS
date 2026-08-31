@@ -11,7 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from jiejing_saas.repository import _ai_ceo_listing_handoff_fields  # noqa: E402
+from jiejing_saas.repository import (  # noqa: E402
+    _ai_ceo_listing_handoff_fields,
+    normalize_merchant_product_fact_packet,
+)
 
 
 def main() -> None:
@@ -28,6 +31,8 @@ def main() -> None:
     assert "collected.unknownFacts.forEach((key) => delete retainedDerivedSuggestions[key])" in app_js
     assert "模拟演练资料" in app_js
     assert "simulation_only: state.saasListingComposerDraft?.merchant_product_fact_packet?.simulation_only === true" in app_js
+    assert '["merchant_owned_product_confirmed", "自有商品归属确认"' in app_js
+    assert 'if (key === "merchant_owned_product_confirmed") return value === true;' in app_js
     assert "function saasListingEbayTitleFromProduct" in app_js
     assert 'const marketResearchHandoff = ["ai_ceo.market_research", "market.report"]' in app_js
     assert "selling_points: marketResearchHandoff ? [] : legacySellingPoints" in app_js
@@ -216,6 +221,29 @@ def main() -> None:
         product_candidates=[],
     )
     assert ordinary_fields["merchant_product_fact_packet"]["derived_listing_suggestions"] == {}, ordinary_fields
+
+    unconfirmed_owned = normalize_merchant_product_fact_packet(
+        {
+            "merchant_confirmed_facts": {
+                "product_name": "Merchant-owned sample",
+                "merchant_owned_product_confirmed": False,
+            }
+        },
+        source="authenticated_merchant_request",
+    )
+    assert unconfirmed_owned["source_mode"] == "source_missing", unconfirmed_owned
+    assert "merchant_product_source_unconfirmed" in unconfirmed_owned["blocked_by"], unconfirmed_owned
+    confirmed_owned = normalize_merchant_product_fact_packet(
+        {
+            "merchant_confirmed_facts": {
+                "product_name": "Merchant-owned sample",
+                "merchant_owned_product_confirmed": True,
+            }
+        },
+        source="authenticated_merchant_request",
+    )
+    assert confirmed_owned["source_mode"] == "merchant_owned_product", confirmed_owned
+    assert confirmed_owned["merchant_confirmed_facts"]["merchant_owned_product_confirmed"] is True, confirmed_owned
 
     inline_rehearsal_message = (
         "继续当前复古黄铜书签（做旧工艺）模拟演练项目，不新建重复项目、商品、SKU 或 Listing。"

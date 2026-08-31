@@ -59,6 +59,7 @@ def main() -> None:
 
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
     assert "listing_project_identity: chat?.listing_project_identity || null" in app_js
+    assert "listing_project_identity: reportListingIdentity || latest.listing_project_identity" in app_js
     assert "listing_project_identity: listingProjectIdentity" in app_js
     assert "await refreshSaasMerchantProjectStatus();" in app_js
     assert "function commitSaasActiveListingProjectContext" in app_js
@@ -120,6 +121,39 @@ def main() -> None:
         assert report["product"] == "复古黄铜书签（做旧工艺）", report
         assert report["selected_product_candidate"]["name"] == "复古黄铜书签（做旧工艺）", report
         assert report["conversation_context"]["selection_mode"] == "active_listing_context", report
+
+        new_task = repository.create_task(
+            company_id="company_current_project",
+            store_id="store_current_project",
+            user_id="user_current_project",
+            task_type="ai_ceo.chat",
+            title="AI CEO brand-new market research",
+            input_data={"message": "新建一个全新商品项目。"},
+        )
+        new_report = repository.save_ai_ceo_market_research_report(
+            task=new_task,
+            message="新建一个全新商品项目，完成市场调研，给出一个候选商品并推荐。",
+            chat={
+                "answer": "候选商品 1：不锈钢咖啡量勺\n推荐度评分：82/100\n最终推荐：不锈钢咖啡量勺。",
+                "route": "ebay_workflow",
+                "status": "model_answered",
+                "answer_quality": {"accepted": True},
+                "source_records": [{"title": "Market source", "url": "https://example.com/market"}],
+            },
+        )
+        assert new_report is not None
+        new_body = new_report["report"]
+        new_identity = new_body.get("listing_project_identity") or {}
+        assert new_identity.get("key", "").startswith("listing-project-"), new_body
+        assert new_identity.get("source_report_id") == new_report["report_id"], new_body
+        assert new_identity.get("candidate_id") == new_body["selected_candidate_id"], new_body
+        fetched_new_report = repository.get_report_for_company(
+            company_id="company_current_project",
+            report_id=new_report["report_id"],
+        )
+        assert fetched_new_report is not None, new_report
+        assert fetched_new_report.get("store_id") == "store_current_project", fetched_new_report
+        assert fetched_new_report.get("report_id") == new_report["report_id"], fetched_new_report
     print("PASS jiejing_ai_ceo_project_trace")
 
 

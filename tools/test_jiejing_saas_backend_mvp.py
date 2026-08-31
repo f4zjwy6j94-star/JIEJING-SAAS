@@ -2533,16 +2533,83 @@ def main() -> int:
         if len(steps_payload.get("steps", [])) != 11:
             return fail("task steps endpoint should return 11 persisted steps")
 
+        publish_listing_project_identity = {
+            "key": "listing-project-backend-mvp-publish",
+            "source_report_id": "source-backend-mvp-publish",
+            "candidate_id": "candidate-backend-mvp-publish",
+        }
+        publish_product_image_url = "https://example.test/backend-mvp-coffee-scoop.jpg"
+        product_facts = post_json(
+            f"{base_url}/stores/{store_id}/product-facts",
+            {
+                "listing_project_identity": publish_listing_project_identity,
+                "merchant_product_fact_packet": {
+                    "merchant_confirmed_facts": {
+                        "product_name": "Stainless steel coffee scoop",
+                        "source_url": "https://supplier.example.test/backend-mvp-coffee-scoop",
+                        "sku": "JJ-BACKEND-MVP-COFFEE-SCOOP-001",
+                        "condition": "NEW",
+                        "material": "Stainless steel",
+                        "package_weight_g": "120",
+                        "package_length_cm": "18",
+                        "package_width_cm": "5",
+                        "package_height_cm": "3",
+                        "unit_cost": "2.50",
+                        "selling_price": "14.99",
+                        "currency": "USD",
+                        "quantity": "1",
+                        "item_location": "US",
+                        "image_urls": publish_product_image_url,
+                        "image_rights_confirmed": True,
+                    }
+                },
+            },
+            token=token,
+        )
+        product_fact_report_id = str((product_facts.get("report") or {}).get("report_id") or "")
+        if not product_fact_report_id:
+            return fail(f"publish fixture should create an authoritative product-fact report: {product_facts}")
+        publish_intake = post_json(
+            f"{base_url}/stores/{store_id}/publish-confirmation",
+            {
+                "product": "Stainless steel coffee scoop",
+                "listing_project_identity": publish_listing_project_identity,
+                "listing": {
+                    "sku": "JJ-BACKEND-MVP-COFFEE-SCOOP-001",
+                    "title": "Stainless Steel Coffee Scoop Measuring Spoon",
+                },
+                "asset_manifest": {"assets": [{"url": publish_product_image_url}]},
+                "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
+            },
+            token=token,
+        )
+        authoritative_publish_confirmation = publish_intake.get("confirmation") or {}
+        authoritative_publish_evidence = (
+            (authoritative_publish_confirmation.get("item") or {}).get("publish_payload") or {}
+        ).get("publish_evidence") or {}
+        if not (
+            authoritative_publish_confirmation.get("action_type") == "publish_listing"
+            and authoritative_publish_confirmation.get("status") == "pending"
+            and authoritative_publish_evidence.get("server_resolved") is True
+            and (authoritative_publish_evidence.get("refs") or {}).get("product_fact_report_id")
+            == product_fact_report_id
+        ):
+            return fail(f"publish fixture must cross the backend source/rights evidence gate: {publish_intake}")
+
         confirmations = fetch_json(f"{base_url}/confirmations", token=token)
         pending = confirmations.get("confirmations", [])
         if not pending:
             return fail("confirmations endpoint should return pending items")
         high_risk_confirmation = next(
-            (item for item in pending if item.get("action_type") == "publish_listing"),
+            (
+                item
+                for item in pending
+                if item.get("confirmation_id") == authoritative_publish_confirmation.get("confirmation_id")
+            ),
             None,
         )
         if not high_risk_confirmation:
-            return fail("workflow should create at least one high-risk confirmation item")
+            return fail("authoritative publish intake should appear as one high-risk confirmation item")
         confirmation_id = high_risk_confirmation["confirmation_id"]
         encoded_confirmation_id = urllib.parse.quote(confirmation_id, safe="")
         operator_approve_status, _ = post_json_expect_error(

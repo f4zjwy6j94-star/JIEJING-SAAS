@@ -34,6 +34,60 @@ def fail(message: str) -> int:
     return 1
 
 
+def attach_publish_evidence(payload: dict[str, object]) -> None:
+    project_key = "listing-project-controlled-publish"
+    report_id = "report_controlled_publish"
+    payload["listing_project_identity"] = {
+        "key": project_key,
+        "source_report_id": report_id,
+        "candidate_id": "candidate_controlled_publish",
+    }
+    manifest = payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), dict) else {}
+    raw_assets = manifest.get("assets") if isinstance(manifest.get("assets"), list) else []
+    covered_assets = []
+    for item in raw_assets:
+        asset = item if isinstance(item, dict) else {}
+        url = str(asset.get("url") or asset.get("url_or_file_path") or "")
+        covered_assets.append(
+            {
+                "asset_id": str(asset.get("asset_id") or ""),
+                "url_sha256": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+                "evidence_type": "merchant_product_fact_report",
+                "evidence_id": report_id,
+            }
+        )
+    evidence = {
+        "contract_version": "2026-08-31-publish-source-rights-evidence-v1",
+        "status": "ready",
+        "server_resolved": True,
+        "scope": {
+            "company_id": "company_test",
+            "store_id": "store_test",
+            "listing_project_key": project_key,
+        },
+        "refs": {"product_fact_report_id": report_id, "media_job_id": ""},
+        "product_source": {
+            "status": "verified",
+            "source_mode": "merchant_owned_product",
+            "evidence_type": "merchant_product_fact_report",
+            "evidence_id": report_id,
+        },
+        "image_rights": {
+            "status": "verified",
+            "required_asset_count": len(covered_assets),
+            "covered_asset_count": len(covered_assets),
+            "coverage_complete": True,
+            "assets": covered_assets,
+        },
+        "secret_exposed": False,
+    }
+    evidence["fingerprint"] = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    evidence["resolved_at"] = "2026-08-31T00:00:00Z"
+    payload["publish_evidence"] = evidence
+
+
 def credential_boundary() -> dict[str, object]:
     connection_id = "conn_controlled_publish"
     secret_ref_id = "secret_ref_publish"
@@ -162,6 +216,7 @@ def main() -> int:
         },
         "secret_exposed": False,
     }
+    attach_publish_evidence(publish_payload)
     executions = [
         {
             "execution_id": "exec_draft_1",
