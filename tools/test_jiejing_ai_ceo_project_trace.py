@@ -74,7 +74,7 @@ def main() -> None:
     ]
     for marker in [
         "saveSaasProtectedStateSnapshot();",
-        "syncSaasProjectRoute(normalizedView)",
+        "syncSaasProjectRoute(normalizedView, { projectId })",
         "refreshSaasMerchantProjectStatus({ projectId })",
         "mountSaasMerchantProjectStatusStrip(normalizedView)",
     ]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.merchant_project_status import _now_iso, build_merchant_project_status  # noqa: E402
+from jiejing_saas.repository import SaaSRepository  # noqa: E402
 
 
 IDENTITY = {
@@ -322,6 +324,70 @@ def assert_single_progress(snapshot: dict[str, Any]) -> None:
 
 def main() -> None:
     assert "." in _now_iso().removesuffix("Z")
+
+    with tempfile.TemporaryDirectory(prefix="jiejing-new-market-project-status-", ignore_cleanup_errors=True) as temp:
+        repository = SaaSRepository(Path(temp) / "saas.sqlite")
+        unbound_task = repository.create_task(
+            company_id="company-new-market-project",
+            store_id="store-new-market-project",
+            user_id="user-new-market-project",
+            task_type="merchant_ceo_chat",
+            title="AI CEO brand-new market research",
+            input_data={"message": "新建一个全新商品项目。"},
+        )
+        saved_market_report = repository.save_ai_ceo_market_research_report(
+            task=unbound_task,
+            message="新建一个全新商品项目，完成市场调研，给出一个候选商品并推荐。",
+            chat={
+                "answer": "候选商品 1：不锈钢咖啡量勺\n推荐度评分：82/100\n最终推荐：不锈钢咖啡量勺。",
+                "route": "ebay_workflow",
+                "status": "model_answered",
+                "answer_quality": {"accepted": True},
+                "source_records": [{"title": "Market source", "url": "https://example.com/market"}],
+            },
+        )
+        assert saved_market_report is not None
+        generated_identity = saved_market_report["report"].get("listing_project_identity") or {}
+        assert generated_identity.get("key", "").startswith("listing-project-"), generated_identity
+        assert not (unbound_task.get("input") or {}).get("listing_project_identity"), unbound_task
+        unrelated_task = repository.create_task(
+            company_id="company-new-market-project",
+            store_id="store-new-market-project",
+            user_id="user-new-market-project",
+            task_type="merchant_product_facts",
+            title="Unbound facts task for the same store",
+            input_data={"product_name": "不锈钢咖啡量勺"},
+        )
+        unrelated_facts_report = repository.save_merchant_product_fact_report(
+            task=unrelated_task,
+            packet={
+                "product_name": "不锈钢咖啡量勺",
+                "unknown_facts": ["material"],
+                "blocked_by": ["product_fact_missing:material"],
+            },
+            listing_project_identity=generated_identity,
+        )
+        generated_snapshot = build_merchant_project_status(
+            repository=repository,
+            company_id="company-new-market-project",
+            store_id="store-new-market-project",
+            user_id="user-new-market-project",
+            project_id=generated_identity["key"],
+            account_health={"status": "healthy"},
+        )
+        generated_stages = {stage["key"]: stage for stage in generated_snapshot["stages"]}
+        assert generated_stages["intake"]["status"] == "completed", generated_snapshot
+        assert generated_stages["research"]["status"] == "completed", generated_snapshot
+        assert generated_snapshot["current_stage"] == "facts", generated_snapshot
+        assert generated_snapshot["blocker"]["key"] != "project_evidence_missing", generated_snapshot
+        assert generated_snapshot["next_action"]["action"] == "complete_product_facts", generated_snapshot
+        generated_record_ids = {
+            item["record_id"] for item in generated_snapshot["work_record_index"]["items"]
+        }
+        assert unbound_task["task_id"] in generated_record_ids, generated_snapshot
+        assert saved_market_report["report_id"] in generated_record_ids, generated_snapshot
+        assert unrelated_facts_report["report_id"] in generated_record_ids, generated_snapshot
+        assert unrelated_task["task_id"] not in generated_record_ids, generated_snapshot
 
     empty = build(FixtureRepository())
     assert_single_progress(empty)

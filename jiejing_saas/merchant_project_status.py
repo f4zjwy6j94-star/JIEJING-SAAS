@@ -118,6 +118,36 @@ def build_merchant_project_status(
             and str(item.get("report_id") or "") == canonical_identity.get("source_report_id")
         )
     ]
+    # A brand-new AI CEO market-research turn cannot bind its task to a project
+    # identity that is minted only when the source report is saved.  Recover
+    # that one source task from the authoritative, fully-bound market report;
+    # other matching report types must not pull their unbound tasks into the
+    # project's audit trail.
+    source_report_id = str(canonical_identity.get("source_report_id") or "")
+    source_candidate_id = str(canonical_identity.get("candidate_id") or "")
+    authoritative_source_task_ids: set[str] = set()
+    if source_report_id and source_candidate_id:
+        for item in matching_reports:
+            report_identity = _artifact_identity(item)
+            if (
+                str(item.get("report_type") or "") == "ai_ceo.market_research"
+                and str(item.get("report_id") or "") == source_report_id
+                and report_identity.get("identity_contract") != "legacy_compatible"
+                and all(
+                    report_identity.get(field) == canonical_identity.get(field)
+                    for field in ("key", "source_report_id", "candidate_id")
+                )
+                and item.get("task_id")
+            ):
+                authoritative_source_task_ids.add(str(item["task_id"]))
+    if authoritative_source_task_ids:
+        matching_tasks = [
+            item
+            for item in tasks
+            if _identity_matches(_artifact_identity(item), canonical_identity)
+            or str(item.get("task_id") or "") in authoritative_source_task_ids
+        ]
+        matching_task_ids = {str(item.get("task_id") or "") for item in matching_tasks}
     matching_media = [item for item in media_jobs if _identity_matches(_artifact_identity(item), canonical_identity)]
     matching_confirmations = [
         item for item in confirmations if _identity_matches(_artifact_identity(item), canonical_identity)

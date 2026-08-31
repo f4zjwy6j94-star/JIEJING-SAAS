@@ -160,6 +160,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("rotating_browser_session_http", [sys.executable, "tools/test_jiejing_rotating_browser_session_http.py"]),
     ("frontend_rotating_browser_sessions", [sys.executable, "tools/test_jiejing_frontend_rotating_browser_sessions.py"]),
     ("browser_rotating_browser_sessions", ["node", "tools/codex_jiejing_rotating_browser_session_smoke.js"]),
+    ("browser_ai_ceo_frontend_resilience", ["node", "tools/codex_jiejing_ai_ceo_frontend_resilience_smoke.js"]),
     ("session_restore_and_ebay_ops_ui", [sys.executable, "tools/test_jiejing_session_restore_and_ebay_ops_ui.py"]),
     ("monitoring_runbook_gate", [sys.executable, "tools/test_jiejing_monitoring_runbook_gate.py"]),
     ("oauth_callback_vault", [sys.executable, "tools/test_jiejing_ebay_oauth_callback_vault.py"]),
