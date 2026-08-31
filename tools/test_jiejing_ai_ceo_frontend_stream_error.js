@@ -53,6 +53,8 @@ const blockedPayload = {
   listing_created: false,
 };
 
+let protectedSessionChecks = 0;
+let fetchCalls = 0;
 const context = {
   AbortController,
   Error,
@@ -61,12 +63,19 @@ const context = {
   Uint8Array,
   clearTimeout,
   console,
-  fetch: async () => ({
-    ok: false,
-    status: 402,
-    text: async () => JSON.stringify(blockedPayload),
-    headers: { get: () => "application/json" },
-  }),
+  ensureSaasProtectedSessionForMutation: async () => {
+    protectedSessionChecks += 1;
+    return { user: { user_id: "user-test" } };
+  },
+  fetch: async () => {
+    fetchCalls += 1;
+    return {
+      ok: false,
+      status: 402,
+      text: async () => JSON.stringify(blockedPayload),
+      headers: { get: () => "application/json" },
+    };
+  },
   recordOptionalSaasSoftTimeout: () => {},
   saasBackendErrorMessage: () => "quota blocked",
   setTimeout,
@@ -89,7 +98,9 @@ vm.runInContext(extractAsyncFunction("saasFetchNdjsonWithTimeout"), context);
     "platform_default_model_trial_exhausted",
     "the exact backend blocker must reach the chat state handler",
   );
-  console.log("PASS AI CEO frontend immediate stream blocker: 3/3");
+  assert.strictEqual(protectedSessionChecks, 1, "mutation preflight must run exactly once");
+  assert.strictEqual(fetchCalls, 1, "AI mutation request must be sent exactly once");
+  console.log("PASS AI CEO frontend immediate stream blocker: 5/5");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

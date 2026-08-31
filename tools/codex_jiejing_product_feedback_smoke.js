@@ -369,24 +369,35 @@ async function main() {
     fixture.mode = "unauthorized";
     fixture.feedbackRequests = [];
     await submitFeedback(page, "Keep this feedback local until identity is loaded again.");
-    await waitForFeedbackState(page, "wait_for_live_identity");
+    await page.waitForURL(
+      (url) => url.pathname.endsWith("/index.html") && url.searchParams.get("reason") === "session_expired",
+      { timeout: 8000 },
+    );
     queued = await currentOutboxItems(page);
-    const unauthorizedKey = queued.find((item) => item.payload.detail.includes("identity"))?.idempotency_key;
+    const unauthorizedItem = queued.find((item) => item.payload.detail.includes("identity"));
+    const unauthorizedKey = unauthorizedItem?.idempotency_key;
     if (!unauthorizedKey) throw new Error("401 did not retain the feedback in the authenticated scope");
+    if (unauthorizedItem.delivery_state !== "wait_for_live_identity" || unauthorizedItem.last_error_class !== "unauthorized") {
+      throw new Error(`401 did not persist the live-identity retry boundary: ${JSON.stringify(unauthorizedItem)}`);
+    }
     fixture.mode = "success";
     const unauthorizedRequestCount = fixture.feedbackRequests.length;
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
-    await page.click("[data-workflow-feedback-retry]");
     await page.waitForTimeout(350);
     if (fixture.feedbackRequests.length !== unauthorizedRequestCount) {
-      throw new Error("online/manual retry bypassed the new-live-identity requirement after 401");
+      throw new Error("login page online event bypassed the new-live-identity requirement after 401");
     }
-    await page.evaluate(() => window.JIEJING_TEST_HOOKS.refreshSaasState({ silent: true }));
-    await page.waitForFunction(() => {
+    await page.goto(`${base}/app.html?start=app&onboarded=1&view=cockpit&qa=public-saas`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await waitForWorkbench(page);
+    await page.waitForFunction((key) => {
       const raw = JSON.parse(localStorage.getItem("jiejing_saas_product_feedback_outbox_v1") || "{}");
-      return Object.values(raw).every((items) => !Array.isArray(items) || !items.some((item) => item.idempotency_key));
-    }, null, { timeout: 15000 });
+      return Object.values(raw).every((items) => !Array.isArray(items) || !items.some((item) => item.idempotency_key === key));
+    }, unauthorizedKey, { timeout: 15000 });
     if (fixture.feedbackRequests.at(-1)?.idempotency_key !== unauthorizedKey) throw new Error("identity reload did not retry the 401 item with the same key");
+    if (fixture.feedbackRequests.length !== unauthorizedRequestCount + 1) throw new Error("identity reload retried the 401 item more than once");
 
     for (const [mode, detail] of [
       ["rate_limited", "Rate limited feedback should remain local."],

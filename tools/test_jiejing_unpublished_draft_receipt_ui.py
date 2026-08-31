@@ -16,6 +16,9 @@ def main() -> None:
     start = app_js.index(start_marker)
     end = app_js.index("function saasLatestExecutionResult", start)
     function_source = app_js[start:end]
+    identity_start = app_js.index("function saasNormalizeListingProjectIdentity")
+    identity_end = app_js.index("function saasListingProjectIdentityFromReport", identity_start)
+    identity_source = app_js[identity_start:identity_end]
     execution = {
         "execution_id": "exec_receipt_test",
         "confirmation_id": "confirm_receipt_test",
@@ -37,6 +40,8 @@ def main() -> None:
         },
     }
     script = f"""
+function publicRuntimeText(value = "") {{ return String(value || ""); }}
+{identity_source}
 {function_source}
 const receipt = saasUnpublishedDraftReceiptViewModel({json.dumps(execution)});
 if (!receipt || receipt.status !== "saved_to_ebay_draft") throw new Error("saved draft receipt missing");
@@ -46,6 +51,7 @@ if (receipt.sku !== "JJ-INCENSE-JC2023041300002-01") throw new Error("SKU mismat
 if (receipt.publicListingCreated !== false || receipt.publishedToEbay !== false) throw new Error("public publish boundary lost");
 globalThis.state = {{
   saasListingComposerDraft: {{
+    listing_project_identity: {{ key: "project-current", source_report_id: "report-current", candidate_id: "candidate-current" }},
     fields: {{}},
     publish_prefill: {{}},
     merchant_product_fact_packet: {{
@@ -59,8 +65,8 @@ globalThis.state = {{
       action_type: "save_ebay_listing_draft",
       status: "executed",
       item: {{
-        listing_project_identity: {{ key: "project-stale" }},
-        publish_payload: {{ listing: {{ sku: "OLD-SKU" }} }},
+        listing_project_identity: {{ key: "project-stale", source_report_id: "report-stale", candidate_id: "candidate-stale" }},
+        publish_payload: {{ listing: {{ sku: "JJ-INCENSE-JC2023041300002-01" }} }},
       }},
     }},
     {{
@@ -68,7 +74,7 @@ globalThis.state = {{
       action_type: "save_ebay_listing_draft",
       status: "executed",
       item: {{
-        listing_project_identity: {{ key: "project-current" }},
+        listing_project_identity: {{ key: "project-current", source_report_id: "report-current", candidate_id: "candidate-current" }},
         publish_payload: {{ listing: {{ sku: "JJ-INCENSE-JC2023041300002-01" }} }},
       }},
     }},
@@ -82,17 +88,20 @@ globalThis.state = {{
         status: "saved_to_ebay_draft",
         action_type: "save_ebay_listing_draft",
         secret_exposed: false,
-        platform_result: {{ offer_id: "stale-offer", offer_status: "UNPUBLISHED", sku: "OLD-SKU", writes_to_ebay: true, public_listing_created: false, published_to_ebay: false }},
+        platform_result: {{ offer_id: "stale-offer", offer_status: "UNPUBLISHED", sku: "JJ-INCENSE-JC2023041300002-01", writes_to_ebay: true, public_listing_created: false, published_to_ebay: false }},
       }},
     }},
     {json.dumps(execution)},
   ],
 }};
-function saasCurrentListingProjectIdentity() {{ return {{ key: "project-current-after-refresh" }}; }}
+function saasCurrentListingProjectIdentity() {{ return {{ key: "project-current", source_report_id: "report-current", candidate_id: "candidate-current" }}; }}
 const current = saasCurrentUnpublishedDraftReceipt();
 if (!current || current.offerId !== "245675556011") throw new Error("current Listing receipt was not selected");
 if (current.confirmationId !== "confirm_receipt_test") throw new Error("receipt crossed Listing project boundary");
 if (current.executionId !== "exec_receipt_test") throw new Error("receipt execution binding missing");
+state.saasConfirmations[1].item.listing_project_identity.candidate_id = "candidate-other";
+if (saasCurrentUnpublishedDraftReceipt() !== null) throw new Error("same SKU with a different candidate identity crossed the Listing project boundary");
+state.saasConfirmations[1].item.listing_project_identity.candidate_id = "candidate-current";
 function escapeHtml(value) {{ return String(value); }}
 function saasTimestampLabel(value) {{ return value ? "08/26 01:28" : "-"; }}
 const markup = renderSaasListingUnpublishedDraftReceipt();

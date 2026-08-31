@@ -14711,7 +14711,11 @@ function saasHasFreshServerClock(referenceLocalNow = Date.now()) {
 }
 
 async function saasFetch(path, options = {}) {
-  const { saasRequestRetriedAfterRefresh = false, ...fetchOptions } = options;
+  const {
+    saasRequestRetriedAfterRefresh = false,
+    saasDeferUnauthorizedTermination = false,
+    ...fetchOptions
+  } = options;
   const headers = {
     accept: "application/json",
     "content-type": "application/json",
@@ -14733,7 +14737,11 @@ async function saasFetch(path, options = {}) {
     saasRequestCanRetryAfterSessionRefresh(path, fetchOptions) &&
     (await refreshSaasBrowserSession())
   ) {
-    return saasFetch(path, { ...fetchOptions, saasRequestRetriedAfterRefresh: true });
+    return saasFetch(path, {
+      ...fetchOptions,
+      saasRequestRetriedAfterRefresh: true,
+      saasDeferUnauthorizedTermination,
+    });
   }
   if (!response.ok) {
     const detail = await response.text();
@@ -14750,7 +14758,7 @@ async function saasFetch(path, options = {}) {
     error.detail = detail;
     if (response.status === 401 && !String(path || "").startsWith("/auth/")) {
       error.code = "saas_session_expired";
-      handleSaasUnrecoverableSession(error);
+      if (!saasDeferUnauthorizedTermination) handleSaasUnrecoverableSession(error);
     }
     throw error;
   }
@@ -27673,7 +27681,7 @@ async function refreshSaasState(options = {}) {
     setView(restoredStartupView, { preserveFlowKey: true });
     document.documentElement.classList.remove("app-auth-pending");
     if (isSaasPublicMvpMode() && isProtectedSaasAppRoute()) {
-      openApp(restoredStartupView);
+      openApp(activeSaasRefreshView("cockpit"));
     }
   }
   try {
@@ -28196,6 +28204,7 @@ function normalizeSaasProductFeedbackOutboxItem(item = {}) {
   const idempotencyKey = String(item.idempotency_key || "").trim();
   const localId = String(item.local_id || "").trim();
   const allowedStates = ["queued_local", "submitting", "wait_for_live_identity", "needs_edit", "conflict", "blocked_error"];
+  const deliveryState = allowedStates.includes(item.delivery_state) ? item.delivery_state : "queued_local";
   if (!payload || !localId || idempotencyKey.length < 8 || idempotencyKey.length > 200 || saasProductFeedbackTextContainsSecret(idempotencyKey)) return null;
   return {
     local_id: localId.slice(0, 200),
@@ -28204,9 +28213,9 @@ function normalizeSaasProductFeedbackOutboxItem(item = {}) {
     created_at: String(item.created_at || new Date().toISOString()).slice(0, 80),
     last_attempt_at: String(item.last_attempt_at || "").slice(0, 80),
     retry_count: Math.max(0, Math.min(100, Number(item.retry_count || 0))),
-    delivery_state: allowedStates.includes(item.delivery_state) ? item.delivery_state : "queued_local",
+    delivery_state: deliveryState,
     next_retry_at: String(item.next_retry_at || "").slice(0, 80),
-    wait_for_live_identity_generation: Math.max(0, Number(item.wait_for_live_identity_generation || 0)),
+    wait_for_live_identity_generation: deliveryState === "wait_for_live_identity" ? 1 : 0,
     last_error_class: String(item.last_error_class || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 48),
     migrated_from_legacy: item.migrated_from_legacy === true,
     legacy_fingerprint: String(item.legacy_fingerprint || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 120),
@@ -28627,7 +28636,11 @@ async function deliverSaasProductFeedbackItem(scope, sourceItem, options = {}) {
     if (saasProductFeedbackContainsSecret(item.payload)) throw Object.assign(new Error("unsafe product feedback blocked"), { code: "unsafe_payload" });
     const result = await saasFetchWithTimeout(
       "/product-feedback",
-      { method: "POST", body: JSON.stringify({ idempotency_key: item.idempotency_key, ...item.payload }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ idempotency_key: item.idempotency_key, ...item.payload }),
+        saasDeferUnauthorizedTermination: true,
+      },
       15000,
     );
     const serverReceipt = validateSaasProductFeedbackServerReceipt(result, item);
@@ -28709,7 +28722,7 @@ async function deliverSaasProductFeedbackItem(scope, sourceItem, options = {}) {
       if (!persistSaasProductFeedbackDeliveryState(scope, item.local_id, {
         delivery_state: waitingForIdentity ? "wait_for_live_identity" : "queued_local",
         next_retry_at: saasProductFeedbackRetryAt(attemptCount, status),
-        wait_for_live_identity_generation: waitingForIdentity ? state.saasProductFeedbackLiveIdentityGeneration + 1 : 0,
+        wait_for_live_identity_generation: waitingForIdentity ? 1 : 0,
         last_error_class: waitingForIdentity ? "unauthorized" : status === 429 ? "rate_limited" : status >= 500 ? "service_unavailable" : "network",
       }, "服务器暂未接收意见，但本机无法安全保存重试状态；本页已停止重试。")) {
         return { delivered: false, status, stopped: true, storage_failed: true };
@@ -28721,6 +28734,7 @@ async function deliverSaasProductFeedbackItem(scope, sourceItem, options = {}) {
           : "暂时未送达；意见已保存在本机，并会按安全间隔重试。";
       setSaasProductFeedbackStatus(scope, waitingForIdentity ? "wait_for_live_identity" : "queued_local", message);
       showActionToast(message);
+      if (waitingForIdentity) handleSaasUnrecoverableSession(error);
       return { delivered: false, status, stopped: true };
     }
     if (!persistSaasProductFeedbackDeliveryState(
