@@ -188,6 +188,14 @@ def source_between(source: str, start_marker: str, end_marker: str) -> str:
     return source[start:end]
 
 
+def approved_homepage_heading(source: str) -> bool:
+    headings = re.findall(r"<h1\b[^>]*>(.*?)</h1\s*>", source, flags=re.I | re.S)
+    return len(headings) == 1 and re.fullmatch(
+        r"让\s+eBay\s+经营\s*少一点重复，\s*多一点自动推进。?",
+        visible_text(headings[0]).strip(),
+    ) is not None
+
+
 def main() -> int:
     index_html = (ROOT / "index.html").read_text(encoding="utf-8")
     app_html = (ROOT / "app.html").read_text(encoding="utf-8")
@@ -222,7 +230,17 @@ def main() -> int:
 
     if "捷境 JIEJING / eBay AI 经营工作台" not in public_text:
         return fail("public homepage should lead with the merchant product positioning")
-    if "让 eBay 经营少一点重复，多一点自动推进" not in public_text:
+    for approved in (
+        "<h1>让 eBay 经营少一点重复，多一点自动推进。</h1>",
+        "<h1><span>让 eBay 经营</span><span>少一点重复，</span><span>多一点自动推进。</span></h1>",
+    ):
+        assert approved_homepage_heading(approved)
+    for invalid in (
+        "<h1>其他标题</h1><p>让 eBay 经营少一点重复，多一点自动推进。</p>",
+        "<h1>让 eBay 经营少一点重复，多一点自动发布。</h1>",
+    ):
+        assert not approved_homepage_heading(invalid)
+    if not approved_homepage_heading(index_html):
         return fail("public homepage must lead with the approved AI CEO outcome")
     body_boundary = re.search(r'<body\b[^>]*\bclass\s*=\s*"[^"]*\bpublic-home-v3\b[^"]*"[^>]*>', index_html, flags=re.I)
     if not body_boundary:

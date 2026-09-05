@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -37,6 +38,17 @@ def extract_shell_function(text: str, name: str) -> str:
     return text[start:end]
 
 
+def has_bounded_preflight_budget(workflow: str) -> bool:
+    job = re.search(
+        r"(?ms)^  preflight:[ \t]*\n(.*?)(?=^  [\w-]+:[ \t]*$|\Z)",
+        workflow,
+    )
+    if job is None:
+        return False
+    budgets = re.findall(r"(?m)^    timeout-minutes:[ \t]*([^\n]+)$", job.group(1))
+    return len(budgets) == 1 and re.fullmatch(r"45[ \t]*(?:#.*)?", budgets[0]) is not None
+
+
 def main() -> int:
     try:
         deploy_workflow = read(DEPLOY_WORKFLOW)
@@ -46,6 +58,23 @@ def main() -> int:
         runbook = read(RUNBOOK)
     except FileNotFoundError as exc:
         return fail(f"missing deploy guardrail file: {exc}")
+
+    budget_fixture = "jobs:\n  preflight:\n    timeout-minutes: 45\n  other-job:\n    timeout-minutes: 12\n"
+    if not has_bounded_preflight_budget(budget_fixture):
+        return fail("preflight budget guard must not require every job to use the same timeout")
+    for counterexample in (
+        budget_fixture.replace("timeout-minutes: 45", "timeout-minutes: 25"),
+        budget_fixture.replace("timeout-minutes: 45", "timeout-minutes: 0"),
+        budget_fixture.replace("timeout-minutes: 45", "timeout-minutes: 60"),
+        budget_fixture.replace("    timeout-minutes: 45\n", ""),
+        budget_fixture.replace("  preflight:", "  unrelated-job:"),
+        budget_fixture.replace("    timeout-minutes: 45\n", "    timeout-minutes: 45\n    timeout-minutes: 25\n"),
+        budget_fixture.replace("    timeout-minutes: 45", "    steps:\n      - timeout-minutes: 45"),
+    ):
+        if has_bounded_preflight_budget(counterexample):
+            return fail("preflight budget counterexample escaped the guard")
+    if not has_bounded_preflight_budget(deploy_workflow):
+        return fail("manual-deploy preflight must have its approved 45-minute job budget")
 
     required_deploy_workflow = [
         "workflow_dispatch:",

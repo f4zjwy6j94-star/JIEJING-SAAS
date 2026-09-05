@@ -104,7 +104,8 @@ def string_leaf_values(value: Any) -> list[str]:
 
 def run_node_json(script: str) -> dict[str, object]:
     completed = subprocess.run(
-        ["node", "-e", script],
+        ["node", "-"],
+        input=script,
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -117,6 +118,29 @@ def run_node_json(script: str) -> dict[str, object]:
     if not output:
         raise AssertionError("node fixture returned no JSON")
     return json.loads(output[-1])
+
+
+def frontend_chat_archive_dependencies() -> str:
+    """Use real W4 scope/rekey behavior rather than bypassing request ownership."""
+    names = (
+        "saasAiCeoHistoryAccountScope",
+        "resetSaasAiCeoHistoryArchive",
+        "saasAiCeoHistoryArchive",
+        "saasAiCeoHistoryRequestContext",
+        "isCurrentSaasAiCeoHistoryRequest",
+        "saasAiCeoArchivedResponseIdentity",
+        "applySaasAiCeoArchivedResponseIdentity",
+        "shouldKeepSaasAiCeoThreadTurn",
+        "saasAiCeoThreadTurnTimestamp",
+        "compareSaasAiCeoThreadTurns",
+        "uniqueSaasAiCeoThreadTurns",
+        "saasAiCeoThreadTurnMergeScore",
+    )
+    return "\n".join([
+        "const SAAS_AI_CEO_INITIAL_VISIBLE_TURNS = 12; let saasAiCeoHistoryEpoch = 0;",
+        *(function_body(APP_JS, name) for name in names),
+        "Object.assign(state, { saasCompany: { company_id: 'phase0-company' }, saasUser: { user_id: 'phase0-user' }, saasSessionExpiryHandled: false });",
+    ])
 
 
 def route_and_chat(message: str, answer: str) -> tuple[str, dict[str, object]]:
@@ -1112,7 +1136,8 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
                     "const hashString = () => 1;",
                     "const buildSaasLocalClockAnswer = () => null;",
                     "const syncSaasCeoCommandToListing = () => { events.push('listing-sync'); return true; };",
-                    "const addCeoMessage = () => null;",
+                    "const addCeoMessage = (text, answer, options) => { state.saasAiCeoLatestTurn = { assistant_id: options.assistantId, user_text: text, assistant_text: answer, pending: options.pending, created_at: options.createdAt }; };",
+                    "const normalizeSaasAiCeoLatestTurn = (value) => value && typeof value === 'object' ? value : null;",
                     "const scheduleSaasAiCeoPendingWatchdog = () => null;",
                     "const requestSaasAiCeoChat = () => { events.push('backend-request'); return new Promise(() => {}); };",
                     "const saasMerchantProjectRouteId = () => '';",
@@ -1121,11 +1146,12 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
                     "const setSaasAiCeoTaskContextState = () => null;",
                     "const refreshSaasAiCeoTaskContext = () => null;",
                     "const prepareSaasNewListingProjectRequest = (text) => ({ active: false, blocked: false, commandText: text, sourceAssetIds: [] });",
-                    "const document = { querySelector: () => null };",
+                    "const document = { querySelector: () => null, querySelectorAll: () => [], getElementById: () => null };",
                     "const refreshSaasCeoRoutingTaskCard = () => null;",
+                    frontend_chat_archive_dependencies(),
                     submit_command,
                     "handleSaasCeoCommandSubmit('普通股票问题');",
-                    "console.log(JSON.stringify({ events }));",
+                    "console.log(JSON.stringify({ events, archivePending: state.saasAiCeoLatestTurn.archive_pending }));",
                 ]
             )
         )
@@ -1134,6 +1160,7 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
             ["backend-request"],
             "submitting a chat may contact the backend, but must not pre-route unvalidated text into the Listing workspace",
         )
+        self.assertTrue(result["archivePending"], "submitted but unfinished chat must not be treated as server-archived")
 
     def test_logical_503_does_not_sync_listing_and_states_no_usage_or_draft(self) -> None:
         submit_command = function_body(APP_JS, "handleSaasCeoCommandSubmit")
@@ -1161,11 +1188,12 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
                     "const normalizeSaasCeoCommand = (value) => value; const newestSaasCeoCommand = (value) => value;",
                     "const syncSaasCeoCommandToListing = () => { syncCount += 1; return true; };",
                     "const updateCeoAssistantMessage = (_id, answer) => { renderedAnswer = answer; }; const updateSaasAiCeoLatestReply = (turn) => { state.saasAiCeoLatestTurn = turn; }; const upsertSaasAiCeoThreadTurn = () => null;",
-                    "const document = { querySelector: () => null }; const replaceJiejingTrustedHtml = () => null; const trustedJiejingHtml = (value) => value; const renderSaasCeoCommandConsole = () => ''; const refreshSaasCeoRoutingTaskCard = () => null;",
+                    "const document = { querySelector: () => null, querySelectorAll: () => [], getElementById: () => null }; const replaceJiejingTrustedHtml = () => null; const trustedJiejingHtml = (value) => value; const renderSaasCeoCommandConsole = () => ''; const refreshSaasCeoRoutingTaskCard = () => null;",
+                    frontend_chat_archive_dependencies(),
                     submit_command,
                     "handleSaasCeoCommandSubmit('请为 eBay 店铺选品');",
                     "await state.saasLastCeoCommandPersistPromise;",
-                    "console.log(JSON.stringify({ syncCount, renderedAnswer }));",
+                    "console.log(JSON.stringify({ syncCount, renderedAnswer, archivePending: state.saasAiCeoLatestTurn.archive_pending, status: state.saasAiCeoLatestTurn.status }));",
                     "})().catch((error) => { console.error(error); process.exit(1); });",
                 ]
             )
@@ -1173,6 +1201,8 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
         self.assertEqual(0, result["syncCount"], "a logical HTTP 503 must never populate the Listing workspace")
         for expected in ("未调用模型", "未消耗次数", "未生成草稿"):
             self.assertIn(expected, result["renderedAnswer"])
+        self.assertEqual("blocked_before_model_chat", result["status"], "the logical 503 must reach the response branch, not a fixture-error catch")
+        self.assertTrue(result["archivePending"], "a response without canonical archive metadata must not claim a finalized history record")
 
     def test_legacy_local_or_untyped_reports_never_become_authoritative(self) -> None:
         normalize_delivery = function_body(APP_JS, "normalizeSaasAiCeoMarketReportDelivery")

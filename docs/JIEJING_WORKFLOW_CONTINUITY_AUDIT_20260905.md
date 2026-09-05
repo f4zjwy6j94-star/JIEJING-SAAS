@@ -139,4 +139,14 @@
 
 本次截图位于忽略的`output/jiejing-ui-audit-20260905/`，不进入Git/部署包。当前证据：`04-public-hero-desktop.png`与`06-local-hero-desktop-phrases.png`同视口前后对照；`01-public-hero-tablet.png`/`07-local-hero-tablet-after.png`；`08-local-hero-mobile-after.png`；失败`09-local-login-mobile.png`与成功`10-local-login-mobile-after.png`同视口对照，`11-local-login-small-tablet-after.png`。工作台`ai-ceo-{empty,project}-{1440,1024}.png`已刷新为最终结果，修复前另存`*-1024-before.png`。截图是本次实页/本地候选，不是登录后商家旅程证明。浏览器回归隔离数据与本地只读素材，不发生真实模型、FAL、支付、退款或eBay操作。
 
-2026-09-06凌晨本批冻结：LF归一化内容hash app=`d2dcc7345056`、styles=`885b316fada8`，family=`20260905-workflow-reliability-v1`。资产/生产部署合同、W5/W6组合17、租户缓存、当前状态、语法/秘密扫描通过。首页8断点及AI CEO4布局回归均纳入同一216项门禁清单；准备干净候选，完整门禁尚待执行。三项原有用户修改不入候选；没有正式部署或高风险业务动作。
+2026-09-06凌晨本批冻结：LF归一化内容hash app=`d2dcc7345056`、styles=`885b316fada8`，family=`20260905-workflow-reliability-v1`。资产/生产部署合同、W5/W6组合17、租户缓存、当前状态、语法/秘密扫描通过。首页8断点及AI CEO4布局回归均纳入同一216项门禁清单。三项原有用户修改不入候选；没有正式部署或高风险业务动作。
+
+### 首轮完整门禁及回归适配（2026-09-06）
+
+首轮提交`f2ce76032c6460bd959cc4fc469740c304be7258`，在独立干净目录`C:\Users\57249\Documents\Codex\2026-09-06\jiejing-release-workflow`执行完整216项，结果214通过/2失败，耗时1463.71秒。`source_stable=true`、`release_eligible=false`；run_id=`311d697180db43999defadb602a5e8d5`。证据保留于该目录`output/jiejing-precloud-deployment-gate/latest.json`；该版本不得打包或部署，不能复用214项结果替代下一候选完整验证。
+
+- `merchant_surface_guard`旧匹配把h1子span间的可见空格当作内容变化。改为校验唯一h1的批准文案，接受语义分行，但其他标题、正文冒充标题或“自动发布”替代“自动推进”仍拒绝。该专项与homepage_maturity通过，未改实际首页。
+- `ai_ceo_phase0_contracts`完整21项原19通过/2失败；两项在行为断言前缺`saasAiCeoHistoryRequestContext`，不是已复现的产品503失败。fixture从真实app抽取scope/epoch/canonical rekey/去重依赖，保留原Listing不回填、503三句反馈断言，并新增必须进入`blocked_before_model_chat`和缺归档元数据仍`archive_pending=true`。Windows命令长度改用Node标准输入，不删真实依赖。完整21项、stream_error8项、streaming合同与历史browser26+4布局通过；未改生产JS。
+- 实际完整检查24分24秒已接近GitHub preflight原25分钟，另有依赖安装等准备步骤。这是预算不足风险，不是观察到GitHub超时。仅将此完整检查job上限有界调整为45分钟并增加合同，其他专项workflow、runner、权限、分支与发布命令不变；不触发CI。
+
+以上后续修订须另提交新候选重跑完整216项，成功后才允许打包和生产dry-run。正式apply以及独立ops发布权限边界不变。

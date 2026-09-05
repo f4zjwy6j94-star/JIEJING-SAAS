@@ -13,7 +13,7 @@
 ## 精确续接点
 
 - 实际仓库：`C:\Users\57249\Documents\Codex\2026-04-29\hermes-agents\software-demo`。
-- 分支：`codex/ai-ceo-real-merchant-loop`；2026-09-05 W1–W4修复基线及当前HEAD：`66032b3`（`fix: define exact ops refund proxy routes and track rollout gap`），本批补丁尚未提交、未部署。恢复时再次核对，不能将基线当永久HEAD。
+- 分支：`codex/ai-ceo-real-merchant-loop`；当前候选HEAD：`f2ce76032c6460bd959cc4fc469740c304be7258`（`fix: stabilize merchant workflows and bind release evidence`），W1–W6/C1/C2/UI本批31文件已提交、未部署。原修复基线为`66032b3`；恢复时再次核对，不能将基线当永久HEAD。
 - 商家生产主机已部署 `4c26ebc487dd40ff1bae45336723eb2910af30fb`（包含此前 `ca5a20d`、`801dc88`、`7a92620` 修复）；完整门禁211/211、dry-run、apply和线上健康复核通过。独立ops仍是旧前后端，见下方新确认阻断；不能称整套退款运营链路已完成。主工作区仍保留三项原有用户修改，不得重置、清理或覆盖。
 - 三个原有用户修改文件不要顺手暂存/提交：`jiejing_saas/readiness.py`、`tools/test_jiejing_phase2_response_boundary_hardening.py`、`tools/test_jiejing_platform_trial_activation_guard.py`。
 - 当前商品：平板电脑支架（折叠便携款）；项目 `listing-project-0ef70f19c079b4261e82`；报告 `report_19fcfc7b9f88f0eb`；候选 `candidate_1`。
@@ -123,11 +123,12 @@
 - 官网保留已批准内容/圆形AI CEO图/六板块/套餐，调整中文标题排印；修复手机登录被桌面双栏挤压、顶部关闭不可达及小平板输入过窄。桌面/平板/手机首页交互与320–1024共8组登录宽度/填写/关闭通过，无真实登录或POST。首页browser已加入门禁与部署白名单。
 - 本地完整app截图确认的1024平板空状态输入裁切、任务摘要遮首条消息均已修复；桌面收起态同因遮挡一起修，桌面展开仍聊天746px/任务351px。复用历史browser runner增加4个实际app布局场景及展开/收起按钮、输入下沿hit-test，26历史场景与4布局场景通过。仅CSS位置/占位，不改业务/导航/聊天主次；平板展开仍沿用既有抽屉行为。
 - 本次公开只读刷新：health=ok、deep=ready；production_ready/beta_ready/can_accept_real_customers=true，billing.public_charging_allowed/charge_now_allowed/billing_ready_for_paid_launch=true；blocker/warning=0。全面real_platform_writes_enabled=false，不代表受控通道关闭。公开投影没有退款执行结论；独立ops仍20260828旧资产，app域ops.html=404。没有重新核验/执行真实退款或eBay操作。
-- app.js冻结LF内容hash=`d2dcc7345056`、styles=`885b316fada8`，7处引用family=`20260905-workflow-reliability-v1`。三项原有用户文件差异仍29/0、1/0、10/1，不进入候选。所有本批修改已冻结，待按范围提交及干净候选216项完整验证，未部署。
+- app.js冻结LF内容hash=`d2dcc7345056`、styles=`885b316fada8`，7处引用family=`20260905-workflow-reliability-v1`。三项原有用户文件差异仍29/0、1/0、10/1，不进入候选。本批已提交为`f2ce760`；独立干净候选位于`C:\Users\57249\Documents\Codex\2026-09-06\jiejing-release-workflow`，完整216项结果214通过/2失败，1463.71秒，source_stable=true、release_eligible=false，证据在该目录`output/jiejing-precloud-deployment-gate/latest.json`。该候选不得打包/部署；session72669已结束exit1。
+- 两个失败为merchant_surface_guard（旧正文匹配不接受标题span排印）与ai_ceo_phase0_contracts（两个抽取submit函数的fixture缺新history request context依赖，在行为断言前ReferenceError）。前者按真实h1可见语义修复，保留错标题/非h1不能替代的负向断言，专项通过；后者抽取真实scope/epoch/canonical依赖，完整21项及stream_error8、streaming合同、历史26+4布局通过，未改生产JS。另仅将GitHub完整preflight上限25→45分钟：实际24分24秒之外还需安装依赖，属于预算风险而非已发生CI超时；job定向7负例及四部署专项通过，权限/分支/runner/命令不变，未触发CI。即将提交这些回归/预算修订，另建`jiejing-release-workflow-r2`跑完整216项，不复用214项旧结果充数。
 
 ## 下一步（按顺序，不另起产品方向）
 
-本批代码/UI已冻结，按范围提交（排除三项用户原有修改）、建立干净候选并跑完整216项门禁、打包及dry-run。正式部署需当前候选的明确确认；不重新部署已完成的旧商家版本。W1–W6及C1/C2已处理的缺陷不要重做。下列运营端及生产UI验收约束仍有效，不因此重新选品。
+先收口上述两项回归测试，再提交/建立新干净候选并跑完整216项门禁，然后打包及dry-run。正式部署需当前候选的明确确认；不重新部署已完成的旧商家版本。W1–W6及C1/C2已处理的缺陷不要重做。下列运营端及生产UI验收约束仍有效，不因此重新选品。
 
 1. 本地ops精确路由回归已收口；通过现有GitHub手动通道规划并执行运营端前后端同版发布，或取得针对旧运营主机的明确SSH部署例外授权。不能仅凭HTTP200、静态更新或refund能力布尔宣布成功。
 2. 商家主机的完整门禁、dry-run、apply和健康复核已完成，不重做。当前 app hash=`1f4d60564877`，styles=`9e2a50d2359c`，候选ops=`d205c9c5f13b`但独立ops尚未提供此版本；保留三项用户原有修改。
