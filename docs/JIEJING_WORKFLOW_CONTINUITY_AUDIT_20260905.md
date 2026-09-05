@@ -168,3 +168,24 @@
 发现另8个普通CI专项未入本地216清单（其中上述失败1项，其余7项隔离复跑通过）。全部补入CHECKS后为224项且名称唯一，26个普通CI Python脚本全部覆盖；既有部署合同直接解析CI实际run脚本并比较CHECKS，覆盖inline/block/folded/quoted形式，排除名称/注释/env伪匹配，有逐项漏接及非Python反例。部署四专项、版本绑定证据16/16、语法/diff通过。部署白名单及编译本来已有这8项，未改脚本。
 
 只改3个测试/门禁文件与本批证据文档；app.js/CSS/后端/生产配置未变，不扩大已批准产品内容。下一步冻结新提交并在第三个干净目录完整224项、精确SHA GitHub CI；旧216通过不能替代，旧0250ce6包不得apply。独立ops未获SSH例外，生产用户UI及真实平台/资金操作未进行。
+
+### 第三候选正式发布与验收收口（2026-09-06）
+
+`1550105b53825a65f876808bff059a4e6d0c0a8a`在r3干净目录完整224/224通过、失败0、1468.03秒；run_id=`33a289f802b64f8bb668e7cc0738fd3f`，源稳定且release_eligible=true。普通[GitHub CI 33983427176](https://github.com/f4zjwy6j94-star/JIEJING-SAAS/actions/runs/33983427176)对应同一SHA，15步骤success。457文件包及manifest独立逐条hash/源blob/证明核对通过，相对0250包仅3个验证工具成员变化；没有混入3项原有用户修改。
+
+包为r3的`output/jiejing-public-staging-bundle/jiejing-public-staging-20260905-183707.zip`及同名manifest；包SHA=`ebe782eed7dd2df8819a5f51b99a9ed2c5ed0e85a0993b8c88fa0159402d3e99`，manifest SHA=`d37a70eec570a2fa628548cf70024a36b6110dafb6f099613c69168b3df6b795`。dry_run与获准apply均成功，正式release=`20260905T184522Z-1550105b5382`，上版=`20260905T113551Z-4c26ebc487dd`。实际脱敏回执及读回在r3的`output/jiejing-production-deploy/`，对应`dry-run/apply/readback-20260905-183707.json`。不再重复部署。
+
+验收结果：
+
+| 范围 | 当前证据 |
+| --- | --- |
+| 源与运行版本 | active/manifest两个SHA/四服务Compose标签一致；API image `5f8f0623…b5e80`健康，Worker image `df91875a…0b500`运行；两个旧镜像hold逐个匹配上版。 |
+| 证据与私有边界 | 首次oneshot与timer安装验收成功；service success/0、timer enabled/active、有下次时间，无drop-in。安装三文件等于包字节。private原路径/root权限/无symlink保持，未读秘密。 |
+| 线上可用性 | health/deep=200及ok/ready；production/beta/customer/public charging/paid launch=true，blocker/warning=0。eBay全面写入=false，受控保存/既有草稿发布=true；不是具体商品真实发布证明。 |
+| 公开资源 | app.js/styles.css实际LF hash匹配；HTML仅Cloudflare注入统计脚本不同，去掉唯一该行后与候选一致。app.html未带start=app时按既有规则转首页，并非部署错误。 |
+| 页面身份/内容/错误 | Codex内置浏览器在正式域实页；非空、无框架错误遮罩；控制台未见相关error/warn。Chrome仍不可用，不重装、不冒充已登录账户。 |
+| 可见交互与截图 | 桌面1440×1000/平板1024×900标题与圆形图；链接#workflow与05素材演示切换；手机390×844入口→登录表单→测试邮箱填写/清空→关闭。输入328.8px，标题/关闭在视口，截图已实际查看；未提交登录或注册。 |
+
+这次修订发现并解决的是过时面板测试与CI/本地清单漏接，保留负向回归防复发；此前W1–W6/C1/C2/UI随本次首次上线。另两个只读验收脚本初始假设已纠正：无Health属性的Worker不能按API模板读取；HTML须区分入口重定向和Cloudflare统计注入。这是检查方式调整，不是修改生产行为。
+
+仍未完成：独立旧ops前后端/退款运营路径同版更新；已登录账号的同一平板支架项目续接、FAL/图片权利及发布前核对。没有新真实收费/退款/eBay写入，没有以任意完成百分比或本地全绿冒充全站成熟和业务闭环。旧ops规范外SSH仍需明确窄范围例外授权；正常手动GitHub通道的main/runner及广泛更新范围不能静默替代该授权。
