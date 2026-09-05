@@ -12,7 +12,7 @@
 
 - 实际仓库：`C:\Users\57249\Documents\Codex\2026-04-29\hermes-agents\software-demo`。
 - 分支：`codex/ai-ceo-real-merchant-loop`；本轮修复前 HEAD：`10d7887`（`fix: make AI CEO project creation idempotent`）。本轮候选提交以当前 `git log` 为准；恢复时再次核对，不能将基线当永久 HEAD。
-- 工作区有本轮未提交修复，不得重置、清理或覆盖。
+- 本轮修复已提交为 `ca5a20ddf05c5fb5aa2a703f290de6100ac92703`，尚未部署。主工作区仍保留三项原有用户修改，不得重置、清理或覆盖。
 - 三个原有用户修改文件不要顺手暂存/提交：`jiejing_saas/readiness.py`、`tools/test_jiejing_phase2_response_boundary_hardening.py`、`tools/test_jiejing_platform_trial_activation_guard.py`。
 - 当前商品：平板电脑支架（折叠便携款）；项目 `listing-project-0ef70f19c079b4261e82`；报告 `report_19fcfc7b9f88f0eb`；候选 `candidate_1`。
 - 调研、导入、商品资料模块和一次有缺陷的 Listing 生成已做。续接同项目，修复上线后再生成一次验证，不从选品重新开始。
@@ -44,7 +44,7 @@
 
 适配了旧 `billing_test_provider` 对商家暴露 `merchant_launch_path` 的过时要求，改为当前正向允许字段与内部信息隔离断言，保留所有禁止真实收费和私测约束；4 类故意破坏投影均被测试拒绝。生产商家投影未因测试而修改。
 
-完整审计范围、发现与验证限度见 `JIEJING_SECURITY_RELIABILITY_AUDIT_20260905.md`。当前正在准备干净候选提交及 211 项完整门禁，不能据专项通过宣称生产修复完成。
+完整审计范围、发现与验证限度见 `JIEJING_SECURITY_RELIABILITY_AUDIT_20260905.md`。干净候选位于 `C:\Users\57249\Documents\Codex\2026-09-05\jiejing-release-security`，HEAD=`ca5a20d`，正在运行 211 项完整门禁（结果将写入该目录 `output/jiejing-precloud-deployment-gate/latest.json`）。不能据专项通过宣称生产修复完成。
 
 这是有限代码审计，不是全局零漏洞证明。没有新增首页夸大能力或跨租户泄漏的确认发现。相关入口：`tools/test_jiejing_domestic_billing_refund.py`、`tools/test_jiejing_domestic_billing_refund_browser.py`；成员/确认/队列路由见 `jiejing_saas/api_server.py`。
 
@@ -62,7 +62,7 @@
 ## 下一步（按顺序，不另起产品方向）
 
 1. 权限、席位与关联恢复问题专项已收口；不再重做复现或新增产品范围。保留现有支付、退款和商家业务能力，不通过盲目切开关掩盖问题。
-2. 静态资源 hash 已更新：app `f27e73cdae74`，styles `9e2a50d2359c`，ops `d205c9c5f13b`；精确提交本轮文件，保留三项用户原有修改。
+2. 首轮门禁发现工程标签残留、保存/媒体测试夹具漏加载拆分函数，以及无效项目身份返回空对象的契约差异，已在主工作区修复。保存专项 30/30、媒体持久化 3/3、相关 UI/预填/恢复检查通过；等待首轮完整结果后准备下一候选，不修改正在测试的目录。当前 app hash=`1f4d60564877`，styles=`9e2a50d2359c`，ops=`d205c9c5f13b`；保留三项用户原有修改。
 3. 在干净提交检出目录运行完整门禁与生产 bundle/dry-run。既有部署授权适用于本任务代码发布；不等于真实收费、退款或 eBay 发布授权。执行 `docs/JIEJING_PRODUCTION_DEPLOY_RUNBOOK_20260823.md`，不混用旧 staging 路径。
 4. 部署后核对 release/manifest/源码提交、health、deep、product-saas readiness、ops 域200和 app 的 ops.html 404。网站在线、私测可用、公开收费可用、平台写入可用分别报告。
 5. Chrome 接续同一个平板支架项目，全程通过捷境 UI 复验生成、素材与发布前检查；真实来源或账号资格不满足时停在该明确阻断，不造成功回执，不重复 OAuth/支付/退款。

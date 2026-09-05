@@ -7384,7 +7384,7 @@ function renderSaasBackendPublishPreflightPanel(readiness = {}, ctx = saasMercha
                     <small>${escapeHtml(saasMerchantVisibleActionLabel(repair.label))} · 点击只打开资料或确认入口，不会执行真实平台动作。</small>
                   </article>
                   <article class="is-${escapeHtml(repair.tone)}">
-                    <span>确认中心路由</span>
+                    <span>确认方式</span>
                     <strong>${escapeHtml(saasMerchantVisiblePublishCode(repair.confirmRoute, "需要确认中心"))}</strong>
                     <small>真实发布、改价、库存、退款、广告、付款和政策修改都必须由你确认。</small>
                   </article>
@@ -7396,7 +7396,7 @@ function renderSaasBackendPublishPreflightPanel(readiness = {}, ctx = saasMercha
                     <small>${escapeHtml(impact.detail)}</small>
                   </article>
                   <article class="is-${escapeHtml(gate.tone)}">
-                    <span>确认门禁</span>
+                    <span>确认要求</span>
                     <strong>${escapeHtml(gate.label)}</strong>
                     <small>${escapeHtml(gate.detail)}</small>
                   </article>

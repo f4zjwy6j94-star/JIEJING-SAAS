@@ -26,6 +26,10 @@ const mediaWritebackSource = extractFunction(
   "function applySaasMediaManifestToListingDraft",
   "\nfunction renderSaasListingMediaWritebackPanel",
 );
+const merchantEditSource = extractFunction(
+  "function saasListingMerchantEditableFieldKeys",
+  "\nfunction setSaasListingDraftField",
+);
 
 function snapshotDraft(draft) {
   const sandbox = { __draft: draft };
@@ -39,6 +43,7 @@ const pickSaasSnapshotFields = (source = {}, fields = []) => Object.fromEntries(
 const saasCurrentListingProjectIdentity = () => ({ key: "incense-project" });
 const sanitizeSaasListingPublishPrefillSnapshot = (value) => ({ ...(value || {}) });
 const sanitizeSaasMerchantProductFactPacketSnapshot = () => null;
+${merchantEditSource}
 ${snapshotSource}
 globalThis.__result = sanitizeSaasListingComposerDraftSnapshot(globalThis.__draft);
 `,
@@ -96,6 +101,26 @@ test("approved Listing media survives the protected snapshot used after reload",
   assert.equal(restored.media_writeback.assets?.[0]?.listing_use_status, "approved_for_listing_draft");
   assert.equal(restored.media_writeback.triggers_real_platform_write, false);
   assert.equal(restored.media_writeback.secret_exposed, false);
+});
+
+test("media snapshot preserves merchant edits without accepting unrelated field permissions", () => {
+  const restored = snapshotDraft({
+    product: "商家平板支架",
+    fields: { title: "Merchant reviewed tablet stand", description: "Merchant reviewed description" },
+    merchant_edited_fields: ["title", "description", "title", "company_id", "image_rights_confirmed"],
+    media_writeback: {
+      media_job_id: "media_job_tablet_stand",
+      image_urls: ["https://cdn.example.test/tablet-stand.jpg"],
+      confirmation_center_required: true,
+      triggers_real_platform_write: false,
+    },
+  });
+  assert.deepEqual(Array.from(restored.merchant_edited_fields), ["title", "description"]);
+  assert.equal(restored.fields.title, "Merchant reviewed tablet stand");
+  assert.equal(restored.fields.description, "Merchant reviewed description");
+  assert.equal(restored.media_writeback.media_job_id, "media_job_tablet_stand");
+  assert.equal(restored.media_writeback.confirmation_center_required, true);
+  assert.equal(restored.media_writeback.triggers_real_platform_write, false);
 });
 
 test("media writeback saves the protected snapshot before returning", () => {

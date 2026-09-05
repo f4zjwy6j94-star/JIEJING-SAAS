@@ -1300,6 +1300,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
 
     def test_frontend_product_fact_save_posts_identity_and_applies_the_server_packet(self) -> None:
         save_function = function_body(APP_JS, "saveSaasMerchantProductFacts")
+        persist_function = function_body(APP_JS, "persistSaasMerchantProductFacts")
         result = run_node_json(
             "\n".join(
                 [
@@ -1316,13 +1317,13 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const saasMerchantProductFactLabel = (value) => value;",
                     "const saasMerchantProductFactSavedMessage = () => 'saved';",
                     "const saveSaasProtectedStateSnapshot = () => {};",
-                    "const renderProductListingCenter = () => {};",
+                    "const renderStatuses = []; const renderProductListingCenter = () => { renderStatuses.push(state.saasListingProductFactSaveStatus); };",
                     "const activeSaasStore = () => ({ store_id: 'store-a' });",
                     "const sanitizeSaasMerchantProductFactPacketSnapshot = (packet) => packet;",
                     "const saasCurrentListingProjectIdentity = () => ({ ...identity, source_id: identity.source_report_id });",
                     "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? value : null;",
-                    "let capturedBody = null; let applied = false;",
-                    "const saasFetch = async (_path, options) => { capturedBody = JSON.parse(options.body); return {",
+                    "let capturedBody = null; let applied = false; let requestCount = 0;",
+                    "const saasFetch = async (_path, options) => { requestCount += 1; capturedBody = JSON.parse(options.body); return {",
                     "  listing_project_identity: identity,",
                     "  merchant_product_fact_packet: { product_name: 'Incense Burner', source_confirmed_facts: { material: 'Resin' }, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: [], blocked_by: [] },",
                     "  task: { task_id: 'task-a' }, report: { report_id: 'facts-a' },",
@@ -1330,7 +1331,8 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => { applied = true; return { ...draft, merchant_product_fact_packet: packet, applied_server_packet: true }; };",
                     "const showActionToast = () => {};",
                     save_function,
-                    "(async () => { await saveSaasMerchantProductFacts(); console.log(JSON.stringify({ capturedBody, applied, draft: state.saasListingComposerDraft })); })().catch((error) => { console.error(error); process.exit(1); });",
+                    persist_function,
+                    "(async () => { const first = saveSaasMerchantProductFacts(); const second = saveSaasMerchantProductFacts(); const busy = state.saasListingProductFactSaveStatus; await first; console.log(JSON.stringify({ capturedBody, applied, draft: state.saasListingComposerDraft, requestCount, samePromise: first === second, busy, savedStatus: state.saasListingProductFactSaveStatus, pendingCleared: state.saasListingProductFactSavePromise === null, renderStatuses })); })().catch((error) => { console.error(error); process.exit(1); });",
                 ]
             )
         )
@@ -1340,6 +1342,13 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertIs(result.get("draft", {}).get("applied_server_packet"), True)
         self.assertEqual([], result.get("draft", {}).get("merchant_product_fact_packet", {}).get("unknown_facts"))
         self.assertEqual(expected_identity, result.get("draft", {}).get("listing_project_identity"))
+        self.assertEqual(1, result.get("requestCount"))
+        self.assertIs(result.get("samePromise"), True)
+        self.assertEqual("saving", result.get("busy"))
+        self.assertEqual("saved", result.get("savedStatus"))
+        self.assertIs(result.get("pendingCleared"), True)
+        self.assertIn("saving", result.get("renderStatuses", []))
+        self.assertEqual("saved", result.get("renderStatuses", [])[-1])
 
     def test_completed_vision_report_recovers_into_the_matching_existing_listing(self) -> None:
         restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")

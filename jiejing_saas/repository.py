@@ -5740,7 +5740,8 @@ class SaaSRepository:
             report = self._report_row_to_dict(report_row)
             return {"task": self._task_row_to_dict(task_row), "report": report,
                     "merchant_product_fact_packet": report["report"]["merchant_product_fact_packet"],
-                    "listing_project_identity": report["report"].get("listing_project_identity", {}),
+                    **({"listing_project_identity": report["report"]["listing_project_identity"]}
+                       if report["report"].get("listing_project_identity") else {}),
                     "idempotent_replay": not created, "model_called": False,
                     "real_platform_writes_enabled": False, "secret_exposed": False}
 
