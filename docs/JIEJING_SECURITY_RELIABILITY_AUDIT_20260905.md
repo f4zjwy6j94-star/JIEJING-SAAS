@@ -31,6 +31,10 @@ S4 使用临时库复现：有效 `wechat_pay_native` 付费订阅被新席位�
 - 前端同源 HTTPS API 限制、Markdown/来源输出转义与危险链接协议拦截；本地 Chromium 恶意输入测试通过。
 - 无已确认的新 P0 或跨租户泄漏，但本轮没有逐一覆盖所有 HTTP 路由、部署网络边缘或依赖链。
 
+## 续接规则的旧状态固化
+
+完整门禁还发现旧 AGENTS 测试强制要求写入“旧 eBay 账号被冻结”和 `ready_for_paid_commercial_launch=false`。这会把历史快照固化成后续执行规则，与用户要求按当前证据接续冲突。本轮没有为了通过测试恢复这些旧结论，而是要求测试验证当前执行索引、实时核对账号/收费状态，以及不同类型证据不得互相冒充；同时阻止这两条固定历史状态重新进入 AGENTS。
+
 ## 验证入口和证据限度
 
 新增核心回归：`tools/test_jiejing_refund_operator_authorization.py`、`tools/test_jiejing_team_seat_quota.py`。既有支付/素材点退款、会话、租户缓存、Listing、额度、迁移和部署合同继续参加候选版本门禁。

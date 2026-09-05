@@ -36,7 +36,10 @@ def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     port = _free_port()
     env = dict(os.environ)
-    env.update({"JIEJING_SAAS_ENV": "test"})
+    env.update({
+        "JIEJING_SAAS_ENV": "test",
+        "JIEJING_INTERNAL_ADMIN_EMAILS": "billing-platform-reviewer@example.test",
+    })
     for key in (
         "JIEJING_WECHAT_PAY_APP_ID",
         "JIEJING_WECHAT_PAY_MCH_ID",
@@ -304,11 +307,31 @@ def main() -> int:
         confirmation_id = str(refund_review.get("confirmation_id") or "")
         if not confirmation_id:
             return fail(f"refund review should create an exact confirmation: {refund_review}")
-        _post_json(
+        merchant_review_status, merchant_review_body = _post_json_expect_error(
             f"{base}/confirmations/{confirmation_id}/decision",
             {"decision": "approve", "note": "Approve review only; do not move money."},
             token=token,
         )
+        if merchant_review_status != 403 or merchant_review_body.get("error") != "domestic_refund_review_requires_platform_operations":
+            return fail(f"merchant must not approve its own SaaS refund: {merchant_review_status}, {merchant_review_body}")
+        pending_refund = repository.get_confirmation(company_id=owner_company_id, confirmation_id=confirmation_id) or {}
+        if pending_refund.get("status") != "pending":
+            return fail("denied merchant approval must leave the refund pending for platform review")
+        reviewer = _post_json(
+            f"{base}/auth/register",
+            {"email": "billing-platform-reviewer@example.test", "password": "Billing-reviewer-fixture-2026", "company_name": "Platform Refund Reviewer"},
+        )
+        review_status, reviewed = _post_json_status(
+            f"{base}/owner/billing/domestic/refunds/{refund_order_id}/review",
+            {"company_id": owner_company_id, "decision": "approve", "review_reason": "Verified the fixture payment and entitlement records; approval alone must not move money."},
+            token=str(reviewer.get("token") or ""),
+            headers={"Host": "ops.jiejing.shop"},
+        )
+        if review_status != 201 or reviewed.get("refund_review", {}).get("status") != "approved":
+            return fail(f"allowlisted platform operations must retain legitimate refund review: {review_status}, {reviewed}")
+        reviewed_order = repository.get_domestic_billing_order(company_id=owner_company_id, order_id=refund_order_id) or {}
+        if reviewed_order.get("status") != "refund_review_requested":
+            return fail("platform approval alone must not submit or complete the refund")
         generic_status, generic_body = _post_json_expect_error(
             f"{base}/confirmations/{confirmation_id}/execute",
             {

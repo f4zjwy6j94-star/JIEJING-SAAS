@@ -443,6 +443,9 @@ FILES=(
   "tools/test_jiejing_refund_operator_authorization.py"
   "tools/test_jiejing_domestic_billing_refund.py"
   "tools/test_jiejing_domestic_billing_refund_browser.py"
+  "tools/test_jiejing_domestic_billing_api.py"
+  "tools/test_jiejing_domestic_billing_merchant_ui.py"
+  "tools/test_jiejing_listing_media_writeback_persistence.js"
   "tools/test_jiejing_domestic_billing_production_completion.py"
   "tools/test_jiejing_domestic_billing_operations.py"
   "tools/test_jiejing_media_credit_purchase.py"
@@ -821,6 +824,8 @@ python3 -m py_compile \
   tools/test_jiejing_refund_operator_authorization.py \
   tools/test_jiejing_domestic_billing_refund.py \
   tools/test_jiejing_domestic_billing_refund_browser.py \
+  tools/test_jiejing_domestic_billing_api.py \
+  tools/test_jiejing_domestic_billing_merchant_ui.py \
   tools/test_jiejing_domestic_billing_production_completion.py \
   tools/test_jiejing_domestic_billing_operations.py \
   tools/test_jiejing_media_credit_purchase.py \
@@ -849,6 +854,7 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check app.js
 "$NODE_BIN" --check ops.js
 "$NODE_BIN" --check tools/codex_jiejing_operations_console_smoke.js
+"$NODE_BIN" --check tools/test_jiejing_listing_media_writeback_persistence.js
 "$NODE_BIN" --check tools/codex_jiejing_product_feedback_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_rotating_browser_session_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_listing_ai_generation_browser_smoke.js

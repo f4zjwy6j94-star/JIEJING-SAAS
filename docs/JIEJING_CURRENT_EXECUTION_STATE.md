@@ -44,7 +44,11 @@
 
 适配了旧 `billing_test_provider` 对商家暴露 `merchant_launch_path` 的过时要求，改为当前正向允许字段与内部信息隔离断言，保留所有禁止真实收费和私测约束；4 类故意破坏投影均被测试拒绝。生产商家投影未因测试而修改。
 
-完整审计范围、发现与验证限度见 `JIEJING_SECURITY_RELIABILITY_AUDIT_20260905.md`。干净候选位于 `C:\Users\57249\Documents\Codex\2026-09-05\jiejing-release-security`，HEAD=`ca5a20d`，正在运行 211 项完整门禁（结果将写入该目录 `output/jiejing-precloud-deployment-gate/latest.json`）。不能据专项通过宣称生产修复完成。
+完整审计范围、发现与验证限度见 `JIEJING_SECURITY_RELIABILITY_AUDIT_20260905.md`。首轮干净候选位于 `C:\Users\57249\Documents\Codex\2026-09-05\jiejing-release-security`，HEAD=`ca5a20d`，完整门禁结果 205/211（见该目录 `output/jiejing-precloud-deployment-gate/latest.json`），不是通过。
+
+首轮六个失败项：merchant_copy_maturity、ai_ceo_routing_supplier_http、listing_media_writeback_persistence、domestic_billing_api、domestic_billing_merchant_ui、agents_md_guardrails。前三项补丁已提交 `801dc88`；退款旧测试已改为验证商家禁止自批/执行、内部运营审核及精确确认。AGENTS 旧测试曾强制写死旧账号冻结/收费false，现验证当前证据与续接索引、禁止旧状态固定化。六项各自修复后的专项通过，真实退款权限套件与支付回调/查询/维护均通过。
+
+第二个干净目录 `C:\Users\57249\Documents\Codex\2026-09-05\jiejing-release-security-r2` 将切到最终候选并重跑完整 211 项。该目录在旧 `801dc88` 提前启动的一次门禁曾在第12项主动停止，不能算完整验证。不能据专项通过宣称生产修复完成。
 
 这是有限代码审计，不是全局零漏洞证明。没有新增首页夸大能力或跨租户泄漏的确认发现。相关入口：`tools/test_jiejing_domestic_billing_refund.py`、`tools/test_jiejing_domestic_billing_refund_browser.py`；成员/确认/队列路由见 `jiejing_saas/api_server.py`。
 
