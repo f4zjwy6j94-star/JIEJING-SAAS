@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .permissions import has_permission
-from .repository import SaaSRepository
+from .repository import SaaSRepository, _parse_explicit_timezone_iso_datetime
 from .media_credits import media_credit_pack_terms, media_credit_purchase_enabled, revoke_plan_media_points
 from .operations_metering import sanitize_provider_telemetry
 
@@ -1069,6 +1069,8 @@ def _approved_domestic_refund_confirmation(
         target_type="confirmation", target_id=confirmation_id,
     ) or {}
     details = review.get("details") if isinstance(review.get("details"), dict) else {}
+    review_instant = _parse_explicit_timezone_iso_datetime(details.get("decided_at"))
+    confirmation_instant = _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at"))
     if not (
         review.get("actor_type") == "platform_internal_admin"
         and review.get("user_id") == confirmation.get("decided_by")
@@ -1076,12 +1078,13 @@ def _approved_domestic_refund_confirmation(
         and details.get("order_id") == order_id
         and details.get("amount_minor") == int(order.get("amount_minor") or 0)
         and details.get("currency") == str(order.get("currency") or "").upper()
-        and details.get("decided_at") == confirmation.get("decided_at")
+        and review_instant is not None and confirmation_instant is not None
+        and review_instant == confirmation_instant
         and _platform_refund_operator_authorized(repository, company_id=str(details.get("reviewer_company_id") or ""), user_id=str(review.get("user_id") or ""), internal_admin_emails=internal_admin_emails)
     ):
         return _blocked("domestic_refund_platform_review_required", http_status=403)
     return {"ok": True, "confirmation_id": confirmation_id, "confirmation_status": "approved",
-            "reviewer_company_id": str(details["reviewer_company_id"]), "reviewer_user_id": str(review["user_id"]), "reviewed_at": str(confirmation["decided_at"])}
+            "reviewer_company_id": str(details["reviewer_company_id"]), "reviewer_user_id": str(review["user_id"]), "reviewed_at": confirmation_instant.isoformat()}
 
 
 def _platform_refund_operator_authorized(repository: SaaSRepository, *, company_id: str, user_id: str, internal_admin_emails: tuple[str, ...]) -> bool:

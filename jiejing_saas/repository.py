@@ -7171,7 +7171,7 @@ class SaaSRepository:
 
     def claim_platform_refund_execution(
         self, *, company_id: str, order_id: str, confirmation_id: str,
-        reviewer_company_id: str, reviewer_user_id: str, reviewed_at: str,
+        reviewer_company_id: str, reviewer_user_id: str, reviewed_at: str | datetime,
         operator_company_id: str, operator_user_id: str, internal_admin_emails: tuple[str, ...],
     ) -> dict[str, Any]:
         """Freeze the reviewed money action before any provider request, across workers."""
@@ -7191,9 +7191,15 @@ class SaaSRepository:
                 member = conn.execute("select u.email, u.status, tm.role from users u join team_members tm on tm.user_id = u.user_id where u.user_id = ? and tm.company_id = ?", (member_user, member_company)).fetchone()
                 if not member or str(member["email"]).lower() not in internal_admin_emails or member["role"] not in {"owner", "admin"} or member["status"] != "active":
                     raise PermissionError("domestic_refund_execution_requires_platform_internal_admin")
+            confirmed_instant = _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at"))
+            requested_instant = _parse_explicit_timezone_iso_datetime(reviewed_at)
             if (confirmation["status"] != "approved" or confirmation.get("decided_by") != reviewer_user_id
-                or confirmation.get("decided_at") != reviewed_at):
+                or confirmed_instant is None or requested_instant is None
+                or confirmed_instant != requested_instant):
                 raise ConfirmationDecisionConflict("domestic_refund_review_state_conflict")
+            # psycopg returns aware datetime values; persisted audit/order JSON
+            # always receives one canonical UTC string, never a native object.
+            reviewed_at = confirmed_instant.isoformat()
             if order["status"] in {"refund_processing", "refunded"}:
                 return {"claimed": False, "status": order["status"]}
             if order["status"] != "refund_review_requested":

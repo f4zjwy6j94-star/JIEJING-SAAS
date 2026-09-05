@@ -48,7 +48,11 @@
 
 首轮六个失败项：merchant_copy_maturity、ai_ceo_routing_supplier_http、listing_media_writeback_persistence、domestic_billing_api、domestic_billing_merchant_ui、agents_md_guardrails。前三项补丁已提交 `801dc88`；退款旧测试已改为验证商家禁止自批/执行、内部运营审核及精确确认。AGENTS 旧测试曾强制写死旧账号冻结/收费false，现验证当前证据与续接索引、禁止旧状态固定化。六项各自修复后的专项通过，真实退款权限套件与支付回调/查询/维护均通过。
 
-第二个干净目录 `C:\Users\57249\Documents\Codex\2026-09-05\jiejing-release-security-r2` 将切到最终候选并重跑完整 211 项。该目录在旧 `801dc88` 提前启动的一次门禁曾在第12项主动停止，不能算完整验证。不能据专项通过宣称生产修复完成。
+第二个干净目录 `C:\Users\57249\Documents\Codex\2026-09-05\jiejing-release-security-r2` 的旧候选 `7a92620` 不得部署：主线程部署前复核发现退款审核时间比较不兼容生产 PostgreSQL 返回的原生 datetime（SQLite 返回字符串）。审计 JSON 的时间文字与原生 datetime 直接比较会让合法审核失败，claim 的时间/JSON持久化也必须一起修。该版完整门禁在第54项通过后主动停止，不能算完整验证。
+
+上述 PostgreSQL 类型问题已在主仓库修复并冻结：审批和 claim 都严格解析明确时区，按 UTC 同时刻比较，拒绝空值、非法、无时区或篡改时间，持久化统一 ISO 字符串。先复现失败，再通过退款权限 18/18（含原生日期贯穿完整 ops HTTP 执行）；既有计费API、微信退款provider、素材点与退款专项通过。独立 quota/seat/fact checkpoint 原生类型回放 4/4，未发现同类确定失败；以上均非真实PG或资金操作。待新提交的干净完整门禁，不复用旧包。
+
+该目录生成的 `output/jiejing-public-staging-bundle/jiejing-public-staging-20260905-104500.zip` 是旧 `7a92620` 候选，SHA256=`fc5a256cc5bebda6b8f2d40b495391a3472b962b23f87f5c5816861d0f8c5299`；仅已打包，没有dry-run/apply，不得继续部署这个包。修复后提交新候选、重跑完整门禁并重新打包。更早的 `801dc88` 在第12项停止的门禁也无完整验证效力。
 
 这是有限代码审计，不是全局零漏洞证明。没有新增首页夸大能力或跨租户泄漏的确认发现。相关入口：`tools/test_jiejing_domestic_billing_refund.py`、`tools/test_jiejing_domestic_billing_refund_browser.py`；成员/确认/队列路由见 `jiejing_saas/api_server.py`。
 
@@ -65,8 +69,8 @@
 
 ## 下一步（按顺序，不另起产品方向）
 
-1. 权限、席位与关联恢复问题专项已收口；不再重做复现或新增产品范围。保留现有支付、退款和商家业务能力，不通过盲目切开关掩盖问题。
-2. 首轮门禁发现工程标签残留、保存/媒体测试夹具漏加载拆分函数，以及无效项目身份返回空对象的契约差异，已在主工作区修复。保存专项 30/30、媒体持久化 3/3、相关 UI/预填/恢复检查通过；等待首轮完整结果后准备下一候选，不修改正在测试的目录。当前 app hash=`1f4d60564877`，styles=`9e2a50d2359c`，ops=`d205c9c5f13b`；保留三项用户原有修改。
+1. PostgreSQL 原生 datetime 兼容修复已通过专项，提交新候选并推进最终完整门禁。其他已通过问题不重做；保留现有支付、退款和商家业务能力，不通过盲目切开关掩盖问题。
+2. 首轮门禁的六项失败已修复并各自专项通过，不重做这些已完成修复。保存专项 30/30、媒体持久化 3/3、相关 UI/预填/恢复检查通过。当前 app hash=`1f4d60564877`，styles=`9e2a50d2359c`，ops=`d205c9c5f13b`；保留三项用户原有修改，不修改正在测试的干净候选目录。
 3. 在干净提交检出目录运行完整门禁与生产 bundle/dry-run。既有部署授权适用于本任务代码发布；不等于真实收费、退款或 eBay 发布授权。执行 `docs/JIEJING_PRODUCTION_DEPLOY_RUNBOOK_20260823.md`，不混用旧 staging 路径。
 4. 部署后核对 release/manifest/源码提交、health、deep、product-saas readiness、ops 域200和 app 的 ops.html 404。网站在线、私测可用、公开收费可用、平台写入可用分别报告。
 5. Chrome 接续同一个平板支架项目，全程通过捷境 UI 复验生成、素材与发布前检查；真实来源或账号资格不满足时停在该明确阻断，不造成功回执，不重复 OAuth/支付/退款。

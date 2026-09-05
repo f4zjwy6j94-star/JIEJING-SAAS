@@ -10,7 +10,9 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -21,7 +23,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.api_server import SaaSBackendHandler
 from jiejing_saas.config import SaaSSettings
-from jiejing_saas.repository import SaaSRepository
+from jiejing_saas.repository import ConfirmationDecisionConflict, SaaSRepository
 from jiejing_saas.security import SessionManager
 
 
@@ -272,6 +274,103 @@ class RefundOperatorAuthorizationTest(unittest.TestCase):
             response = _default_refund_query(self.repo, self.company_id, self.order_id)
             self.assertTrue(response["ok"], response)
             self.assertEqual(provider.call_count, 1)
+
+    @contextmanager
+    def native_confirmation_timestamp(self, value):
+        """Emulate psycopg's native timestamp at the database cursor boundary."""
+        connect = self.repo._connect
+        class Cursor:
+            def __init__(self, cursor):
+                self.cursor = cursor
+            def fetchone(self):
+                row = self.cursor.fetchone()
+                return {**dict(row), "decided_at": value} if row else None
+            def __getattr__(self, name):
+                return getattr(self.cursor, name)
+        class Connection:
+            def __init__(self, connection):
+                self.connection = connection
+            def execute(self, sql, parameters=()):
+                cursor = self.connection.execute(sql, parameters)
+                return Cursor(cursor) if "select * from confirmations" in " ".join(sql.lower().split()) else cursor
+            def __getattr__(self, name):
+                return getattr(self.connection, name)
+        @contextmanager
+        def adapted_connect():
+            with connect() as connection:
+                yield Connection(connection)
+        with patch.object(self.repo, "_connect", adapted_connect):
+            yield
+
+    def claim_arguments(self, packet, reviewed_at):
+        reviewer = self.accounts["reviewer"]
+        return {"company_id": self.company_id, "order_id": self.order_id, "confirmation_id": packet["confirmation_id"],
+                "reviewer_company_id": reviewer["company"]["company_id"], "reviewer_user_id": reviewer["user"]["user_id"],
+                "reviewed_at": reviewed_at, "operator_company_id": reviewer["company"]["company_id"], "operator_user_id": reviewer["user"]["user_id"],
+                "internal_admin_emails": self.handler.settings.internal_admin_emails}
+
+    def test_postgres_native_and_equivalent_timezone_approval_timestamps(self) -> None:
+        from jiejing_saas.billing_domestic import _approved_domestic_refund_confirmation
+        packet = self.approve_and_get_packet()
+        decided_at = self.repo.get_confirmation(company_id=self.company_id, confirmation_id=packet["confirmation_id"])["decided_at"]
+        instant = datetime.fromisoformat(decided_at.replace("Z", "+00:00"))
+        for value in (instant, instant.astimezone(timezone(timedelta(hours=8))), instant.astimezone(timezone(timedelta(hours=-4))).isoformat()):
+            with self.subTest(value_type=type(value).__name__), self.native_confirmation_timestamp(value):
+                approval = _approved_domestic_refund_confirmation(self.repo, company_id=self.company_id, order_id=self.order_id, internal_admin_emails=self.handler.settings.internal_admin_emails)
+                self.assertTrue(approval["ok"], approval)
+                self.assertEqual(approval["reviewed_at"], instant.astimezone(timezone.utc).isoformat())
+
+    def test_postgres_native_claim_timestamp_is_canonical_json_evidence(self) -> None:
+        packet = self.approve_and_get_packet()
+        instant = datetime.fromisoformat(self.repo.get_confirmation(company_id=self.company_id, confirmation_id=packet["confirmation_id"])["decided_at"].replace("Z", "+00:00"))
+        with self.native_confirmation_timestamp(instant):
+            claim = self.repo.claim_platform_refund_execution(**self.claim_arguments(packet, instant.astimezone(timezone(timedelta(hours=8)))))
+        self.assertTrue(claim["claimed"])
+        expected = instant.astimezone(timezone.utc).isoformat()
+        order = self.repo.get_domestic_billing_order(company_id=self.company_id, order_id=self.order_id)
+        self.assertEqual(order["order"]["state"]["refund_execution_reviewed_at"], expected)
+        audit = self.repo.find_latest_audit_log_by_target(company_id=self.company_id, store_id=None, action_type="billing.domestic_refund.execution_claimed", target_type="billing_order", target_id=self.order_id)
+        self.assertEqual(audit["details"]["reviewed_at"], expected)
+        json.dumps({"order": order, "audit": audit})
+
+    def test_ops_execution_accepts_native_database_timestamp_through_full_boundary(self) -> None:
+        packet = self.approve_and_get_packet()
+        instant = datetime.fromisoformat(self.repo.get_confirmation(company_id=self.company_id, confirmation_id=packet["confirmation_id"])["decided_at"].replace("Z", "+00:00")).astimezone(timezone.utc)
+        with self.native_confirmation_timestamp(instant), patch("jiejing_saas.billing_wechat_pay.request_wechat_pay_refund_from_env", return_value=self.provider_packet()) as provider:
+            status, response = self.request(f"/owner/billing/domestic/refunds/{self.order_id}/execute", {"company_id": self.company_id, "exact_confirmation": packet["execution_confirmation"]}, account="reviewer", ops=True)
+        self.assertEqual(status, 202, response)
+        self.assertEqual(response["domestic_billing_refund_execution"]["status"], "refund_processing")
+        self.assertEqual(provider.call_count, 1)
+        persisted = self.repo.get_domestic_billing_order(company_id=self.company_id, order_id=self.order_id)
+        self.assertEqual(persisted["order"]["state"]["refund_execution_reviewed_at"], instant.isoformat())
+
+    def test_refund_approval_rejects_invalid_naive_or_changed_review_time(self) -> None:
+        from jiejing_saas.billing_domestic import _approved_domestic_refund_confirmation
+        packet = self.approve_and_get_packet()
+        audit = self.repo.find_latest_audit_log_by_target(company_id=self.company_id, store_id=None, action_type="billing.domestic_refund.reviewed", target_type="confirmation", target_id=packet["confirmation_id"])
+        original = audit["details"]["decided_at"]
+        instant = datetime.fromisoformat(original.replace("Z", "+00:00"))
+        cases = [(None, None), ("not-a-time", "not-a-time"), (instant.replace(tzinfo=None), instant.replace(tzinfo=None).isoformat()), (instant + timedelta(microseconds=1), original)]
+        for database_value, evidence_value in cases:
+            with self.subTest(database_type=type(database_value).__name__, evidence=evidence_value):
+                changed_audit = {**audit, "details": {**audit["details"], "decided_at": evidence_value}}
+                with self.repo._connect() as connection:
+                    connection.execute("update audit_logs set audit_json = ? where audit_id = ?", (json.dumps(changed_audit), audit["audit_id"]))
+                with self.native_confirmation_timestamp(database_value):
+                    result = _approved_domestic_refund_confirmation(self.repo, company_id=self.company_id, order_id=self.order_id, internal_admin_emails=self.handler.settings.internal_admin_emails)
+                self.assertFalse(result["ok"], result)
+                self.assertEqual(result["reason"], "domestic_refund_platform_review_required")
+
+    def test_refund_claim_rejects_invalid_naive_or_changed_review_time(self) -> None:
+        packet = self.approve_and_get_packet()
+        instant = datetime.fromisoformat(self.repo.get_confirmation(company_id=self.company_id, confirmation_id=packet["confirmation_id"])["decided_at"].replace("Z", "+00:00"))
+        for stored, requested in ((None, None), ("bad", "bad"), (instant.replace(tzinfo=None), instant.replace(tzinfo=None)), (instant, instant + timedelta(microseconds=1))):
+            with self.subTest(stored_type=type(stored).__name__):
+                with self.repo._connect() as connection:
+                    connection.execute("update billing_orders set status = 'refund_review_requested' where order_id = ?", (self.order_id,))
+                with self.native_confirmation_timestamp(stored), self.assertRaises(ConfirmationDecisionConflict):
+                    self.repo.claim_platform_refund_execution(**self.claim_arguments(packet, requested))
+                self.assertEqual(self.repo.get_domestic_billing_order(company_id=self.company_id, order_id=self.order_id)["status"], "refund_review_requested")
 
 
 if __name__ == "__main__":

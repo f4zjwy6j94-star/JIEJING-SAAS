@@ -17,12 +17,15 @@
 | S3 | 团队邀请未限制套餐席位 | `repository.py` 团队邀请与 `_team_seat_quota_in_transaction` | 成员和待邀请共同占席；相同邮箱幂等；最后一席事务串行化；待邀请转成员重新校验；客户端不能自定限额或用重邀更改角色。 |
 | S4 | 共享订阅判定漏认真实微信套餐及有效期 | `billing_plan.py:_entitlement_active` | 支持受信任的真实微信订阅；检查状态与到期时间；过期标记未刷新也不能继续授予付费权益。测试不能只用 mock 支付提供方。 |
 | S5 | 退款授权修复会影响查询恢复；原退款发送存在在途状态竞态 | `billing_domestic.py` execute/query、`repository.py` 内部审核 | 查询沿用有效内部审批上下文；发送前原子认领；在途不能撤销成“已拒绝”，并发不能重复发送；不确定结果走查询，不自动重发资金动作。 |
+| S6 | 新退款审核时间比较不兼容 PostgreSQL 原生日期对象 | `billing_domestic.py:_approved_domestic_refund_confirmation`、`repository.py:claim_platform_refund_execution` | 审核与确认时间按明确时区解析为同一 UTC 时刻；拒绝无效、无时区或被改动的时间；订单和审计 JSON 只保存标准 ISO 字符串。 |
 
 S1 首次使用本地假商家、假订单与假 provider 复现：未具备平台内部身份的商家能够申请、自批并到达退款 provider。真实外部调用为零。
 
 S5 独立复核使用临时库与阻塞假 provider 复现：两个并发执行可到达 provider 两次；请求在途时另一运营审核拒绝成功，之后订单却成为退款处理中。微信固定退款请求号具备 provider 层幂等，因此没有把该证据表述为“双倍真实退款”。
 
 S4 使用临时库复现：有效 `wechat_pay_native` 付费订阅被新席位入口当作免费；另一已到期订阅在 active 标记尚未清理时仍可增加成员。修复必须覆盖共享判定，不仅修改界面文案。
+
+S6 在部署前代码复核发现：SQLite 返回时间字符串，生产 PostgreSQL 驱动返回原生 datetime，直接比较会拒绝合法审核。旧候选已停止门禁且未部署。新增回归在数据库游标边界注入原生日期对象，覆盖等价时区、时间篡改、无效/无时区时间及认领证据 JSON 序列化；它不是一次真实生产退款。
 
 ## 代表性保护已验证
 
@@ -40,5 +43,7 @@ S4 使用临时库复现：有效 `wechat_pay_native` 付费订阅被新席位�
 新增核心回归：`tools/test_jiejing_refund_operator_authorization.py`、`tools/test_jiejing_team_seat_quota.py`。既有支付/素材点退款、会话、租户缓存、Listing、额度、迁移和部署合同继续参加候选版本门禁。
 
 SQLite 并发测试和 PostgreSQL 锁/迁移合同是不同证据。本轮未在真实托管 PostgreSQL 上运行并发压力测试。自动化本地浏览器合同也不等于已登录生产商家的完整 UI 操作。
+
+quota、seat、fact checkpoint 的新增路径另经独立原生行契约回放，日期、JSONB 与整数类型四项通过，未发现同类确定失败；这不等于真实 PostgreSQL SQL 与并发执行通过。
 
 本轮 Chrome 控制连接不可用，未重新登录、重装或用旧截图伪造当前视觉审查。平板支架项目仍从已有报告/资料/Listing 步骤续接；没有真实发布完成证明。部署是否完成、完整门禁结果及下一步以当前执行索引为准。
