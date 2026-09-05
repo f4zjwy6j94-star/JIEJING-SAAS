@@ -300,6 +300,9 @@ FILES=(
   "tools/jiejing_deploy_frontend_staging_with_key.ps1"
   "tools/jiejing_prepare_stable_deploy_key.ps1"
   "tools/jiejing_prepare_public_staging_bundle.py"
+  "tools/jiejing_release_gate_evidence.py"
+  "tools/test_jiejing_release_gate_evidence.py"
+  "tools/test_jiejing_workflow_entry_feedback.js"
   "tools/jiejing_staging_deploy.py"
   "tools/jiejing_current_state_guard.py"
   "tools/jiejing_external_launch_blocker_gate.py"
@@ -343,6 +346,8 @@ FILES=(
   "tools/test_jiejing_platform_trial_window.py"
   "tools/test_jiejing_postgres_schema_contract.py"
   "tools/codex_jiejing_listing_ai_generation_browser_smoke.js"
+  "tools/codex_jiejing_homepage_maturity_browser_smoke.js"
+  "tools/test_jiejing_listing_backend_restore.js"
   "tools/test_jiejing_listing_product_fact_confirmation_ui.js"
   "tools/test_jiejing_listing_publish_prefill_truth.js"
   "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"
@@ -438,6 +443,7 @@ FILES=(
   "tools/test_jiejing_registration_challenge_ui.py"
   "tools/test_jiejing_ai_ceo_scroll_retention.py"
   "tools/test_jiejing_ai_ceo_history_pagination.py"
+  "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js"
   "tools/test_jiejing_billing_quota_guardrail.py"
   "tools/test_jiejing_team_seat_quota.py"
   "tools/test_jiejing_refund_operator_authorization.py"
@@ -699,6 +705,8 @@ python3 -m py_compile \
   tools/jiejing_infrastructure_stage_gate.py \
   tools/jiejing_deploy_channel_doctor.py \
   tools/jiejing_prepare_public_staging_bundle.py \
+  tools/jiejing_release_gate_evidence.py \
+  tools/test_jiejing_release_gate_evidence.py \
   tools/jiejing_staging_deploy.py \
   tools/jiejing_current_state_guard.py \
   tools/jiejing_external_launch_blocker_gate.py \
@@ -858,6 +866,10 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check tools/codex_jiejing_product_feedback_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_rotating_browser_session_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_listing_ai_generation_browser_smoke.js
+"$NODE_BIN" --check tools/codex_jiejing_homepage_maturity_browser_smoke.js
+"$NODE_BIN" --check tools/test_jiejing_listing_backend_restore.js
+"$NODE_BIN" --check tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js
+"$NODE_BIN" --check tools/test_jiejing_workflow_entry_feedback.js
 "$NODE_BIN" --check tools/test_jiejing_listing_product_fact_confirmation_ui.js
 "$NODE_BIN" --check tools/test_jiejing_listing_publish_prefill_truth.js
 

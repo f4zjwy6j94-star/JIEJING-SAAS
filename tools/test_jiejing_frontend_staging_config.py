@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import io
@@ -36,6 +37,17 @@ def validate_prepare_bundle_contract() -> str:
             prepare_source,
             encoding="utf-8",
         )
+        (fixture / "tools" / "jiejing_release_gate_evidence.py").write_text(
+            (ROOT / "tools" / "jiejing_release_gate_evidence.py").read_text(encoding="utf-8"), encoding="utf-8",
+        )
+        gate_source = (ROOT / "tools" / "jiejing_precloud_deployment_gate.py").read_text(encoding="utf-8")
+        catalog_node = next(node for node in ast.parse(gate_source).body
+                            if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "CHECKS")
+        gate_lines = gate_source.splitlines(keepends=True)
+        gate_lines[catalog_node.lineno - 1:catalog_node.end_lineno] = [
+            'CHECKS = [("fixture_pass", [sys.executable, "-c", "raise SystemExit(0)"])]\n'
+        ]
+        (fixture / "tools" / "jiejing_precloud_deployment_gate.py").write_text("".join(gate_lines), encoding="utf-8")
         app_js = "console.log('clean fixture');\n"
         styles_css = "body { color: #123; }\n"
         app_digest = hashlib.sha256(app_js.encode("utf-8")).hexdigest()[:12]
@@ -94,6 +106,14 @@ def validate_prepare_bundle_contract() -> str:
             timeout=30,
         ).stdout.strip()
         prepare = fixture / "tools" / "jiejing_prepare_public_staging_bundle.py"
+        unverified = subprocess.run([sys.executable, str(prepare), "--dry-run"], cwd=fixture,
+                                    capture_output=True, text=True, encoding="utf-8", timeout=120)
+        if unverified.returncode == 0 or "gate_evidence" not in unverified.stdout + unverified.stderr:
+            return "new bundle without source-bound gate evidence was accepted"
+        fixture_gate = subprocess.run([sys.executable, str(fixture / "tools" / "jiejing_precloud_deployment_gate.py")],
+                                      cwd=fixture, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        if fixture_gate.returncode != 0:
+            return "isolated one-check fixture gate failed"
         bundle_dry_run = subprocess.run(
             [sys.executable, str(prepare), "--dry-run"],
             cwd=fixture,
@@ -112,6 +132,21 @@ def validate_prepare_bundle_contract() -> str:
             return "public staging bundle dry-run did not emit readable JSON"
         if bundle_manifest.get("source_commit") != source_commit:
             return "bundle manifest is not bound to the clean source commit"
+        proof = bundle_manifest.get("release_gate_proof", {})
+        gate_path = fixture / "output" / "jiejing-precloud-deployment-gate" / "latest.json"
+        if proof.get("report_sha256") != hashlib.sha256(gate_path.read_bytes()).hexdigest():
+            return "bundle did not bind its exact gate report bytes"
+        if proof.get("evidence", {}).get("source_commit") != source_commit or "stdout_tail" in json.dumps(proof):
+            return "bundle gate proof is unbound or contains raw check output"
+        original_gate_bytes = gate_path.read_bytes()
+        stale_gate = json.loads(original_gate_bytes)
+        stale_gate["release_gate_evidence"]["check_catalog_sha256"] = "0" * 64
+        gate_path.write_text(json.dumps(stale_gate), encoding="utf-8")
+        stale_prepare = subprocess.run([sys.executable, str(prepare), "--dry-run"], cwd=fixture,
+                                       capture_output=True, text=True, encoding="utf-8", timeout=120)
+        gate_path.write_bytes(original_gate_bytes)
+        if stale_prepare.returncode == 0 or "gate_evidence_check_catalog_mismatch" not in stale_prepare.stdout + stale_prepare.stderr:
+            return "bundle accepted a stale gate catalog"
         files_sha256 = bundle_manifest.get("files_sha256")
         if not isinstance(files_sha256, dict) or set(files_sha256) != set(whitelist):
             return "bundle manifest does not hash the complete whitelist"
@@ -149,6 +184,8 @@ def validate_prepare_bundle_contract() -> str:
         bundle_path = Path(bundle_match.group(1).strip())
         manifest_path = Path(manifest_match.group(1).strip())
         built_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if built_manifest.get("release_gate_proof") != proof:
+            return "built bundle lost or changed the reviewed gate proof"
         with zipfile.ZipFile(bundle_path, "r") as archive:
             names = archive.namelist()
             if len(names) != len(set(names)) or set(names) != set(whitelist):
@@ -949,7 +986,7 @@ def main() -> int:
         "资料不足不编造",
         "侵权风险初筛，仍需商家核对",
     ]:
-        if merchant_outcome_copy not in index_html + app_html:
+        if merchant_outcome_copy not in re.sub(r"<[^>]+>", "", index_html + app_html):
             return fail(f"public product copy should explain the merchant outcome: {merchant_outcome_copy}")
     if "免费体验不绑卡、不自动续费" not in index_html:
         return fail("homepage onboarding copy should explain the bounded free trial")

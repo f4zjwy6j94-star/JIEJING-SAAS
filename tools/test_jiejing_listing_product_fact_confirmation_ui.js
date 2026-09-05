@@ -86,6 +86,10 @@ const baseFunctions = baseFunctionNames.map((name) => {
   }
   return functionSource;
 }).join("\n") + `\n${extractOptionalFunction("markSaasMerchantProductFactEdited")}\n${extractOptionalFunction("confirmSaasMerchantProductFactSuggestion")}`;
+const generationContextHelpers = source.slice(
+  source.indexOf("let saasListingAiGenerationEpoch ="),
+  source.indexOf("async function generateSaasListingDraftFromCurrentProject("),
+);
 
 async function withProductFactPage(run) {
   const browser = await chromium.launch({ channel: browserChannel, headless: true });
@@ -97,6 +101,7 @@ async function withProductFactPage(run) {
     await page.addScriptTag({
       content: `
         const SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT = "merchant_product_fact_packet_v1";
+        let saasStateRefreshGeneration = 0;
         const state = {
           saasLoading: false,
           saasConnected: false,
@@ -153,6 +158,7 @@ async function withProductFactPage(run) {
         const escapeHtml = (value) => String(value == null ? "" : value)
           .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
           .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+        ${generationContextHelpers}
         ${baseFunctions}
         document.querySelector("#product-fact-test-root").innerHTML =
           renderSaasMerchantProductFactsModule(state.saasListingComposerDraft);

@@ -141,12 +141,15 @@ def main() -> int:
     merge_history_body = function_body(app_js, "mergeSaasAiCeoHistoryFromBackend")
     for marker in [
         "payload?.ai_ceo_chat_history",
-        "uniqueSaasAiCeoThreadTurns",
+        "retainSaasAiCeoRecentThread",
         'history.scope === "account"',
         "history.cross_store === true",
         "persistSaasAiCeoThread({ syncBackend: false })",
     ]:
         require(merge_history_body, marker, "cross-device backend history merge")
+    recent_history_body = function_body(app_js, "retainSaasAiCeoRecentThread")
+    for marker in ["uniqueSaasAiCeoThreadTurns", "ordered.slice(-30)", "archive.turns"]:
+        require(recent_history_body, marker, "recent history stays bounded while display archive remains separate")
 
     sync_history_body = function_body(app_js, "syncSaasAiCeoThreadWithBackend")
     for marker in [
@@ -166,7 +169,7 @@ def main() -> int:
         require(cloud_dom_body, marker, "non-sensitive cloud history browser proof")
 
     merge_score_body = function_body(app_js, "saasAiCeoThreadTurnMergeScore")
-    for marker in ["normalized.pending ? 0 : 100000", "normalized.assistant_text", "normalized.source_records"]:
+    for marker in ["normalized.pending || normalized.archive_pending ? 0 : 100000", "normalized.assistant_text", "normalized.source_records"]:
         require(merge_score_body, marker, "cross-device completed-turn conflict preference")
     unique_turns_body = function_body(app_js, "uniqueSaasAiCeoThreadTurns")
     for marker in [

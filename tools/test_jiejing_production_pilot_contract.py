@@ -248,8 +248,10 @@ def main() -> int:
             return fail(f"CI/deploy workflow must execute the paper ceremony contract: {workflow.name}")
     if "provision_managed_postgres_and_redis" in precloud_gate:
         return fail("precloud next steps must not recommend paid Redis after the production queue moved to Postgres durable")
-    if "provision_managed_postgres_and_postgres_durable_queue" not in precloud_gate:
-        return fail("precloud next steps must name the selected Postgres durable production queue")
+    if "provision_managed_postgres" in precloud_gate or "vault_kms" in precloud_gate:
+        return fail("precloud must not recommend reprovisioning the existing database or paid KMS by default")
+    if "JIEJING_CURRENT_EXECUTION_STATE" not in precloud_gate or "manual_github_dry_run" not in precloud_gate:
+        return fail("precloud next steps must use current state and the approved deployment channel")
     private_env = "${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-saas.production.env"
     if compose.count(private_env) != 2 or "./jiejing-saas.production.env" in compose.replace(private_env, ""):
         return fail("production credentials must be injected from the server-private env boundary")

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from html import unescape
 from pathlib import Path
@@ -35,7 +36,28 @@ def assert_future_platform_copy(source: str) -> None:
             assert not forbidden.search(block), f"{platform} future block also claims current availability: {block}"
 
 
+def assert_homepage_browser_release_wiring(gate_source: str, apply_source: str) -> None:
+    runner = "tools/codex_jiejing_homepage_maturity_browser_smoke.js"
+    catalog = next(
+        node.value for node in ast.parse(gate_source).body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "CHECKS"
+    )
+    matches = [
+        node for node in catalog.elts
+        if isinstance(node, ast.Tuple) and node.elts and isinstance(node.elts[0], ast.Constant)
+        and node.elts[0].value == "browser_homepage_maturity"
+    ]
+    assert len(matches) == 1, "homepage browser regression must appear exactly once in the release gate"
+    assert ast.literal_eval(matches[0].elts[1]) == ["node", runner], "homepage browser gate must execute its real runner"
+    whitelist = re.search(r"(?ms)^FILES=\(\n(.*?)^\)", apply_source)
+    assert whitelist and whitelist.group(1).splitlines().count(f'  "{runner}"') == 1, "homepage browser runner must be bundled exactly once"
+    assert apply_source.splitlines().count(f'"$NODE_BIN" --check {runner}') == 1, "homepage browser runner needs a Node syntax check"
+
+
 def main() -> None:
+    gate_source = (ROOT / "tools/jiejing_precloud_deployment_gate.py").read_text(encoding="utf-8")
+    apply_source = (ROOT / "deploy/apply-staging-patch.sh").read_text(encoding="utf-8")
+    assert_homepage_browser_release_wiring(gate_source, apply_source)
     assert_future_platform_copy("<p>TikTok、Amazon 后续开放。</p>")
     for counterexample in (
         "<p>TikTok 后续开放；当前可用。</p>",
@@ -61,7 +83,7 @@ def main() -> None:
     plans = re.findall(r'<button class="path-card[^"]*"[^>]*data-plan="(free|single|multi)"', INDEX)
     assert plans == ["free", "single", "multi"]
 
-    assert "让 eBay 经营少一点重复，多一点自动推进" in INDEX
+    assert "让 eBay 经营少一点重复，多一点自动推进" in re.sub(r"<[^>]+>", "", INDEX)
     assert 'data-home-proof-grid="jiejing_product_proof_v2"' in INDEX
     assert len(re.findall(r'data-home-proof-metric="[^"]+"', INDEX)) == 4
 

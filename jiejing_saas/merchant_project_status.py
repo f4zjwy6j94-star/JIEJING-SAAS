@@ -59,45 +59,16 @@ def build_merchant_project_status(
             overall_status="blocked",
         )
 
-    tasks = _before_cutoff(
-        repository.list_tasks(company_id=company_id, store_id=store_id, limit=500),
-        cutoff,
+    evidence = repository.list_merchant_project_evidence(
+        company_id=company_id, store_id=store_id, project_id=clean_project_id,
+        user_id=user_id, evidence_cutoff=cutoff,
     )
-    store_task_ids = {str(item.get("task_id") or "") for item in tasks if item.get("task_id")}
-    reports = [
-        item
-        for item in _before_cutoff(repository.list_reports(company_id=company_id, limit=500), cutoff)
-        if str(item.get("task_id") or "") in store_task_ids
-    ]
-    confirmations = [
-        item
-        for item in _before_cutoff(repository.list_confirmations(company_id=company_id, limit=500), cutoff)
-        if str(item.get("store_id") or "") == store_id
-    ]
-    media_jobs = _before_cutoff(
-        repository.list_media_asset_jobs(company_id=company_id, store_id=store_id, limit=200),
-        cutoff,
-    )
-    confirmation_ids = {str(item.get("confirmation_id") or "") for item in confirmations}
-    executions = [
-        item
-        for item in _before_cutoff(repository.list_execution_results(company_id=company_id, limit=500), cutoff)
-        if str(item.get("confirmation_id") or "") in confirmation_ids
-    ]
-    chat_turns = []
-    if user_id and callable(getattr(repository, "list_ai_ceo_chat_history", None)):
-        chat_turns = [
-            item
-            for item in _before_cutoff(
-                repository.list_ai_ceo_chat_history(
-                    company_id=company_id,
-                    user_id=user_id,
-                    limit=50,
-                ),
-                cutoff,
-            )
-            if not str(item.get("store_id") or "") or str(item.get("store_id") or "") == store_id
-        ]
+    tasks = _before_cutoff(evidence.get("tasks"), cutoff)
+    reports = _before_cutoff(evidence.get("reports"), cutoff)
+    confirmations = _before_cutoff(evidence.get("confirmations"), cutoff)
+    media_jobs = _before_cutoff(evidence.get("media_jobs"), cutoff)
+    executions = _before_cutoff(evidence.get("executions"), cutoff)
+    chat_turns = _before_cutoff(evidence.get("chat_turns"), cutoff)
 
     identity_records = [*tasks, *reports, *media_jobs, *confirmations, *chat_turns]
     project_identities = [
@@ -106,6 +77,36 @@ def build_merchant_project_status(
         if identity.get("key") == clean_project_id
     ]
     canonical_identity, identity_conflict = _merge_identities(clean_project_id, project_identities)
+
+    # The immutable source report is an exact project reference, not a page
+    # position. Keep it (and its owning task) even after this same project has
+    # produced more versions than the bounded recent-evidence windows.
+    source_report_id = str(canonical_identity.get("source_report_id") or "")
+    if source_report_id and not identity_conflict and not any(
+        str(item.get("report_id") or "") == source_report_id for item in reports
+    ):
+        source_report = repository.get_report_for_company(company_id=company_id, report_id=source_report_id)
+        if source_report and str(source_report.get("store_id") or "") == store_id:
+            source_task = repository.get_task(company_id=company_id, task_id=str(source_report.get("task_id") or ""))
+            source_identity = _artifact_identity(source_report)
+            # An exact reference may recover legacy/unbound source evidence,
+            # but never override an explicit identity belonging elsewhere.
+            source_conflict = any(
+                identity.get(field) and canonical_identity.get(field)
+                and identity[field] != canonical_identity[field]
+                for identity in (source_identity, _artifact_identity(source_task))
+                for field in ("key", "source_report_id", "candidate_id")
+            )
+            if (source_task and str(source_task.get("store_id") or "") == store_id
+                    and not source_conflict
+                    and _before_cutoff([source_report], cutoff) and _before_cutoff([source_task], cutoff)):
+                reports.append(source_report)
+                if not any(item.get("task_id") == source_task.get("task_id") for item in tasks):
+                    tasks.append(source_task)
+                if source_identity.get("key") == clean_project_id:
+                    canonical_identity, identity_conflict = _merge_identities(
+                        clean_project_id, [*project_identities, source_identity],
+                    )
 
     matching_tasks = [item for item in tasks if _identity_matches(_artifact_identity(item), canonical_identity)]
     matching_task_ids = {str(item.get("task_id") or "") for item in matching_tasks}

@@ -298,17 +298,62 @@ def validate_atomic_frontend_manifest() -> list[str]:
             for name, contents in validation_files.items()
         }
         try:
+            module.validate_local_release_candidate(
+                full_bundle, full_manifest_path, set(validation_files), "a" * 40,
+                source_files_sha256=fixture_source_hashes,
+            )
+        except ValueError as exc:
+            if "gate_evidence" not in str(exc):
+                failures.append(f"missing gate proof produced imprecise rejection:{exc}")
+        else:
+            failures.append("new release candidate without source-bound gate proof was accepted")
+        try:
+            from jiejing_release_gate_evidence import build_gate_evidence
+        except ModuleNotFoundError:
+            from tools.jiejing_release_gate_evidence import build_gate_evidence
+        fixture_checks = [("fixture_pass", ["python", "tools/fixture.py"])]
+        fixture_state = {"source_commit": "a" * 40, "source_tree": "b" * 40,
+                         "worktree_clean": True, "tracked_flags_safe": True, "tracked_fingerprint_sha256": "c" * 64}
+        full_manifest["release_gate_proof"] = {"report_sha256": "d" * 64, "evidence": build_gate_evidence(
+            fixture_checks, [{"key": "fixture_pass", "pass": True, "returncode": 0}],
+            fixture_state, fixture_state, "2026-09-05T10:00:00Z", "2026-09-05T10:00:01Z", ROOT,
+        )}
+        full_manifest_path.write_text(json.dumps(full_manifest), encoding="utf-8")
+        try:
             _, initial_bundle_sha, initial_manifest_sha = module.validate_local_release_candidate(
                 full_bundle,
                 full_manifest_path,
                 set(validation_files),
                 "a" * 40,
                 source_files_sha256=fixture_source_hashes,
+                source_tree="b" * 40, gate_checks=fixture_checks,
             )
         except (AttributeError, TypeError, ValueError) as exc:
             failures.append(f"valid sealed release candidate rejected:{exc}")
             initial_bundle_sha = module.sha256(full_bundle)
             initial_manifest_sha = module.sha256(full_manifest_path)
+
+        original_proof_bytes = full_manifest_path.read_bytes()
+        for label, edit in (
+            ("stale source", lambda evidence: evidence.update(source_commit="f" * 40)),
+            ("stale catalog", lambda evidence: evidence.update(check_catalog_sha256="0" * 64)),
+            ("failed result", lambda evidence: evidence["results"][0].update(returncode=1)),
+            ("missing result", lambda evidence: evidence["results"].clear()),
+        ):
+            candidate_manifest = json.loads(original_proof_bytes)
+            edit(candidate_manifest["release_gate_proof"]["evidence"])
+            full_manifest_path.write_text(json.dumps(candidate_manifest), encoding="utf-8")
+            try:
+                module.validate_local_release_candidate(
+                    full_bundle, full_manifest_path, set(validation_files), "a" * 40,
+                    source_files_sha256=fixture_source_hashes, source_tree="b" * 40, gate_checks=fixture_checks,
+                )
+            except ValueError as exc:
+                if "gate_evidence" not in str(exc):
+                    failures.append(f"{label} gate proof produced imprecise rejection:{exc}")
+            else:
+                failures.append(f"production validator accepted {label} gate proof")
+        full_manifest_path.write_bytes(original_proof_bytes)
 
         original_bundle_bytes = full_bundle.read_bytes()
         full_bundle.write_bytes(original_bundle_bytes + b"tampered-after-initial-validation")

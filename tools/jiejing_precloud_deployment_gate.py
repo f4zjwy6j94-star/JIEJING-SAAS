@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Pre-cloud deployment gate for Jiejing SaaS.
 
-This is the last local gate before moving to a public staging domain. It checks
-that the repo is ready for the first real eBay OAuth/read-only validation loop:
-frontend staging config, public demo-auth guardrail, OAuth/Vault boundaries,
-eBay read-only preflight, backend MVP, and productization stage gate.
+This local regression gate binds its checks to one clean source candidate.
+It does not prove current production health, commercial readiness, or permission
+to repeat OAuth, payments, refunds, or platform writes.
 """
 
 from __future__ import annotations
@@ -17,6 +16,11 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+try:
+    from jiejing_release_gate_evidence import build_gate_evidence, capture_source_state, utc_now
+except ModuleNotFoundError:
+    from tools.jiejing_release_gate_evidence import build_gate_evidence, capture_source_state, utc_now
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +56,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("merchant_surface_isolation", [sys.executable, "tools/test_jiejing_merchant_surface_isolation.py"]),
     ("core_workflow_maturity", [sys.executable, "tools/test_jiejing_core_workflow_maturity.py"]),
     ("homepage_maturity", [sys.executable, "tools/test_jiejing_homepage_maturity.py"]),
+    ("browser_homepage_maturity", ["node", "tools/codex_jiejing_homepage_maturity_browser_smoke.js"]),
     ("production_empty_state", [sys.executable, "tools/test_jiejing_production_empty_state.py"]),
     ("merchant_role_labels", [sys.executable, "tools/test_jiejing_merchant_role_labels.py"]),
     ("merchant_source_paths_copy", [sys.executable, "tools/test_jiejing_merchant_source_paths_copy.py"]),
@@ -101,6 +106,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("platform_trial_window", [sys.executable, "tools/test_jiejing_platform_trial_window.py"]),
     ("postgres_schema_contract", [sys.executable, "tools/test_jiejing_postgres_schema_contract.py"]),
     ("listing_ai_generation_browser", ["node", "tools/codex_jiejing_listing_ai_generation_browser_smoke.js"]),
+    ("listing_backend_restore_browser", ["node", "tools/test_jiejing_listing_backend_restore.js"]),
     ("listing_product_fact_confirmation_ui", ["node", "tools/test_jiejing_listing_product_fact_confirmation_ui.js"]),
     ("listing_concrete_product_gate", [sys.executable, "tools/test_jiejing_listing_concrete_product_gate.py"]),
     ("ai_ceo_product_label_extraction", [sys.executable, "tools/test_jiejing_ai_ceo_product_label_extraction.py"]),
@@ -126,6 +132,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ai_ceo_cross_device_history", [sys.executable, "tools/test_jiejing_ai_ceo_cross_device_history.py"]),
     ("ai_ceo_scroll_retention", [sys.executable, "tools/test_jiejing_ai_ceo_scroll_retention.py"]),
     ("ai_ceo_history_pagination", [sys.executable, "tools/test_jiejing_ai_ceo_history_pagination.py"]),
+    ("ai_ceo_history_pagination_browser", ["node", "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js"]),
     ("ai_ceo_cross_device_refresh", [sys.executable, "tools/test_jiejing_ai_ceo_cross_device_refresh_contract.py"]),
     ("bulk_partial_success", [sys.executable, "tools/test_jiejing_bulk_partial_success_contract.py"]),
     ("bulk_candidate_lane", [sys.executable, "tools/test_jiejing_bulk_candidate_lane.py"]),
@@ -259,6 +266,8 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("fixed_launch_progress", [sys.executable, "tools/test_jiejing_fixed_launch_progress.py"]),
     ("merchant_workflow_validation", [sys.executable, "tools/test_jiejing_merchant_workflow_validation.py"]),
     ("version_bound_release_evidence", [sys.executable, "tools/test_jiejing_version_bound_release_evidence.py"]),
+    ("source_bound_release_gate_evidence", [sys.executable, "tools/test_jiejing_release_gate_evidence.py"]),
+    ("workflow_entry_feedback", ["node", "tools/test_jiejing_workflow_entry_feedback.js"]),
     ("owner_launch_control", [sys.executable, "tools/test_jiejing_owner_launch_control.py"]),
     ("owner_launch_control_access", [sys.executable, "tools/test_jiejing_owner_launch_control_access.py"]),
     ("billing_provider_webhook", [sys.executable, "tools/test_jiejing_billing_provider_webhook.py"]),
@@ -270,10 +279,14 @@ CHECKS: list[tuple[str, list[str]]] = [
 
 def main() -> int:
     started = time.time()
+    started_at = utc_now()
+    source_before = capture_source_state(ROOT)
     OUT.mkdir(parents=True, exist_ok=True)
     results = [_run_check(key, command) for key, command in CHECKS]
+    source_after = capture_source_state(ROOT)
+    evidence = build_gate_evidence(CHECKS, results, source_before, source_after, started_at, utc_now(), ROOT)
     docker_path = shutil.which("docker")
-    local_pass = all(item["pass"] for item in results)
+    local_pass = evidence["checks_passed"]
     external_blockers = []
     if not docker_path:
         external_blockers.append("docker_cli_not_available_on_this_machine")
@@ -282,7 +295,8 @@ def main() -> int:
         "product": "Jiejing SaaS",
         "gate": "precloud_deployment_gate",
         "status": "pass_local_checks" if local_pass else "failed_local_checks",
-        "ready_for_public_staging_code_handoff": local_pass,
+        "ready_for_public_staging_code_handoff": evidence["release_eligible"],
+        "release_gate_evidence": evidence,
         "ready_for_paid_commercial_launch": False,
         "checks": results,
         "external_blockers": external_blockers,
@@ -298,7 +312,8 @@ def main() -> int:
     output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     print(f"OUTPUT={output_path}")
-    return 0 if local_pass else 1
+    # Publish preflights also consume the exit status, not only the JSON flag.
+    return 0 if evidence["release_eligible"] else 1
 
 
 def _latest_staging_verification() -> dict[str, Any]:
@@ -310,7 +325,9 @@ def _latest_staging_verification() -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"status": "invalid_doctor_output", "public_staging_reachable": False, "deploy_channel_ready": False}
     return {
-        "status": "verified" if payload.get("deploy_channel_ready") and payload.get("public_staging_reachable") else "blocked",
+        "status": "historical_verified" if payload.get("deploy_channel_ready") and payload.get("public_staging_reachable") else "historical_blocked",
+        "current_state_verified": False,
+        "evidence_scope": "historical_unbound_doctor_output_not_current_deploy_authority",
         "deploy_channel_ready": payload.get("deploy_channel_ready") is True,
         "public_staging_reachable": payload.get("public_staging_reachable") is True,
         "public_health_service": (payload.get("public_health") or {}).get("service"),
@@ -320,20 +337,14 @@ def _latest_staging_verification() -> dict[str, Any]:
 
 
 def _next_external_steps(staging_verification: dict[str, Any]) -> list[str]:
-    steps = [
-        "use_current_state_guard_before_any_future_oauth_sync_or_deploy_action",
-        "provision_managed_postgres_and_postgres_durable_queue_when_the_operator_approves_paid_infra",
-        "configure_production_vault_kms_monitoring_backups_domain_and_billing_before_paid_launch",
-        "do_not_repeat_seller_oauth_or_live_sync_unless_current_state_guard_says_the_artifact_is_missing_or_stale",
-    ]
-    if staging_verification.get("status") == "verified":
-        return [
-            "public_staging_is_reachable_keep_using_agentuser_ssh_for_future_patch_deploys",
-            *steps,
-        ]
+    # A historical doctor file is a hint, not current state or deploy authority.
     return [
-        "deploy_verified_patch_to_existing_public_staging_over_the_known_agentuser_ssh_channel",
-        *steps,
+        "read_docs/JIEJING_CURRENT_EXECUTION_STATE.md_and_AGENTS.md_before_selecting_any_next_action",
+        "recheck_current_target_release_and_readiness_only_when_needed_do_not_treat_local_or_historical_evidence_as_live_state",
+        "follow_the_target_environment_runbook_staging_uses_manual_github_dry_run_then_explicitly_approved_apply",
+        "repair_only_current_missing_or_expired_backup_restore_monitoring_evidence_without_assuming_new_infrastructure_is_needed",
+        "do_not_repeat_oauth_unless_the_user_explicitly_approves_new_ebay_account",
+        "do_not_repeat_live_sync_payment_refund_or_ebay_proof_just_to_recover_progress",
     ]
 
 

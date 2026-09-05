@@ -313,8 +313,18 @@ async function runSmoke() {
       body: { platform: "ebay", store_name: "Listing AI Store", marketplace: "EBAY_US" },
     })
   ).store;
+  const otherStore = (
+    await api("/stores", {
+      token,
+      method: "POST",
+      body: { platform: "ebay", store_name: "Other Listing Store", marketplace: "EBAY_US" },
+    })
+  ).store;
 
   let capturedGenerationBody = null;
+  let holdGeneration = false;
+  let heldGeneration = null;
+  let generationRequestCount = 0;
   let browser = null;
   try {
   browser = await chromium.launch({ channel: browserChannel, headless: true });
@@ -333,8 +343,16 @@ async function runSmoke() {
   ]);
   await context.route(`${base}/**`, async (route) => {
     const request = route.request();
-    if (request.method() === "POST" && request.url().includes(`/stores/${encodeURIComponent(store.store_id)}/listing-drafts/generate`)) {
+    const generationStore = new URL(request.url()).pathname.match(/^\/stores\/([^/]+)\/listing-drafts\/generate$/);
+    if (request.method() === "POST" && generationStore) {
+      generationRequestCount += 1;
       capturedGenerationBody = JSON.parse(request.postData() || "{}");
+      if (holdGeneration) {
+        await new Promise((resolve) => {
+          heldGeneration = { route, body: capturedGenerationBody, storeId: decodeURIComponent(generationStore[1]), resolve };
+        });
+        return;
+      }
       return route.fulfill({
         status: 201,
         contentType: "application/json; charset=utf-8",
@@ -457,6 +475,263 @@ async function runSmoke() {
   if (layout.scroll_width > layout.viewport_width + 2 || layout.clipped_controls) {
     throw new Error(`Listing AI workflow overflows the viewport: ${JSON.stringify(layout)}`);
   }
+
+  // Exercise the actual store selector while a real app handler awaits its
+  // model response. Only the external generation response is delayed/mocked.
+  holdGeneration = true;
+  await page.click('[data-saas-action="listing-generate-ai-draft"]');
+  const heldDeadline = Date.now() + 10000;
+  while (!heldGeneration && Date.now() < heldDeadline) await new Promise((resolve) => setTimeout(resolve, 20));
+  if (!heldGeneration) throw new Error("generation request was not held for context-switch regression");
+  // The compact workbench hides this legacy selector; dispatch its native
+  // change event to exercise the real switch handler, then assert visible UI.
+  await page.selectOption("#storeSwitch", `saas:${otherStore.store_id}`, { force: true });
+  await page.waitForFunction(
+    (storeId) => activeSaasStore()?.store_id === storeId && state.saasLoading === false,
+    otherStore.store_id,
+    { timeout: 30000 },
+  );
+  await page.waitForSelector('[data-source-manual-field="product_name"]', { timeout: 20000 });
+  await page.fill('[data-source-manual-field="product_name"]', "Other Store Tablet Stand");
+  await page.fill('[data-source-manual-field="material"]', "Aluminum");
+  await page.selectOption('[data-source-manual-field="condition"]', "NEW");
+  const otherFactsSaved = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes(`/stores/${otherStore.store_id}/product-facts`) && response.ok(),
+    { timeout: 20000 },
+  );
+  await page.click('[data-saas-action="save-new-product-facts"]');
+  await otherFactsSaved;
+  await page.waitForSelector('[data-saas-listing-draft-field="title"]', { timeout: 20000 });
+  await page.fill('[data-saas-listing-draft-field="title"]', "Other Store Unsaved Tablet Title");
+  await page.locator('[data-saas-listing-draft-field="title"]').blur();
+  const contextBeforeOldResponse = await page.evaluate(() => ({
+    storeId: activeSaasStore()?.store_id,
+    projectId: saasCurrentListingProjectIdentity().key,
+    title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+    staleReportPresent: (state.saasReports || []).some((item) => item.report_id === "report-old-context-must-not-enter-new-store"),
+  }));
+  const oldPayload = generatedPayload(heldGeneration.body, heldGeneration.storeId);
+  oldPayload.report.report_id = "report-old-context-must-not-enter-new-store";
+  const oldResponseFinished = page.waitForResponse((response) => response.url().includes(`/stores/${store.store_id}/listing-drafts/generate`));
+  await heldGeneration.route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(oldPayload) });
+  heldGeneration.resolve();
+  await oldResponseFinished;
+  await page.waitForTimeout(150);
+  const contextAfterOldResponse = await page.evaluate(() => ({
+    storeId: activeSaasStore()?.store_id,
+    projectId: saasCurrentListingProjectIdentity().key,
+    title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+    staleReportPresent: (state.saasReports || []).some((item) => item.report_id === "report-old-context-must-not-enter-new-store"),
+  }));
+  if (JSON.stringify(contextBeforeOldResponse) !== JSON.stringify(contextAfterOldResponse)) {
+    throw new Error(`old Listing response changed the current store editor/cache: ${JSON.stringify({ before: contextBeforeOldResponse, after: contextAfterOldResponse })}`);
+  }
+  heldGeneration = null;
+  await page.click('[data-saas-action="listing-generate-ai-draft"]');
+  const returnDeadline = Date.now() + 10000;
+  while (!heldGeneration && Date.now() < returnDeadline) await new Promise((resolve) => setTimeout(resolve, 20));
+  if (!heldGeneration) throw new Error("return-to-project generation request was not held");
+  await page.evaluate(() => {
+    const original = state.saasListingComposerDraft;
+    resetSaasListingProjectTransientState();
+    state.saasListingComposerDraft = { ...original, listing_project_identity: { key: "temporary-other-project" } };
+    resetSaasListingProjectTransientState();
+    state.saasListingComposerDraft = original;
+    // Model another view's completed work; the old request no longer owns it.
+    state.saasLoading = false;
+    renderProductListingCenter();
+  });
+  await page.fill('[data-saas-listing-draft-field="title"]', "Returned Project New Unsaved Title");
+  await page.locator('[data-saas-listing-draft-field="title"]').blur();
+  const returnedPayload = generatedPayload(heldGeneration.body, heldGeneration.storeId);
+  returnedPayload.report.report_id = "report-before-project-leave";
+  await heldGeneration.route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(returnedPayload) });
+  heldGeneration.resolve();
+  await page.waitForTimeout(150);
+  const returnResult = await page.evaluate(() => ({
+    title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+    staleReportPresent: (state.saasReports || []).some((item) => item.report_id === "report-before-project-leave"),
+  }));
+  if (returnResult.title !== "Returned Project New Unsaved Title" || returnResult.staleReportPresent) {
+    throw new Error(`leaving and returning revived an old Listing request: ${JSON.stringify(returnResult)}`);
+  }
+  heldGeneration = null;
+  await page.click('[data-saas-action="listing-generate-ai-draft"]');
+  const editDeadline = Date.now() + 10000;
+  while (!heldGeneration && Date.now() < editDeadline) await new Promise((resolve) => setTimeout(resolve, 20));
+  if (!heldGeneration) throw new Error("edit-during-generation request was not held");
+  await page.fill('[data-saas-listing-draft-field="title"]', "Merchant Typed While AI Was Running");
+  await page.fill('[data-saas-product-fact-field="material"]', "Updated material awaiting save");
+  const editedPayload = generatedPayload(heldGeneration.body, heldGeneration.storeId);
+  editedPayload.report.report_id = "report-generated-before-new-merchant-edits";
+  await heldGeneration.route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(editedPayload) });
+  heldGeneration.resolve();
+  await page.waitForTimeout(150);
+  const editResult = await page.evaluate(() => ({
+    title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+    material: document.querySelector('[data-saas-product-fact-field="material"]')?.value,
+    generating: state.saasLoading,
+    buttonDisabled: document.querySelector('[data-saas-action="listing-generate-ai-draft"]')?.disabled,
+    reportRetained: (state.saasReports || []).some((item) => item.report_id === "report-generated-before-new-merchant-edits"),
+  }));
+  if (editResult.title !== "Merchant Typed While AI Was Running" || editResult.material !== "Updated material awaiting save" || editResult.generating || editResult.buttonDisabled || !editResult.reportRetained) {
+    throw new Error(`generation discarded new edits or left the editor busy: ${JSON.stringify(editResult)}`);
+  }
+  heldGeneration = null;
+  const requestCountBeforeDuplicate = generationRequestCount;
+  await page.click('[data-saas-action="listing-generate-ai-draft"]');
+  const duplicateDeadline = Date.now() + 10000;
+  while (!heldGeneration && Date.now() < duplicateDeadline) await new Promise((resolve) => setTimeout(resolve, 20));
+  if (!heldGeneration) throw new Error("duplicate-generation request was not held");
+  await page.evaluate(() => { void generateSaasListingDraftFromCurrentProject(); });
+  await page.waitForTimeout(150);
+  if (generationRequestCount !== requestCountBeforeDuplicate + 1) {
+    throw new Error(`duplicate invocation sent ${generationRequestCount - requestCountBeforeDuplicate} model requests for one in-flight project`);
+  }
+  await heldGeneration.route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(generatedPayload(heldGeneration.body, heldGeneration.storeId)) });
+  heldGeneration.resolve();
+  await page.waitForFunction(() => state.saasLoading === false);
+  const contextCases = ["store_switch", "project_leave_return", "edits_during_generation", "duplicate_inflight"];
+  await page.evaluate(() => {
+    stopSaasAiCeoCrossDeviceSync();
+    window.__listingContextFixture = structuredClone({
+      saasCompany: state.saasCompany, saasIdentity: state.saasIdentity, saasUser: state.saasUser,
+      saasListingComposerDraft: state.saasListingComposerDraft,
+      saasReports: state.saasReports, saasTasks: state.saasTasks,
+    });
+  });
+  const restoreFixture = () => page.evaluate(() => {
+    resetSaasListingProjectTransientState();
+    Object.assign(state, structuredClone(window.__listingContextFixture));
+    state.saasLoading = false;
+    state.saasListingAiGenerationStatus = "idle";
+    state.saasListingAiGenerationMissingFields = [];
+    setView("product", { listingMode: "single" });
+  });
+  const beginHeldRequest = async () => {
+    heldGeneration = null;
+    await page.click('[data-saas-action="listing-generate-ai-draft"]');
+    const deadline = Date.now() + 10000;
+    while (!heldGeneration && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    if (!heldGeneration) throw new Error("context matrix request was not held");
+    return heldGeneration;
+  };
+  const finishHeldRequest = async (held, outcome, marker) => {
+    const payload = outcome === "success" ? generatedPayload(held.body, held.storeId)
+      : outcome === "blocked" ? { status: "blocked", missing_fields: ["material"], merchant_message: "Old context blocked" }
+        : { error: "fixture_model_unavailable", merchant_message: "Old context failure" };
+    if (payload.report) payload.report.report_id = marker;
+    if (payload.task) payload.task.task_id = marker;
+    await held.route.fulfill({ status: outcome === "failure" ? 503 : 200, contentType: "application/json", body: JSON.stringify(payload) });
+    held.resolve();
+    await page.waitForTimeout(100);
+  };
+  for (const scope of ["project", "company", "user"]) {
+    for (const outcome of ["success", "blocked", "failure"]) {
+      await restoreFixture();
+      const held = await beginHeldRequest();
+      const marker = `old-${scope}-${outcome}`;
+      await page.evaluate(({ scope }) => {
+        if (scope === "project") {
+          resetSaasListingProjectTransientState();
+          state.saasListingComposerDraft.listing_project_identity.key = "other-project-context";
+          state.saasListingComposerDraft.listing_project_key = "other-project-context";
+        } else if (scope === "company") {
+          state.saasCompany = { ...state.saasCompany, company_id: "other-company-context" };
+          state.saasIdentity = { ...state.saasIdentity, company_id: "other-company-context" };
+        } else {
+          state.saasUser = { ...state.saasUser, user_id: "other-user-context" };
+          state.saasIdentity = { ...state.saasIdentity, user_id: "other-user-context" };
+        }
+        state.saasListingComposerDraft.fields.title = "Current Context Must Keep This Title";
+        state.saasLoading = true;
+        state.saasListingAiGenerationStatus = "running";
+        state.saasListingAiGenerationMissingFields = ["current-context-only"];
+        renderProductListingCenter();
+      }, { scope });
+      await finishHeldRequest(held, outcome, marker);
+      const result = await page.evaluate((marker) => ({
+        title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+        busy: state.saasLoading,
+        status: state.saasListingAiGenerationStatus,
+        missing: state.saasListingAiGenerationMissingFields,
+        staleArtifact: [...state.saasReports, ...state.saasTasks].some((item) => item.report_id === marker || item.task_id === marker),
+      }), marker);
+      if (result.title !== "Current Context Must Keep This Title" || !result.busy || result.status !== "running" || JSON.stringify(result.missing) !== '["current-context-only"]' || result.staleArtifact) {
+        throw new Error(`stale ${scope}/${outcome} modified current editor, error, cache or busy state: ${JSON.stringify(result)}`);
+      }
+      contextCases.push(`${scope}_${outcome}`);
+    }
+  }
+  await restoreFixture();
+  const viewRequest = await beginHeldRequest();
+  await page.click('.nav-item[data-view="media"]');
+  await finishHeldRequest(viewRequest, "success", "same-project-other-view-result");
+  const otherViewResult = await page.evaluate(() => ({
+    view: state.view,
+    retained: state.saasReports.some((item) => item.report_id === "same-project-other-view-result"),
+    busy: state.saasLoading,
+  }));
+  if (otherViewResult.view !== "media" || !otherViewResult.retained || otherViewResult.busy) {
+    throw new Error(`same-project navigation cancelled or redirected generation: ${JSON.stringify(otherViewResult)}`);
+  }
+  contextCases.push("same_project_other_view");
+  await restoreFixture();
+  const requestBeforeVisibleSwitch = await beginHeldRequest();
+  const recentPayload = generatedPayload(requestBeforeVisibleSwitch.body, requestBeforeVisibleSwitch.storeId);
+  recentPayload.report.report_id = "report-visible-recent-project";
+  recentPayload.report.task_id = "task-visible-recent-project";
+  recentPayload.task.task_id = "task-visible-recent-project";
+  recentPayload.task.task_type = "product_workflow";
+  recentPayload.task.output.report_id = recentPayload.report.report_id;
+  recentPayload.report.report.listing_project_identity = { key: "visible-recent-project", source_report_id: "", candidate_id: "" };
+  recentPayload.task.input.listing_project_identity = recentPayload.report.report.listing_project_identity;
+  await page.evaluate((payload) => {
+    const companyId = state.saasCompany?.company_id || state.saasIdentity?.company_id;
+    payload.report.company_id = companyId;
+    payload.report.store_id = activeSaasStore().store_id;
+    payload.task.company_id = companyId;
+    state.saasReports.unshift(payload.report);
+    state.saasTasks.unshift(payload.task);
+  }, recentPayload);
+  await page.click('[data-listing-mode="recent"]');
+  await page.click('[data-open-recent-product-task="task-visible-recent-project"]');
+  await page.waitForSelector('[data-saas-listing-draft-field="title"]');
+  await page.fill('[data-saas-listing-draft-field="title"]', "Visible Recent Project Must Remain");
+  await finishHeldRequest(requestBeforeVisibleSwitch, "success", "old-before-visible-project-switch");
+  const visibleSwitchResult = await page.evaluate(() => ({
+    projectId: saasCurrentListingProjectIdentity().key,
+    title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+    staleArtifact: state.saasReports.some((item) => item.report_id === "old-before-visible-project-switch"),
+  }));
+  if (visibleSwitchResult.projectId !== "visible-recent-project" || visibleSwitchResult.title !== "Visible Recent Project Must Remain" || visibleSwitchResult.staleArtifact) {
+    throw new Error(`visible recent-project navigation was overwritten: ${JSON.stringify(visibleSwitchResult)}`);
+  }
+  contextCases.push("visible_recent_project_navigation");
+  await restoreFixture();
+  const overlappingA = await beginHeldRequest();
+  await page.evaluate(() => {
+    resetSaasListingProjectTransientState();
+    state.saasListingComposerDraft.listing_project_identity.key = "overlapping-project-b";
+    state.saasListingComposerDraft.listing_project_key = "overlapping-project-b";
+    renderProductListingCenter();
+  });
+  const overlappingB = await beginHeldRequest();
+  await finishHeldRequest(overlappingA, "failure", "overlapping-a-failure");
+  const overlappingBusy = await page.evaluate(() => ({
+    busy: state.saasLoading,
+    status: state.saasListingAiGenerationStatus,
+    buttonDisabled: document.querySelector('[data-saas-action="listing-generate-ai-draft"]')?.disabled,
+  }));
+  if (!overlappingBusy.busy || overlappingBusy.status !== "running" || !overlappingBusy.buttonDisabled) {
+    throw new Error(`old failure cleared a newer actual request: ${JSON.stringify(overlappingBusy)}`);
+  }
+  await finishHeldRequest(overlappingB, "success", "overlapping-b-result");
+  await page.waitForFunction(() => state.saasLoading === false && state.saasListingAiGenerationStatus === "completed");
+  contextCases.push("overlapping_request_busy_owner");
+  await restoreFixture();
+  const screenshotPath = path.join(os.tmpdir(), `jiejing-listing-context-guard-${Date.now()}.png`);
+  await page.screenshot({ path: screenshotPath, fullPage: false });
   if (pageErrors.length) throw new Error(`page errors: ${JSON.stringify(pageErrors)}`);
   if (unsafeRequests.length) throw new Error(`unsafe requests triggered: ${JSON.stringify(unsafeRequests)}`);
 
@@ -469,6 +744,8 @@ async function runSmoke() {
     viewport_width: layout.viewport_width,
     no_real_platform_writes_triggered: true,
     no_charge_or_refund_triggered: true,
+    context_guard_cases: contextCases,
+    screenshot_path: screenshotPath,
   }, null, 2));
   } finally {
     if (browser) await browser.close();

@@ -11,6 +11,7 @@
 - 默认动作是 `dry_run`，只验证候选发布，不切换线上服务。
 - 正式应用必须输入完整确认语：`deploy app.jiejing.shop production`。
 - 发布前 Git 工作区必须干净，候选包 SHA-256 必须与清单一致。
+- 候选必须先在同一干净commit/tree完整运行当前门禁；新报告绑定检查有序清单、全部结果及开始/结束源状态。脏目录、运行中变化、assume-unchanged/skip-worktree隐藏修改、旧版/错源/缺项报告均不得打包。打包和部署前共同验证清单中的脱敏门禁证明；这不是线上健康或真实业务执行证明。
 - 发布不会主动发起真实扣款、退款或 eBay 写入。
 - 当前部署只重建 SaaS、Worker，并重建前端与边缘代理；不会删除数据库、Docker volume 或 Vault 数据。
 - `dry_run` 不获取任何锁，不调用 `systemctl`，也不运行 COS/CLS 探针；它在创建 `/tmp/jiejing-production-dry-run-*.d` 之前安装清理 trap，完成 wrapper `bash -n`、固定 unit 合同和安装意图校验后自动删除；`HUP`、`INT`、`TERM` 和正常/异常退出均进入不可被二次可捕获信号打断的清理。成功必须精确输出 `CANDIDATE_RELEASE_PERSISTED=0`、`ACTIVE_SWITCHED=0` 以及不含值的 private env 权限规范化布尔，不会在 production release root 留下目录。
@@ -22,6 +23,7 @@
 ```powershell
 python tools/jiejing_secret_scan.py
 python tools/test_jiejing_production_deploy_channel.py
+python tools/jiejing_precloud_deployment_gate.py
 python tools/jiejing_prepare_public_staging_bundle.py
 
 python tools/jiejing_production_deploy.py `

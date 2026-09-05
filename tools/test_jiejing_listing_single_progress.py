@@ -6,7 +6,10 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import unittest
+from unittest.mock import patch
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.merchant_project_status import _now_iso, build_merchant_project_status  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
+from jiejing_saas.postgres_repository_runtime import PostgresConnectionAdapter, placeholder_count  # noqa: E402
 
 
 IDENTITY = {
@@ -91,6 +95,31 @@ class FixtureRepository:
     def list_ai_ceo_chat_history(self, *, company_id: str, user_id: str, limit: int = 30):
         del company_id, user_id, limit
         return list(self.chats)
+
+    def get_task(self, *, company_id, task_id):
+        return next((item for item in self.tasks if item.get("company_id") == company_id and item.get("task_id") == task_id), None)
+
+    def get_report_for_company(self, *, company_id, report_id):
+        for item in self.reports:
+            owner = self.get_task(company_id=company_id, task_id=item.get("task_id"))
+            if item.get("report_id") == report_id and owner:
+                return {**item, "company_id": company_id, "store_id": owner.get("store_id")}
+        return None
+
+    def list_merchant_project_evidence(self, *, company_id, store_id, project_id, user_id, evidence_cutoff):
+        del project_id, evidence_cutoff
+        tasks = self.list_tasks(company_id=company_id, store_id=store_id)
+        task_ids = {item["task_id"] for item in tasks}
+        confirmations = [item for item in self.list_confirmations(company_id=company_id) if item.get("store_id") == store_id]
+        confirmation_ids = {item["confirmation_id"] for item in confirmations}
+        return {
+            "tasks": tasks,
+            "reports": [item for item in self.list_reports(company_id=company_id) if item.get("task_id") in task_ids],
+            "confirmations": confirmations,
+            "executions": [item for item in self.list_execution_results(company_id=company_id) if item.get("confirmation_id") in confirmation_ids],
+            "media_jobs": self.list_media_asset_jobs(company_id=company_id, store_id=store_id),
+            "chat_turns": [item for item in self.chats if not item.get("store_id") or item.get("store_id") == store_id] if user_id else [],
+        }
 
 
 def task(identity: dict[str, str] = IDENTITY, *, task_id: str = "task-incense", store_id: str = "store-a") -> dict[str, Any]:
@@ -322,7 +351,335 @@ def assert_single_progress(snapshot: dict[str, Any]) -> None:
         assert forbidden not in serialized
 
 
+class MerchantProjectEvidenceScopeTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="jiejing-project-evidence-scope-", ignore_cleanup_errors=True)
+        self.addCleanup(self.temp.cleanup)
+        self.repository = SaaSRepository(Path(self.temp.name) / "saas.sqlite", database_engine="sqlite", database_url="")
+        self.identity = {
+            "key": "project-tablet-stand",
+            "source_report_id": "report-tablet-source",
+            "candidate_id": "candidate-tablet",
+        }
+
+    def task(self, identity=None, *, company_id="company-a", store_id="store-a"):
+        return self.repository.create_task(
+            company_id=company_id, store_id=store_id, user_id="user-a",
+            task_type="merchant_product_facts", title="Product information",
+            input_data={"listing_project_identity": identity or self.identity},
+        )
+
+    def snapshot(self, **kwargs):
+        return build_merchant_project_status(
+            repository=self.repository, company_id="company-a", store_id="store-a",
+            user_id="user-a", project_id=self.identity["key"], **kwargs,
+        )
+
+    def confirmation(self, task, identity, *, action_type="save_ebay_listing_draft"):
+        return self.repository.create_confirmation(
+            company_id=task["company_id"], store_id=task["store_id"], task_id=task["task_id"],
+            runtime_run_id="local-fixture", action_type=action_type, title="Local fixture",
+            item={"listing_project_identity": identity}, created_by="user-a",
+        )
+
+    def media(self, task, identity, *, status="approved_for_listing"):
+        return self.repository.create_media_asset_job(
+            company_id=task["company_id"], store_id=task["store_id"], task_id=task["task_id"],
+            user_id="user-a", provider_job_key="local-fixture-no-provider",
+            idempotency_key=f"{task['task_id']}:{identity['key']}:{status}", status=status,
+            job_spec={"inputs": {"product_facts": {"listing_project_identity": identity}}},
+        )
+
+    def draft_result(self, confirmation):
+        return self.repository.save_execution_result(
+            confirmation=confirmation,
+            result={"status": "saved_to_ebay_draft", "platform_result": {
+                "offer_id": "unit-offer", "offer_status": "UNPUBLISHED", "sku": "UNIT-SKU",
+                "public_listing_created": False, "published_to_ebay": False,
+            }},
+        )
+
+    def test_other_projects_cannot_evict_existing_task_and_facts(self):
+        source_task = self.repository.create_task(
+            company_id="company-a", store_id="store-a", user_id="user-a",
+            task_type="merchant_ceo_chat", title="New market project", input_data={"message": "新建商品项目"},
+        )
+        source_report = self.repository.save_ai_ceo_market_research_report(
+            task=source_task, message="新建一个全新商品项目，完成市场调研，给出一个候选商品并推荐。",
+            chat={"answer": "候选商品 1：不锈钢咖啡量勺\n推荐度评分：82/100\n最终推荐：不锈钢咖啡量勺。",
+                  "route": "ebay_workflow", "status": "model_answered", "answer_quality": {"accepted": True},
+                  "source_records": [{"title": "Local fixture", "url": "https://example.test/market"}]},
+        )
+        self.assertIsNotNone(source_report)
+        self.identity = source_report["report"]["listing_project_identity"]
+        old_task = self.task()
+        facts = self.repository.save_merchant_product_fact_report(
+            task=old_task, listing_project_identity=self.identity,
+            packet={"product_name": "Tablet stand", "unknown_facts": ["material"],
+                    "blocked_by": ["merchant_product_fact_missing:material"]},
+        )
+        before = self.snapshot()
+        self.assertEqual(before["blocker"]["key"], "product_facts_missing")
+        for index in range(500):
+            self.task({**self.identity, "key": f"unrelated-project-{index}"})
+        self.assertIsNotNone(self.repository.get_task(company_id="company-a", task_id=old_task["task_id"]))
+        after = self.snapshot()
+        self.assertEqual(after["blocker"]["key"], "product_facts_missing")
+        self.assertEqual(after["stages"], before["stages"])
+        record_ids = {item["record_id"] for item in after["work_record_index"]["items"]}
+        self.assertIn(old_task["task_id"], record_ids)
+        self.assertIn(facts["report_id"], record_ids)
+        self.assertIn(source_task["task_id"], record_ids)
+        self.assertIn(source_report["report_id"], record_ids)
+
+    def test_shared_task_other_project_reports_cannot_evict_current_facts(self):
+        shared_task = self.task()
+        self.repository.save_merchant_product_fact_report(
+            task=shared_task, listing_project_identity=self.identity,
+            packet={"product_name": "Tablet stand", "unknown_facts": ["material"],
+                    "blocked_by": ["merchant_product_fact_missing:material"]},
+        )
+        before = self.snapshot()
+        for index in range(500):
+            self.repository.save_merchant_product_fact_report(
+                task=shared_task,
+                listing_project_identity={**self.identity, "key": f"other-candidate-{index}"},
+                packet={"product_name": "Other candidate", "unknown_facts": [], "blocked_by": []},
+            )
+        after = self.snapshot()
+        self.assertEqual(after["stages"], before["stages"])
+        self.assertEqual(after["blocker"]["key"], "product_facts_missing")
+
+    def test_other_projects_cannot_evict_media_or_platform_evidence(self):
+        target_task = self.task()
+        target_media = self.media(target_task, self.identity)
+        target_confirmation = self.confirmation(target_task, self.identity)
+        target_execution = self.draft_result(target_confirmation)
+        self.repository.sync_ai_ceo_chat_history(
+            company_id="company-a", user_id="user-a",
+            turns=[{"assistant_id": "chat-target", "user_text": "Continue this product",
+                    "assistant_text": "Review the current draft", "listing_project_identity": self.identity}],
+        )
+        before = self.snapshot(account_health={"status": "restricted"})
+        self.assertEqual(before["blocker"]["key"], "ebay_account_restricted")
+        other_task = self.task({**self.identity, "key": "other-task-project"})
+        for index in range(500):
+            other_identity = {**self.identity, "key": f"other-flow-{index}"}
+            confirmation = self.confirmation(other_task, other_identity)
+            self.draft_result(confirmation)
+            if index < 200:
+                self.media(other_task, other_identity)
+            # The separate 50-turn retention policy is not widened by this
+            # project-reader fix; validate reads of an actually retained chat.
+            if index < 49:
+                self.repository.sync_ai_ceo_chat_history(
+                    company_id="company-a", user_id="user-a",
+                    turns=[{"assistant_id": f"chat-other-{index}", "user_text": "Other product",
+                            "assistant_text": "Another draft", "listing_project_identity": other_identity}],
+                )
+        after = self.snapshot(account_health={"status": "restricted"})
+        self.assertEqual(after["stages"], before["stages"])
+        self.assertEqual(after["blocker"]["key"], "ebay_account_restricted")
+        ids = {item["record_id"] for item in after["work_record_index"]["items"]}
+        expected_ids = {target_media["media_job_id"], target_confirmation["confirmation_id"],
+                        target_execution["execution_id"], "chat-target"}
+        self.assertFalse(expected_ids - ids, f"missing project records: {expected_ids - ids}")
+        self.assertEqual(after["overall_status"], "blocked")
+        self.assertEqual(after["project"]["listing_id"], "")
+
+    def test_cutoff_filters_before_window_with_offset_and_microsecond_precision(self):
+        with patch("jiejing_saas.repository.now_iso", return_value="2026-09-05T08:00:00.123455+08:00"):
+            old_task = self.task()
+            self.repository.save_merchant_product_fact_report(
+                task=old_task, listing_project_identity=self.identity,
+                packet={"product_name": "Tablet stand", "unknown_facts": ["material"],
+                        "blocked_by": ["merchant_product_fact_missing:material"]},
+            )
+        cutoff = "2026-09-05T00:00:00.123456Z"
+        before = self.snapshot(evidence_cutoff=cutoff)
+        with patch("jiejing_saas.repository.now_iso", return_value="2026-09-05T00:00:00.123457Z"):
+            for _ in range(500):
+                self.task()
+        after = self.snapshot(evidence_cutoff=cutoff)
+        self.assertEqual(after["stages"], before["stages"])
+        self.assertEqual(after["blocker"]["key"], "product_facts_missing")
+        self.assertEqual(after["evidence_cutoff"], cutoff)
+
+    def test_scope_and_full_identity_do_not_promote_other_merchant_evidence(self):
+        target_task = self.task()
+        self.repository.save_merchant_product_fact_report(
+            task=target_task, listing_project_identity=self.identity,
+            packet={"product_name": "Tablet stand", "unknown_facts": ["material"],
+                    "blocked_by": ["merchant_product_fact_missing:material"]},
+        )
+        before = self.snapshot()
+        excluded_ids = set()
+        for company, store in (("company-b", "store-a"), ("company-a", "store-b")):
+            other_identity = {**self.identity, "candidate_id": "other-candidate"}
+            other_task = self.task(other_identity, company_id=company, store_id=store)
+            other_facts = self.repository.save_merchant_product_fact_report(
+                task=other_task, listing_project_identity=other_identity,
+                packet={"product_name": "Other merchant", "unknown_facts": [], "blocked_by": []},
+            )
+            other_media = self.media(other_task, other_identity)
+            other_confirmation = self.confirmation(other_task, other_identity)
+            other_execution = self.draft_result(other_confirmation)
+            excluded_ids.update((other_task["task_id"], other_facts["report_id"], other_media["media_job_id"],
+                                 other_confirmation["confirmation_id"], other_execution["execution_id"]))
+        self.repository.sync_ai_ceo_chat_history(
+            company_id="company-a", user_id="different-user",
+            turns=[{"assistant_id": "other-user-chat", "user_text": "Different account",
+                    "assistant_text": "Not this user's project", "listing_project_identity": {
+                        **self.identity, "candidate_id": "different-candidate"}}],
+        )
+        unsafe_media = self.repository.create_media_asset_job(
+            company_id="company-a", store_id="store-a", task_id=target_task["task_id"], user_id="user-a",
+            provider_job_key="local-fixture", idempotency_key="unsafe-key-only", status="approved_for_listing",
+            job_spec={"listing_project_key": self.identity["key"]},
+        )
+        excluded_ids.add(unsafe_media["media_job_id"])
+        after = self.snapshot()
+        self.assertEqual(after["stages"], before["stages"])
+        self.assertEqual(after["blocker"]["key"], "product_facts_missing")
+        ids = {item["record_id"] for item in after["work_record_index"]["items"]}
+        self.assertFalse(ids & excluded_ids)
+        self.assertNotIn("other-user-chat", ids)
+        conflict_task = self.task({**self.identity, "candidate_id": "conflicting-candidate"})
+        self.assertEqual(self.snapshot()["blocker"]["key"], "listing_project_identity_conflict")
+        self.assertIsNotNone(conflict_task)
+
+    def test_postgres_native_rows_and_parameterized_query_contract(self):
+        """Replay the real PG adapter contract; not a PostgreSQL server test."""
+        target_task = self.task()
+        self.repository.save_merchant_product_fact_report(
+            task=target_task, listing_project_identity=self.identity,
+            packet={"product_name": "Tablet stand", "unknown_facts": ["material"],
+                    "blocked_by": ["merchant_product_fact_missing:material"]},
+        )
+        self.media(target_task, self.identity)
+        self.draft_result(self.confirmation(target_task, self.identity))
+        self.repository.sync_ai_ceo_chat_history(
+            company_id="company-a", user_id="user-a",
+            turns=[{"assistant_id": "pg-chat", "user_text": "Current project",
+                    "assistant_text": "Current answer", "listing_project_identity": self.identity}],
+        )
+        expected = self.snapshot(account_health={"status": "restricted"})
+        tables = ("tasks", "reports", "confirmations", "execution_results", "media_asset_jobs", "ai_ceo_chat_turns")
+        native_rows = {}
+        with self.repository._connect() as connection:
+            for table in tables:
+                rows = [dict(row) for row in connection.execute(f"select * from {table}").fetchall()]
+                for row in rows:
+                    for key, value in list(row.items()):
+                        if key.endswith("_json"):
+                            row[key] = json.loads(value)
+                        elif key in {"created_at", "updated_at"}:
+                            row[key] = datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(
+                                timezone(timedelta(hours=8)))
+                    if table == "reports":
+                        row.update(company_id="company-a", store_id="store-a")
+                native_rows[table] = rows
+        observed_queries = []
+        testcase = self
+
+        class NativeCursor:
+            def execute(self, sql, params):
+                testcase.assertEqual(placeholder_count(sql), len(params))
+                testcase.assertNotIn("json_extract", sql)
+                testcase.assertNotIn("jiejing_evidence_time", sql)
+                testcase.assertNotIn("project-tablet-stand", sql)
+                testcase.assertEqual(params[0], "company-a")
+                observed_queries.append(sql)
+                if "where t.company_id = %s and r.report_id = %s" in sql:
+                    self.rows = []  # No fabricated source report for this fixture.
+                else:
+                    testcase.assertIn("#>>", sql)
+                    self.rows = next(native_rows[table] for table in tables if f"from {table} " in sql)
+
+            def fetchall(self):
+                return self.rows
+
+            def fetchone(self):
+                return self.rows[0] if self.rows else None
+
+        class NativeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def cursor(self):
+                return NativeCursor()
+
+        with patch.object(self.repository, "database_engine", "postgres"), \
+                patch.object(self.repository, "_postgres_initialized", True), \
+                patch.object(self.repository, "_connect", return_value=PostgresConnectionAdapter(NativeConnection())):
+            observed = self.snapshot(account_health={"status": "restricted"})
+        self.assertEqual(len(observed_queries), 7)
+        self.assertEqual(observed["stages"], expected["stages"])
+        self.assertEqual(observed["blocker"], expected["blocker"])
+        self.assertEqual(observed["project"], expected["project"])
+        self.assertEqual(observed["work_record_index"]["counts"], expected["work_record_index"]["counts"])
+
+    def test_source_report_and_task_survive_the_projects_own_bounded_windows(self):
+        source_task = self.repository.create_task(
+            company_id="company-a", store_id="store-a", user_id="user-a",
+            task_type="merchant_ceo_chat", title="New market project", input_data={"message": "新建商品项目"},
+        )
+        source_report = self.repository.save_ai_ceo_market_research_report(
+            task=source_task, message="新建一个全新商品项目，完成市场调研，给出一个候选商品并推荐。",
+            chat={"answer": "候选商品 1：不锈钢咖啡量勺\n推荐度评分：82/100\n最终推荐：不锈钢咖啡量勺。",
+                  "route": "ebay_workflow", "status": "model_answered", "answer_quality": {"accepted": True},
+                  "source_records": [{"title": "Local fixture", "url": "https://example.test/market"}]},
+        )
+        self.identity = source_report["report"]["listing_project_identity"]
+        self.assertEqual(self.snapshot()["stages"][1]["status"], "completed")
+        for _ in range(500):
+            self.repository.save_merchant_product_fact_report(
+                task=self.task(), listing_project_identity=self.identity,
+                packet={"product_name": "Current product", "unknown_facts": ["material"],
+                        "blocked_by": ["merchant_product_fact_missing:material"]},
+            )
+        after = self.snapshot()
+        self.assertEqual(after["stages"][1]["status"], "completed")
+        self.assertEqual(after["blocker"]["key"], "product_facts_missing")
+        self.assertEqual(after["work_record_index"]["counts"]["task"], 501)
+
+    def test_secondary_identity_cannot_fill_the_current_projects_media_window(self):
+        target_task = self.task()
+        self.media(target_task, self.identity)
+        self.assertEqual(self.snapshot()["stages"][3]["status"], "completed")
+        for index in range(200):
+            self.repository.create_media_asset_job(
+                company_id="company-a", store_id="store-a", task_id=target_task["task_id"], user_id="user-a",
+                provider_job_key="local-fixture", idempotency_key=f"conflicting-media-{index}", status="approved_for_listing",
+                job_spec={"listing_project_identity": {**self.identity, "key": f"other-primary-{index}"},
+                          "inputs": {"product_facts": {"listing_project_identity": self.identity}}},
+            )
+        self.assertEqual(self.snapshot()["stages"][3]["status"], "completed")
+
+    def test_exact_source_lookup_cannot_promote_an_explicit_other_project(self):
+        other_identity = {**self.identity, "key": "explicit-other-project"}
+        other_task = self.task(other_identity)
+        other_report = self.repository.save_merchant_product_fact_report(
+            task=other_task, listing_project_identity=other_identity,
+            packet={"product_name": "Another product", "unknown_facts": [], "blocked_by": []},
+        )
+        self.identity = {**self.identity, "source_report_id": other_report["report_id"]}
+        self.task()
+        snapshot = self.snapshot()
+        self.assertEqual(snapshot["stages"][1]["status"], "waiting")
+        record_ids = {item["record_id"] for item in snapshot["work_record_index"]["items"]}
+        self.assertNotIn(other_report["report_id"], record_ids)
+        self.assertNotIn(other_task["task_id"], record_ids)
+
+
 def main() -> None:
+    scope_result = unittest.TextTestRunner(verbosity=2).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(MerchantProjectEvidenceScopeTest)
+    )
+    assert scope_result.wasSuccessful(), "real-repository project evidence regressions failed"
     assert "." in _now_iso().removesuffix("Z")
 
     with tempfile.TemporaryDirectory(prefix="jiejing-new-market-project-status-", ignore_cleanup_errors=True) as temp:

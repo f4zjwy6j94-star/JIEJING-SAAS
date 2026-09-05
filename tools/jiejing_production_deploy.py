@@ -19,6 +19,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
+try:
+    from jiejing_release_gate_evidence import load_release_checks, tracked_index_flags_safe, validate_manifest_gate_proof
+except ModuleNotFoundError:
+    from tools.jiejing_release_gate_evidence import load_release_checks, tracked_index_flags_safe, validate_manifest_gate_proof
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HOST = "43.129.169.223"
@@ -235,6 +240,8 @@ def assert_source_state(expected_source_commit: str) -> None:
         raise ValueError("source_commit_changed")
     if git_value("status", "--porcelain", "--untracked-files=all"):
         raise ValueError("deploy_requires_clean_git_worktree")
+    if not tracked_index_flags_safe(ROOT):
+        raise ValueError("deploy_source_hidden_tracking_flags")
 
 
 def validate_local_release_candidate(
@@ -246,6 +253,8 @@ def validate_local_release_candidate(
     expected_bundle_sha256: str = "",
     expected_manifest_sha256: str = "",
     source_files_sha256: dict[str, str] | None = None,
+    source_tree: str = "",
+    gate_checks=None,
 ) -> tuple[dict[str, Any], str, str]:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -265,6 +274,13 @@ def validate_local_release_candidate(
         raise ValueError("manifest_scope_invalid")
     if manifest.get("real_platform_writes_enabled") is not False:
         raise ValueError("manifest_real_write_state_unsafe")
+    if not isinstance(manifest.get("release_gate_proof"), dict):
+        raise ValueError("gate_evidence_manifest_proof_missing_or_invalid")
+    validate_manifest_gate_proof(
+        manifest["release_gate_proof"], expected_source_commit,
+        source_tree or git_value("rev-parse", f"{expected_source_commit}^{{tree}}"),
+        load_release_checks(ROOT) if gate_checks is None else gate_checks, ROOT,
+    )
     validate_zip(bundle, allowed_files=allowed_files)
     validate_bundle_manifest(bundle, manifest, allowed_files, expected_source_commit)
     validate_bundle_matches_source_commit(

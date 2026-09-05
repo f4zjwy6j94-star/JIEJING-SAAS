@@ -4038,6 +4038,7 @@ function prepareSaasMediaStudioForCurrentListing() {
 }
 
 function resetSaasListingProjectTransientState() {
+  invalidateSaasListingAiGenerationContext();
   state.saasMerchantProjectStatusRequestGeneration = Number(state.saasMerchantProjectStatusRequestGeneration || 0) + 1;
   state.saasMerchantProjectStatus = null;
   state.saasListingBackendWorkflow = null;
@@ -4095,6 +4096,7 @@ function resetSaasListingProjectTransientState() {
 }
 
 function resetSaasActiveProjectForStoreSwitch() {
+  invalidateSaasSettingsActionContext();
   stopSaasAiCeoCrossDeviceSync();
   stopSaasPendingNewListingProjectReconciliation();
   state.saasPendingNewListingProjectRequest = null;
@@ -14832,8 +14834,17 @@ async function saasFetch(path, options = {}) {
   const {
     saasRequestRetriedAfterRefresh = false,
     saasDeferUnauthorizedTermination = false,
+    saasRequestIsCurrent = null,
     ...fetchOptions
   } = options;
+  const assertCurrentRequest = () => {
+    if (typeof saasRequestIsCurrent === "function" && !saasRequestIsCurrent()) {
+      const error = new Error("request_context_changed");
+      error.code = "saas_request_context_changed";
+      throw error;
+    }
+  };
+  assertCurrentRequest();
   const headers = {
     accept: "application/json",
     "content-type": "application/json",
@@ -14848,6 +14859,7 @@ async function saasFetch(path, options = {}) {
     credentials: fetchOptions.credentials || "include",
     headers,
   });
+  assertCurrentRequest();
   recordSaasServerClock(response, requestStartedAtMs, Date.now());
   if (
     response.status === 401 &&
@@ -14855,14 +14867,18 @@ async function saasFetch(path, options = {}) {
     saasRequestCanRetryAfterSessionRefresh(path, fetchOptions) &&
     (await refreshSaasBrowserSession())
   ) {
+    assertCurrentRequest();
     return saasFetch(path, {
       ...fetchOptions,
       saasRequestRetriedAfterRefresh: true,
       saasDeferUnauthorizedTermination,
+      saasRequestIsCurrent,
     });
   }
+  assertCurrentRequest();
   if (!response.ok) {
     const detail = await response.text();
+    assertCurrentRequest();
     let payload = null;
     try {
       payload = JSON.parse(detail);
@@ -15148,6 +15164,7 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
   const activeStoreId = String(
     typeof activeSaasStore === "function" ? activeSaasStore()?.store_id || "" : "",
   ).trim();
+  const activeCompanyId = String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "").trim();
   const reportIdentityForRestore = (item = {}) => {
     if (typeof saasListingProjectIdentityFromReport === "function") {
       return saasListingProjectIdentityFromReport(item);
@@ -15157,6 +15174,8 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
       saasNormalizeListingProjectIdentity(body.listing_project_identity);
   };
   const reportPool = rawReportPool.filter((item) => {
+    const reportCompanyId = String(item?.company_id || item?.report?.company_id || "").trim();
+    if (activeCompanyId && reportCompanyId && reportCompanyId !== activeCompanyId) return false;
     const reportStoreId = String(item?.store_id || item?.report?.store_id || "").trim();
     if (activeStoreId && reportStoreId !== activeStoreId) return false;
     if (!routeProjectId) return true;
@@ -15191,12 +15210,16 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
           ...(previousPacket.derived_listing_suggestions || {}),
           ...incomingDerivedSuggestions,
         };
+        const mergedSourceFacts = { ...(previousPacket.source_confirmed_facts || {}), ...(incomingPacket.source_confirmed_facts || {}) };
+        const mergedMerchantFacts = { ...(previousPacket.merchant_confirmed_facts || {}), ...(incomingPacket.merchant_confirmed_facts || {}) };
         incomingUnknownFacts.forEach((key) => {
           const incomingStillSuggestsValue = Object.prototype.hasOwnProperty.call(incomingDerivedSuggestions, key);
           const incomingConfirmsValue =
             Object.prototype.hasOwnProperty.call(incomingPacket.source_confirmed_facts || {}, key) ||
             Object.prototype.hasOwnProperty.call(incomingPacket.merchant_confirmed_facts || {}, key);
           if (!incomingStillSuggestsValue && !incomingConfirmsValue) delete mergedDerivedSuggestions[key];
+          delete mergedSourceFacts[key];
+          delete mergedMerchantFacts[key];
         });
         return {
           ...merged,
@@ -15207,8 +15230,8 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
             merchant_product_fact_packet: {
               ...previousPacket,
               ...incomingPacket,
-              source_confirmed_facts: { ...(previousPacket.source_confirmed_facts || {}), ...(incomingPacket.source_confirmed_facts || {}) },
-              merchant_confirmed_facts: { ...(previousPacket.merchant_confirmed_facts || {}), ...(incomingPacket.merchant_confirmed_facts || {}) },
+              source_confirmed_facts: mergedSourceFacts,
+              merchant_confirmed_facts: mergedMerchantFacts,
               derived_listing_suggestions: mergedDerivedSuggestions,
               listing_copy: { ...(previousPacket.listing_copy || {}), ...(incomingPacket.listing_copy || {}) },
               field_evidence: { ...(previousPacket.field_evidence || {}), ...(incomingPacket.field_evidence || {}) },
@@ -15269,6 +15292,42 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
     });
     return matchingLegacyNames.length === 1;
   };
+  const latestReportByTypes = (types = [], accepts = () => true) =>
+    reportPool
+      .filter((item) => types.includes(item?.report_type) && accepts(item))
+      .sort((a, b) => saasTimestampMillis(b.updated_at || b.created_at) - saasTimestampMillis(a.updated_at || a.created_at))
+      .find((item) => saasListingDraftHasConcreteProduct(saasListingDraftFromReport(item, "backend_report_probe"))) || null;
+  const isValidatedListingReport = (item = {}) => {
+    const body = item.report || {};
+    return item.status === "saved" && item.runtime_run_id === "listing_draft_generation" &&
+      body.contract_version === "listing_ai_draft_generation_v1" &&
+      body.listing_handoff?.source_mode === "project_scoped_live_model" &&
+      body.listing_handoff?.ready_for_listing_draft === true;
+  };
+  const applyListingFactSnapshotValidation = (draft, generationPacket = {}) => {
+    if (!draft) return;
+    const factSnapshotSignature = (packet = {}) => JSON.stringify(saasCanonicalJsonValue({
+      product_name: packet.product_name || "",
+      source_confirmed_facts: packet.source_confirmed_facts || {},
+      merchant_confirmed_facts: packet.merchant_confirmed_facts || {},
+      unknown_facts: [...(packet.unknown_facts || [])].sort(),
+      fact_conflicts: packet.fact_conflicts || [],
+      simulation_only: packet.simulation_only === true,
+    }));
+    const currentPacket = draft.merchant_product_fact_packet || {};
+    const factsChanged = factSnapshotSignature(currentPacket) !== factSnapshotSignature(generationPacket);
+    draft.model_generated = !factsChanged;
+    draft.safe_local_only = factsChanged || currentPacket.simulation_only === true;
+    if (factsChanged) {
+      draft.buyer_copy_requires_validated_listing_generation = true;
+      draft.buyer_copy_status = "waiting_for_validated_listing_generation";
+    }
+  };
+  const applyListingValidationState = (draft, report) => {
+    if (isValidatedListingReport(report)) {
+      applyListingFactSnapshotValidation(draft, report.report?.merchant_product_fact_packet || {});
+    }
+  };
   if (preferBackendLatest && state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") {
     state.saasListingComposerDraft = null;
     state.saasListingSourceMode = "";
@@ -15287,7 +15346,13 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
         currentDraft.merchant_product_fact_packet && typeof currentDraft.merchant_product_fact_packet === "object"
           ? currentDraft.merchant_product_fact_packet
           : {};
-      const matchingFactReport = mergeMatchingFactReports(factReports.filter((item) => factReportMatchesDraft(item, currentDraft)));
+      const matchingListingReport = latestReportByTypes(["listing.package", "product.listing"],
+        (item) => isValidatedListingReport(item) && factReportMatchesDraft(item, currentDraft));
+      const matchingFactItems = factReports.filter((item) => factReportMatchesDraft(item, currentDraft));
+      const matchingFactReport = mergeMatchingFactReports([
+        ...(matchingListingReport ? [matchingListingReport] : []),
+        ...matchingFactItems,
+      ]);
       if (matchingFactReport) {
         const body = matchingFactReport.report && typeof matchingFactReport.report === "object" ? matchingFactReport.report : {};
         const incomingPacket = body.merchant_product_fact_packet || {};
@@ -15347,8 +15412,15 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
         }
         state.saasListingComposerDraft = {
           ...applySaasMerchantProductFactPacketToDraft(currentDraft, mergedPacket),
-          source_product_fact_report_id: String(matchingFactReport.report_id || ""),
+          source_product_fact_report_id: String(
+            mergeMatchingFactReports(matchingFactItems)?.report_id || currentDraft.source_product_fact_report_id || "",
+          ),
         };
+        if (currentDraft.model_generated === true) {
+          // The retained copy belongs to this draft's fact snapshot, not to a
+          // newer Listing produced on another device. Never borrow its validation.
+          applyListingFactSnapshotValidation(state.saasListingComposerDraft, currentPacket);
+        }
         state.saasListingSourceMode = "backend_product_fact_restore";
         return state.saasListingComposerDraft;
       }
@@ -15369,7 +15441,16 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
       );
     })
     .sort((a, b) => saasTimestampMillis(b.updated_at || b.created_at) - saasTimestampMillis(a.updated_at || a.created_at))[0];
-  if (visionFactSeed) {
+  const validatedListingReport = latestReportByTypes(["listing.package", "product.listing"], (item) => {
+    if (!isValidatedListingReport(item)) return false;
+    if (!visionFactSeed) return true;
+    const visionIdentity = reportIdentityForRestore(visionFactSeed);
+    const listingIdentity = reportIdentityForRestore(item);
+    return listingIdentity?.key === visionIdentity?.key &&
+      listingIdentity?.source_report_id === visionIdentity?.source_report_id &&
+      listingIdentity?.candidate_id === visionIdentity?.candidate_id;
+  });
+  if (visionFactSeed && !validatedListingReport) {
     const visionIdentity = reportIdentityForRestore(visionFactSeed);
     const matchingVisionFacts = factReports.filter((item) => {
       const candidateIdentity = reportIdentityForRestore(item);
@@ -15435,23 +15516,27 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
     }
     return state.saasListingComposerDraft;
   }
-  const latestReportByTypes = (types = []) =>
-    reportPool
-      .filter((item) => types.includes(item?.report_type))
-      .sort((a, b) => saasTimestampMillis(b.updated_at || b.created_at) - saasTimestampMillis(a.updated_at || a.created_at))
-      .find((item) => saasListingDraftHasConcreteProduct(saasListingDraftFromReport(item, "backend_report_probe"))) || null;
-  const report = latestReportByTypes(["listing.package", "product.listing"]) || latestReportByTypes(["ai_ceo.market_research", "market.report"]);
+  const report = validatedListingReport || latestReportByTypes(["listing.package", "product.listing"]) || latestReportByTypes(["ai_ceo.market_research", "market.report"]);
   if (!report) return null;
   const restored = saasListingDraftFromReport(report, report.report_type === "ai_ceo.market_research" ? "ai_ceo_market_report" : "ai_report");
   if (!restored || !saasListingDraftHasConcreteProduct(restored)) return null;
   const identity = saasCurrentListingProjectIdentity(restored);
   const restoredWithIdentity = { ...restored, listing_project_key: identity.key };
-  const factReport = mergeMatchingFactReports(factReports.filter((item) => factReportMatchesDraft(item, restoredWithIdentity)));
+  const matchingFacts = factReports.filter((item) => factReportMatchesDraft(item, restoredWithIdentity));
+  // A Listing contains the fact snapshot used to generate it. Older vision
+  // checkpoints may supply provenance, but must not replace that newer snapshot.
+  const factReport = mergeMatchingFactReports([
+    ...(report.report?.merchant_product_fact_packet ? [report] : []),
+    ...matchingFacts,
+  ]);
   const factBody = factReport?.report && typeof factReport.report === "object" ? factReport.report : {};
   state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft(
     restoredWithIdentity,
     factBody.merchant_product_fact_packet,
   );
+  const latestFactReport = mergeMatchingFactReports(matchingFacts);
+  if (latestFactReport) state.saasListingComposerDraft.source_product_fact_report_id = String(latestFactReport.report_id || "");
+  applyListingValidationState(state.saasListingComposerDraft, report);
   state.saasListingSourceMode = "backend_report_restore";
   if (!state.activeMediaDraft || isLegacySampleMediaDraftKey(state.activeMediaDraft)) {
     state.activeMediaDraft = identity.key || "";
@@ -16086,6 +16171,7 @@ function sanitizeSaasPendingNewListingProjectRequestSnapshot(record = null, opti
     storeId: currentStoreId,
     commandId,
     idempotencyKey,
+    assistantId: /^[A-Za-z0-9_-]{1,180}$/.test(String(record.assistantId || "")) ? String(record.assistantId) : "",
     originalText: sanitizeSaasCeoCommandSourceText(record.originalText || requestPayload.message),
     previousProjectId: /^[A-Za-z0-9._:-]{1,160}$/.test(String(record.previousProjectId || ""))
       ? String(record.previousProjectId)
@@ -16373,7 +16459,10 @@ function hydrateSaasProtectedStateFromCache() {
 }
 
 function clearSaasSessionFromStorage(options = {}) {
+  invalidateSaasSettingsActionContext();
   stopSaasAiCeoCrossDeviceSync();
+  resetSaasAiCeoHistoryArchive();
+  resetSaasAiCeoComposerDrafts();
   clearSaasProductFeedbackLiveIdentity();
   resetSaasProductFeedbackViewState();
   const preserveCeoThread = Boolean(options.preserveCeoThread);
@@ -16556,6 +16645,7 @@ function reconcileSaasCachedProjectStateForConfirmedAccount(confirmedAliases = [
   );
   const sameAccount = confirmed.size > 0 && Array.from(confirmed).some((alias) => previous.has(alias));
   if (sameAccount) return true;
+  resetSaasAiCeoHistoryArchive();
   stopSaasPendingNewListingProjectReconciliation();
   resetSaasListingProjectTransientState();
   state.saasPendingNewListingProjectRequest = null;
@@ -16677,6 +16767,8 @@ function shouldFetchDirectRuntimeApi() {
 }
 
 function resetSaasProtectedWorkbenchState() {
+  invalidateSaasSettingsActionContext();
+  resetSaasAiCeoComposerDrafts();
   clearSaasProductFeedbackLiveIdentity();
   resetSaasProductFeedbackViewState();
   resetSaasListingProjectTransientState();
@@ -23767,6 +23859,8 @@ function sanitizeSaasFrozenNewProjectRequestPayload(payload = null, options = {}
   ) return null;
   return {
     idempotency_key: idempotencyKey,
+    ...(payload.chat_archive_contract === "server_finalized_chat_archive_v1"
+      ? { chat_archive_contract: "server_finalized_chat_archive_v1" } : {}),
     message: sanitizeSaasCeoCommandSourceText(payload.message || command.text),
     command,
     conversation_history: [],
@@ -24032,7 +24126,7 @@ function commitSaasPendingNewListingProjectFromPayload(payload = null, commandId
     : null;
   if (report?.report_id) upsertSaasReportRecord(report);
   const chat = payload.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : {};
-  const turn = report
+  let turn = report
     ? saasAiCeoMarketTurnFromReport(report)
     : normalizeSaasAiCeoLatestTurn({
         user_text: state.saasPendingNewListingProjectRequest?.originalText || "",
@@ -24048,6 +24142,11 @@ function commitSaasPendingNewListingProjectFromPayload(payload = null, commandId
         listing_project_identity: chat.listing_project_identity || null,
         created_at: new Date().toISOString(),
       });
+  const archived = saasAiCeoArchivedResponseIdentity(payload);
+  if (turn && archived) {
+    applySaasAiCeoArchivedResponseIdentity(state.saasPendingNewListingProjectRequest?.assistantId || "", archived);
+    turn = normalizeSaasAiCeoLatestTurn({ ...turn, assistant_id: archived.assistant_id, created_at: archived.created_at });
+  }
   const identity = saasNormalizeListingProjectIdentity(turn?.listing_project_identity);
   if (!turn || !identity?.key || !commitSaasNewListingProjectRequest(turn, commandId)) return false;
   upsertSaasAiCeoThreadTurn(turn);
@@ -25339,6 +25438,7 @@ function buildSaasAiCeoChatRequestEnvelope(command = state.saasLastCeoCommand, s
   return {
     payload: {
       idempotency_key: idempotencyKey,
+      chat_archive_contract: "server_finalized_chat_archive_v1",
       message: safeCommand.text,
       command: safeCommand,
       conversation_history: options.suppressConversationHistory === true ? [] : saasAiCeoConversationHistoryForRequest(),
@@ -25389,6 +25489,9 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
   }
   try {
     const { payload: requestPayload, activeListingContext, safeSourceAssetIds } = envelope;
+    if (requestPayload.chat_archive_contract === "server_finalized_chat_archive_v1") {
+      hooks.onRequestIdentity?.(await saasAiCeoExpectedRequestArchiveIdentity(current, requestPayload));
+    }
     const requiresWorkflowCompletionBudget = activeListingContext?.contract_version === "active_listing_context_v1";
     const defaultRequestTimeoutMs = safeSourceAssetIds.length || requiresWorkflowCompletionBudget ? 180000 : 60000;
     const requestedReconcileTimeoutMs = Number(options.reconcileTimeoutMs);
@@ -25706,7 +25809,15 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
   recordSaasCeoCommandSourceRecord(command);
   const submittedAtMs = Date.now();
   const submittedAt = new Date(submittedAtMs).toISOString();
-  const pendingMessageId = `ceo-ai-reply-${submittedAtMs.toString(16)}-${Math.abs(hashString(text)).toString(16)}`;
+  const submittedAccountContext = saasAiCeoHistoryRequestContext();
+  const serverArchiveRequested = newProjectRequest.active
+    ? frozenNewProjectRequestPayload?.chat_archive_contract === "server_finalized_chat_archive_v1" : true;
+  let pendingMessageId = String(newProjectRequest.active && state.saasPendingNewListingProjectRequest?.assistantId || "") ||
+    `ceo-ai-reply-${submittedAtMs.toString(16)}-${Math.abs(hashString(text)).toString(16)}`;
+  if (newProjectRequest.active && state.saasPendingNewListingProjectRequest) {
+    state.saasPendingNewListingProjectRequest.assistantId = pendingMessageId;
+    saveSaasProtectedStateSnapshot();
+  }
   const localInstantAnswer = buildSaasLocalClockAnswer(text);
   if (localInstantAnswer && !newProjectRequest.active) {
     const instantCommand = normalizeSaasCeoCommand({
@@ -25758,6 +25869,8 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
     decision_center_required: Boolean(command.decision_center_required),
     createdAt: submittedAt,
   });
+  if (serverArchiveRequested) applySaasAiCeoArchivedResponseIdentity(pendingMessageId,
+    { assistant_id: pendingMessageId, created_at: submittedAt, archived: false });
   scheduleSaasAiCeoPendingWatchdog(pendingMessageId, command);
   let streamRenderTimer = null;
   let streamRenderText = "";
@@ -25771,7 +25884,18 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
       ? options.sourceAssetIds.slice(0, 8)
       : [];
   state.saasLastCeoCommandPersistPromise = requestSaasAiCeoChat(command, {
+    onRequestIdentity: (expectedArchive) => {
+      if (!isCurrentSaasAiCeoHistoryRequest(submittedAccountContext)) return;
+      applySaasAiCeoArchivedResponseIdentity(pendingMessageId, { ...expectedArchive, created_at: submittedAt, archived: false });
+      pendingMessageId = expectedArchive.assistant_id;
+      if (newProjectRequest.active && state.saasPendingNewListingProjectRequest?.commandId === command.id) {
+        state.saasPendingNewListingProjectRequest.assistantId = pendingMessageId;
+        saveSaasProtectedStateSnapshot();
+      }
+      persistSaasAiCeoThread();
+    },
     onStage: (stage) => {
+      if (!isCurrentSaasAiCeoHistoryRequest(submittedAccountContext)) return;
       const latest = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
       if (!latest || latest.assistant_id !== pendingMessageId) return;
       updateCeoAssistantPendingMessage(pendingMessageId, {
@@ -25782,6 +25906,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
       });
     },
     onDelta: (_delta, fullText) => {
+      if (!isCurrentSaasAiCeoHistoryRequest(submittedAccountContext)) return;
       streamRenderText = fullText;
       if (!streamRenderTimer) streamRenderTimer = setTimeout(flushStreamRender, 48);
     },
@@ -25795,8 +25920,15 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
     .then((payload) => {
       if (streamRenderTimer) clearTimeout(streamRenderTimer);
       streamRenderTimer = null;
+      if (!isCurrentSaasAiCeoHistoryRequest(submittedAccountContext)) return null;
       const latestTurnAtResponse = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
       const isCurrentChatTurn = !latestTurnAtResponse?.assistant_id || latestTurnAtResponse.assistant_id === pendingMessageId;
+      const archived = saasAiCeoArchivedResponseIdentity(payload);
+      const replyCreatedAt = archived?.created_at || submittedAt;
+      if (archived) {
+        applySaasAiCeoArchivedResponseIdentity(pendingMessageId, archived);
+        pendingMessageId = archived.assistant_id;
+      }
       const chat = payload?.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : null;
       const productVisionFactPacket =
         payload?.product_vision_fact_packet && typeof payload.product_vision_fact_packet === "object"
@@ -25816,6 +25948,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
         updateCeoAssistantPendingMessage(pendingMessageId, {
           ...(state.saasAiCeoLatestTurn || {}),
           assistant_id: pendingMessageId,
+          created_at: replyCreatedAt,
           assistant_text: requestStillInProgress
             ? "这次新商品项目仍在后端处理中。捷境已保留同一请求标识，刷新或稍后重试不会再次调用模型。"
             : "这次请求的最终执行结果暂时无法确认。捷境会先按原请求对账，不会另起一次模型调用；请不要重复新建同一商品项目。",
@@ -25845,6 +25978,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
       ];
       const marketReportCandidateTurn = normalizeSaasAiCeoLatestTurn({
         ...(isCurrentChatTurn ? state.saasAiCeoLatestTurn || {} : {}),
+        archive_pending: serverArchiveRequested && !archived,
         user_text: text,
         assistant_id: pendingMessageId,
         assistant_text: answer,
@@ -25871,7 +26005,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
         performance,
         pending_stage: "",
         pending: false,
-        created_at: submittedAt,
+        created_at: replyCreatedAt,
       });
       const marketReportTurn = ensureSaasAiCeoMarketReportRecordFromTurn(marketReportCandidateTurn, aiCeoMarketReport);
       if (marketReportTurn?.market_report_id) {
@@ -25915,6 +26049,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
       });
       const completedTurn = {
         ...(isCurrentChatTurn ? state.saasAiCeoLatestTurn || {} : {}),
+        archive_pending: serverArchiveRequested && !archived,
         user_text: text,
         assistant_id: pendingMessageId,
         assistant_text: answer,
@@ -25941,7 +26076,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
         performance,
         pending_stage: "",
         pending: false,
-        created_at: submittedAt,
+        created_at: replyCreatedAt,
       };
       const completedTurnWithReport = ensureSaasAiCeoMarketReportRecordFromTurn(completedTurn, aiCeoMarketReport) || completedTurn;
       const responseIdentity = saasNormalizeListingProjectIdentity(completedTurnWithReport?.listing_project_identity);
@@ -26005,6 +26140,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
     .catch((error) => {
       if (streamRenderTimer) clearTimeout(streamRenderTimer);
       streamRenderTimer = null;
+      if (!isCurrentSaasAiCeoHistoryRequest(submittedAccountContext)) return null;
       const sessionExpired = isSaasUnrecoverableSessionError(error);
       if (newProjectRequest.active) markSaasNewListingProjectRequestFailed(
         command?.id || "",
@@ -26018,6 +26154,7 @@ function handleSaasCeoCommandSubmit(text, options = {}) {
         : "AI CEO 连接暂时没有完成。我已经保留这次目标，可以稍后重试或补充资料；真实发布、付款、退款、广告、授权和敏感客服承诺不会自动执行。";
       const latest = normalizeSaasAiCeoLatestTurn({
         ...(state.saasAiCeoLatestTurn || {}),
+        archive_pending: serverArchiveRequested,
         assistant_id: pendingMessageId,
         assistant_text: safeText,
         status: failureStatus,
@@ -28198,7 +28335,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
       </div>
       <div class="runtime-bridge-actions saas-model-live-actions">
         <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelAvailable ? "disabled" : ""}>生成报告和上架资料</button>
-        <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" ${state.saasLoading || !ctx.store ? "disabled" : ""}>回填商家记忆</button>
+        <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" ${state.saasLoading || !ctx.store ? "disabled" : ""}>更新经营记录</button>
       </div>
       <details class="saas-model-config-details" ${merchantModelConfigured && connectionAttempt.state === "ready" ? "" : "open"}>
         <summary>
@@ -29272,6 +29409,7 @@ async function refreshSaasState(options = {}) {
     renderStoreContext();
     renderGlobalLoopWorkbench();
     if (state.view === "cockpit") renderSaasCockpitRealWorkbench();
+    const coreCeoHistoryContext = saasAiCeoHistoryRequestContext();
     const [
       coreMe,
       corePermissions,
@@ -29308,7 +29446,9 @@ async function refreshSaasState(options = {}) {
       }, 10000),
       optionalSaasFetchFast("/ai-ceo/chat-history?limit=30", {
         ai_ceo_chat_history: { scope: "unavailable", cross_store: false, turns: [] },
-      }, 10000),
+      }, 10000, {
+        saasRequestIsCurrent: () => isCurrentRefresh() && isCurrentSaasAiCeoHistoryRequest(coreCeoHistoryContext),
+      }),
       saasFetch(`/tasks?limit=20&store_id=${encodeURIComponent(store.store_id)}`),
       saasFetch("/confirmations?limit=40"),
       optionalSaasFetchFast("/auth/sessions", { sessions: [] }, 10000),
@@ -29359,12 +29499,13 @@ async function refreshSaasState(options = {}) {
       activeCeoCommandAtCoreApply,
       shouldPreserveActiveCeoState ? activeCeoCommandBeforeRefresh : null,
     );
-    state.saasAiCeoThread = uniqueSaasAiCeoThreadTurns([
+    updateSaasAiCeoHistoryPagination(coreCeoChatHistory?.ai_ceo_chat_history);
+    state.saasAiCeoThread = retainSaasAiCeoRecentThread([
       ...loadSaasAiCeoThread(),
       ...(shouldPreserveActiveCeoState ? activeCeoThreadBeforeRefresh : []),
       ...activeCeoThreadAtCoreApply,
       ...(Array.isArray(coreCeoChatHistory?.ai_ceo_chat_history?.turns) ? coreCeoChatHistory.ai_ceo_chat_history.turns : []),
-    ]).slice(-30);
+    ]);
     state.saasAiCeoThreadCloudReady =
       coreCeoChatHistory?.ai_ceo_chat_history?.scope === "account" &&
       coreCeoChatHistory?.ai_ceo_chat_history?.cross_store === true;
@@ -29506,10 +29647,10 @@ async function refreshSaasState(options = {}) {
       loadSaasLastCeoCommand(),
       activeCeoCommandAtExtendedApply,
     );
-    state.saasAiCeoThread = uniqueSaasAiCeoThreadTurns([
+    state.saasAiCeoThread = retainSaasAiCeoRecentThread([
       ...loadSaasAiCeoThread(),
       ...activeCeoThreadAtExtendedApply,
-    ]).slice(-30);
+    ]);
     state.saasAiCeoLatestTurn = activeLatestTurnAtExtendedApply || syncSaasAiCeoLatestTurnFromThread();
     if (state.saasLastCeoCommand) {
       persistSaasLastCeoCommand(state.saasLastCeoCommand);
@@ -32321,12 +32462,77 @@ async function verifySaasModelConnectionFromWorkbench() {
   }
 }
 
+let saasSettingsActionEpoch = 0;
+let saasSettingsActionRequest = null;
+
+function saasSettingsActionScope() {
+  return JSON.stringify([
+    String(state.saasApiBase || ""),
+    String(state.saasCompany?.company_id || state.saasIdentity?.company_id || ""),
+    String(state.saasUser?.user_id || state.saasIdentity?.user_id || ""),
+    String(activeSaasStore()?.store_id || ""),
+  ]);
+}
+
+function isCurrentSaasSettingsAction(request) {
+  return Boolean(request && saasSettingsActionRequest === request && request.epoch === saasSettingsActionEpoch &&
+    request.refreshGeneration === saasStateRefreshGeneration &&
+    request.scope === saasSettingsActionScope() && state.saasSessionExpiryHandled !== true);
+}
+
+function invalidateSaasSettingsActionContext() {
+  const previous = saasSettingsActionRequest;
+  saasSettingsActionEpoch += 1;
+  saasSettingsActionRequest = null;
+  if (previous?.refreshGeneration === saasStateRefreshGeneration) state.saasLoading = false;
+}
+
+function beginSaasSettingsAction() {
+  if (state.saasLoading || isCurrentSaasSettingsAction(saasSettingsActionRequest)) return null;
+  const request = { scope: saasSettingsActionScope(), epoch: saasSettingsActionEpoch, refreshGeneration: saasStateRefreshGeneration };
+  saasSettingsActionRequest = request;
+  return request;
+}
+
+function finishSaasSettingsAction(request) {
+  const current = isCurrentSaasSettingsAction(request);
+  if (saasSettingsActionRequest === request) saasSettingsActionRequest = null;
+  if (!current || request.refreshGeneration !== saasStateRefreshGeneration) return;
+  state.saasLoading = false;
+  renderSaasBackendPanel();
+}
+
+function saasSettingsReportFailureText({ blockers = [], error = null } = {}) {
+  const payload = error?.payload && typeof error.payload === "object" ? error.payload : {};
+  const codes = [
+    ...(Array.isArray(blockers) ? blockers : []),
+    ...(Array.isArray(payload.blocked_by) ? payload.blocked_by : []),
+    ...(Array.isArray(payload.model_value_rehearsal?.blockers) ? payload.model_value_rehearsal.blockers : []),
+    payload.error,
+  ].filter((code) => typeof code === "string");
+  const knownReasons = [
+    [["model_quota_or_billing_blocked"], "AI 服务商账号的额度或余额需要处理，请到服务商查看用量后重试。"],
+    [["model_authentication_failed", "merchant_model_api_key_not_saved", "current_account_model_connection_missing", "current_account_model_connection_not_ready", "current_store_model_connection_missing"], "请在本页查看 AI 连接状态，再使用“重新检测连接”；只在明确失效时更新连接信息。"],
+    [["model_provider_timeout", "model_provider_verification_failed", "model_provider_error", "model_secret_resolve_blocked"], "AI 服务暂时不可用，请稍后重试；不必重复填写连接信息。"],
+    [["model_name_not_available"], "当前模型名称不可用，请在本页选择服务商支持的模型后重新检测。"],
+    [["sanitized_platform_data_packet_missing", "platform_data_packet_not_ready_for_runtime"], "请到设置的“店铺数据”查看待补资料，再继续生成。"],
+    [["public_search_provider_not_configured", "public_search_provider_error", "public_search_no_results", "public_search_disabled", "public_web_no_results"], "本次没有取得足够的联网资料，请稍后重试或补充可核对的来源。"],
+  ];
+  for (const [allowedCodes, message] of knownReasons) {
+    if (codes.some((code) => allowedCodes.includes(code))) return `报告和上架资料暂时无法继续生成：${message}`;
+  }
+  if (error?.status === 403) return "当前账号没有生成报告和上架资料的权限，请联系团队负责人核对。";
+  return "本次未能确认报告和上架资料生成完成。请先刷新查看最新结果，再决定是否重试；如仍失败，可通过页面“意见”联系支持。";
+}
+
 async function runSaasModelValueRehearsalFromWorkbench() {
   const store = activeSaasStore();
   if (!store) {
     showActionToast("请先选择店铺。");
     return false;
   }
+  const request = beginSaasSettingsAction();
+  if (!request) return false;
   const latestPacket = getLatestSaasDataPacketRecord();
   const activeSecret = saasActiveModelSecretRef();
   const connection = saasConnectionForStore(store);
@@ -32340,6 +32546,7 @@ async function runSaasModelValueRehearsalFromWorkbench() {
   try {
     const payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/model/value-rehearsal`, {
       method: "POST",
+      saasRequestIsCurrent: () => isCurrentSaasSettingsAction(request),
       body: JSON.stringify({
         allow_live_model: true,
         use_merchant_byok: Boolean(activeSecret?.secret_ref),
@@ -32349,48 +32556,66 @@ async function runSaasModelValueRehearsalFromWorkbench() {
         merchant_goal: "优先用账号自己的 AI；没有账号 AI 时使用捷境试用 AI 的有限额度。基于官方只读 eBay 店铺资料生成商家可读的中文 Market Report 和 Listing Package；没有来源的事实写待补资料。",
       }),
     });
-    state.saasLastModelValueRehearsal = payload.model_value_rehearsal || null;
-    const blockers = payload.model_value_rehearsal?.blockers || [];
-    if (blockers.length) {
-      showActionToast(`live 模型证明被阻断：${saasModelValueFailureMessage({ blockers, resolution: payload.model_secret_resolution })}`);
+    if (!isCurrentSaasSettingsAction(request)) return false;
+    const result = payload?.model_value_rehearsal;
+    state.saasLastModelValueRehearsal = result && typeof result === "object" && !Array.isArray(result) ? result : null;
+    const blockers = Array.isArray(result?.blockers) ? result.blockers : [];
+    const completed = result?.status === "completed" && Array.isArray(result.blockers) && blockers.length === 0;
+    if (!completed) {
+      showActionToast(saasSettingsReportFailureText({ blockers }));
     } else {
-      showActionToast("Market Report 和 Listing Package 已生成并写入报告/记忆。");
+      showActionToast("报告和上架资料已生成，可到“选品与上架”查看并核对；尚未发布到 eBay。");
     }
-    await refreshSaasState({ silent: true });
-    return true;
+    const refresh = refreshSaasState({ silent: true });
+    request.refreshGeneration = saasStateRefreshGeneration;
+    await refresh;
+    return isCurrentSaasSettingsAction(request) && completed;
   } catch (error) {
-    state.saasError = error.message || String(error);
-    showActionToast(`live 模型证明失败：${saasModelValueFailureMessage({ error })}`);
+    if (!isCurrentSaasSettingsAction(request)) return false;
+    state.saasError = saasSettingsReportFailureText({ error });
+    showActionToast(state.saasError);
     return false;
   } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
+    finishSaasSettingsAction(request);
   }
 }
 
 async function refreshSaasMerchantMemoryFromWorkbench() {
   const store = activeSaasStore();
+  const unconfirmedMessage = "本次未能确认经营记录更新完成。请先刷新查看最新结果，再决定是否重试；如仍失败，可通过页面“意见”联系支持。";
   if (!store) {
     showActionToast("请先选择店铺。");
     return false;
   }
+  const request = beginSaasSettingsAction();
+  if (!request) return false;
   state.saasLoading = true;
   renderSaasBackendPanel();
   try {
     const payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/merchant-memory/refresh`, {
       method: "POST",
+      saasRequestIsCurrent: () => isCurrentSaasSettingsAction(request),
       body: JSON.stringify({ limit: 100 }),
     });
-    showActionToast(`商家记忆已回填：${payload.merchant_memory_refresh?.inserted_or_updated || 0} 条。`);
-    await refreshSaasState({ silent: true });
-    return true;
+    if (!isCurrentSaasSettingsAction(request)) return false;
+    const count = payload?.merchant_memory_refresh?.inserted_or_updated;
+    if (!Number.isSafeInteger(count) || count < 0) {
+      state.saasError = unconfirmedMessage;
+      showActionToast(state.saasError);
+      return false;
+    }
+    showActionToast(`已更新 ${count} 条经营记录，后续建议会参考已保存的经营资料。`);
+    const refresh = refreshSaasState({ silent: true });
+    request.refreshGeneration = saasStateRefreshGeneration;
+    await refresh;
+    return isCurrentSaasSettingsAction(request);
   } catch (error) {
-    state.saasError = error.message || String(error);
-    showActionToast("商家记忆回填失败，请查看后端日志。");
+    if (!isCurrentSaasSettingsAction(request)) return false;
+    state.saasError = unconfirmedMessage;
+    showActionToast(state.saasError);
     return false;
   } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
+    finishSaasSettingsAction(request);
   }
 }
 
@@ -32877,8 +33102,65 @@ function saasListingCurrentDraftFieldsForAi(draft = state.saasListingComposerDra
   return currentFields;
 }
 
+let saasListingAiGenerationEpoch = 0;
+let saasListingAiGenerationRequest = null;
+const saasListingAiGenerationInFlight = new Map();
+
+function invalidateSaasListingAiGenerationContext() {
+  saasListingAiGenerationEpoch += 1;
+  const previous = saasListingAiGenerationRequest;
+  saasListingAiGenerationRequest = null;
+  if (previous && state.saasListingAiGenerationStatus === "running") {
+    state.saasListingAiGenerationStatus = "idle";
+    state.saasListingAiGenerationMissingFields = [];
+    if (previous.refreshGeneration === saasStateRefreshGeneration) state.saasLoading = false;
+  }
+}
+
+function saasListingAiGenerationContextKey(draft = state.saasListingComposerDraft) {
+  const identity = saasCurrentListingProjectIdentity(draft);
+  return JSON.stringify([
+    String(state.saasCompany?.company_id || state.saasIdentity?.company_id || ""),
+    String(state.saasUser?.user_id || state.saasIdentity?.user_id || ""),
+    String(activeSaasStore()?.store_id || ""),
+    identity.key || "",
+    identity.source_report_id || identity.source_id || "",
+    identity.candidate_id || "",
+  ]);
+}
+
+function saasListingAiGenerationEditSnapshot() {
+  const draft = state.saasListingComposerDraft || {};
+  return {
+    draft: JSON.stringify([draft.fields || {}, draft.merchant_product_fact_packet || {}, draft.publish_prefill || {}]),
+    inputs: Array.from(document.querySelectorAll("#view-product [data-saas-product-fact-field]"), (field) => [
+      field.dataset.saasProductFactField,
+      field.type === "checkbox" ? field.checked : field.value,
+      field.dataset.productFactConfirmed || "",
+      field.dataset.productFactUnknown || "",
+    ]),
+  };
+}
+
+function saasListingAiGenerationHasNewEdits(snapshot) {
+  const current = saasListingAiGenerationEditSnapshot();
+  return current.draft !== snapshot.draft ||
+    (current.inputs.length > 0 && JSON.stringify(current.inputs) !== JSON.stringify(snapshot.inputs));
+}
+
+function releaseSaasListingAiGenerationButtons() {
+  document.querySelectorAll('[data-saas-action="listing-generate-ai-draft"], [data-saas-action="save-merchant-product-facts"]').forEach((button) => {
+    button.disabled = state.saasLoading || state.saasListingProductFactSaveStatus === "saving";
+    if (button.dataset.saasAction === "listing-generate-ai-draft") button.textContent = "AI 生成 Listing 草稿";
+  });
+}
+
 async function generateSaasListingDraftFromCurrentProject() {
   if (!requireSaasProtectedSessionForAction()) return false;
+  if (saasListingAiGenerationInFlight.has(saasListingAiGenerationContextKey())) {
+    if (state.view === "product") showActionToast("该商品的 AI 草稿仍在生成，请稍后从当前商品记录继续。");
+    return false;
+  }
   captureSaasListingDraftEditor();
   const draft = state.saasListingComposerDraft;
   const store = activeSaasStore();
@@ -32901,10 +33183,23 @@ async function generateSaasListingDraftFromCurrentProject() {
     source_report_id: identity.source_report_id || identity.source_id || "",
     candidate_id: identity.candidate_id || "",
   };
+  const generationRequest = {
+    contextKey: saasListingAiGenerationContextKey(draft),
+    epoch: saasListingAiGenerationEpoch,
+    refreshGeneration: saasStateRefreshGeneration,
+  };
+  saasListingAiGenerationRequest = generationRequest;
+  saasListingAiGenerationInFlight.set(generationRequest.contextKey, generationRequest);
+  const isCurrentGeneration = () =>
+    saasListingAiGenerationRequest === generationRequest &&
+    generationRequest.epoch === saasListingAiGenerationEpoch &&
+    generationRequest.contextKey === saasListingAiGenerationContextKey();
   state.saasLoading = true;
   state.saasListingAiGenerationStatus = "running";
   state.saasListingAiGenerationMissingFields = [];
   renderProductListingCenter();
+  const editSnapshot = saasListingAiGenerationEditSnapshot();
+  let preservePendingEdits = false;
   try {
     const response = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/listing-drafts/generate`, {
       method: "POST",
@@ -32914,6 +33209,10 @@ async function generateSaasListingDraftFromCurrentProject() {
         current_draft_fields: saasListingCurrentDraftFieldsForAi(state.saasListingComposerDraft),
       }),
     });
+    // The backend keeps the original project artifact. A late response must
+    // not copy it into a different company, store, project, or browser cache.
+    if (!isCurrentGeneration()) return false;
+    preservePendingEdits = saasListingAiGenerationHasNewEdits(editSnapshot);
     if (response.status !== "completed" || !response.report) {
       const missingFields = Array.isArray(response.missing_fields) ? response.missing_fields : [];
       state.saasListingAiGenerationStatus = "blocked";
@@ -32937,6 +33236,12 @@ async function generateSaasListingDraftFromCurrentProject() {
       response.report,
       ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id),
     ];
+    if (preservePendingEdits) {
+      state.saasListingAiGenerationStatus = "completed";
+      state.saasListingAiGenerationMissingFields = Array.isArray(response.missing_fields) ? response.missing_fields : [];
+      if (state.view === "product") showActionToast("AI 草稿已生成并保留在当前商品记录中；你在生成期间的新修改已保留，没有被覆盖。");
+      return true;
+    }
     const restored = saasListingDraftFromReport(response.report, "listing_ai_generation");
     if (!restored) throw new Error("listing_ai_report_not_importable");
     const serverIdentity = saasNormalizeListingProjectIdentity(response.listing_project_identity) || listingProjectIdentity;
@@ -32952,20 +33257,31 @@ async function generateSaasListingDraftFromCurrentProject() {
     saveSaasProtectedStateSnapshot();
     renderProductListingCenter();
     window.requestAnimationFrame(() => {
-      document.querySelector(".saas-listing-v2-draft-editor")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      if (state.view === "product" && generationRequest.epoch === saasListingAiGenerationEpoch && generationRequest.contextKey === saasListingAiGenerationContextKey()) {
+        document.querySelector(".saas-listing-v2-draft-editor")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
     });
-    showActionToast("AI Listing 草稿已生成并写入工作记录；你可以继续修改，尚未写入 eBay。");
+    if (state.view === "product") showActionToast("AI Listing 草稿已生成并保存到当前商品；你可以继续修改，尚未写入 eBay。");
     return true;
   } catch (error) {
+    if (!isCurrentGeneration()) return false;
+    preservePendingEdits = saasListingAiGenerationHasNewEdits(editSnapshot);
     state.saasListingAiGenerationStatus = "failed";
     const errorPayload = error?.payload && typeof error.payload === "object" ? error.payload : {};
     const merchantMessage = publicRuntimeText(errorPayload.merchant_message || "").trim().slice(0, 260);
-    showActionToast(merchantMessage || "AI Listing 草稿暂时没有生成；商品资料和现有编辑已保留，请稍后重试。");
+    if (state.view === "product") showActionToast(merchantMessage || "AI Listing 草稿暂时没有生成；商品资料和现有编辑已保留，请稍后重试。");
     return false;
   } finally {
-    state.saasLoading = false;
-    saveSaasProtectedStateSnapshot();
-    renderProductListingCenter();
+    if (saasListingAiGenerationInFlight.get(generationRequest.contextKey) === generationRequest) {
+      saasListingAiGenerationInFlight.delete(generationRequest.contextKey);
+    }
+    if (isCurrentGeneration()) {
+      if (generationRequest.refreshGeneration === saasStateRefreshGeneration) state.saasLoading = false;
+      saasListingAiGenerationRequest = null;
+      saveSaasProtectedStateSnapshot();
+      if (preservePendingEdits) releaseSaasListingAiGenerationButtons();
+      else renderProductListingCenter();
+    }
   }
 }
 
@@ -36582,6 +36898,7 @@ function renderSaasWorkflowCenter() {
 function renderSaasInactiveViewPlaceholder(viewId = "") {
   const view = document.querySelector(`#view-${viewId}`);
   if (!view) return;
+  if (viewId === "cockpit") captureSaasAiCeoComposerDraft(view.querySelector("#ceoInput"));
   const labels = {
     cockpit: ["AI CEO", "对话入口、真实账号状态和下一步会在打开本页时读取。"],
     workflow: ["AI CEO", "岗位链路已归入 AI CEO 对话入口。"],
@@ -38150,6 +38467,7 @@ function renderSaasMerchantLaunchReadinessPath() {
 }
 
 function renderSaasCockpitRealWorkbench() {
+  captureSaasAiCeoComposerDraft();
   if (!isSaasPublicMvpMode()) return false;
   const cockpit = document.querySelector("#view-cockpit");
   if (!cockpit) return false;
@@ -38691,7 +39009,83 @@ function recordBulkHandoffActivities(countLabel) {
   });
 }
 
+const saasAiCeoComposerDrafts = new Map();
+const saasAiCeoComposerBindings = new WeakMap();
+let saasAiCeoComposerAccount = "";
+let saasAiCeoComposerEpoch = 0;
+
+function resetSaasAiCeoComposerDrafts() {
+  saasAiCeoComposerDrafts.clear();
+  saasAiCeoComposerAccount = "";
+  saasAiCeoComposerEpoch += 1;
+}
+
+function saasAiCeoComposerContext() {
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "");
+  const userId = String(state.saasIdentity?.user_id || state.saasUser?.user_id || "");
+  const account = companyId && userId && !state.saasSessionExpiryHandled ? JSON.stringify([companyId, userId]) : "";
+  if (account !== saasAiCeoComposerAccount) {
+    resetSaasAiCeoComposerDrafts();
+    saasAiCeoComposerAccount = account;
+  }
+  if (!account) return null;
+  return { scope: JSON.stringify([companyId, userId, String(activeSaasStore()?.store_id || "")]), epoch: saasAiCeoComposerEpoch };
+}
+
+function captureSaasAiCeoComposerDraft(input = document.querySelector("#ceoInput")) {
+  const current = saasAiCeoComposerContext();
+  const bound = input && saasAiCeoComposerBindings.get(input);
+  if (!current || !bound || bound.scope !== current.scope || bound.epoch !== current.epoch) return false;
+  saasAiCeoComposerDrafts.set(current.scope, String(input.value || ""));
+  return true;
+}
+
+function bindSaasAiCeoComposerDraft(input) {
+  const current = saasAiCeoComposerContext();
+  if (!input || !current) return;
+  saasAiCeoComposerBindings.set(input, current);
+  if (saasAiCeoComposerDrafts.has(current.scope)) input.value = saasAiCeoComposerDrafts.get(current.scope);
+  input.addEventListener("input", () => captureSaasAiCeoComposerDraft(input));
+  // The existing submit handler clears only accepted input; rejected input stays.
+  input.form?.addEventListener("submit", () => captureSaasAiCeoComposerDraft(input));
+}
+
+function saasBulkResearchGoal() {
+  const count = [10, 20, 50].includes(Number(state.batchCandidateCount)) ? Number(state.batchCandidateCount) : 10;
+  const preferences = [...new Set(state.batchSourcingPrefs || [])]
+    .filter((key) => Object.prototype.hasOwnProperty.call(batchPreferenceLabels, key))
+    .map((key) => batchPreferenceLabels[key][0]);
+  return [
+    "【批量选品调研目标】",
+    `我还没有货源，请为 eBay 调研 ${count} 个候选方向。`,
+    preferences.length ? `筛选条件：${preferences.join("、")}。` : "请先说明每个候选的市场机会和主要风险。",
+    "请提供可核对的市场依据、竞争情况、风险和需要补充的商品资料；证据不足时明确说明，不编造销量、规格或供应商。",
+    "我会根据建议自行寻找货源，再提供真实商品资料。本次只准备调研，不生成素材、不写入或发布到 eBay，不采购、不付款。",
+  ].join(" ");
+}
+
+function openSaasBulkResearchDraft() {
+  captureSaasAiCeoComposerDraft();
+  const goal = saasBulkResearchGoal();
+  handleGlobalFlowNavigation({ dataset: { globalFlowView: "cockpit", globalFlowKey: "goal" } });
+  const input = document.querySelector("#ceoInput");
+  if (!input) {
+    showActionToast("AI CEO 输入框暂时不可用，请重新打开 AI CEO 后再试。");
+    return false;
+  }
+  const existing = String(input.value || "");
+  input.value = existing.includes(goal) ? existing : [existing, goal].filter(Boolean).join(" ");
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.focus({ preventScroll: true });
+  showActionToast("筛选条件已带入 AI CEO，核对后点击发送开始调研；尚未调用 AI。");
+  return true;
+}
+
 function handleBulkAction(action, item = "") {
+  if (action === "source-research") {
+    openSaasBulkResearchDraft();
+    return;
+  }
   const itemCopy = {
     "item-draft": {
       stage: "draft",
@@ -43280,6 +43674,52 @@ function normalizeSaasAiCeoMarketReportDelivery(delivery = null) {
   };
 }
 
+async function saasAiCeoExpectedRequestArchiveIdentity(command, payload) {
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "");
+  if (!companyId || !window.crypto?.subtle || typeof TextEncoder !== "function") {
+    throw new Error("当前浏览器无法安全关联这次聊天记录，本次请求没有发送。请刷新页面或更新浏览器后再试。");
+  }
+  const digest = async (value) => Array.from(new Uint8Array(await window.crypto.subtle.digest(
+    "SHA-256", new TextEncoder().encode(value),
+  )), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  // Exact server v1 task identity; this is an identifier, not a credential.
+  const scope = await digest(`ai-ceo-chat-request-v1\0${companyId}\0${command.store_id}\0${payload.idempotency_key}`);
+  const requestTaskId = `task_ai_ceo_request_${scope.slice(0, 40)}`;
+  return { request_task_id: requestTaskId, assistant_id: `ceo-server-${(await digest(requestTaskId)).slice(0, 32)}` };
+}
+
+function saasAiCeoArchivedResponseIdentity(payload = null) {
+  const archive = payload?.ai_ceo_chat_history_turn;
+  if (archive?.contract_version !== "server_finalized_chat_archive_v1" || archive.archived !== true ||
+      !/^ceo-server-[a-f0-9]{32}$/.test(String(archive.assistant_id || "")) ||
+      !/^[A-Za-z0-9_-]{1,180}$/.test(String(archive.request_task_id || "")) ||
+      !Number.isFinite(Date.parse(archive.created_at || ""))) return null;
+  return { assistant_id: archive.assistant_id, request_task_id: archive.request_task_id,
+    created_at: new Date(archive.created_at).toISOString() };
+}
+
+function applySaasAiCeoArchivedResponseIdentity(previousId, archived) {
+  if (!previousId || !archived?.assistant_id) return;
+  // Replace only the exact submitted placeholder, before any completed SYNC.
+  // Identical text or nearby timestamps are never used as record identity.
+  const replace = (turn) => turn?.assistant_id === previousId
+    ? { ...turn, assistant_id: archived.assistant_id, created_at: archived.created_at, archive_pending: archived.archived === false } : turn;
+  state.saasAiCeoThread = uniqueSaasAiCeoThreadTurns((state.saasAiCeoThread || []).map(replace));
+  state.saasAiCeoLatestTurn = replace(state.saasAiCeoLatestTurn);
+  state.saasLastAiCeoMarketResearchTurn = replace(state.saasLastAiCeoMarketResearchTurn);
+  const archive = saasAiCeoHistoryArchive();
+  archive.turns = uniqueSaasAiCeoThreadTurns(archive.turns.map(replace));
+  const oldNode = document.getElementById(previousId);
+  const existingNode = document.getElementById(archived.assistant_id);
+  if (oldNode && oldNode !== existingNode) {
+    if (existingNode) (oldNode.closest("[data-assistant-id]") || oldNode).remove();
+    else oldNode.id = archived.assistant_id;
+  }
+  document.querySelectorAll("#ceoChat [data-assistant-id]").forEach((node) => {
+    if (node.dataset.assistantId === previousId) node.dataset.assistantId = archived.assistant_id;
+  });
+}
+
 function normalizeSaasAiCeoLatestTurn(turn = {}) {
   if (!turn || typeof turn !== "object") return null;
   const userText = merchantConversationText(turn.user_text || turn.userText || turn.user || "");
@@ -43308,6 +43748,7 @@ function normalizeSaasAiCeoLatestTurn(turn = {}) {
     assistant_text: assistantText,
     status,
     assistant_id: assistantId,
+    ...(turn.archive_pending === true ? { archive_pending: true } : {}),
     pending: Boolean(turn.pending),
     pending_stage: String(turn.pending_stage || turn.pendingStage || ""),
     store_id: String(turn.store_id || turn.storeId || "").replace(/[^A-Za-z0-9_-]/g, ""),
@@ -43492,7 +43933,7 @@ function uniqueSaasAiCeoThreadTurns(turns = []) {
 function saasAiCeoThreadTurnMergeScore(turn = {}) {
   const normalized = normalizeSaasAiCeoLatestTurn(turn);
   if (!normalized) return -1;
-  const completionScore = normalized.pending ? 0 : 100000;
+  const completionScore = normalized.pending || normalized.archive_pending ? 0 : 100000;
   const answerScore = Math.min(20000, String(normalized.assistant_text || "").length * 10);
   const evidenceScore =
     (normalized.source_records || []).length * 100 +
@@ -43608,7 +44049,7 @@ function persistSaasAiCeoThread(options = {}) {
 function saasAiCeoThreadForBackendSync() {
   const currentStoreId = activeSaasStore()?.store_id || "";
   return uniqueSaasAiCeoThreadTurns(state.saasAiCeoThread || [])
-    .filter((turn) => turn && !turn.pending && turn.user_text && turn.assistant_text)
+    .filter((turn) => turn && !turn.pending && !turn.archive_pending && turn.user_text && turn.assistant_text)
     .slice(-30)
     .map((turn) => ({
       ...turn,
@@ -43624,6 +44065,78 @@ function saasAiCeoThreadForBackendSync() {
 const SAAS_AI_CEO_BOTTOM_FOLLOW_THRESHOLD = 96;
 const SAAS_AI_CEO_INITIAL_VISIBLE_TURNS = 12;
 const SAAS_AI_CEO_LOAD_OLDER_STEP = 8;
+let saasAiCeoHistoryEpoch = 0;
+
+function saasAiCeoHistoryAccountScope() {
+  return JSON.stringify([
+    state.saasCompany?.company_id || state.saasIdentity?.company_id || "",
+    state.saasUser?.user_id || state.saasIdentity?.user_id || state.saasUser?.email || "",
+  ]);
+}
+
+function resetSaasAiCeoHistoryArchive() {
+  saasAiCeoHistoryEpoch += 1;
+  state.saasAiCeoHistoryArchive = null;
+  state.saasAiCeoHistoryRevision = "";
+  state.saasAiCeoHistoryConflictMerged = false;
+  state.saasAiCeoVisibleTurnLimit = SAAS_AI_CEO_INITIAL_VISIBLE_TURNS;
+  state.saasAiCeoThreadSyncPromise = null;
+  state.saasAiCeoThreadRefreshPromise = null;
+}
+
+function saasAiCeoHistoryArchive() {
+  const scope = saasAiCeoHistoryAccountScope();
+  if (state.saasAiCeoHistoryArchive?.scope !== scope) {
+    resetSaasAiCeoHistoryArchive();
+    state.saasAiCeoHistoryArchive = {
+      scope, turns: [], cursor: "", hasMore: false, initialized: false, pagesLoaded: 0, loading: false, error: "", promise: null,
+    };
+  }
+  return state.saasAiCeoHistoryArchive;
+}
+
+function saasAiCeoHistoryRequestContext() {
+  saasAiCeoHistoryArchive();
+  return { scope: saasAiCeoHistoryAccountScope(), epoch: saasAiCeoHistoryEpoch };
+}
+
+function isCurrentSaasAiCeoHistoryRequest(context) {
+  return context?.scope === saasAiCeoHistoryAccountScope() && context?.epoch === saasAiCeoHistoryEpoch &&
+    state.saasSessionExpiryHandled !== true;
+}
+
+function updateSaasAiCeoHistoryPagination(history = {}) {
+  const archive = saasAiCeoHistoryArchive();
+  const recent = uniqueSaasAiCeoThreadTurns(state.saasAiCeoThread || []).filter((turn) => !turn.pending);
+  const incoming = uniqueSaasAiCeoThreadTurns(Array.isArray(history?.turns) ? history.turns : []);
+  const turnKey = (turn) => turn.assistant_id || `${turn.created_at}|${turn.user_text}|${turn.assistant_text}`;
+  const knownKeys = new Set(recent.map(turnKey));
+  const disjointNewerWindow = recent.length > 0 && incoming.length > 0 && history?.has_more === true &&
+    !incoming.some((turn) => knownKeys.has(turnKey(turn))) &&
+    compareSaasAiCeoThreadTurns(incoming[incoming.length - 1], recent[recent.length - 1]) > 0;
+  if ((!archive.initialized || (!archive.hasMore && !archive.pagesLoaded) || disjointNewerWindow) && typeof history?.has_more === "boolean") {
+    archive.cursor = String(history.next_cursor || "");
+    archive.hasMore = history.has_more === true && Boolean(archive.cursor);
+    archive.initialized = true;
+    archive.error = "";
+  }
+}
+
+function retainSaasAiCeoRecentThread(turns = []) {
+  const ordered = uniqueSaasAiCeoThreadTurns(turns);
+  const archive = saasAiCeoHistoryArchive();
+  const previousCount = uniqueSaasAiCeoThreadTurns([...archive.turns, ...(state.saasAiCeoThread || [])]).length;
+  if (ordered.length > 30) archive.turns = uniqueSaasAiCeoThreadTurns([...archive.turns, ...ordered.slice(0, -30)]);
+  if (Number(state.saasAiCeoVisibleTurnLimit || 0) > SAAS_AI_CEO_INITIAL_VISIBLE_TURNS) {
+    const nextCount = uniqueSaasAiCeoThreadTurns([...archive.turns, ...ordered]).length;
+    state.saasAiCeoVisibleTurnLimit += Math.max(0, nextCount - previousCount);
+  }
+  return ordered.slice(-30);
+}
+
+function saasAiCeoDisplayHistoryTurns() {
+  return uniqueSaasAiCeoThreadTurns([...saasAiCeoHistoryArchive().turns, ...(state.saasAiCeoThread || [])]);
+}
 
 function isSaasAiCeoChatNearBottom(chat) {
   if (!chat) return true;
@@ -43687,14 +44200,54 @@ function restoreSaasAiCeoScrollState(chat, snapshot = null, options = {}) {
   state.saasAiCeoAutoFollow = false;
 }
 
-function revealOlderSaasAiCeoTurns(chat) {
+async function revealOlderSaasAiCeoTurns(chat) {
   if (!chat) return;
-  const turns = (state.saasAiCeoThread || []).map(normalizeSaasAiCeoLatestTurn).filter(shouldKeepSaasAiCeoThreadTurn);
+  const archive = saasAiCeoHistoryArchive();
+  if (archive.loading) return;
+  let turns = saasAiCeoDisplayHistoryTurns();
   const currentLimit = Math.max(SAAS_AI_CEO_INITIAL_VISIBLE_TURNS, Number(state.saasAiCeoVisibleTurnLimit || 0));
-  if (currentLimit >= turns.length) return;
+  if (currentLimit >= turns.length && !archive.hasMore) return;
+  const context = saasAiCeoHistoryRequestContext();
+  state.saasAiCeoAutoFollow = false;
+  if (currentLimit >= turns.length) {
+    if (!hasSaasProtectedSessionCandidate() || !shouldReadSaasAccountScopedLocalCache()) return;
+    const cursor = archive.cursor;
+    archive.loading = true;
+    archive.error = "";
+    const button = chat.querySelector("[data-ceo-load-older]");
+    if (button) { button.disabled = true; button.textContent = "正在加载更早对话…"; }
+    archive.promise = saasFetchWithTimeout(`/ai-ceo/chat-history?limit=30&cursor=${encodeURIComponent(cursor)}`, {
+      saasRequestIsCurrent: () => isCurrentSaasAiCeoHistoryRequest(context),
+    }, 10000);
+    try {
+      const payload = await archive.promise;
+      if (!isCurrentSaasAiCeoHistoryRequest(context)) return;
+      const history = payload?.ai_ceo_chat_history;
+      if (history?.scope !== "account" || history.cross_store !== true || !Array.isArray(history.turns)) {
+        throw new Error("history_page_unavailable");
+      }
+      const nextCursor = String(history.next_cursor || "");
+      if (history.has_more === true && (!nextCursor || nextCursor === cursor)) throw new Error("history_cursor_not_advanced");
+      archive.turns = uniqueSaasAiCeoThreadTurns([...archive.turns, ...history.turns]);
+      if (archive.cursor === cursor) {
+        archive.cursor = nextCursor;
+        archive.hasMore = history.has_more === true && Boolean(nextCursor);
+      }
+      archive.pagesLoaded += 1;
+      turns = saasAiCeoDisplayHistoryTurns();
+    } catch (error) {
+      if (!isCurrentSaasAiCeoHistoryRequest(context)) return;
+      archive.error = "更早对话暂时未加载，请重试";
+    } finally {
+      archive.loading = false;
+      archive.promise = null;
+    }
+  }
+  if (!isCurrentSaasAiCeoHistoryRequest(context)) return;
   const previousHeight = chat.scrollHeight;
   const previousTop = chat.scrollTop;
-  state.saasAiCeoVisibleTurnLimit = Math.min(turns.length, currentLimit + SAAS_AI_CEO_LOAD_OLDER_STEP);
+  const activeLimit = Math.max(currentLimit, Number(state.saasAiCeoVisibleTurnLimit || 0));
+  state.saasAiCeoVisibleTurnLimit = Math.min(turns.length, activeLimit + SAAS_AI_CEO_LOAD_OLDER_STEP);
   state.saasAiCeoAutoFollow = false;
   setJiejingTrustedHtml(
     chat,
@@ -43703,6 +44256,7 @@ function revealOlderSaasAiCeoTurns(chat) {
   syncSaasAiCeoFixedChatViewportState();
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
+      if (!isCurrentSaasAiCeoHistoryRequest(context) || !chat.isConnected) return;
       chat.scrollTop = previousTop + Math.max(0, chat.scrollHeight - previousHeight);
       state.saasAiCeoAutoFollow = false;
     });
@@ -43728,7 +44282,8 @@ function mergeSaasAiCeoHistoryFromBackend(payload = {}, options = {}) {
   const backendTurns = Array.isArray(history.turns)
     ? history.turns.map(normalizeSaasAiCeoLatestTurn).filter(shouldKeepSaasAiCeoThreadTurn)
     : [];
-  state.saasAiCeoThread = uniqueSaasAiCeoThreadTurns([...(state.saasAiCeoThread || []), ...backendTurns]).slice(-30);
+  updateSaasAiCeoHistoryPagination(history);
+  state.saasAiCeoThread = retainSaasAiCeoRecentThread([...(state.saasAiCeoThread || []), ...backendTurns]);
   state.saasAiCeoThreadCloudReady = history.scope === "account" && history.cross_store === true;
   state.saasAiCeoHistoryRevision = publicRuntimeText(history.revision || state.saasAiCeoHistoryRevision || "").slice(0, 120);
   state.saasAiCeoHistoryConflictMerged = history.conflict_merged === true;
@@ -43759,13 +44314,15 @@ function syncSaasAiCeoCloudDomState() {
 
 async function syncSaasAiCeoThreadWithBackend() {
   if (!hasSaasProtectedSessionCandidate() || !shouldReadSaasAccountScopedLocalCache()) return null;
+  const context = saasAiCeoHistoryRequestContext();
   if (state.saasAiCeoThreadSyncPromise) return state.saasAiCeoThreadSyncPromise;
-  state.saasAiCeoThreadSyncPromise = optionalSaasFetchFast(
+  const request = optionalSaasFetchFast(
     "/ai-ceo/chat-history/sync",
     { ai_ceo_chat_history: { scope: "unavailable", cross_store: false, turns: [] } },
     12000,
     {
       method: "POST",
+      saasRequestIsCurrent: () => isCurrentSaasAiCeoHistoryRequest(context),
       body: JSON.stringify({
         turns: saasAiCeoThreadForBackendSync(),
         base_revision: state.saasAiCeoHistoryRevision || "",
@@ -43773,39 +44330,47 @@ async function syncSaasAiCeoThreadWithBackend() {
     },
   )
     .then(async (payload) => {
+      if (!isCurrentSaasAiCeoHistoryRequest(context)) return null;
       const merged = mergeSaasAiCeoHistoryFromBackend(payload);
       await refreshSaasMerchantProjectStatus();
+      if (!isCurrentSaasAiCeoHistoryRequest(context)) return null;
       if (state.view === "activity") renderActivities();
       return merged;
     })
     .catch((error) => {
+      if (!isCurrentSaasAiCeoHistoryRequest(context)) return null;
       if (isSaasUnrecoverableSessionError(error)) return null;
       throw error;
     })
     .finally(() => {
-      state.saasAiCeoThreadSyncPromise = null;
+      if (state.saasAiCeoThreadSyncPromise === request) state.saasAiCeoThreadSyncPromise = null;
     });
-  return state.saasAiCeoThreadSyncPromise;
+  state.saasAiCeoThreadSyncPromise = request;
+  return request;
 }
 
 async function refreshSaasAiCeoThreadFromBackend(options = {}) {
   const { render = true } = options;
   if (!hasSaasProtectedSessionCandidate() || !shouldReadSaasAccountScopedLocalCache()) return null;
+  const context = saasAiCeoHistoryRequestContext();
   if (state.saasAiCeoThreadRefreshPromise) return state.saasAiCeoThreadRefreshPromise;
-  state.saasAiCeoThreadRefreshPromise = optionalSaasFetchFast(
+  const request = optionalSaasFetchFast(
     `/ai-ceo/chat-history?limit=30&fresh=${Date.now()}`,
     { ai_ceo_chat_history: { scope: "unavailable", cross_store: false, turns: [] } },
     10000,
+    { saasRequestIsCurrent: () => isCurrentSaasAiCeoHistoryRequest(context) },
   )
-    .then((payload) => mergeSaasAiCeoHistoryFromBackend(payload, { render }))
+    .then((payload) => isCurrentSaasAiCeoHistoryRequest(context) ? mergeSaasAiCeoHistoryFromBackend(payload, { render }) : null)
     .catch((error) => {
+      if (!isCurrentSaasAiCeoHistoryRequest(context)) return null;
       if (isSaasUnrecoverableSessionError(error)) return null;
       throw error;
     })
     .finally(() => {
-      state.saasAiCeoThreadRefreshPromise = null;
+      if (state.saasAiCeoThreadRefreshPromise === request) state.saasAiCeoThreadRefreshPromise = null;
     });
-  return state.saasAiCeoThreadRefreshPromise;
+  state.saasAiCeoThreadRefreshPromise = request;
+  return request;
 }
 
 function stopSaasAiCeoCrossDeviceSync() {
@@ -43875,6 +44440,7 @@ function scheduleSaasAiCeoThreadBackendSync(delay = 450) {
 }
 
 function hydrateSaasCeoAccountScopedLocalState() {
+  saasAiCeoHistoryArchive();
   state.saasLastCeoCommand = loadSaasLastCeoCommand();
   state.saasAiCeoThread = loadSaasAiCeoThread();
   state.saasLastAiCeoMarketResearchTurn = loadLatestSaasAiCeoMarketResearchTurn();
@@ -43901,7 +44467,7 @@ function upsertSaasAiCeoThreadTurn(turn = {}) {
       `turn-${Math.abs(hashString(`${current.created_at}|${current.user_text}|${current.assistant_text}`)).toString(16)}`;
     return currentKey !== key;
   });
-  state.saasAiCeoThread = uniqueSaasAiCeoThreadTurns([...withoutCurrent, latest]).slice(-30);
+  state.saasAiCeoThread = retainSaasAiCeoRecentThread([...withoutCurrent, latest]);
   rememberLatestSaasAiCeoMarketResearchTurn(latest);
   persistSaasAiCeoThread();
   return latest;
@@ -43911,7 +44477,7 @@ function saasAiCeoThreadTurnByAssistantId(assistantId = "") {
   const key = String(assistantId || "").replace(/[^A-Za-z0-9_-]/g, "");
   if (!key) return null;
   return (
-    (state.saasAiCeoThread || [])
+    saasAiCeoDisplayHistoryTurns()
       .map(normalizeSaasAiCeoLatestTurn)
       .find((turn) => turn?.assistant_id === key) || null
   );
@@ -43922,19 +44488,20 @@ function renderSaasAiCeoThreadMarkup(fallbackTurn = null) {
   if (!Array.isArray(state.saasAiCeoThread) || !state.saasAiCeoThread.length) {
     state.saasAiCeoThread = loadSaasAiCeoThread();
   }
-  let turns = (state.saasAiCeoThread || []).map(normalizeSaasAiCeoLatestTurn).filter(shouldKeepSaasAiCeoThreadTurn);
+  let turns = saasAiCeoDisplayHistoryTurns();
   if (fallback && shouldKeepSaasAiCeoThreadTurn(fallback)) {
     const fallbackKey = fallback.assistant_id || `${fallback.user_text}|${fallback.assistant_text}`;
     const hasFallback = turns.some((item) => (item.assistant_id || `${item.user_text}|${item.assistant_text}`) === fallbackKey);
-    if (!hasFallback) turns = [...turns, fallback].slice(-30);
+    if (!hasFallback) turns = uniqueSaasAiCeoThreadTurns([...turns, fallback]);
   }
   const visibleLimit = Math.max(SAAS_AI_CEO_INITIAL_VISIBLE_TURNS, Number(state.saasAiCeoVisibleTurnLimit || 0));
   const hiddenTurnCount = Math.max(0, turns.length - visibleLimit);
   const visibleTurns = turns.slice(-visibleLimit);
   const latestPendingIndex = visibleTurns.reduce((latestIndex, turn, index) => (turn.pending ? index : latestIndex), -1);
-  const olderControl = hiddenTurnCount
+  const archive = saasAiCeoHistoryArchive();
+  const olderControl = hiddenTurnCount || archive.hasMore || archive.error
     ? `<div class="saas-ai-ceo-history-more">
-        <button type="button" data-ceo-load-older>查看更早对话 <span>${hiddenTurnCount}</span></button>
+        <button type="button" data-ceo-load-older ${archive.loading ? "disabled" : ""}>${archive.loading ? "正在加载更早对话…" : archive.error ? escapeHtml(archive.error) : "查看更早对话"}${hiddenTurnCount ? ` <span>${hiddenTurnCount}</span>` : ""}</button>
       </div>`
     : "";
   return (
@@ -44661,6 +45228,7 @@ function bindCeoForm(root = document) {
   form.dataset.bound = "true";
   form.addEventListener("submit", handleCeoFormSubmit);
   const input = form.querySelector("#ceoInput");
+  bindSaasAiCeoComposerDraft(input);
   const attachmentButton = form.querySelector("#ceoAttachmentButton");
   const attachmentInput = form.querySelector("#ceoAttachmentInput");
   attachmentButton?.addEventListener("click", () => attachmentInput?.click());

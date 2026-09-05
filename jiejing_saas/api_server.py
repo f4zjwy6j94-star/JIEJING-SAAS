@@ -3153,11 +3153,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         if path == "ai-ceo/chat-history":
             limit = _query_limit(query, default=30, maximum=50) or 30
-            turns = self.repository.list_ai_ceo_chat_history(
-                company_id=identity["company_id"],
-                user_id=identity["user_id"],
-                limit=limit,
-            )
+            try:
+                page = self.repository.page_ai_ceo_chat_history(
+                    company_id=identity["company_id"], user_id=identity["user_id"], limit=limit,
+                    cursor=query.get("cursor", [""])[0],
+                )
+            except ValueError:
+                self._send_error(HTTPStatus.BAD_REQUEST, "invalid chat history cursor")
+                return
             revision = self.repository.ai_ceo_chat_history_revision(
                 company_id=identity["company_id"],
                 user_id=identity["user_id"],
@@ -3167,8 +3170,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "ai_ceo_chat_history": {
                         "scope": "account",
                         "cross_store": True,
-                        "turns": turns,
-                        "turn_count": len(turns),
+                        **page,
+                        "turn_count": len(page["turns"]),
                         "revision": revision,
                         "sync_contract": "2026-07-11-ai-ceo-cross-device-revision-v1",
                         "raw_provider_secret_stored": False,
@@ -7700,6 +7703,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "client_now": str(body.get("client_now") or ""),
                 "client_timezone": str(body.get("client_timezone") or ""),
             }
+            archive_contract = str(body.get("chat_archive_contract") or "")
+            if archive_contract and archive_contract != "server_finalized_chat_archive_v1":
+                self._send_error(HTTPStatus.BAD_REQUEST, "unsupported chat archive contract")
+                return
+            if archive_contract:
+                fingerprint_payload["chat_archive_contract"] = archive_contract
             payload_fingerprint = _ai_ceo_chat_request_fingerprint(
                 secret=self.sessions.secret,
                 canonical_request=fingerprint_payload,
@@ -7715,6 +7724,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 user_id=identity["user_id"],
                 idempotency_key=idempotency_key,
                 payload_fingerprint=payload_fingerprint,
+                archive_context={"contract_version": archive_contract, "user_text": message} if archive_contract else None,
             )
             request_task = request_claim["request_task"]
             if request_claim["claim_state"] == "conflict":
@@ -9809,11 +9819,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 company_id=identity["company_id"],
                 user_id=identity["user_id"],
             )
-            history = self.repository.sync_ai_ceo_chat_history(
+            page = self.repository.sync_ai_ceo_chat_history(
                 company_id=identity["company_id"],
                 user_id=identity["user_id"],
                 turns=turns,
                 limit=30,
+                return_page=True,
             )
             revision = self.repository.ai_ceo_chat_history_revision(
                 company_id=identity["company_id"],
@@ -9824,8 +9835,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "ai_ceo_chat_history": {
                         "scope": "account",
                         "cross_store": True,
-                        "turns": history,
-                        "turn_count": len(history),
+                        **page,
+                        "turn_count": len(page["turns"]),
                         "submitted_turn_count": min(len(turns), 30),
                         "revision": revision,
                         "base_revision": base_revision,

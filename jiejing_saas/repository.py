@@ -2920,6 +2920,7 @@ class SaaSRepository:
         user_id: str,
         idempotency_key: str,
         payload_fingerprint: str,
+        archive_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Atomically claim one tenant-scoped AI CEO chat request."""
         self.initialize()
@@ -2940,6 +2941,11 @@ class SaaSRepository:
             "secret_exposed": False,
             "real_platform_writes_enabled": False,
         }
+        if isinstance(archive_context, dict) and archive_context.get("contract_version") == "server_finalized_chat_archive_v1":
+            input_data["chat_archive_context"] = {
+                "contract_version": "server_finalized_chat_archive_v1",
+                "user_text": _sanitize_merchant_ceo_text(archive_context.get("user_text"), limit=900),
+            }
         with self._connect() as conn:
             inserted = conn.execute(
                 """
@@ -2971,12 +2977,13 @@ class SaaSRepository:
         if (
             request_task.get("company_id") != company_id
             or request_task.get("store_id") != store_id
+            or request_task.get("user_id") != user_id
             or request_task.get("task_type") != "ai_ceo_chat_request"
             or existing_input.get("idempotency_key_hash") != scope_hash
         ):
-            return {"claim_state": "conflict", "request_task": request_task}
+            return {"claim_state": "conflict", "request_task": {}}
         if existing_input.get("payload_fingerprint") != normalized_fingerprint:
-            return {"claim_state": "conflict", "request_task": request_task}
+            return {"claim_state": "conflict", "request_task": {}}
         if int(inserted.rowcount or 0) == 1:
             return {"claim_state": "claimed", "request_task": request_task}
         output = request_task.get("output") if isinstance(request_task.get("output"), dict) else {}
@@ -3033,7 +3040,7 @@ class SaaSRepository:
             }
             previous_updated_at = request_task.get("updated_at")
             with self._connect() as conn:
-                conn.execute(
+                reconciled = conn.execute(
                     """
                     update tasks set status = ?, updated_at = ?, output_json = ?
                     where task_id = ? and company_id = ? and store_id = ? and task_type = ?
@@ -3051,6 +3058,14 @@ class SaaSRepository:
                         previous_updated_at,
                     ),
                 )
+                if int(reconciled.rowcount or 0) == 1:
+                    reconciliation_output["response_payload"] = self._archive_ai_ceo_terminal_response(
+                        conn, request_row=row, response_payload=reconciliation_payload,
+                    )
+                    conn.execute(
+                        "update tasks set output_json = ? where task_id = ? and company_id = ? and store_id = ?",
+                        (json.dumps(reconciliation_output, ensure_ascii=False, default=json_default), task_id, company_id, store_id),
+                    )
                 refreshed_row = conn.execute(
                     "select * from tasks where task_id = ? and company_id = ? and store_id = ?",
                     (task_id, company_id, store_id),
@@ -3095,12 +3110,18 @@ class SaaSRepository:
         }
         updated_at = now_iso()
         with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
             row = conn.execute(
-                "select * from tasks where task_id = ? and company_id = ? and store_id = ?",
+                "select * from tasks where task_id = ? and company_id = ? and store_id = ?" + lock_suffix,
                 (request_task_id, company_id, store_id),
             ).fetchone()
             if row is None or row["task_type"] != "ai_ceo_chat_request":
                 raise KeyError("AI CEO chat request task not found")
+            if row["status"] == "running":
+                safe_payload = self._archive_ai_ceo_terminal_response(conn, request_row=row, response_payload=safe_payload)
+                output["response_payload"] = safe_payload
             finalized = conn.execute(
                 """
                 update tasks set status = ?, updated_at = ?, output_json = ?
@@ -3122,6 +3143,40 @@ class SaaSRepository:
         if not task or task.get("store_id") != store_id:
             raise RuntimeError("AI CEO chat request finalization could not be read")
         return {**task, "_idempotent_finalize_applied": int(finalized.rowcount or 0) == 1}
+
+    def _archive_ai_ceo_terminal_response(
+        self, conn: Any, *, request_row: Any, response_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        request_input = _load_json_field(request_row["input_json"])
+        context = request_input.get("chat_archive_context") if isinstance(request_input, dict) else None
+        if not isinstance(context, dict) or context.get("contract_version") != "server_finalized_chat_archive_v1":
+            return response_payload
+        chat = response_payload.get("ai_ceo_chat")
+        if not isinstance(chat, dict):
+            return response_payload
+        assistant_id = "ceo-server-" + hashlib.sha256(str(request_row["task_id"]).encode("utf-8")).hexdigest()[:32]
+        created_at = _project_evidence_time(request_row["created_at"])
+        delivery = response_payload.get("ai_ceo_market_report_delivery") or {}
+        report = response_payload.get("ai_ceo_market_report") or {}
+        report_body = report.get("report") if isinstance(report, dict) else {}
+        turn = _normalize_ai_ceo_chat_history_turn({
+            **chat, "assistant_id": assistant_id, "user_text": context.get("user_text") or "",
+            "assistant_text": chat.get("answer") or "", "created_at": created_at,
+            "store_id": request_row["store_id"],
+            "listing_project_identity": chat.get("listing_project_identity") or (
+                report_body.get("listing_project_identity") if isinstance(report_body, dict) else None),
+            "market_report_id": report.get("report_id") if isinstance(report, dict) else "",
+            "market_report_delivery": delivery if isinstance(delivery, dict) else {},
+        }, company_id=str(request_row["company_id"]), user_id=str(request_row["user_id"]))
+        if not turn:
+            raise ValueError("AI CEO terminal archive is empty")
+        turn["archive_contract"] = "server_finalized_chat_archive_v1"
+        self._merge_ai_ceo_chat_turn(conn, company_id=str(request_row["company_id"]),
+                                    user_id=str(request_row["user_id"]), turn=turn, server_finalized=True)
+        return {**response_payload, "ai_ceo_chat_history_turn": {
+            "contract_version": "server_finalized_chat_archive_v1", "request_task_id": request_row["task_id"],
+            "assistant_id": assistant_id, "created_at": created_at, "archived": True,
+        }}
 
     def create_queue_job(
         self,
@@ -6017,6 +6072,151 @@ class SaaSRepository:
             row = conn.execute("select * from tasks where company_id = ? and task_id = ?", (company_id, task_id)).fetchone()
         return self._task_row_to_dict(row) if row else None
 
+    def list_merchant_project_evidence(
+        self, *, company_id: str, store_id: str, project_id: str,
+        user_id: str = "", evidence_cutoff: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Bound each evidence window to the project before applying its limit.
+
+        JSON predicates select candidates only. The status reducer retains the
+        authoritative full-identity, legacy compatibility and success checks.
+        Related tasks/confirmations are recovered by primary key, not by widening
+        the company timeline or trusting an unrelated artifact's newest row.
+        """
+        self.initialize()
+        project = str(project_id or "").strip()
+        empty = {key: [] for key in ("tasks", "reports", "confirmations", "executions", "media_jobs", "chat_turns")}
+        if not company_id or not store_id or not project:
+            return empty
+        cutoff = _project_evidence_time(evidence_cutoff)
+
+        def json_value(column: str, path: str) -> str:
+            if self.database_engine == "postgres":
+                return f"{column} #>> '{{{path.replace('.', ',')}}}'"
+            return f"case when json_valid({column}) then json_extract({column}, '$.{path}') end"
+
+        def identity(columns: tuple[tuple[str, tuple[str, ...]], ...]) -> tuple[str, list[str]]:
+            full_keys, legacy_keys, compatibility = [], [], []
+
+            def valid_key(value: str) -> str:
+                if self.database_engine != "postgres":
+                    return f"jiejing_evidence_key({value})"
+                normalized = f"substr(trim(coalesce({value}, '')), 1, 160)"
+                return f"case when {normalized} ~ '^[[:alnum:]_.:-]+$' then {normalized} end"
+
+            for column, prefixes in columns:
+                for prefix in prefixes:
+                    for suffix, destination in (("listing_project_identity.key", full_keys), ("listing_project_key", legacy_keys)):
+                        path = f"{prefix}.{suffix}" if prefix else suffix
+                        destination.append(valid_key(json_value(column, path)))
+                compatibility.append(
+                    f"({column} #> '{{legacy_project_identity_compatible}}') = 'true'::jsonb"
+                    if self.database_engine == "postgres" else
+                    f"case when json_valid({column}) then json_type({column}, '$.legacy_project_identity_compatible') = 'true' else 0 end"
+                )
+            # Match the reducer's first-valid full identity. A stale secondary
+            # key or an unapproved legacy key must not consume this window.
+            legacy = f"case when ({' or '.join(compatibility)}) then coalesce({', '.join(legacy_keys)}, null) end"
+            return f"coalesce({', '.join(full_keys)}, {legacy}) = ?", [project]
+
+        def before(column: str) -> str:
+            return f"{column} <= ?" if self.database_engine == "postgres" else f"jiejing_evidence_time({column}) <= ?"
+
+        task_match, task_params = identity((("t.input_json", ("",)), ("t.output_json", ("",))))
+        report_match, report_params = identity((("r.report_json", ("",)),))
+        confirmation_match, confirmation_params = identity((("c.item_json", ("",)),))
+        media_match, media_params = identity((("m.media_job_json", ("", "job_spec", "job_spec.inputs.product_facts")),))
+        chat_match, chat_params = identity((("h.turn_json", ("",)),))
+        source_report_match = "(" + " or ".join(
+            f"r.report_id = {json_value(column, 'listing_project_identity.' + field)}"
+            for column in ("t.input_json", "t.output_json")
+            for field in ("source_report_id", "source_id")
+        ) + ")"
+
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                # SQLite stores ISO text; normalise offsets without losing
+                # microseconds as julianday()/strftime('%f') would do.
+                conn.create_function("jiejing_evidence_time", 1, _project_evidence_time, deterministic=True)
+                conn.create_function("jiejing_evidence_key", 1, _project_evidence_key, deterministic=True)
+            task_rows = conn.execute(
+                f"""select t.* from tasks t
+                where t.company_id = ? and t.store_id = ? and {before('t.updated_at')}
+                  and ({task_match} or exists (
+                    select 1 from reports r where r.task_id = t.task_id
+                    and {before('r.created_at')} and {report_match}))
+                order by t.created_at desc, t.task_id desc limit 500""",
+                (company_id, store_id, cutoff, *task_params, cutoff, *report_params),
+            ).fetchall()
+            report_rows = conn.execute(
+                f"""select r.*, t.company_id, t.store_id from reports r
+                join tasks t on t.task_id = r.task_id
+                where t.company_id = ? and t.store_id = ?
+                  and {before('t.updated_at')} and {before('r.created_at')}
+                  and ({report_match} or ({task_match} and {source_report_match}))
+                order by r.created_at desc, r.report_id desc limit 500""",
+                (company_id, store_id, cutoff, cutoff, *report_params, *task_params),
+            ).fetchall()
+            confirmation_rows = conn.execute(
+                f"""select c.* from confirmations c
+                where c.company_id = ? and c.store_id = ?
+                  and {before('c.created_at')} and {confirmation_match}
+                order by c.created_at desc, c.confirmation_id desc limit 500""",
+                (company_id, store_id, cutoff, *confirmation_params),
+            ).fetchall()
+            execution_rows = conn.execute(
+                f"""select e.* from execution_results e
+                join confirmations c on c.confirmation_id = e.confirmation_id
+                where c.company_id = ? and c.store_id = ?
+                  and {before('c.created_at')} and {before('e.created_at')}
+                  and {confirmation_match}
+                order by e.created_at desc, e.execution_id desc limit 500""",
+                (company_id, store_id, cutoff, cutoff, *confirmation_params),
+            ).fetchall()
+            media_rows = conn.execute(
+                f"""select m.* from media_asset_jobs m
+                where m.company_id = ? and m.store_id = ?
+                  and {before('m.updated_at')} and {media_match}
+                order by m.updated_at desc, m.media_job_id desc limit 200""",
+                (company_id, store_id, cutoff, *media_params),
+            ).fetchall()
+            chat_rows = conn.execute(
+                f"""select h.* from ai_ceo_chat_turns h
+                where h.company_id = ? and h.user_id = ?
+                  and (h.store_id = ? or h.store_id is null or h.store_id = '')
+                  and {before('h.updated_at')} and {chat_match}
+                order by h.created_at desc, h.chat_turn_id desc limit 50""",
+                (company_id, user_id, store_id, cutoff, *chat_params),
+            ).fetchall() if user_id else []
+
+            # At most 500 parent keys per query; do not let a separate task or
+            # confirmation window erase otherwise selected authoritative proof.
+            task_ids = {str(row["task_id"]) for row in task_rows}
+            missing_tasks = sorted({str(row["task_id"]) for row in report_rows} - task_ids)
+            if missing_tasks:
+                task_rows.extend(conn.execute(
+                    f"select * from tasks where company_id = ? and store_id = ? "
+                    f"and {before('updated_at')} and task_id in ({','.join('?' for _ in missing_tasks)})",
+                    (company_id, store_id, cutoff, *missing_tasks),
+                ).fetchall())
+            confirmation_ids = {str(row["confirmation_id"]) for row in confirmation_rows}
+            missing_confirmations = sorted({str(row["confirmation_id"]) for row in execution_rows} - confirmation_ids)
+            if missing_confirmations:
+                confirmation_rows.extend(conn.execute(
+                    f"select * from confirmations where company_id = ? and store_id = ? "
+                    f"and {before('created_at')} and confirmation_id in ({','.join('?' for _ in missing_confirmations)})",
+                    (company_id, store_id, cutoff, *missing_confirmations),
+                ).fetchall())
+
+        return {
+            "tasks": [self._task_row_to_dict(row) for row in task_rows],
+            "reports": [self._report_row_to_dict(row) for row in report_rows],
+            "confirmations": [self._confirmation_row_to_dict(row) for row in confirmation_rows],
+            "executions": [self._execution_row_to_dict(row) for row in execution_rows],
+            "media_jobs": [self._media_asset_job_row_to_dict(row) for row in media_rows],
+            "chat_turns": [self._ai_ceo_chat_turn_row_to_dict(row) for row in reversed(chat_rows)],
+        }
+
     def list_tasks(self, *, company_id: str, store_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         self.initialize()
         params: list[Any] = [company_id]
@@ -6440,7 +6640,8 @@ class SaaSRepository:
         user_id: str,
         turns: list[dict[str, Any]],
         limit: int = 30,
-    ) -> list[dict[str, Any]]:
+        return_page: bool = False,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
         """Merge a user's sanitized device history into the account timeline."""
 
         self.initialize()
@@ -6456,74 +6657,9 @@ class SaaSRepository:
             prepared_turns.append(turn)
         with self._connect() as conn:
             for turn in prepared_turns:
-                store_id = str(turn.get("store_id") or "") or None
-                assistant_id = str(turn["assistant_id"])
-                chat_turn_id = _scoped_ai_ceo_chat_turn_id(
-                    company_id=company_id,
-                    user_id=user_id,
-                    assistant_id=assistant_id,
-                )
-                updated_at = now_iso()
-                existing_row = conn.execute(
-                    "select * from ai_ceo_chat_turns where company_id = ? and user_id = ? and assistant_id = ?",
-                    (company_id, user_id, assistant_id),
-                ).fetchone()
-                if existing_row:
-                    existing_turn = self._ai_ceo_chat_turn_row_to_dict(existing_row)
-                    if _ai_ceo_chat_turn_content_score(existing_turn) >= _ai_ceo_chat_turn_content_score(turn):
-                        enriched_identity = _merge_ai_ceo_chat_listing_identity(existing_turn, turn)
-                        if not enriched_identity:
-                            continue
-                        turn = {
-                            **existing_turn,
-                            "listing_project_identity": enriched_identity,
-                            "updated_at": str(turn.get("updated_at") or now_iso())[:80],
-                        }
-                payload = json.dumps(turn, ensure_ascii=False, default=json_default)
-                merge_score = _ai_ceo_chat_turn_merge_score(turn)
-                conn.execute(
-                    """
-                    insert into ai_ceo_chat_turns (
-                      chat_turn_id, company_id, user_id, store_id, assistant_id, status, route,
-                      merge_score, created_at, updated_at, turn_json
-                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    on conflict (company_id, user_id, assistant_id) do update set
-                      store_id = excluded.store_id,
-                      status = excluded.status,
-                      route = excluded.route,
-                      merge_score = excluded.merge_score,
-                      created_at = excluded.created_at,
-                      updated_at = excluded.updated_at,
-                      turn_json = excluded.turn_json
-                    where excluded.merge_score > ai_ceo_chat_turns.merge_score
-                    """,
-                    (
-                        chat_turn_id,
-                        company_id,
-                        user_id,
-                        store_id,
-                        assistant_id,
-                        str(turn.get("status") or "completed")[:80],
-                        str(turn.get("route") or "general_chat")[:80],
-                        merge_score,
-                        str(turn.get("created_at") or updated_at)[:80],
-                        updated_at,
-                        payload,
-                    ),
-                )
-            retained_rows = conn.execute(
-                """
-                select chat_turn_id from ai_ceo_chat_turns
-                where company_id = ? and user_id = ?
-                order by created_at desc, updated_at desc, chat_turn_id desc
-                """,
-                (company_id, user_id),
-            ).fetchall()
-            for stale_row in retained_rows[50:]:
-                conn.execute(
-                    "delete from ai_ceo_chat_turns where company_id = ? and user_id = ? and chat_turn_id = ?",
-                    (company_id, user_id, stale_row["chat_turn_id"]),
-                )
+                self._merge_ai_ceo_chat_turn(conn, company_id=company_id, user_id=user_id, turn=turn)
+            # A device submits only a recent slice. Missing turns are not a
+            # deletion request; historical account conversations stay stored.
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -6543,26 +6679,95 @@ class SaaSRepository:
                     "secret_exposed": False,
                 },
             )
-        return self.list_ai_ceo_chat_history(company_id=company_id, user_id=user_id, limit=limit)
+        page = self.page_ai_ceo_chat_history(company_id=company_id, user_id=user_id, limit=limit)
+        return page if return_page else page["turns"]
+
+    def _merge_ai_ceo_chat_turn(self, conn: Any, *, company_id: str, user_id: str, turn: dict[str, Any],
+                              server_finalized: bool = False) -> None:
+        """Shared sanitized merge, using the caller's transaction and account scope."""
+        turn = dict(turn)
+        assistant_id = str(turn["assistant_id"])
+        chat_turn_id = _scoped_ai_ceo_chat_turn_id(company_id=company_id, user_id=user_id, assistant_id=assistant_id)
+        updated_at = now_iso()
+        existing_row = conn.execute(
+            "select * from ai_ceo_chat_turns where company_id = ? and user_id = ? and assistant_id = ?",
+            (company_id, user_id, assistant_id),
+        ).fetchone()
+        if existing_row and not server_finalized:
+            existing_payload = _load_json_field(existing_row["turn_json"])
+            if isinstance(existing_payload, dict) and existing_payload.get("archive_contract") == "server_finalized_chat_archive_v1":
+                return
+            existing_turn = self._ai_ceo_chat_turn_row_to_dict(existing_row)
+            if _ai_ceo_chat_turn_content_score(existing_turn) >= _ai_ceo_chat_turn_content_score(turn):
+                enriched_identity = _merge_ai_ceo_chat_listing_identity(existing_turn, turn)
+                if not enriched_identity:
+                    return
+                turn = {**existing_turn, "listing_project_identity": enriched_identity,
+                        "updated_at": str(turn.get("updated_at") or updated_at)[:80]}
+            turn["created_at"] = str(existing_row["created_at"])
+        else:
+            try:
+                created_at = _project_evidence_time(turn.get("created_at") or updated_at)
+                datetime.fromisoformat(created_at)
+            except (TypeError, ValueError, OverflowError):
+                created_at = _project_evidence_time(updated_at)
+            turn["created_at"] = created_at
+        # The predicate also protects against a SYNC that read the row before
+        # terminal finalization committed. Only the request transaction may
+        # establish/replace its own canonical server archive.
+        archive_marker = ("ai_ceo_chat_turns.turn_json ->> 'archive_contract'" if self.database_engine == "postgres"
+                          else "json_extract(ai_ceo_chat_turns.turn_json, '$.archive_contract')")
+        update_anchor = ", created_at = excluded.created_at" if server_finalized else ""
+        merge_condition = "" if server_finalized else (
+            " where excluded.merge_score > ai_ceo_chat_turns.merge_score"
+            f" and coalesce({archive_marker}, '') <> 'server_finalized_chat_archive_v1'")
+        conn.execute(
+            f"""insert into ai_ceo_chat_turns (
+              chat_turn_id, company_id, user_id, store_id, assistant_id, status, route,
+              merge_score, created_at, updated_at, turn_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict (company_id, user_id, assistant_id) do update set
+              store_id = excluded.store_id, status = excluded.status, route = excluded.route,
+              merge_score = excluded.merge_score, updated_at = excluded.updated_at, turn_json = excluded.turn_json
+              {update_anchor} {merge_condition}""",
+            (chat_turn_id, company_id, user_id, str(turn.get("store_id") or "") or None, assistant_id,
+             str(turn.get("status") or "completed")[:80], str(turn.get("route") or "general_chat")[:80],
+             _ai_ceo_chat_turn_merge_score(turn), str(turn.get("created_at") or updated_at)[:80], updated_at,
+             json.dumps(turn, ensure_ascii=False, default=json_default)),
+        )
 
     def ai_ceo_chat_history_revision(self, *, company_id: str, user_id: str) -> str:
         self.initialize()
         with self._connect() as conn:
+            count_row = conn.execute(
+                "select count(*) as turn_count from ai_ceo_chat_turns where company_id = ? and user_id = ?",
+                (company_id, user_id),
+            ).fetchone()
+            updated = "updated_at"
+            if self.database_engine != "postgres":
+                conn.create_function("jiejing_evidence_time", 1, _project_evidence_time, deterministic=True)
+                updated = "jiejing_evidence_time(updated_at)"
             rows = conn.execute(
-                """
+                f"""
                 select assistant_id, status, updated_at, turn_json
                 from ai_ceo_chat_turns
                 where company_id = ? and user_id = ?
-                order by assistant_id
+                order by {updated} desc, chat_turn_id desc
+                limit 50
                 """,
                 (company_id, user_id),
             ).fetchall()
-        revision_payload = [
-            [str(row["assistant_id"] or ""), str(row["status"] or ""), str(row["updated_at"] or ""), str(row["turn_json"] or "")]
+        # Retention is not the model/display window. Polling must not pull every
+        # archived JSON payload into memory just to detect a new merge.
+        turn_count = int(count_row["turn_count"] or 0)
+        revision_payload = [turn_count, [
+            [str(row["assistant_id"] or ""), str(row["status"] or ""),
+             _project_evidence_time(row["updated_at"]), _load_json_field(row["turn_json"])]
             for row in rows
-        ]
-        digest = hashlib.sha256(json.dumps(revision_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
-        return f"chatrev_{len(rows)}_{digest}"
+        ]]
+        digest = hashlib.sha256(json.dumps(revision_payload, ensure_ascii=False, sort_keys=True, default=json_default,
+                                           separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+        return f"chatrev_{turn_count}_{digest}"
 
     def list_ai_ceo_chat_history(
         self,
@@ -6571,19 +6776,64 @@ class SaaSRepository:
         user_id: str,
         limit: int = 30,
     ) -> list[dict[str, Any]]:
+        return self.page_ai_ceo_chat_history(company_id=company_id, user_id=user_id, limit=limit)["turns"]
+
+    def page_ai_ceo_chat_history(
+        self, *, company_id: str, user_id: str, limit: int = 30, cursor: str = "",
+    ) -> dict[str, Any]:
+        """Return one bounded account page, with an ownership-checked keyset anchor."""
         self.initialize()
         bounded_limit = min(max(int(limit or 30), 1), 50)
+        anchor_id = ""
+        if cursor:
+            try:
+                if not isinstance(cursor, str) or len(cursor) > 300 or not cursor.startswith("chatpage_v1_"):
+                    raise ValueError("invalid chat history cursor")
+                encoded = cursor[len("chatpage_v1_"):]
+                anchor_id = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True).decode("ascii")
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", anchor_id):
+                    raise ValueError("invalid chat history cursor")
+            except (ValueError, UnicodeError):
+                raise ValueError("invalid chat history cursor") from None
         with self._connect() as conn:
+            created = "created_at"
+            if self.database_engine != "postgres":
+                conn.create_function("jiejing_evidence_time", 1, _project_evidence_time, deterministic=True)
+                created = "jiejing_evidence_time(created_at)"
+            params: list[Any] = [company_id, user_id]
+            older = ""
+            if anchor_id:
+                anchor = conn.execute(
+                    "select created_at, chat_turn_id from ai_ceo_chat_turns "
+                    "where company_id = ? and user_id = ? and chat_turn_id = ?",
+                    (company_id, user_id, anchor_id),
+                ).fetchone()
+                if not anchor:
+                    raise ValueError("invalid chat history cursor")
+                anchor_time = _project_evidence_time(anchor["created_at"])
+                older = f"and ({created} < ? or ({created} = ? and chat_turn_id < ?))"
+                params.extend((anchor_time, anchor_time, anchor_id))
+            params.append(bounded_limit + 1)
             rows = conn.execute(
-                """
+                f"""
                 select * from ai_ceo_chat_turns
                 where company_id = ? and user_id = ?
-                order by created_at desc, updated_at desc, chat_turn_id desc
+                {older}
+                order by {created} desc, chat_turn_id desc
                 limit ?
                 """,
-                (company_id, user_id, bounded_limit),
+                tuple(params),
             ).fetchall()
-        return [self._ai_ceo_chat_turn_row_to_dict(row) for row in reversed(rows)]
+        has_more = len(rows) > bounded_limit
+        selected = rows[:bounded_limit]
+        next_cursor = ""
+        if has_more and selected:
+            next_cursor = "chatpage_v1_" + base64.urlsafe_b64encode(str(selected[-1]["chat_turn_id"]).encode("ascii")).decode("ascii").rstrip("=")
+        return {
+            "turns": [self._ai_ceo_chat_turn_row_to_dict(row) for row in reversed(selected)],
+            "has_more": has_more, "next_cursor": next_cursor, "page_size": bounded_limit,
+            "pagination_contract": "2026-09-05-ai-ceo-history-keyset-v1",
+        }
 
     def refresh_merchant_memory_from_existing_records(
         self,
@@ -17801,6 +18051,24 @@ def _load_json_field(value: Any) -> Any:
     if isinstance(value, (bytes, bytearray)):
         return json.loads(value.decode("utf-8"))
     return json.loads(value)
+
+
+def _project_evidence_key(value: Any) -> str | None:
+    text = str(value or "").strip()[:160]
+    return text if text and all(character.isalnum() or character in "._:-" for character in text) else None
+
+
+def _project_evidence_time(value: Any) -> str:
+    """Comparable UTC text for SQLite evidence timestamps, including offsets."""
+    text = str(value or "").strip()
+    try:
+        normalized = f"{text[:-1]}+00:00" if text.endswith(("Z", "z")) else text
+        instant = datetime.fromisoformat(normalized)
+    except ValueError:
+        return text
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    return instant.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _model_usage_required_sql(*, database_engine: str, alias: str) -> str:

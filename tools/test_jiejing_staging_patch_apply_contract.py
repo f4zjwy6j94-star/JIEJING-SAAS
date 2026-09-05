@@ -229,6 +229,8 @@ def main() -> int:
         "tools/test_jiejing_infra_cutover_rehearsal.py",
         "tools/jiejing_deploy_channel_doctor.py",
         "tools/jiejing_prepare_public_staging_bundle.py",
+        "tools/jiejing_release_gate_evidence.py",
+        "tools/test_jiejing_release_gate_evidence.py",
         "tools/jiejing_staging_deploy.py",
         "tools/test_jiejing_staging_deploy_channel_contract.py",
         "tools/test_jiejing_staging_deploy_disk_guard.py",
@@ -558,6 +560,11 @@ def main() -> int:
     python_compile_block = text[python_compile_start:python_compile_end]
     if ".js" in python_compile_block:
         return fail("patch apply must not pass JavaScript files to python py_compile")
+    for path in ("tools/jiejing_release_gate_evidence.py", "tools/test_jiejing_release_gate_evidence.py"):
+        if path not in python_compile_block:
+            return fail(f"source-bound gate evidence dependency must be syntax checked: {path}")
+    if precloud_gate.count('("source_bound_release_gate_evidence", [sys.executable, "tools/test_jiejing_release_gate_evidence.py"])') != 1:
+        return fail("source-bound release gate regression must execute exactly once")
     node_check_start = text.index('NODE_BIN="${JIEJING_NODE_BIN:-node}"')
     node_check_end = text.index('COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"', node_check_start)
     node_check_block = text[node_check_start:node_check_end]
@@ -567,6 +574,26 @@ def main() -> int:
     ):
         if marker not in node_check_block:
             return fail(f"patch apply Node syntax check missing Listing workflow file: {marker}")
+    workflow_browser_checks = {
+        "ai_ceo_history_pagination_browser": "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js",
+        "listing_backend_restore_browser": "tools/test_jiejing_listing_backend_restore.js",
+        "workflow_entry_feedback": "tools/test_jiejing_workflow_entry_feedback.js",
+    }
+    whitelist_start = text.index("FILES=(\n")
+    whitelist_end = text.index("\n)", whitelist_start)
+    whitelist_lines = {line.strip() for line in text[whitelist_start:whitelist_end].splitlines()}
+    node_check_lines = {line.strip() for line in node_check_block.splitlines()}
+    missing_workflow_wiring = []
+    for check_name, script_path in workflow_browser_checks.items():
+        if f'"{script_path}"' not in whitelist_lines:
+            missing_workflow_wiring.append(f"bundle whitelist: {script_path}")
+        if f'"$NODE_BIN" --check {script_path}' not in node_check_lines:
+            missing_workflow_wiring.append(f"Node syntax check: {script_path}")
+        gate_entry = f'("{check_name}", ["node", "{script_path}"])'
+        if precloud_gate.count(gate_entry) != 1:
+            missing_workflow_wiring.append(f"exactly one precloud check: {check_name}")
+    if missing_workflow_wiring:
+        return fail("workflow browser regressions must ship and run: " + "; ".join(missing_workflow_wiring))
     for marker in [
         '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',

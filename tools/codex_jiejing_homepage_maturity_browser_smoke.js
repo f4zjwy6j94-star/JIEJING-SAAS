@@ -343,6 +343,19 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
       reduced_motion_marker: workflowScope?.querySelector('[data-home-motion-policy="respect-reduced-motion"]') !== null,
       auto_rotate_state: workflowScope?.querySelector('[data-home-material-studio="listing-media-v3"]')?.dataset.homeAutoRotate,
       horizontal_overflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
+      hero_type: (() => {
+        const heading = heroScope?.querySelector("h1");
+        const style = heading && getComputedStyle(heading);
+        const size = parseFloat(style?.fontSize || "0");
+        const width = heading?.getBoundingClientRect().width || 0;
+        const lineHeight = parseFloat(style?.lineHeight || "0");
+        return {
+          font_size: size,
+          line_height_ratio: size ? lineHeight / size : 0,
+          column_size_ratio: width ? size / width : 1,
+          readable: Boolean(size >= 32 && lineHeight >= size * 1.1 && width >= size / 0.14),
+        };
+      })(),
     };
   });
   state.workflow_default_goal = initialWorkflow.synchronized && initialWorkflow.active_step === "goal";
@@ -636,6 +649,44 @@ async function inspectExpiredSessionHint(browser) {
   };
 }
 
+async function inspectResponsiveAuth(browser) {
+  const results = [];
+  for (const viewport of [{ width: 320, height: 568 }, { width: 390, height: 460 }, { width: 390, height: 844 }, { width: 680, height: 700 }, { width: 681, height: 700 }, { width: 720, height: 900 }, { width: 768, height: 900 }, { width: 1024, height: 900 }]) {
+    const context = await browser.newContext({ viewport, deviceScaleFactor: 1 });
+    await installStaticRoute(context);
+    const page = await context.newPage();
+    const errors = [];
+    const posts = [];
+    page.on("pageerror", (error) => errors.push(String(error)));
+    page.on("request", (request) => { if (request.method() === "POST") posts.push(request.url()); });
+    await page.goto(`${base}/index.html`, { waitUntil: "domcontentloaded" });
+    await page.locator("#heroWorkbenchLogin").click();
+    await page.waitForSelector("#nextStepModal.is-open");
+    await page.locator(".entry-modal-panel").evaluate((panel) => Promise.all(
+      panel.getAnimations().map((animation) => animation.finished.catch(() => {})),
+    ));
+    const geometry = await page.evaluate(() => {
+      const box = (selector) => document.querySelector(selector).getBoundingClientRect().toJSON();
+      const email = box("#entryAuthEmail"), password = box("#entryAuthPassword");
+      const title = box("#nextStepTitle"), close = box("#nextStepModal .modal-close");
+      const shell = box(".entry-auth-shell");
+      return { email, password, title, close, shell,
+        ok: [email, password].every((item) => item.width >= 160 && item.left >= 0 && item.right <= innerWidth + 1) &&
+          title.top >= 0 && title.width >= 200 && close.top >= 0 && close.bottom <= innerHeight &&
+          shell.width >= 260 && shell.left >= 0 && shell.right <= innerWidth + 1 };
+    });
+    if (geometry.ok) {
+      await page.locator("#entryAuthEmail").fill("layout@example.invalid");
+      await page.locator("#entryAuthPassword").fill("local-only-not-submitted");
+      await page.getByRole("button", { name: "关闭", exact: true }).click();
+    }
+    const closed = await page.evaluate(() => !document.querySelector("#nextStepModal").classList.contains("is-open"));
+    results.push({ viewport, geometry, closed, errors, posts, ok: geometry.ok && closed && errors.length === 0 && posts.length === 0 });
+    await context.close();
+  }
+  return { results, ok: results.every((item) => item.ok) };
+}
+
 async function main() {
   const browser = await chromium.launch({ channel: browserChannel, headless: true });
   try {
@@ -652,7 +703,8 @@ async function main() {
     const touchInteractions = await inspectTouchInteractions(browser);
     const javascriptDisabled = await inspectJavascriptDisabled(browser);
     const expiredSessionHint = await inspectExpiredSessionHint(browser);
-    const ok = keyboardFirst.ok && touchInteractions.ok && javascriptDisabled.ok && expiredSessionHint.ok && results.every(
+    const responsiveAuth = await inspectResponsiveAuth(browser);
+    const ok = responsiveAuth.ok && keyboardFirst.ok && touchInteractions.ok && javascriptDisabled.ok && expiredSessionHint.ok && results.every(
       (item) =>
         item.body_version &&
         item.section_count === 6 &&
@@ -714,13 +766,14 @@ async function main() {
         item.reduced_motion_marker &&
         item.auto_rotate_state === "false" &&
         item.horizontal_overflow <= 1 &&
+        item.hero_type.readable &&
         item.page_errors.length === 0 &&
         item.console_issues.length === 0 &&
         item.bad_responses.length === 0 &&
         (item.name !== "desktop" || (item.primary_cta_opens_auth === true && item.material_rotate_interval_valid === true && item.material_default_static === true && item.material_first_user_switch === true && item.material_all_options_exercised === true && item.material_keyboard_focus_ready === true && item.material_enter_selection === true && item.material_space_selection === true && item.material_user_stops_rotation === true && item.hero_keyboard_navigated === true && item.hero_keyboard_relation_active === true && item.hero_pointer_relation_active === true && item.workflow_keyboard_navigated === true && item.workflow_keyboard_switch === true && item.workflow_cta_opens_entry?.auth_mode === true && item.workflow_cta_opens_entry?.login_form_visible === true && Boolean(item.workflow_cta_opens_entry?.modal_title))) &&
         (item.name !== "reduced-motion" || (item.reduced_motion_static === true && item.reduced_motion_no_rotation === true)),
     );
-    console.log(JSON.stringify({ ok, results, keyboard_first: keyboardFirst, touch_interactions: touchInteractions, javascript_disabled: javascriptDisabled, expired_session_hint: expiredSessionHint, no_login_performed: true, no_real_world_action: true }, null, 2));
+    console.log(JSON.stringify({ ok, results, keyboard_first: keyboardFirst, touch_interactions: touchInteractions, javascript_disabled: javascriptDisabled, expired_session_hint: expiredSessionHint, responsive_auth: responsiveAuth, no_login_performed: true, no_real_world_action: true }, null, 2));
     if (!ok) process.exitCode = 1;
   } finally {
     await browser.close();

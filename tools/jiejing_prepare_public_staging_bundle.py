@@ -13,6 +13,11 @@ import zipfile
 from pathlib import Path
 from typing import Iterable
 
+try:
+    from jiejing_release_gate_evidence import load_gate_report, load_release_checks, tracked_index_flags_safe
+except ModuleNotFoundError:
+    from tools.jiejing_release_gate_evidence import load_gate_report, load_release_checks, tracked_index_flags_safe
+
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "jiejing-public-staging-bundle"
@@ -51,6 +56,11 @@ def main() -> int:
     args = parser.parse_args()
 
     source_commit = _clean_source_commit()
+    release_gate_proof = load_gate_report(
+        ROOT / "output" / "jiejing-precloud-deployment-gate" / "latest.json",
+        source_commit, _git_value("rev-parse", f"{source_commit}^{{tree}}"),
+        load_release_checks(ROOT), ROOT,
+    )
     whitelist = _apply_patch_file_list(source_commit)
     files = list(_iter_bundle_files(whitelist))
     worktree_fingerprints = _worktree_fingerprints(files)
@@ -68,6 +78,7 @@ def main() -> int:
         "bundle": "public_staging",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source_commit": source_commit,
+        "release_gate_proof": release_gate_proof,
         "file_count": len(files),
         "files": [str(path.relative_to(ROOT)).replace("\\", "/") for path in files],
         "files_sha256": files_sha256,
@@ -184,6 +195,8 @@ def _clean_source_commit() -> str:
     dirty = _git_value("status", "--porcelain", "--untracked-files=all")
     if dirty:
         raise RuntimeError("refusing to prepare bundle from dirty git worktree")
+    if not tracked_index_flags_safe(ROOT):
+        raise RuntimeError("bundle_source_hidden_tracking_flags")
     return source_commit
 
 
@@ -208,6 +221,8 @@ def _assert_source_unchanged(expected_commit: str) -> None:
         raise RuntimeError("source commit changed during bundle preparation")
     if _git_value("status", "--porcelain", "--untracked-files=all"):
         raise RuntimeError("git worktree changed during bundle preparation")
+    if not tracked_index_flags_safe(ROOT):
+        raise RuntimeError("bundle_source_hidden_tracking_flags")
 
 
 def _worktree_fingerprints(files: list[Path]) -> dict[str, tuple[int, int, int, int, int]]:

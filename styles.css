@@ -46219,6 +46219,10 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer {
     height: calc(100dvh - 86px);
     padding: 12px 18px calc(12px + env(safe-area-inset-bottom, 0px)) !important;
   }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream:empty {
+    min-height: 0 !important;
+  }
 }
 
 @media (max-width: 700px) {
@@ -47785,6 +47789,18 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-task-context.is-collapsed
   box-shadow: 0 10px 24px rgba(22, 50, 44, 0.1);
 }
 
+@media (min-width: 701px) {
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-task-context.is-collapsed {
+    position: relative;
+    top: auto;
+    right: auto;
+    order: -1;
+    flex: 0 0 auto;
+    align-self: flex-end;
+    margin-bottom: 10px;
+  }
+}
+
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-task-context.is-collapsed .saas-ai-ceo-task-context-summary {
   min-height: 58px;
   padding: 10px 12px;
@@ -47799,9 +47815,13 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-task-context.is-collapsed
   }
 
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-task-context {
-    position: absolute;
-    top: 14px;
-    right: 14px;
+    position: relative;
+    top: auto;
+    right: auto;
+    order: -1;
+    flex: 0 0 auto;
+    align-self: flex-end;
+    margin-bottom: 10px;
     z-index: 30;
     width: min(320px, calc(100% - 28px));
   }
@@ -47877,6 +47897,8 @@ body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-
   body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chatgpt-layout.has-task-context.is-task-context-collapsed > .saas-ai-ceo-chat {
     width: 100% !important;
     max-width: none !important;
+    flex: 1 1 0;
+    height: 0;
   }
 }
 
@@ -47892,6 +47914,13 @@ body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-
   body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chatgpt-layout.has-task-context > .saas-ai-ceo-chat {
     width: 100% !important;
     max-width: none !important;
+  }
+}
+
+@media (min-width: 701px) and (max-width: 1100px) {
+  body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chatgpt-layout.has-task-context > .saas-ai-ceo-chat {
+    flex: 1 1 0;
+    height: 0;
   }
 }
 
