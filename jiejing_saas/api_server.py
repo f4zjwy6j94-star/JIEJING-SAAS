@@ -47,6 +47,7 @@ from .billing_domestic import (
     execute_approved_domestic_billing_refund,
     merchant_domestic_billing_order,
     open_domestic_billing_checkout,
+    platform_refund_review_packet,
     query_and_reconcile_domestic_billing_order,
     query_and_reconcile_domestic_billing_refund,
     reconcile_domestic_billing_orders,
@@ -121,7 +122,12 @@ from .merchant_onboarding import (
 )
 from .ip_risk_screening import build_ip_logo_brand_screening
 from .json_safe import json_default
-from .listing_draft_generation import generate_listing_draft, listing_draft_core_missing_fields
+from .listing_draft_generation import (
+    ListingDraftGenerationError,
+    generate_listing_draft,
+    listing_draft_core_missing_fields,
+    listing_draft_merchant_copy_failure,
+)
 from .model_value_gate import build_model_value_gate
 from .model_value_rehearsal import run_model_value_rehearsal
 from .model_provider_catalog import (
@@ -189,6 +195,7 @@ from .repository import (
     HIGH_RISK_ACTIONS,
     OAuthPlanExactApprovalError,
     SaaSRepository,
+    TeamSeatQuotaExceeded,
     ai_ceo_market_artifact_eligible,
     normalize_ai_ceo_supplier_fact_attestation,
     normalize_listing_project_identity,
@@ -2898,6 +2905,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"operations_detail": detail})
             return
 
+        if path == "owner/billing/domestic/refunds":
+            if not self._require_operations_console_request("SaaS refund review") or not self._require_platform_internal_admin(identity, "SaaS refund review"):
+                return
+            orders = self.repository.list_platform_refund_review_orders(limit=_query_limit(query, default=50, maximum=100) or 50)
+            self._send_json({"refund_reviews": [platform_refund_review_packet(self.repository, order, internal_admin_emails=self.settings.internal_admin_emails) for order in orders], "secret_exposed": False})
+            return
+
         if path == "billing/domestic/contract":
             contract = build_wechat_pay_native_contract()
             acceptance = self.repository.domestic_payment_acceptance_evidence()
@@ -4123,6 +4137,53 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if identity is None:
             return
 
+        if len(parts) == 6 and parts[:4] == ["owner", "billing", "domestic", "refunds"] and parts[5] in {"review", "execute", "query"}:
+            if not self._require_operations_console_request("SaaS refund operation") or not self._require_platform_internal_admin(identity, "SaaS refund operation"):
+                return
+            body = self._read_json_body()
+            company_id = str(body.get("company_id") or "").strip()
+            order = self.repository.get_domestic_billing_order(company_id=company_id, order_id=parts[4])
+            if not order:
+                self._send_error(HTTPStatus.NOT_FOUND, "domestic_billing_order_not_found")
+                return
+            packet = platform_refund_review_packet(self.repository, order)
+            if parts[5] == "review":
+                try:
+                    result = self.repository.review_platform_refund_confirmation(
+                        company_id=company_id, order_id=parts[4], confirmation_id=packet["confirmation_id"],
+                        reviewer_company_id=identity["company_id"], reviewer_user_id=identity["user_id"],
+                        internal_admin_emails=self.settings.internal_admin_emails,
+                        decision=str(body.get("decision") or ""), review_reason=str(body.get("review_reason") or ""),
+                    )
+                except PermissionError as exc:
+                    self._send_error(HTTPStatus.FORBIDDEN, str(exc))
+                    return
+                except KeyError:
+                    self._send_error(HTTPStatus.NOT_FOUND, "domestic_billing_order_not_found")
+                    return
+                except ConfirmationDecisionConflict:
+                    self._send_error(HTTPStatus.CONFLICT, "domestic_refund_review_state_conflict")
+                    return
+                except ValueError as exc:
+                    self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+                self._send_json({"refund_review": {"confirmation_id": result["confirmation_id"], "status": result["status"], "secret_exposed": False}}, status=HTTPStatus.CREATED)
+                return
+            if not self._check_domestic_reconciliation_rate_limit(identity):
+                return
+            if parts[5] == "execute":
+                if not hmac.compare_digest(str(body.get("exact_confirmation") or ""), packet["execution_confirmation"]):
+                    self._send_error(HTTPStatus.CONFLICT, "domestic_refund_exact_confirmation_required")
+                    return
+                result = execute_approved_domestic_billing_refund(
+                    self.repository, company_id=company_id, user_id=identity["user_id"], order_id=parts[4],
+                    operator_company_id=identity["company_id"], internal_admin_emails=self.settings.internal_admin_emails,
+                )
+            else:
+                result = query_and_reconcile_domestic_billing_refund(self.repository, company_id=company_id, order_id=parts[4], internal_admin_emails=self.settings.internal_admin_emails)
+            self._send_json({"domestic_billing_refund_execution" if parts[5] == "execute" else "domestic_billing_refund_query": result}, status=HTTPStatus.ACCEPTED if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)))
+            return
+
         if path == "owner/ebay/provider-restriction-resolution":
             if not self._require_operations_console_request("eBay provider restriction resolution evidence"):
                 return
@@ -4832,22 +4893,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "refund-execute":
-            if not self._require_permission(identity, "manage_billing"):
-                return
-            if not self._require_permission(identity, "approve_high_risk"):
-                return
-            if not self._check_domestic_reconciliation_rate_limit(identity):
-                return
-            result = execute_approved_domestic_billing_refund(
-                self.repository,
-                company_id=identity["company_id"],
-                user_id=identity["user_id"],
-                order_id=parts[3],
-            )
-            self._send_json(
-                {"domestic_billing_refund_execution": result},
-                status=HTTPStatus.ACCEPTED if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
-            )
+            self._send_error(HTTPStatus.FORBIDDEN, "domestic_refund_execution_requires_platform_operations")
             return
 
         if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "refund-query":
@@ -4859,6 +4905,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self.repository,
                 company_id=identity["company_id"],
                 order_id=parts[3],
+                internal_admin_emails=self.settings.internal_admin_emails,
             )
             self._send_json(
                 {"domestic_billing_refund_query": result},
@@ -5411,10 +5458,28 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     role=str(body.get("role") or "viewer"),
                     metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
                 )
+            except TeamSeatQuotaExceeded as exc:
+                self._send_json(
+                    {
+                        "error": "team_member_quota_exhausted",
+                        "merchant_message": (
+                            f"当前套餐包含 {exc.quota['limit']} 个团队席位（含账号所有者），"
+                            "现有成员和待加入邀请已占满；请在套餐与付款中选择更多席位的套餐。"
+                        ),
+                        "quota": exc.quota,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.PAYMENT_REQUIRED,
+                )
+                return
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
-            self._send_json({"team_invitation": invite, "real_platform_writes_enabled": False}, status=HTTPStatus.CREATED)
+            self._send_json(
+                {"team_invitation": invite, "real_platform_writes_enabled": False},
+                status=HTTPStatus.OK if invite.get("reused_existing") else HTTPStatus.CREATED,
+            )
             return
 
         if len(parts) == 3 and parts[0] == "stores" and parts[2] == "connections":
@@ -7988,10 +8053,33 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "chat": {},
                 "metered_task_factory": None,
                 "model_usage_persister": None,
+                "platform_trial_reservation": {},
+                "platform_trial_reservation_settlement": {},
                 "failure_stage": "dependency_resolution",
                 "attempt_failure_state": "failed_internal_dependency",
                 "attempt_failure_code": "internal_dependency_failed",
             }
+
+            def settle_platform_trial_for_usage(model_usage: dict[str, Any] | None) -> dict[str, Any]:
+                usage = model_usage if isinstance(model_usage, dict) else {}
+                request_count = max(0, int(usage.get("request_count") or 0))
+                if attempt_recovery_state.get("usage_consumed") is True and request_count <= 0:
+                    request_count = 1
+                try:
+                    settlement = self._settle_platform_model_trial_reservation(
+                        identity=identity,
+                        reservation=attempt_recovery_state.get("platform_trial_reservation"),
+                        request_count=request_count,
+                    )
+                except Exception:
+                    settlement = {
+                        "settled": False,
+                        "status": "settlement_failed",
+                        "provider_request_count": request_count,
+                        "secret_exposed": False,
+                    }
+                attempt_recovery_state["platform_trial_reservation_settlement"] = settlement
+                return settlement
 
             def update_model_attempt(
                 *,
@@ -8046,6 +8134,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     attempt_recovery_state.get("usage_consumed")
                     or int((model_usage or {}).get("request_count") or 0) > 0
                 )
+                settlement = settle_platform_trial_for_usage(model_usage)
                 actual_task_id = str(attempt_recovery_state.get("actual_task_id") or "")
                 actual_task: dict[str, Any] | None = None
                 if usage_consumed and not actual_task_id:
@@ -8138,10 +8227,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     )
                 except Exception:
                     pass
+                zero_request_quota_released = str(settlement.get("status") or "") in {
+                    "released",
+                    "unmetered",
+                }
                 answer = (
                     "模型调用已经发生，但没有返回可用结果或后续内部记录没有完成；本次未生成草稿，请勿立即重复提交，稍后查看任务记录。"
                     if usage_consumed
-                    else "内部依赖暂时不可用；本次未调用模型、未消耗次数、未生成草稿，请稍后重试。"
+                    else (
+                        "内部依赖暂时不可用；本次未调用模型、未消耗次数、未生成草稿，请稍后重试。"
+                        if zero_request_quota_released
+                        else "内部依赖暂时不可用；本次未调用模型、未生成草稿，试用次数状态正在核对，请稍后查看。"
+                    )
                 )
                 public_failure_status = (
                     "model_call_failed"
@@ -8177,6 +8274,19 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._active_ai_ceo_attempt_recovery = recover_unexpected_model_attempt
 
             def send_database_schema_blocked_attempt() -> None:
+                reservation_record = attempt_recovery_state.get("platform_trial_reservation")
+                reservation_id = (
+                    str(reservation_record.get("reservation_id") or "")
+                    if isinstance(reservation_record, dict)
+                    else ""
+                )
+                settlement_record = attempt_recovery_state.get("platform_trial_reservation_settlement")
+                settlement_status = (
+                    str(settlement_record.get("status") or "")
+                    if isinstance(settlement_record, dict)
+                    else ""
+                )
+                quota_released = not reservation_id or settlement_status in {"released", "unmetered"}
                 update_model_attempt(
                     attempt_state="blocked_database_schema",
                     task_status="blocked",
@@ -8188,7 +8298,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "ai_ceo_chat": {
                             "status": "blocked_before_model_chat",
                             "blocked_by": ["database_schema_unavailable"],
-                            "answer": "数据库结构检查未通过，本次未调用模型、未消耗次数、未生成草稿。请稍后重试。",
+                            "answer": (
+                                "数据库结构检查未通过，本次未调用模型、未消耗次数、未生成草稿。请稍后重试。"
+                                if quota_released
+                                else "数据库结构检查未通过，本次未调用模型、未生成草稿，试用次数状态正在核对。请稍后查看。"
+                            ),
                             **route_meta,
                             "frontend_gets_model_api_key": False,
                             "runtime_gets_raw_ebay_token": False,
@@ -8448,6 +8562,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     product_vision_report = self.repository.save_merchant_product_fact_report(
                         task=product_vision_task,
                         packet=product_vision_fact_packet,
+                        listing_project_identity=listing_project_identity,
                     )
                     product_vision_task = self.repository.update_task_status(
                         task_id=product_vision_task["task_id"],
@@ -8620,6 +8735,70 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
             attempt_recovery_state["metered_task_factory"] = ensure_metered_model_task
             attempt_recovery_state["model_usage_persister"] = persist_metered_model_usage
+            if model_secret_resolution.get("mode") == "platform_managed_default":
+                attempt_recovery_state["failure_stage"] = "platform_trial_reservation"
+                try:
+                    platform_trial_reservation = self._reserve_platform_model_trial(
+                        identity=identity,
+                        route_scope="merchant_ceo_chat",
+                    )
+                    attempt_recovery_state["platform_trial_reservation"] = platform_trial_reservation
+                except Exception as exc:
+                    if not self._is_database_unavailable_exception(exc):
+                        raise
+                    send_database_schema_blocked_attempt()
+                    return
+                platform_trial_quota = platform_trial_reservation.get("quota") or {}
+                model_secret_resolution["platform_trial_quota"] = platform_trial_quota
+                if platform_trial_reservation.get("allowed") is not True:
+                    trial_blocker = str(
+                        platform_trial_quota.get("blocked_by") or "platform_default_model_trial_exhausted"
+                    )
+                    trial_answer = (
+                        "当前账号已注册，但捷境提供的 AI 试用尚未激活；你也可以在设置中连接自己的模型。"
+                        if trial_blocker == "platform_trial_activation_required"
+                        else "当前账号的捷境 AI 免费体验已结束或额度已用完；你也可以在设置中连接自己的模型。"
+                    )
+                    trial_answer = f"{trial_answer} 本次未调用模型、未消耗新的次数、未生成草稿。"
+                    update_model_attempt(
+                        attempt_state="blocked_quota",
+                        task_status="blocked",
+                        failure_code=trial_blocker,
+                        summary="AI CEO attempt lost the atomic platform trial reservation before model usage.",
+                    )
+                    send_chat_payload(
+                        {
+                            "ai_ceo_chat": {
+                                "status": "blocked_before_model_chat",
+                                "blocked_by": [trial_blocker],
+                                "answer": trial_answer,
+                                **route_meta,
+                                "model_secret_resolution": {
+                                    key: value
+                                    for key, value in model_secret_resolution.items()
+                                    if key not in {"model_client", "secret_value"}
+                                },
+                                "platform_trial_quota": platform_trial_quota,
+                                "frontend_gets_model_api_key": False,
+                                "runtime_gets_raw_ebay_token": False,
+                                "secret_exposed": False,
+                            },
+                            "merchant_ceo_command": command_response,
+                            "model_secret_resolution": {
+                                key: value
+                                for key, value in model_secret_resolution.items()
+                                if key not in {"model_client", "secret_value"}
+                            },
+                            "usage_consumed": False,
+                            "listing_created": False,
+                            "ai_ceo_market_report": None,
+                            "ai_ceo_market_report_delivery": None,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.PAYMENT_REQUIRED,
+                    )
+                    return
             update_model_attempt(
                 attempt_state="model_running",
                 summary="AI CEO attempt entered the backend model boundary.",
@@ -8688,6 +8867,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 attempt_recovery_state["usage_consumed"] = bool(
                     int(model_usage_after_failure.get("request_count") or 0) > 0
                 )
+                settlement = settle_platform_trial_for_usage(model_usage_after_failure)
                 if attempt_recovery_state["usage_consumed"]:
                     attempt_recovery_state["failure_stage"] = "model_provider"
                     attempt_recovery_state["attempt_failure_state"] = "failed_model_provider"
@@ -8707,7 +8887,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "ai_ceo_chat": {
                             "status": "model_call_failed",
                             "blocked_by": ["model_runtime_failed"],
-                            "answer": "模型服务本次没有返回可用结果，未消耗次数、未生成草稿。请稍后重试。",
+                            "answer": (
+                                "模型服务本次没有返回可用结果，未消耗次数、未生成草稿。请稍后重试。"
+                                if str(settlement.get("status") or "") in {"released", "unmetered"}
+                                else "模型服务本次没有返回可用结果、未生成草稿，试用次数状态正在核对，请稍后查看。"
+                            ),
                             **route_meta,
                             "frontend_gets_model_api_key": False,
                             "runtime_gets_raw_ebay_token": False,
@@ -8727,6 +8911,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             provider_failure_code = str(chat.get("provider_error_type") or "")
             if provider_failure_code:
                 provider_failure_usage = metered_model_client.usage_summary()
+                provider_failure_settlement = settle_platform_trial_for_usage(provider_failure_usage)
                 if int(provider_failure_usage.get("request_count") or 0) > 0:
                     attempt_recovery_state["model_usage"] = provider_failure_usage
                     attempt_recovery_state["usage_consumed"] = True
@@ -8744,7 +8929,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     **chat,
                     "answer": (
                         f"{str(chat.get('answer') or '').strip()}\n\n"
-                        "本次未获得可用模型结果、未消耗次数、未生成草稿。"
+                        +
+                        (
+                            "本次未获得可用模型结果、未消耗次数、未生成草稿。"
+                            if str(provider_failure_settlement.get("status") or "") in {"released", "unmetered"}
+                            else "本次未获得可用模型结果、未生成草稿，试用次数状态正在核对。"
+                        )
                     ).strip(),
                 }
                 send_chat_payload(
@@ -8772,6 +8962,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             usage_consumed = bool(model_usage.get("request_count"))
             attempt_recovery_state["model_usage"] = model_usage
             attempt_recovery_state["usage_consumed"] = usage_consumed
+            settle_platform_trial_for_usage(model_usage)
             attempt_recovery_state["failure_stage"] = "model_task_persistence"
             task = ensure_metered_model_task()
             attempt_recovery_state["actual_task_id"] = task["task_id"]
@@ -8828,7 +9019,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "market_report_recovery_draft",
                 }
                 else "blocked",
-                output={"ai_ceo_chat": chat, "secret_exposed": False},
+                output={
+                    "ai_ceo_chat": chat,
+                    "usage_consumed": usage_consumed,
+                    "model_request_count": int(model_usage.get("request_count") or 0),
+                    "secret_exposed": False,
+                },
                 audit_summary="AI CEO chat turn completed through backend model boundary.",
             )
             update_model_attempt(
@@ -9659,54 +9855,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 source="authenticated_merchant_request",
             )
             listing_project_identity = normalize_listing_project_identity(body.get("listing_project_identity"))
+            if packet.get("sensitive_text_detected") is True:
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": ["listing_product_fact_sensitive_text"],
+                        "failure_code": "listing_product_fact_sensitive_text",
+                        "merchant_message": "商品资料中包含疑似凭证或密钥文本，请删除后再保存；本次没有保存记录。",
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                )
+                return
             if not packet.get("product_name"):
                 self._send_error(HTTPStatus.BAD_REQUEST, "商品名称还没有确认，不能保存商品资料。")
                 return
-            task_input = {
-                "merchant_product_fact_packet": packet,
-                "model_usage_required": False,
-                "real_platform_writes_enabled": False,
-                "secret_exposed": False,
-            }
-            if listing_project_identity:
-                task_input["listing_project_identity"] = listing_project_identity
-            task = self.repository.create_task(
+            response_payload = self.repository.save_merchant_product_fact_checkpoint(
                 company_id=identity["company_id"],
                 store_id=store_id,
                 user_id=identity["user_id"],
-                task_type="merchant_product_facts",
-                title=f"商品资料：{str(packet.get('product_name') or '')[:120]}",
-                input_data=task_input,
-            )
-            report = self.repository.save_merchant_product_fact_report(
-                task=task,
                 packet=packet,
                 listing_project_identity=listing_project_identity,
             )
-            task = self.repository.update_task_status(
-                task_id=task["task_id"],
-                company_id=identity["company_id"],
-                status="completed",
-                output={
-                    "report_id": report.get("report_id"),
-                    "unknown_fact_count": len(packet.get("unknown_facts") or []),
-                    "ready_for_listing_generation": bool(packet.get("listing_readiness", {}).get("ready_for_listing_generation")),
-                    "real_platform_writes_enabled": False,
-                    "secret_exposed": False,
-                },
-                audit_summary="Merchant product fact checkpoint completed without a model or platform write.",
-            )
-            response_payload = {
-                "task": task,
-                "report": report,
-                "merchant_product_fact_packet": packet,
-                "model_called": False,
-                "real_platform_writes_enabled": False,
-                "secret_exposed": False,
-            }
-            if listing_project_identity:
-                response_payload["listing_project_identity"] = listing_project_identity
-            self._send_json(response_payload, status=HTTPStatus.CREATED)
+            self._send_json(response_payload, status=HTTPStatus.OK if response_payload["idempotent_replay"] else HTTPStatus.CREATED)
             return
 
         if len(parts) == 4 and parts[0] == "stores" and parts[2:] == ["listing-drafts", "generate"]:
@@ -9723,6 +9899,23 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 source="authenticated_merchant_request",
             )
             listing_project_identity = normalize_listing_project_identity(body.get("listing_project_identity"))
+            if packet.get("sensitive_text_detected") is True:
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": ["listing_product_fact_sensitive_text"],
+                        "failure_code": "listing_product_fact_sensitive_text",
+                        "merchant_message": "商品资料中包含疑似凭证或密钥文本，请删除后再生成；本次未调用模型。",
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                )
+                return
             missing_core = listing_draft_core_missing_fields(packet)
             if not listing_project_identity.get("key"):
                 missing_core.append("listing_project_identity")
@@ -9741,7 +9934,38 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     }
                 )
                 return
-            if not self._require_quota(identity, "model_report_assist"):
+            merchant_copy_failure = listing_draft_merchant_copy_failure(
+                body.get("current_draft_fields"),
+                marketplace=str(store.get("marketplace") or "EBAY_US"),
+                merchant_product_fact_packet=packet,
+            )
+            if merchant_copy_failure:
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": [merchant_copy_failure],
+                        "failure_code": merchant_copy_failure,
+                        "merchant_message": "请先把商家手改文案调整为目标站点语言，并保留 3–5 条有事实依据的卖点。",
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    }
+                )
+                return
+            if not self._require_quota(
+                identity,
+                "model_report_assist",
+                extra_response={
+                    "merchant_message": "当前套餐的 AI/联网工作额度已用完；本次未调用模型、未消耗捷境试用次数，也没有保存 Listing。",
+                    "model_called": False,
+                    "usage_consumed": False,
+                    "report": None,
+                    "listing_project_identity": listing_project_identity,
+                },
+            ):
                 return
             model_resolution = self._resolve_model_client_for_store(
                 identity=identity,
@@ -9770,6 +9994,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     status=HTTPStatus.ACCEPTED,
                 )
                 return
+            if model_resolution.get("mode") == "platform_managed_default":
+                platform_trial_quota = self._platform_model_trial_quota(identity=identity)
+                safe_model_resolution["platform_trial_quota"] = platform_trial_quota
+                if platform_trial_quota.get("allowed") is not True:
+                    trial_blocker = str(
+                        platform_trial_quota.get("blocked_by") or "platform_default_model_trial_exhausted"
+                    )
+                    self._send_json(
+                        {
+                            "status": "blocked",
+                            "blocked_by": [trial_blocker],
+                            "merchant_message": (
+                                "捷境托管 AI 试用尚未激活，请先完成账号验证；你也可以在设置中连接自己的模型。"
+                                if trial_blocker == "platform_trial_activation_required"
+                                else "捷境托管 AI 试用额度已用完；你可以连接自己的模型，或选择适合的套餐。"
+                            ),
+                            "platform_trial_quota": platform_trial_quota,
+                            "model_resolution": safe_model_resolution,
+                            "model_called": False,
+                            "usage_consumed": False,
+                            "report": None,
+                            "listing_project_identity": listing_project_identity,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.PAYMENT_REQUIRED,
+                    )
+                    return
             packet_record = None
             requested_packet_id = str(body.get("packet_id") or "").strip()
             if requested_packet_id:
@@ -9781,6 +10033,39 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     packet_record = candidate
                 else:
                     self._send_error(HTTPStatus.NOT_FOUND, "eBay account data packet not found or not accessible")
+                    return
+            platform_trial_reservation: dict[str, Any] = {}
+            if model_resolution.get("mode") == "platform_managed_default":
+                platform_trial_reservation = self._reserve_platform_model_trial(
+                    identity=identity,
+                    route_scope="listing_draft_generation",
+                )
+                platform_trial_quota = platform_trial_reservation.get("quota") or {}
+                safe_model_resolution["platform_trial_quota"] = platform_trial_quota
+                if platform_trial_reservation.get("allowed") is not True:
+                    trial_blocker = str(
+                        platform_trial_quota.get("blocked_by") or "platform_default_model_trial_exhausted"
+                    )
+                    self._send_json(
+                        {
+                            "status": "blocked",
+                            "blocked_by": [trial_blocker],
+                            "merchant_message": (
+                                "捷境托管 AI 试用尚未激活，请先完成账号验证；你也可以在设置中连接自己的模型。"
+                                if trial_blocker == "platform_trial_activation_required"
+                                else "捷境托管 AI 试用额度已用完；你可以连接自己的模型，或选择适合的套餐。"
+                            ),
+                            "platform_trial_quota": platform_trial_quota,
+                            "model_resolution": safe_model_resolution,
+                            "model_called": False,
+                            "usage_consumed": False,
+                            "report": None,
+                            "listing_project_identity": listing_project_identity,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.PAYMENT_REQUIRED,
+                    )
                     return
             try:
                 result = generate_listing_draft(
@@ -9797,19 +10082,76 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     model_resolution=safe_model_resolution,
                     packet_record=packet_record,
                 )
-            except Exception:
+            except ListingDraftGenerationError as exc:
+                trial_settlement = self._settle_platform_model_trial_reservation(
+                    identity=identity,
+                    reservation=platform_trial_reservation,
+                    request_count=int((exc.model_usage or {}).get("request_count") or 0),
+                )
+                zero_request_released = str(trial_settlement.get("status") or "") in {
+                    "released",
+                    "unmetered",
+                }
                 self._send_json(
                     {
                         "status": "failed",
-                        "failure_code": "listing_model_generation_failed",
-                        "merchant_message": "AI 草稿生成暂时失败，商品资料已保留，请稍后重试。",
-                        "model_called": True,
+                        "failure_code": exc.failure_code,
+                        "merchant_message": (
+                            "AI 返回的文案没有通过语言或事实检查，系统已自动纠正一次但仍未通过；"
+                            "本次没有保存 Listing，也没有写入 eBay。商品资料已保留。"
+                            if exc.failure_code.startswith("listing_model_output_")
+                            else "商家编辑与 AI 草稿合并后没有通过语言或事实检查；本次没有保存 Listing，也没有写入 eBay。"
+                            if exc.failure_code.startswith("listing_final_copy_")
+                            else (
+                                "AI 草稿生成暂时失败；本次未消耗捷境试用次数，没有写入 eBay，商品资料已保留。"
+                                if not exc.usage_consumed and zero_request_released
+                                else "AI 草稿生成暂时失败；本次没有写入 eBay，商品资料已保留。"
+                            )
+                        ),
+                        "task_id": exc.task_id,
+                        "model_called": exc.model_called,
+                        "usage_consumed": exc.usage_consumed,
+                        "model_usage": exc.model_usage,
+                        "report": None,
                         "real_platform_writes_enabled": False,
                         "secret_exposed": False,
                     },
                     status=HTTPStatus.BAD_GATEWAY,
                 )
                 return
+            except Exception:
+                trial_settlement = self._settle_platform_model_trial_reservation(
+                    identity=identity,
+                    reservation=platform_trial_reservation,
+                    request_count=0,
+                )
+                zero_request_released = str(trial_settlement.get("status") or "") in {
+                    "released",
+                    "unmetered",
+                }
+                self._send_json(
+                    {
+                        "status": "failed",
+                        "failure_code": "listing_model_generation_failed",
+                        "merchant_message": (
+                            "AI 草稿生成暂时失败；本次未调用模型、未消耗捷境试用次数，没有写入 eBay，商品资料已保留。"
+                            if zero_request_released
+                            else "AI 草稿生成暂时失败；本次没有写入 eBay，商品资料已保留，试用次数状态正在核对。"
+                        ),
+                        "model_called": False if zero_request_released else None,
+                        "usage_consumed": False if zero_request_released else None,
+                        "report": None,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.BAD_GATEWAY,
+                )
+                return
+            self._settle_platform_model_trial_reservation(
+                identity=identity,
+                reservation=platform_trial_reservation,
+                request_count=int((result.get("model_usage") or {}).get("request_count") or 0),
+            )
             result["model_resolution"] = safe_model_resolution
             self._send_json(result, status=HTTPStatus.CREATED)
             return
@@ -9917,6 +10259,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "workers/run-next":
+            if not self._require_permission(identity, "create_task"):
+                return
             body = self._read_json_body()
             job_id = str(body.get("job_id") or "") or None
             result = self.queue_worker.run_next(company_id=identity["company_id"], job_id=job_id)
@@ -9925,6 +10269,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 3 and parts[0] == "queue-jobs" and parts[2] == "cancel":
+            if not self._require_permission(identity, "create_task"):
+                return
             body = self._read_json_body()
             try:
                 job = self.repository.cancel_queue_job(
@@ -9943,6 +10289,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 3 and parts[0] == "queue-jobs" and parts[2] == "retry":
+            if not self._require_permission(identity, "create_task"):
+                return
             body = self._read_json_body()
             try:
                 job = self.repository.retry_queue_job(
@@ -9961,6 +10309,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 2 and parts[0] == "queue-jobs" and parts[1] == "recover-stale":
+            if not self._require_permission(identity, "create_task"):
+                return
             body = self._read_json_body()
             stale_after = int(body.get("stale_after_seconds") or 900)
             limit = int(body.get("limit") or 50)
@@ -9979,12 +10329,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if not existing_confirmation:
                     self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
                     return
+                if _is_domestic_billing_refund_confirmation(existing_confirmation):
+                    self._send_error(HTTPStatus.FORBIDDEN, "domestic_refund_review_requires_platform_operations")
+                    return
                 decision_value = str(body.get("decision") or "")
-                if (
-                    decision_value == "approve"
-                    and existing_confirmation.get("action_type") in HIGH_RISK_ACTIONS
-                    and not self._require_permission(identity, "approve_high_risk")
-                ):
+                decision_permission = "approve_high_risk" if existing_confirmation.get("action_type") in HIGH_RISK_ACTIONS else "create_task"
+                if not self._require_permission(identity, decision_permission):
                     return
                 if decision_value == "approve" and existing_confirmation.get("action_type") in {
                     "publish_listing",
@@ -12192,17 +12542,27 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         legacy_grandfathered = activation is None
         expires_at = activated_at + timedelta(days=duration_days) if activated_at else None
         trial_expired = bool(expires_at and now >= expires_at)
-        used = 0
+        task_used = 0
         for task in self.repository.list_tasks(company_id=identity["company_id"]):
             task_created_at = _parse_utc_datetime(task.get("created_at"))
             if activated_at and (task_created_at is None or task_created_at < activated_at):
                 continue
             if legacy_grandfathered and str(task.get("created_at") or "")[:7] != now.strftime("%Y-%m"):
                 continue
-            if str(task.get("task_type") or "") != "merchant_ceo_chat":
-                continue
+            task_type = str(task.get("task_type") or "")
             task_input = task.get("input") if isinstance(task.get("input"), dict) else {}
             task_output = task.get("output") if isinstance(task.get("output"), dict) else {}
+            if task_type == "listing_draft_generation":
+                platform_used = task_input.get("model_usage_owner") == "jiejing_platform_trial"
+                usage_consumed = (
+                    task_output.get("usage_consumed") is True
+                    or int(task_output.get("model_request_count") or 0) > 0
+                )
+                if platform_used and usage_consumed:
+                    task_used += 1
+                continue
+            if task_type != "merchant_ceo_chat":
+                continue
             chat = task_output.get("ai_ceo_chat") if isinstance(task_output.get("ai_ceo_chat"), dict) else {}
             model_client = chat.get("model_client") if isinstance(chat.get("model_client"), dict) else {}
             platform_used = (
@@ -12214,7 +12574,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 )
             )
             if platform_used:
-                used += 1
+                usage_consumed = (
+                    task_output.get("usage_consumed") is True
+                    or int(task_output.get("model_request_count") or 0) > 0
+                )
+                if usage_consumed:
+                    task_used += 1
+        period_anchor = (
+            f"legacy-month:{now.strftime('%Y-%m')}"
+            if legacy_grandfathered
+            else f"activated-trial:{activated_at.isoformat() if activated_at else 'not-activated'}"
+        )
+        period_key = hashlib.sha256(
+            f"platform-model-trial-v1|{identity['company_id']}|{period_anchor}".encode("utf-8")
+        ).hexdigest()
+        reservation_usage = self.repository.platform_model_trial_reservation_usage(
+            company_id=identity["company_id"],
+            period_key=period_key,
+        )
+        used = max(task_used, int(reservation_usage.get("reservation_used") or 0))
         if activation is None:
             activation_status = "grandfathered_active"
             activation_allowed = True
@@ -12254,11 +12632,96 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 )
             ),
             "unlimited_when_limit_zero": limit <= 0,
-            "quota_source": "backend_task_audit_and_activation_window",
+            "quota_source": "backend_model_task_audit_and_atomic_reservations",
             "account_space_id_present": bool(identity.get("company_id")),
             "requires_merchant_byok_or_plan_upgrade_when_exhausted": True,
             "secret_exposed": False,
         }
+
+    def _reserve_platform_model_trial(
+        self,
+        *,
+        identity: dict[str, Any],
+        route_scope: str,
+    ) -> dict[str, Any]:
+        """Reserve one shared platform-funded action immediately before model entry."""
+
+        quota = self._platform_model_trial_quota(identity=identity)
+        if quota.get("allowed") is not True:
+            return {
+                "allowed": False,
+                "quota": quota,
+                "reservation_created": False,
+                "secret_exposed": False,
+            }
+        limit = max(0, int(quota.get("trial_limit") or 0))
+        if limit <= 0:
+            return {
+                "allowed": True,
+                "quota": quota,
+                "reservation_created": False,
+                "unlimited": True,
+                "secret_exposed": False,
+            }
+        period_anchor = (
+            f"legacy-month:{quota.get('period') or ''}"
+            if quota.get("legacy_grandfathered") is True
+            else f"activated-trial:{quota.get('trial_started_at') or 'not-activated'}"
+        )
+        period_key = hashlib.sha256(
+            f"platform-model-trial-v1|{identity['company_id']}|{period_anchor}".encode("utf-8")
+        ).hexdigest()
+        reservation = self.repository.reserve_platform_model_trial_slot(
+            company_id=identity["company_id"],
+            period_key=period_key,
+            historical_used=int(quota.get("used") or 0),
+            limit=limit,
+            route_scope=route_scope,
+        )
+        refreshed_quota = self._platform_model_trial_quota(identity=identity)
+        reservation_allowed = reservation.get("allowed") is True
+        return {
+            "allowed": reservation_allowed,
+            # A successful response preserves the existing "quota before this
+            # action" contract.  A loser receives the refreshed hard-stop
+            # snapshot that includes the winning request's durable slot.
+            "quota": quota if reservation_allowed else refreshed_quota,
+            "reservation_created": reservation.get("reservation_created") is True,
+            "reservation_id": str(reservation.get("reservation_id") or ""),
+            "slot_number": int(reservation.get("slot_number") or 0),
+            "storage": "shared_database",
+            "secret_exposed": False,
+        }
+
+    def _settle_platform_model_trial_reservation(
+        self,
+        *,
+        identity: dict[str, Any],
+        reservation: dict[str, Any] | None,
+        request_count: int,
+    ) -> dict[str, Any]:
+        reservation_record = reservation if isinstance(reservation, dict) else {}
+        reservation_id = str(reservation_record.get("reservation_id") or "")
+        if not reservation_id:
+            return {
+                "settled": True,
+                "status": "unmetered",
+                "provider_request_count": max(0, int(request_count or 0)),
+                "secret_exposed": False,
+            }
+        try:
+            return self.repository.settle_platform_model_trial_reservation(
+                company_id=identity["company_id"],
+                reservation_id=reservation_id,
+                request_count=request_count,
+            )
+        except Exception:
+            return {
+                "settled": False,
+                "status": "settlement_failed",
+                "provider_request_count": max(0, int(request_count or 0)),
+                "secret_exposed": False,
+            }
 
     def _platform_trial_activation_for_registration(
         self,
@@ -13764,6 +14227,7 @@ def _controlled_existing_draft_publish_context(
             "status": "controlled_publish_exact_draft_not_found" if not matches else "controlled_publish_draft_not_unique",
             "secret_exposed": False,
         }
+
     execution, confirmation = matches[0]
     item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
     payload = _deep_merge({}, item.get("publish_payload") or {})

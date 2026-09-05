@@ -405,6 +405,7 @@ def validate_zip(path: Path, *, allowed_files: set[str] | None = None) -> None:
             "deploy/jiejing-production-release-apply.sh",
             "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
             "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
+            "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql",
             "tools/jiejing_secret_scan.py",
         } | PHASE3_REQUIRED_BUNDLE_FILES
         missing = sorted(required.difference(names))

@@ -32,6 +32,9 @@ POSTGRES_MEDIA_CREDIT_BUCKETS_MIGRATION = (
 POSTGRES_RUNTIME_SCHEMA_RECONCILIATION_MIGRATION = (
     ROOT / "jiejing_saas" / "migrations" / "003_runtime_schema_reconciliation_postgres.sql"
 )
+POSTGRES_PLATFORM_MODEL_TRIAL_RESERVATIONS_MIGRATION = (
+    ROOT / "jiejing_saas" / "migrations" / "004_platform_model_trial_reservations_postgres.sql"
+)
 POSTGRES_MIGRATION_ADVISORY_LOCK_KEY = -1280677561506917264
 
 
@@ -91,6 +94,15 @@ POSTGRES_CRITICAL_COLUMN_POSTCONDITIONS: tuple[_PostgresColumnPostcondition, ...
     _PostgresColumnPostcondition("user_refresh_token_history", "replayed_at", "timestamptz", True),
     _PostgresColumnPostcondition("user_refresh_token_history", "expires_epoch", "int8", False),
     _PostgresColumnPostcondition("user_sessions", "refresh_session_id", "text", True),
+    _PostgresColumnPostcondition("platform_model_trial_reservations", "reservation_id", "text", False),
+    _PostgresColumnPostcondition("platform_model_trial_reservations", "company_id", "text", False),
+    _PostgresColumnPostcondition("platform_model_trial_reservations", "period_key", "text", False),
+    _PostgresColumnPostcondition("platform_model_trial_reservations", "slot_number", "int4", False),
+    _PostgresColumnPostcondition("platform_model_trial_reservations", "route_scope", "text", False),
+    _PostgresColumnPostcondition("platform_model_trial_reservations", "baseline_used", "int4", False),
+    _PostgresColumnPostcondition("platform_model_trial_reservations", "status", "text", False),
+    _PostgresColumnPostcondition("platform_model_trial_reservations", "created_at", "timestamptz", False),
+    _PostgresColumnPostcondition("platform_model_trial_reservations", "released_at", "timestamptz", True),
 )
 
 
@@ -158,6 +170,20 @@ POSTGRES_CRITICAL_CONSTRAINT_POSTCONDITIONS: tuple[_PostgresConstraintPostcondit
         ("session_id",),
         "user_sessions_refresh_session_id_fkey",
     ),
+    _PostgresConstraintPostcondition(
+        "platform_model_trial_reservations.company_fk",
+        "platform_model_trial_reservations",
+        "f",
+        ("company_id",),
+        "companies",
+        ("company_id",),
+    ),
+    _PostgresConstraintPostcondition(
+        "platform_model_trial_reservations.company_period_slot_unique",
+        "platform_model_trial_reservations",
+        "u",
+        ("company_id", "period_key", "slot_number"),
+    ),
 )
 
 
@@ -210,6 +236,16 @@ POSTGRES_MIGRATION_MANIFEST: tuple[_PostgresMigrationSpec, ...] = (
             (
                 "20260823_003_runtime_schema_reconciliation_postgres",
                 "jiejing-runtime-schema-reconciliation-postgres-v20260823",
+            ),
+        ),
+    ),
+    _PostgresMigrationSpec(
+        path=POSTGRES_PLATFORM_MODEL_TRIAL_RESERVATIONS_MIGRATION,
+        canonical_sha256="b3f5262101e5c4a4d7d1e9cd53d50a5b73ea9867e51de2f3d3ba1f5de9f5e211",
+        migration_records=(
+            (
+                "20260901_004_platform_model_trial_reservations_postgres",
+                "jiejing-platform-model-trial-reservations-postgres-v20260901",
             ),
         ),
     ),

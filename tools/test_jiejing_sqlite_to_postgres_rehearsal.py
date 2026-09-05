@@ -43,6 +43,24 @@ def main() -> int:
     )
     user = fixture["user"]
     company = fixture["company"]
+    repo.upsert_platform_trial_activation(
+        company_id=company["company_id"],
+        user_id=user["user_id"],
+        status="active",
+        platform_trial_allowed=True,
+        requires_challenge=False,
+        challenge_attested=False,
+        decision_reason="migration_rehearsal",
+    )
+    reservation = repo.reserve_platform_model_trial_slot(
+        company_id=company["company_id"],
+        period_key="a" * 64,
+        historical_used=0,
+        limit=1,
+        route_scope="listing_draft_generation",
+    )
+    if reservation.get("allowed") is not True:
+        return fail("platform model trial fixture reservation should succeed")
     store = repo.create_store(
         company_id=company["company_id"],
         user_id=user["user_id"],
@@ -240,7 +258,23 @@ def main() -> int:
         return fail("rehearsal summary should be ready for isolated import")
     if summary.get("secret_exposed") is not False or summary.get("raw_rows_printed") is not False:
         return fail("summary must not expose raw row values or secrets")
-    for table in ("companies", "users", "stores", "ai_ceo_chat_turns", "platform_data_packets", "tasks", "queue_jobs", "ebay_account_deletion_events", "media_asset_jobs", "reports", "confirmations", "execution_results", "audit_logs"):
+    for table in (
+        "companies",
+        "users",
+        "platform_trial_activations",
+        "platform_model_trial_reservations",
+        "stores",
+        "ai_ceo_chat_turns",
+        "platform_data_packets",
+        "tasks",
+        "queue_jobs",
+        "ebay_account_deletion_events",
+        "media_asset_jobs",
+        "reports",
+        "confirmations",
+        "execution_results",
+        "audit_logs",
+    ):
         if summary.get("table_counts", {}).get(table, 0) < 1:
             return fail(f"expected exported rows for {table}")
     if "\"packet_json\"" not in sql or "::jsonb" not in sql:
@@ -249,6 +283,12 @@ def main() -> int:
         return fail("generated SQL should be append-safe for repeated rehearsals")
     if not _appears_before(sql, 'insert into "companies"', 'insert into "users"'):
         return fail("companies must be inserted before users for foreign keys")
+    if not _appears_before(
+        sql,
+        'insert into "companies"',
+        'insert into "platform_model_trial_reservations"',
+    ):
+        return fail("companies must be inserted before platform trial reservations")
     if not _appears_before(sql, 'insert into "stores"', 'insert into "tasks"'):
         return fail("stores must be inserted before tasks for foreign keys")
     if not _appears_before(sql, 'insert into "stores"', 'insert into "ai_ceo_chat_turns"'):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -136,7 +137,8 @@ def _default_payment_query(repository: SaaSRepository, company_id: str, order_id
 
 
 def _default_refund_query(repository: SaaSRepository, company_id: str, order_id: str) -> dict[str, Any]:
-    return query_and_reconcile_domestic_billing_refund(repository, company_id=company_id, order_id=order_id)
+    allowlist = tuple(value.strip().lower() for value in os.environ.get("JIEJING_INTERNAL_ADMIN_EMAILS", "").split(",") if value.strip())
+    return query_and_reconcile_domestic_billing_refund(repository, company_id=company_id, order_id=order_id, internal_admin_emails=allowlist)
 
 
 def _safe_query_result(*, order_id: str, incident_code: str, result: dict[str, Any]) -> dict[str, Any]:

@@ -174,29 +174,65 @@ def main() -> int:
         safe_merchant_provider = (
             safe_merchant_plan.get("provider") if isinstance(safe_merchant_plan.get("provider"), dict) else {}
         )
-        safe_merchant_path = (
-            safe_merchant_plan.get("merchant_launch_path")
-            if isinstance(safe_merchant_plan.get("merchant_launch_path"), dict)
-            else {}
-        )
-        if (
-            "test_billing_provider_configured" in safe_merchant_provider
-            or safe_merchant_path.get("current_stage") != "invited_beta_no_real_charge"
-        ):
-            return fail(
-                "merchant allowlist must preserve private-beta compatibility through the safe launch path only: "
-                f"{safe_merchant_plan}"
-            )
-        safe_step_keys = {
-            item.get("key") for item in safe_merchant_path.get("steps", []) if isinstance(item, dict)
+        # Private-beta proof remains in the internal plan checked above. Settings
+        # receives the merchant contract, not the project's launch-stage report.
+        expected_merchant_fields = {
+            "contract_version", "provider", "plan_catalog", "add_on_catalog", "quota_contract",
+            "mainland_payment", "confirmation_boundary", "public_charging_allowed", "charge_now_allowed",
+            "triggers_real_charge", "triggers_real_refund", "calls_external_payment_api",
+            "real_platform_writes_enabled", "frontend_gets_payment_secret", "frontend_can_grant_entitlement",
+            "frontend_can_grant_quota", "customer_visible", "secret_exposed",
         }
-        if not {
-            "current_charge_status",
-            "hosted_payment_page",
-            "backend_confirmation_before_entitlement",
-            "quota_from_subscription_state",
-        }.issubset(safe_step_keys):
-            return fail(f"merchant allowlist must retain the safe Settings renderer steps: {safe_merchant_path}")
+        if set(safe_merchant_plan) != expected_merchant_fields:
+            return fail(f"merchant billing response must use the current positive field allowlist: {set(safe_merchant_plan)}")
+        safe_catalog = safe_merchant_plan.get("plan_catalog", [])
+        if [(item.get("key"), item.get("amount_minor"), item.get("team_member_quota")) for item in safe_catalog] != [
+            ("free", 0, 1), ("starter", 9900, 2), ("operator", 19900, 5),
+        ]:
+            return fail(f"merchant projection must retain current catalog prices and total seats: {safe_catalog}")
+        if (safe_merchant_provider.get("provider"), safe_merchant_provider.get("checkout_mode"),
+            safe_merchant_provider.get("billing_mode"), safe_merchant_provider.get("customer_visible")) != (
+            "wechat_pay_native", "native_qr", "one_time_30_day_plan", True,
+        ):
+            return fail(f"merchant payment description must retain the current mainland checkout contract: {safe_merchant_provider}")
+        safe_quota = safe_merchant_plan.get("quota_contract", {})
+        if not all(safe_quota.get(key) is True for key in (
+            "enabled", "hard_stop_on_quota_exhaustion", "merchant_visible_usage_required",
+        )) or not {"connected_store", "ai_ceo_task", "provider_job", "model_report_assist"}.issubset(safe_quota.get("metered_units", [])):
+            return fail(f"merchant projection must retain enforced and visible usage limits: {safe_quota}")
+        safe_boundary = safe_merchant_plan.get("confirmation_boundary", {})
+        if not all(safe_boundary.get(key) is True for key in (
+            "billing_changes_need_owner_or_admin", "real_platform_writes_not_included_in_any_current_plan",
+            "refunds_and_payment_disputes_need_human_operator",
+        )):
+            return fail(f"merchant projection must retain billing and refund approval boundaries: {safe_boundary}")
+        for packet in (safe_merchant_plan, safe_merchant_provider, safe_merchant_plan.get("mainland_payment", {})):
+            for key in ("public_charging_allowed", "charge_now_allowed", "triggers_real_charge", "triggers_real_refund",
+                        "calls_external_payment_api", "real_platform_writes_enabled", "frontend_gets_payment_secret",
+                        "frontend_can_grant_entitlement", "frontend_can_grant_quota", "secret_exposed"):
+                if key in packet and packet[key] is not False:
+                    return fail(f"no-charge rehearsal merchant projection must keep {key}=false")
+        if safe_merchant_plan.get("customer_visible") is not True or safe_merchant_provider.get("available") is not False:
+            return fail("no-charge rehearsal must expose merchant information without offering a real checkout")
+        internal_fields = {
+            "merchant_launch_path", "current_stage", "mainland_payment_launch", "future_international_payment",
+            "billing_test_rehearsal_summary", "subscription_quota_shutdown_closure", "billing_incident_runbook",
+            "customer_billing_trust_packet", "paid_launch_blockers", "internal_launch_evidence_visible",
+            "external_paid_provider_configured", "test_billing_provider_configured", "payment_flow_test_mode",
+            "manual_beta_private_provider_configured", "signed_webhook_configured", "provider_plan_id",
+        }
+        pending_values = [safe_merchant_plan]
+        while pending_values:
+            value = pending_values.pop()
+            if isinstance(value, dict):
+                leaked = internal_fields.intersection(value)
+                if leaked:
+                    return fail(f"merchant projection exposed internal billing fields: {sorted(leaked)}")
+                pending_values.extend(value.values())
+            elif isinstance(value, list):
+                pending_values.extend(value)
+        if "invited_beta_no_real_charge" in json.dumps(safe_merchant_plan):
+            return fail("merchant Settings must not display the internal invited-beta launch stage")
         readiness = build_product_readiness(settings, repo)
         public_billing = (
             readiness.get("provider_status", {}).get("billing", {})

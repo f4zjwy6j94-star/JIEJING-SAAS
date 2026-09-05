@@ -2,12 +2,30 @@
 
 These instructions apply to the whole repository. They exist so local Codex, Codex Cloud, and GitHub-driven agents keep the same JIEJING safety and product boundaries.
 
+## Continuity And Instruction Conflicts
+
+- At a restart, handoff, or context compaction, read `docs/JIEJING_CURRENT_EXECUTION_STATE.md` before task actions. It is the single current execution index; dated handoffs are historical evidence, not automatic next-step instructions.
+- Verify the actual repository, `git status --short --branch`, and relevant changes before continuing. Refresh online state only when needed for the claim or action. Do not rerun completed OAuth, payment/refund proof, research, or product imports just to recover context.
+- Keep that index current at meaningful milestones: completed actions and their IDs, remaining work, failed approaches, test evidence, and whether work is uncommitted, committed, deployed, or exercised through the SaaS. Link evidence instead of copying whole logs. Do not store secrets or credentials.
+- The user's latest explicit decisions take precedence over advisory skill content. Do not let design libraries, remembered summaries, or historical documents silently change product scope, pricing, navigation, or deployment authority.
+- On a genuine conflict, inspect the smallest relevant source and explain the discrepancy; do not reset the project or invent a new plan. Updates to an existing authorised task do not require repeated generic approval, but high-risk external actions retain their action-time confirmation boundary.
+- Code review, local test success, production health, paid availability, and real eBay execution are distinct evidence. Never turn one into a claim about all of them.
+
+## Approved UI And Product Constraints
+
+- Public entry has three choices: 免费体验、有店铺、多店铺. No beginner sourcing service, fourth pricing plan, or unsupported platform claims. Use current billing definitions for amounts and entitlements.
+- Merchants without supply receive research suggestions and find their own source; merchants with supply provide product information. 捷境 helps generate/edit Listing and media inside the SaaS, without inventing facts or sending normal listing work to manual eBay forms.
+- Preserve the approved homepage direction. UI changes must not silently change backend business logic or remove capabilities such as bulk-listing.
+- AI CEO conversation is the primary workspace; product progress is secondary and compact. Check existing-project and empty states, desktop and tablet widths.
+- Do not restore a standalone 工作记录/运行记录 navigation item. Retain the actual conversations, reports, Listing versions, media jobs, and support history in their corresponding business pages.
+- Keep owner-facing project completion and engineering readiness commentary out of public pages and merchant Settings. Internal operations surfaces hold those details.
+
 ## Product Boundary
 
 - JIEJING is an eBay-first AI CEO SaaS for cross-border commerce operations.
 - Do not reframe it as a generic ERP, generic agent marketplace, or ordinary chatbot.
 - The AI CEO can chat normally, but eBay operating tasks must enter workflows with evidence, audit trails, and confirmation gates.
-- Keep complex operational status, launch gates, WAF/security diagnostics, billing cutover, and owner-only readiness panels in settings or internal owner surfaces. Core merchant workflows should stay simple.
+- Keep owner-only launch gates, WAF/security diagnostics, billing cutover, and project-readiness panels in internal operations surfaces. Merchant Settings holds actionable account, plan, store, model, and permission controls. Core merchant workflows should stay simple.
 
 ## Current-State Rules
 
@@ -17,7 +35,7 @@ These instructions apply to the whole repository. They exist so local Codex, Cod
   - `https://app.jiejing.shop/health/deep`
   - `https://app.jiejing.shop/readiness/product-saas`
 - If an edge/WAF blocks script-like probes, retry with a normal browser User-Agent before declaring the app down.
-- Never claim formal paid public launch readiness unless readiness evidence says `production_ready=true` and `can_accept_real_customers=true`.
+- Never claim paid public launch readiness without current `production_ready`, `can_accept_real_customers`, and `public_charging_allowed` evidence. Refund execution and eBay writing must be verified separately, not inferred from payment availability.
 
 ## Local-First And Cloud Fallback
 
@@ -31,7 +49,7 @@ These instructions apply to the whole repository. They exist so local Codex, Cod
 
 - Do not run or repeat eBay OAuth unless the user explicitly says to start with a new eBay account.
 - Do not trigger real eBay publish, revise, inventory, refund, procurement/payment, ads, policy edits, or sensitive customer promises without the confirmation center / decision center boundary.
-- The old eBay account is frozen. Do not use it for real validation.
+- Historical eBay account restrictions are not current proof. Inspect the specific account's current status when relevant; do not repeat OAuth or use a restricted account for real validation.
 - Do not run Stripe live payment cutover, real charges, refunds, or live webhook writes unless explicitly approved for that step.
 - Do not read, print, commit, or write secrets: model keys, BYOK keys, API keys, client secrets, Stripe secrets, eBay refresh/access tokens, OAuth codes, SSH private keys, cookies, or GitHub tokens.
 - Never use `git credential fill` or any equivalent command that could print credentials.
@@ -94,4 +112,4 @@ For UI changes, run the relevant contract tests and browser smoke checks. Use th
 
 - Keep commits scoped and explain whether a change is code-only, staging-only, or production-adjacent.
 - If pushing to GitHub, do not include local `output/`, env files, databases, logs, build caches, private keys, screenshots, or third-party cloned references.
-- Keep `ready_for_paid_commercial_launch=false` unless the external payment, new eBay account, managed infra, Vault/KMS, monitoring, backups, and live proof gates are actually complete.
+- Report launch flags as calculated from current evidence; do not hardcode a desired true or false value into the report. eBay account eligibility, public charging, and refund execution remain separate checks. Do not introduce paid KMS as a requirement: the approved Vault recovery arrangement is a separate evidence track.

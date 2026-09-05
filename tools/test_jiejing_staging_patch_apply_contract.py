@@ -175,6 +175,7 @@ def main() -> int:
         "jiejing_saas/migrations/001_initial_schema_postgres.sql",
         "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
         "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
+        "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql",
         "tools/jiejing_current_state_guard.py",
         "tools/jiejing_external_launch_blocker_gate.py",
         "tools/jiejing_configure_tencent_runtime_env.py",
@@ -552,6 +553,20 @@ def main() -> int:
     for marker, minimum_count in compiled_or_checked.items():
         if text.count(marker) < minimum_count:
             return fail(f"patch apply script must whitelist and syntax-check the feedback closure file: {marker}")
+    python_compile_start = text.index("python3 -m py_compile")
+    python_compile_end = text.index("bash -n", python_compile_start)
+    python_compile_block = text[python_compile_start:python_compile_end]
+    if ".js" in python_compile_block:
+        return fail("patch apply must not pass JavaScript files to python py_compile")
+    node_check_start = text.index('NODE_BIN="${JIEJING_NODE_BIN:-node}"')
+    node_check_end = text.index('COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"', node_check_start)
+    node_check_block = text[node_check_start:node_check_end]
+    for marker in (
+        "tools/codex_jiejing_listing_ai_generation_browser_smoke.js",
+        "tools/test_jiejing_listing_product_fact_confirmation_ui.js",
+    ):
+        if marker not in node_check_block:
+            return fail(f"patch apply Node syntax check missing Listing workflow file: {marker}")
     for marker in [
         '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',

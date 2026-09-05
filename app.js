@@ -6930,6 +6930,7 @@ function saasBackendPublishCheckSource(check = {}, readiness = {}) {
     asset_reachability: ["merchant_input", "public_asset_urls"],
     new_product_duplicate_guard: ["confirmation_history", "execution_results"],
     item_specifics_quality: ["merchant_input", "ebay_category_rules"],
+    buyer_copy_fact_boundary: ["policy_screening", "merchant_input"],
     ip_vero_and_claims: ["policy_screening", "merchant_input"],
     gpsr_regulatory_fields: ["regulatory_screening", "merchant_input"],
     price_quantity_exposure: ["finance_records", "merchant_input"],
@@ -6975,6 +6976,9 @@ function saasBackendPublishFixAction(check = {}) {
   }
   if (["price_quantity_exposure", "profit_and_fee_sanity"].includes(key)) {
     return { action: "focus-publish-intake", label: "补利润口径", target: "product.finance", requiresHuman: true, canTriggerRealWrite: false, canTriggerPayment: false, canTriggerOauth: false, detail: "补售价、成本、费用、物流和汇率" };
+  }
+  if (key === "buyer_copy_fact_boundary") {
+    return { action: "focus-publish-intake", label: "修正兼容性文案", target: "product.listing_copy", requiresHuman: true, canTriggerRealWrite: false, canTriggerPayment: false, canTriggerOauth: false, detail: "删除未经商品事实确认的设备兼容性、适配型号或尺寸承诺" };
   }
   if (["ip_vero_and_claims", "gpsr_regulatory_fields"].includes(key)) {
     return { action: "focus-publish-intake", label: "补合规资料", target: "product.policy_review", requiresHuman: true, canTriggerRealWrite: false, canTriggerPayment: false, canTriggerOauth: false, detail: "修标题、属性、来源和法规字段" };
@@ -7094,6 +7098,7 @@ function saasBackendPublishImpact(check = {}) {
     asset_reachability: ["图片素材", "图片无法公开访问或素材不足会阻断真实发布。"],
     new_product_duplicate_guard: ["防重复发布", "发现旧 SKU、旧标题或旧素材时必须换成全新真实测试商品。"],
     item_specifics_quality: ["商品属性", "关键属性不足会影响搜索、类目规则和发布成功率。"],
+    buyer_copy_fact_boundary: ["买家文案事实边界", "未经商品事实确认的设备兼容性、适配型号或尺寸承诺会阻断 eBay 写入。"],
     ip_vero_and_claims: ["IP / VeRO", "品牌词、夸大承诺或侵权风险词必须先删除或补证据。"],
     gpsr_regulatory_fields: ["法规字段", "触发 GPSR 或合规要求时，缺资料不能进入真实发布。"],
     price_quantity_exposure: ["价格和库存暴露", "价格 x 库存会占用卖家额度，必须先核对。"],
@@ -7391,7 +7396,7 @@ function renderSaasBackendPublishPreflightPanel(readiness = {}, ctx = saasMercha
                     <small>${escapeHtml(impact.detail)}</small>
                   </article>
                   <article class="is-${escapeHtml(gate.tone)}">
-                    <span>确认要求</span>
+                    <span>确认门禁</span>
                     <strong>${escapeHtml(gate.label)}</strong>
                     <small>${escapeHtml(gate.detail)}</small>
                   </article>
@@ -8015,6 +8020,10 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
   const buyerCopyRequiresMerchantFacts = ["ai_ceo_market_chat", "ai_ceo_market_report", "bulk_handoff"].includes(
     String(draft?.source_type || state.saasListingSourceMode || ""),
   );
+  const buyerCopyRequiresValidatedGeneration =
+    draft?.model_generated !== true &&
+    (draft?.buyer_copy_requires_validated_listing_generation === true ||
+      String(draft?.source_type || state.saasListingSourceMode || "") === "ai_ceo_product_vision");
   const itemSpecifics = fields.item_specifics || "";
   const itemSpecificRows = parseSaasKeyValueLines(itemSpecifics);
   const logisticsText = fields.logistics || "";
@@ -8052,7 +8061,7 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
   const values = {
     product: draft?.product || draft?.title || "",
     sku: publishPrefill.sku || "",
-    title: String(fields.title || draft?.title || "").slice(0, 80),
+    title: buyerCopyRequiresValidatedGeneration ? "" : String(fields.title || draft?.title || "").slice(0, 80),
     category_id: publishPrefill.category_id || "",
     category_leaf: publishPrefill.category_leaf || categoryText,
     price: publishPrefill.price || priceValue,
@@ -8082,9 +8091,11 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     item_specifics: itemSpecifics,
     image_urls: publishPrefill.image_urls || imageUrls,
     description_html:
-      publishPrefill.description_html ||
-      [fields.selling_points, fields.description].filter(Boolean).join("\n\n") ||
-      (buyerCopyRequiresMerchantFacts ? "" : clean),
+      buyerCopyRequiresValidatedGeneration
+        ? ""
+        : publishPrefill.description_html ||
+          [fields.selling_points, fields.description].filter(Boolean).join("\n\n") ||
+          (buyerCopyRequiresMerchantFacts ? "" : clean),
     fulfillment_policy_id: publishPrefill.fulfillment_policy_id || accountPrefill.fulfillment_policy_id,
     payment_policy_id: publishPrefill.payment_policy_id || accountPrefill.payment_policy_id,
     return_policy_id: publishPrefill.return_policy_id || accountPrefill.return_policy_id,
@@ -9375,27 +9386,65 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
       ? existing.derived_listing_suggestions
       : {}),
   };
+  for (const key of Array.isArray(existing.unknown_facts) ? existing.unknown_facts : []) {
+    if (!Object.prototype.hasOwnProperty.call(existing.derived_listing_suggestions || {}, key)) {
+      delete derivedSuggestions[key];
+    }
+  }
   const values = { ...derivedSuggestions, ...sourceConfirmed, ...merchantConfirmed };
   const requiredKeys = saasMerchantProductFactRequiredKeys();
-  const unknownFacts = requiredKeys.filter((key) => !saasMerchantProductFactValuePresent(key, {
+  const requiredUnknownFacts = requiredKeys.filter((key) => !saasMerchantProductFactValuePresent(key, {
     ...sourceConfirmed,
     ...merchantConfirmed,
   }[key]));
-  const total = requiredKeys.length;
-  const ready = total - unknownFacts.length;
+  const productVisionPacket =
+    existing.source === "backend_product_vision_extraction" || Boolean(existing.vision_contract_version);
+  const visionSuggestionUnknownFacts = productVisionPacket
+    ? Object.keys(derivedSuggestions).filter(
+        (key) =>
+          saasMerchantProductFactValuePresent(key, derivedSuggestions[key]) &&
+          !saasMerchantProductFactValuePresent(key, sourceConfirmed[key]) &&
+          !saasMerchantProductFactValuePresent(key, merchantConfirmed[key]),
+      )
+    : [];
+  const confirmedSourceUrl = sourceConfirmed.source_url || merchantConfirmed.source_url || "";
+  const merchantOwnedProductConfirmed = merchantConfirmed.merchant_owned_product_confirmed === true;
+  const sourceConfirmationUnknown = confirmedSourceUrl || merchantOwnedProductConfirmed
+    ? []
+    : saasMerchantProductFactValuePresent("source_url", derivedSuggestions.source_url)
+      ? ["source_url"]
+      : ["merchant_owned_product_confirmed"];
+  const unknownFacts = Array.from(
+    new Set([...requiredUnknownFacts, ...visionSuggestionUnknownFacts, ...sourceConfirmationUnknown]),
+  );
+  const listingReadinessUnknownFacts = new Set([...requiredUnknownFacts, ...sourceConfirmationUnknown]);
+  const total = requiredKeys.length + 1;
+  const ready = Math.max(0, total - listingReadinessUnknownFacts.size);
   const sourceRecords = Array.isArray(existing.source_records) ? existing.source_records.slice(0, 12) : [];
   if (values.source_url && !sourceRecords.some((item) => item?.url === values.source_url)) {
     sourceRecords.push({ type: "merchant_product_link", url: values.source_url, rights_status: "not_applicable" });
   }
   const normalizedPacket = {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
-    source_mode: existing.source_mode || (values.source_url ? "merchant_source_supplied" : "merchant_owned_product"),
+    source: publicRuntimeText(existing.source || "").slice(0, 80),
+    source_mode: confirmedSourceUrl
+      ? "merchant_source_supplied"
+      : merchantOwnedProductConfirmed
+        ? "merchant_owned_product"
+        : existing.source_mode === "merchant_images_supplied" ? "merchant_images_supplied" : "source_missing",
+    vision_contract_version: publicRuntimeText(existing.vision_contract_version || "").slice(0, 80),
     product_name: values.product_name || draft.product || draft.title || "",
     simulation_only: existing.simulation_only === true,
     fact_scope: existing.simulation_only === true ? "simulation_rehearsal" : "merchant_product",
     source_confirmed_facts: sourceConfirmed,
     merchant_confirmed_facts: merchantConfirmed,
     derived_listing_suggestions: derivedSuggestions,
+    buyer_copy_requires_validated_listing_generation:
+      existing.buyer_copy_requires_validated_listing_generation === true ||
+      existing.source === "backend_product_vision_extraction" ||
+      Boolean(existing.vision_contract_version),
+    field_evidence: existing.field_evidence && typeof existing.field_evidence === "object" ? { ...existing.field_evidence } : {},
+    fact_conflicts: Array.isArray(existing.fact_conflicts) ? [...existing.fact_conflicts] : [],
     unknown_facts: unknownFacts,
     source_records: sourceRecords,
     values,
@@ -9403,7 +9452,7 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
       ready_fact_count: ready,
       total_fact_count: total,
       completion_percent: total ? Math.round((ready / total) * 100) : 0,
-      ready_for_listing_generation: unknownFacts.length === 0,
+      ready_for_listing_generation: listingReadinessUnknownFacts.size === 0,
       ready_for_real_publish: false,
       reason: existing.simulation_only === true
         ? "模拟演练资料仅供内部 Listing 与素材流程，不可写入 eBay"
@@ -9422,15 +9471,41 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
 
 function saasMerchantProductFactOrigin(packet = {}, key = "") {
   if (Object.prototype.hasOwnProperty.call(packet.merchant_confirmed_facts || {}, key)) {
-    return { label: "商家确认", tone: "green" };
+    return { state: "merchant_confirmed", label: "商家确认", tone: "green" };
   }
   if (Object.prototype.hasOwnProperty.call(packet.source_confirmed_facts || {}, key)) {
-    return { label: "来源资料", tone: "green" };
+    return { state: "source_confirmed", label: "来源资料", tone: "green" };
   }
   if (saasMerchantProductFactValuePresent(key, (packet.derived_listing_suggestions || {})[key])) {
-    return { label: "AI 建议", tone: "amber" };
+    if (packet.source === "backend_product_vision_extraction" || Boolean(packet.vision_contract_version)) {
+      return { state: "vision_suggested", label: "图片识别 · 待确认", tone: "amber" };
+    }
+    return { state: "ai_suggested", label: "AI 建议 · 待确认", tone: "amber" };
   }
-  return { label: "待补资料", tone: "neutral" };
+  return { state: "missing", label: "待补资料", tone: "neutral" };
+}
+
+function saasMerchantProductFactReviewSummary(packet = {}) {
+  const definitions = saasMerchantProductFactDefinitions().flatMap((group) => group.fields);
+  const unknownFacts = new Set(Array.isArray(packet.unknown_facts) ? packet.unknown_facts.map((item) => String(item || "")) : []);
+  const pendingSuggestionLabels = definitions
+    .filter(([key]) => unknownFacts.has(key) && ["ai_suggested", "vision_suggested"].includes(saasMerchantProductFactOrigin(packet, key).state))
+    .map(([, label]) => label);
+  const missingLabels = definitions
+    .filter(([key]) => unknownFacts.has(key) && !["ai_suggested", "vision_suggested"].includes(saasMerchantProductFactOrigin(packet, key).state))
+    .map(([, label]) => label);
+  return { pendingSuggestionLabels, missingLabels };
+}
+
+function saasMerchantProductFactSavedMessage(packet = {}) {
+  const { pendingSuggestionLabels, missingLabels } = saasMerchantProductFactReviewSummary(packet);
+  const status = [
+    pendingSuggestionLabels.length ? `待确认 ${pendingSuggestionLabels.slice(0, 4).join("、")}` : "",
+    missingLabels.length ? `仍缺 ${missingLabels.slice(0, 4).join("、")}` : "",
+  ].filter(Boolean).join("；");
+  return status
+    ? `商品资料已保存；${status}，不会编造或真实发布。`
+    : "商品资料已保存；可以继续审核 Listing，真实发布仍需确认中心。";
 }
 
 function renderSaasMerchantProductFactField(packet = {}, definition = []) {
@@ -9440,11 +9515,12 @@ function renderSaasMerchantProductFactField(packet = {}, definition = []) {
   const classes = ["saas-product-fact-field", wide ? "is-wide" : "", type === "checkbox" ? "is-checkbox" : ""]
     .filter(Boolean)
     .join(" ");
+  const originAttributes = `data-product-fact-origin-state="${escapeHtml(origin.state)}" data-product-fact-confirmed="${origin.state === "merchant_confirmed" ? "true" : "false"}"`;
   const control = type === "textarea"
-    ? `<textarea data-saas-product-fact-field="${escapeHtml(key)}" rows="3" placeholder="${escapeHtml(placeholder)}">${escapeHtml(value || "")}</textarea>`
+    ? `<textarea data-saas-product-fact-field="${escapeHtml(key)}" ${originAttributes} rows="3" placeholder="${escapeHtml(placeholder)}">${escapeHtml(value || "")}</textarea>`
     : type === "checkbox"
-      ? `<label class="saas-product-fact-check"><input data-saas-product-fact-field="${escapeHtml(key)}" type="checkbox" ${value === true ? "checked" : ""}><span>${escapeHtml(placeholder)}</span></label>`
-      : `<input data-saas-product-fact-field="${escapeHtml(key)}" type="${escapeHtml(type)}" value="${escapeHtml(value || "")}" placeholder="${escapeHtml(placeholder)}" ${type === "number" ? 'min="0" step="0.01"' : ""}>`;
+      ? `<label class="saas-product-fact-check"><input data-saas-product-fact-field="${escapeHtml(key)}" ${originAttributes} type="checkbox" ${value === true ? "checked" : ""}><span>${escapeHtml(placeholder)}</span></label>`
+      : `<input data-saas-product-fact-field="${escapeHtml(key)}" ${originAttributes} type="${escapeHtml(type)}" value="${escapeHtml(value || "")}" placeholder="${escapeHtml(placeholder)}" ${type === "number" ? 'min="0" step="0.01"' : ""}>`;
   return `
     <div class="${classes}" data-product-fact-key="${escapeHtml(key)}">
       <div class="saas-product-fact-label">
@@ -9452,6 +9528,7 @@ function renderSaasMerchantProductFactField(packet = {}, definition = []) {
         <em class="is-${escapeHtml(origin.tone)}" data-product-fact-origin>${escapeHtml(origin.label)}</em>
       </div>
       ${control}
+      ${["ai_suggested", "vision_suggested"].includes(origin.state) ? `<button type="button" data-saas-action="confirm-product-fact-suggestion" data-product-fact-key="${escapeHtml(key)}">确认此值</button>` : ""}
       ${type === "checkbox" ? "" : `<button type="button" data-saas-action="mark-product-fact-unknown" data-product-fact-key="${escapeHtml(key)}">暂时不知道</button>`}
     </div>
   `;
@@ -9460,10 +9537,16 @@ function renderSaasMerchantProductFactField(packet = {}, definition = []) {
 function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerDraft) {
   if (!draft) return "";
   const packet = saasMerchantProductFactPacket(draft);
-  const missingLabels = saasMerchantProductFactDefinitions()
-    .flatMap((group) => group.fields)
-    .filter(([key]) => packet.unknown_facts.includes(key))
-    .map(([, label]) => label);
+  const { pendingSuggestionLabels, missingLabels } = saasMerchantProductFactReviewSummary(packet);
+  const factStatusLabel = pendingSuggestionLabels.length ? "待确认" : missingLabels.length ? "待补" : "已填写";
+  const factStatusDetail = [
+    pendingSuggestionLabels.length ? `${pendingSuggestionLabels.length} 项 AI 建议待确认` : "",
+    missingLabels.length ? `${missingLabels.length} 项资料缺失` : "",
+  ].filter(Boolean).join(" · ") || "商品事实已补齐";
+  const footerStatus = [
+    pendingSuggestionLabels.length ? `待确认：${pendingSuggestionLabels.slice(0, 4).join("、")}` : "",
+    missingLabels.length ? `仍缺：${missingLabels.slice(0, 4).join("、")}` : "",
+  ].filter(Boolean).join("；") || "可以继续生成 Listing 文案和发布体检";
   return `
     <section class="saas-product-facts-module" data-product-fact-packet="merchant_product_fact_packet_v1" aria-label="商品资料补全">
       <div class="saas-product-facts-head">
@@ -9473,8 +9556,8 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
           <p>材质、成本、库存、发货和图片权利以你的真实资料为准。保存后 JIEJING 会继续生成和体检 Listing，不用去 eBay 手工填写。</p>
         </div>
         <div class="saas-product-facts-score">
-          <b>${missingLabels.length ? "待补" : "已填写"}</b>
-          <small>${missingLabels.length ? "仍有商品资料待确认" : "商品事实已补齐"}</small>
+          <b>${escapeHtml(factStatusLabel)}</b>
+          <small>${escapeHtml(factStatusDetail)}</small>
         </div>
       </div>
       ${packet.simulation_only === true ? `
@@ -9484,7 +9567,7 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
         </div>
       ` : ""}
       <div class="saas-product-fact-legend" aria-label="字段来源说明">
-        <span class="is-green">来源资料</span><span class="is-green">商家确认</span><span class="is-amber">AI 建议</span><span>待补资料</span>
+        <span class="is-green">来源资料</span><span class="is-green">商家确认</span><span class="is-amber">AI 建议 · 待确认</span><span>待补资料</span>
       </div>
       <div class="saas-product-facts-groups">
         ${saasMerchantProductFactDefinitions()
@@ -9502,12 +9585,12 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
       </div>
       <div class="saas-product-facts-footer">
         <div>
-          <strong>${missingLabels.length ? `仍待补：${escapeHtml(missingLabels.slice(0, 6).join("、"))}` : "可以继续生成 Listing 文案和发布体检"}</strong>
+          <strong>${escapeHtml(footerStatus)}</strong>
           <p>至少确认商品名称、状态和材质后，AI 才生成买家文案；留空内容不会被猜测，真实发布也会继续停住。</p>
         </div>
         <div class="button-row">
-          <button class="secondary-action" type="button" data-saas-action="save-merchant-product-facts" ${state.saasLoading ? "disabled" : ""}>保存商品资料</button>
-          <button class="primary-action" type="button" data-saas-action="listing-generate-ai-draft" ${state.saasLoading ? "disabled" : ""}>${state.saasListingAiGenerationStatus === "running" ? "AI 正在生成…" : "AI 生成 Listing 草稿"}</button>
+          <button class="secondary-action" type="button" data-saas-action="save-merchant-product-facts" ${state.saasLoading || state.saasListingProductFactSaveStatus === "saving" ? "disabled" : ""}>${state.saasListingProductFactSaveStatus === "saving" ? "保存中…" : "保存已确认资料"}</button>
+          <button class="primary-action" type="button" data-saas-action="listing-generate-ai-draft" ${state.saasLoading || state.saasListingProductFactSaveStatus === "saving" ? "disabled" : ""}>${state.saasListingAiGenerationStatus === "running" ? "AI 正在生成…" : "AI 生成 Listing 草稿"}</button>
         </div>
       </div>
     </section>
@@ -9536,7 +9619,7 @@ function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
             <strong>影响点击和转化的内容</strong>
           </div>
           ${renderSaasListingDraftField("eBay 标题", "title", fields.title || draft.title, { wide: true, placeholder: "80 字以内，避免品牌词和夸大承诺" })}
-          ${renderSaasListingDraftField("五点卖点", "selling_points", fields.selling_points || "", { multiline: true, rows: 5, placeholder: "根据真实材质、尺寸、数量和用途填写；每行一个卖点", wide: true })}
+          ${renderSaasListingDraftField("核心卖点（3–5 条）", "selling_points", fields.selling_points || "", { multiline: true, rows: 5, placeholder: "根据真实材质、尺寸、数量和用途填写；每行一个卖点", wide: true })}
           ${renderSaasListingDraftField("商品描述", "description", fields.description || "", { multiline: true, rows: 7, placeholder: "根据已确认的商品事实填写，不会把市场调研理由自动写给买家", wide: true })}
         </div>
         <aside class="saas-listing-v2-draft-side" aria-label="Listing 辅助参数">
@@ -14870,6 +14953,7 @@ function shouldAttachSaasBearerToken() {
 function saasBackendErrorMessage(status, detail = "", payload = null) {
   const body = payload && typeof payload === "object" ? payload : {};
   const candidates = [
+    body.merchant_message,
     body.error,
     body.message,
     body.detail,
@@ -15096,6 +15180,24 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
         const incomingPacket = incomingBody.merchant_product_fact_packet || {};
         const mergeArray = (previous = [], incoming = []) =>
           Array.from(new Map([...previous, ...incoming].map((value) => [JSON.stringify(value), value])).values());
+        const incomingUnknownFacts = new Set(
+          Array.isArray(incomingPacket.unknown_facts) ? incomingPacket.unknown_facts.map((key) => String(key || "")) : [],
+        );
+        const incomingDerivedSuggestions =
+          incomingPacket.derived_listing_suggestions && typeof incomingPacket.derived_listing_suggestions === "object"
+            ? incomingPacket.derived_listing_suggestions
+            : {};
+        const mergedDerivedSuggestions = {
+          ...(previousPacket.derived_listing_suggestions || {}),
+          ...incomingDerivedSuggestions,
+        };
+        incomingUnknownFacts.forEach((key) => {
+          const incomingStillSuggestsValue = Object.prototype.hasOwnProperty.call(incomingDerivedSuggestions, key);
+          const incomingConfirmsValue =
+            Object.prototype.hasOwnProperty.call(incomingPacket.source_confirmed_facts || {}, key) ||
+            Object.prototype.hasOwnProperty.call(incomingPacket.merchant_confirmed_facts || {}, key);
+          if (!incomingStillSuggestsValue && !incomingConfirmsValue) delete mergedDerivedSuggestions[key];
+        });
         return {
           ...merged,
           ...item,
@@ -15107,7 +15209,7 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
               ...incomingPacket,
               source_confirmed_facts: { ...(previousPacket.source_confirmed_facts || {}), ...(incomingPacket.source_confirmed_facts || {}) },
               merchant_confirmed_facts: { ...(previousPacket.merchant_confirmed_facts || {}), ...(incomingPacket.merchant_confirmed_facts || {}) },
-              derived_listing_suggestions: { ...(previousPacket.derived_listing_suggestions || {}), ...(incomingPacket.derived_listing_suggestions || {}) },
+              derived_listing_suggestions: mergedDerivedSuggestions,
               listing_copy: { ...(previousPacket.listing_copy || {}), ...(incomingPacket.listing_copy || {}) },
               field_evidence: { ...(previousPacket.field_evidence || {}), ...(incomingPacket.field_evidence || {}) },
               fact_conflicts: mergeArray(previousPacket.fact_conflicts || [], incomingPacket.fact_conflicts || []),
@@ -15241,7 +15343,6 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
           mergedPacket.unknown_facts.forEach((key) => {
             delete mergedPacket.source_confirmed_facts[key];
             delete mergedPacket.merchant_confirmed_facts[key];
-            delete mergedPacket.derived_listing_suggestions[key];
           });
         }
         state.saasListingComposerDraft = {
@@ -15255,6 +15356,84 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
     }
     state.saasListingComposerDraft = null;
     state.saasListingSourceMode = "";
+  }
+  const visionFactSeed = factReports
+    .filter((item) => {
+      const body = item?.report && typeof item.report === "object" ? item.report : {};
+      const packet = body.merchant_product_fact_packet && typeof body.merchant_product_fact_packet === "object"
+        ? body.merchant_product_fact_packet
+        : {};
+      return Boolean(
+        reportIdentityForRestore(item)?.key &&
+        (packet.source === "backend_product_vision_extraction" || packet.vision_contract_version),
+      );
+    })
+    .sort((a, b) => saasTimestampMillis(b.updated_at || b.created_at) - saasTimestampMillis(a.updated_at || a.created_at))[0];
+  if (visionFactSeed) {
+    const visionIdentity = reportIdentityForRestore(visionFactSeed);
+    const matchingVisionFacts = factReports.filter((item) => {
+      const candidateIdentity = reportIdentityForRestore(item);
+      return Boolean(
+        candidateIdentity?.key === visionIdentity.key &&
+        candidateIdentity.source_report_id === visionIdentity.source_report_id &&
+        candidateIdentity.candidate_id === visionIdentity.candidate_id,
+      );
+    });
+    const visionFactReport = mergeMatchingFactReports(matchingVisionFacts) || visionFactSeed;
+    const visionBody = visionFactReport.report && typeof visionFactReport.report === "object" ? visionFactReport.report : {};
+    const rawVisionPacket = visionBody.merchant_product_fact_packet && typeof visionBody.merchant_product_fact_packet === "object"
+      ? visionBody.merchant_product_fact_packet
+      : {};
+    const seedBody = visionFactSeed.report && typeof visionFactSeed.report === "object" ? visionFactSeed.report : {};
+    const seedPacket = seedBody.merchant_product_fact_packet && typeof seedBody.merchant_product_fact_packet === "object"
+      ? seedBody.merchant_product_fact_packet
+      : {};
+    const visionValues = packetValues(rawVisionPacket);
+    const productName = publicRuntimeText(
+      rawVisionPacket.product_name || visionValues.product_name || visionBody.product || seedBody.product || "商品图片识别",
+    ).slice(0, 120);
+    const visionPacket = {
+      ...rawVisionPacket,
+      source: "backend_product_vision_extraction",
+      vision_contract_version:
+        rawVisionPacket.vision_contract_version || seedPacket.vision_contract_version || "jiejing_ai_ceo_product_vision_intake_v1",
+      product_name: productName,
+      listing_copy: {},
+      buyer_copy_requires_validated_listing_generation: true,
+    };
+    const seedDraft = typeof saasListingComposerDraftFromText === "function"
+      ? saasListingComposerDraftFromText(productName)
+      : { product: productName, title: productName, fields: {}, publish_prefill: {} };
+    const projectedDraft = applySaasMerchantProductFactPacketToDraft(seedDraft, visionPacket);
+    state.saasListingComposerDraft = {
+      ...projectedDraft,
+      product: productName,
+      title: productName,
+      source_type: "ai_ceo_product_vision",
+      source_label: "AI CEO 图片与链接识别",
+      source_report_id: visionIdentity.source_report_id || String(visionFactReport.report_id || ""),
+      source_product_fact_report_id: String(visionFactReport.report_id || ""),
+      listing_project_key: visionIdentity.key,
+      listing_project_identity: visionIdentity,
+      fields: {
+        ...(projectedDraft?.fields || {}),
+        title: "",
+        selling_points: "",
+        description: "",
+      },
+      model_generated: false,
+      buyer_copy_requires_validated_listing_generation: true,
+      buyer_copy_status: "waiting_for_validated_listing_generation",
+    };
+    state.saasListingSourceMode = "backend_product_fact_restore";
+    if (!state.activeMediaDraft || isLegacySampleMediaDraftKey(state.activeMediaDraft)) {
+      state.activeMediaDraft = visionIdentity.key;
+    }
+    if (restoreDetachedDraft) {
+      const restoredDetachedDraft = restoreSaasDetachedListingProjectDraftForBackendDraft(state.saasListingComposerDraft);
+      if (restoredDetachedDraft) return restoredDetachedDraft;
+    }
+    return state.saasListingComposerDraft;
   }
   const latestReportByTypes = (types = []) =>
     reportPool
@@ -15299,12 +15478,19 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
     ...(packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object" ? packet.merchant_confirmed_facts : {}),
   };
   const dimensions = [facts.package_length_cm, facts.package_width_cm, facts.package_height_cm].filter(Boolean);
-  const listingCopy = packet.listing_copy && typeof packet.listing_copy === "object" ? packet.listing_copy : {};
+  const productVisionRequiresValidatedListing =
+    packet.source === "backend_product_vision_extraction" || Boolean(packet.vision_contract_version);
+  const listingCopy =
+    !productVisionRequiresValidatedListing && packet.listing_copy && typeof packet.listing_copy === "object"
+      ? packet.listing_copy
+      : {};
   const projected = {
     ...draft,
     merchant_product_fact_packet: packet,
     simulation_only: packet.simulation_only === true,
     safe_local_only: packet.simulation_only === true ? true : draft.safe_local_only,
+    buyer_copy_requires_validated_listing_generation:
+      productVisionRequiresValidatedListing || draft.buyer_copy_requires_validated_listing_generation === true,
   };
   projected.product = facts.product_name || packet.product_name || projected.product || projected.title;
   projected.publish_prefill = {
@@ -15364,15 +15550,22 @@ function applySaasAiCeoProductFactPacket(packet = null, merchantText = "", repor
   const seed = [packet.product_name || "商品图片识别", merchantText].filter(Boolean).join("\n");
   let draft = saasListingComposerDraftFromText(seed);
   draft = applySaasMerchantProductFactPacketToDraft(draft, packet);
-  const listingCopy = packet.listing_copy && typeof packet.listing_copy === "object" ? packet.listing_copy : {};
   draft.source_type = "ai_ceo_product_vision";
   draft.source_label = "AI CEO 图片与链接识别";
   draft.source_report_id = String(report?.report_id || "");
-  draft.title = listingCopy.title || draft.title;
+  draft.title = packet.product_name || draft.title;
   draft.product = packet.product_name || draft.product;
+  draft.fields = {
+    ...(draft.fields || {}),
+    title: "",
+    selling_points: "",
+    description: "",
+  };
   draft.summary = "AI CEO 已从商家提交的图片和链接整理来源事实；冲突项和发布必填项仍需商家核对。";
   draft.safe_local_only = false;
-  draft.buyer_copy_status = "ai_vision_prefilled_waiting_for_merchant_review";
+  draft.model_generated = false;
+  draft.buyer_copy_requires_validated_listing_generation = true;
+  draft.buyer_copy_status = "waiting_for_validated_listing_generation";
   state.saasListingComposerDraft = draft;
   state.saasListingComposerInput = merchantText;
   state.saasListingSourceMode = "ai_ceo_product_vision";
@@ -15411,16 +15604,22 @@ function sanitizeSaasMerchantProductFactValues(values = {}) {
 
 function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
   if (!packet || typeof packet !== "object") return null;
+  const source = publicRuntimeText(packet.source || "").slice(0, 80);
+  const visionContractVersion = publicRuntimeText(packet.vision_contract_version || "").slice(0, 80);
+  const productVisionRequiresValidatedListing =
+    source === "backend_product_vision_extraction" || Boolean(visionContractVersion);
   return {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
+    source,
     source_mode: publicRuntimeText(packet.source_mode || "").slice(0, 80),
+    vision_contract_version: visionContractVersion,
     product_name: publicRuntimeText(packet.product_name || "").slice(0, 120),
     simulation_only: packet.simulation_only === true,
     fact_scope: packet.simulation_only === true ? "simulation_rehearsal" : "merchant_product",
     source_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.source_confirmed_facts),
     merchant_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.merchant_confirmed_facts),
     derived_listing_suggestions: sanitizeSaasMerchantProductFactValues(packet.derived_listing_suggestions),
-    listing_copy: packet.listing_copy && typeof packet.listing_copy === "object"
+    listing_copy: !productVisionRequiresValidatedListing && packet.listing_copy && typeof packet.listing_copy === "object"
       ? {
           title: sanitizeSaasWorkflowFeedbackText(packet.listing_copy.title || "", 80),
           selling_points: Array.isArray(packet.listing_copy.selling_points)
@@ -15429,6 +15628,36 @@ function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
           description: sanitizeSaasWorkflowFeedbackText(packet.listing_copy.description || "", 2400),
         }
       : {},
+    buyer_copy_requires_validated_listing_generation:
+      productVisionRequiresValidatedListing || packet.buyer_copy_requires_validated_listing_generation === true,
+    field_evidence:
+      packet.field_evidence && typeof packet.field_evidence === "object"
+        ? Object.fromEntries(
+            Object.entries(packet.field_evidence)
+              .filter(([key, value]) =>
+                saasMerchantProductFactDefinitions().some((group) => group.fields.some((field) => field[0] === key)) &&
+                value &&
+                typeof value === "object",
+              )
+              .slice(0, 30)
+              .map(([key, value]) => [
+                key,
+                {
+                  source_type: publicRuntimeText(value.source_type || "").slice(0, 80),
+                  image_indexes: Array.isArray(value.image_indexes)
+                    ? value.image_indexes
+                        .map((index) => Number(index))
+                        .filter((index) => Number.isInteger(index) && index >= 0 && index < 20)
+                        .slice(0, 10)
+                    : [],
+                  confidence: Number.isFinite(Number(value.confidence))
+                    ? Math.max(0, Math.min(1, Number(value.confidence)))
+                    : 0,
+                  merchant_confirmation_received: value.merchant_confirmation_received === true,
+                },
+              ]),
+          )
+        : {},
     fact_conflicts: Array.isArray(packet.fact_conflicts)
       ? packet.fact_conflicts.slice(0, 12).map((item) => ({
           field: publicRuntimeText(item?.field || "").slice(0, 80),
@@ -15447,7 +15676,14 @@ function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
           .map((item) => ({
             type: publicRuntimeText(item.type || "merchant_product_source").slice(0, 80),
             url: publicRuntimeText(item.url || "").slice(0, 700),
+            source_index: Number.isInteger(Number(item.source_index)) ? Math.max(0, Math.min(20, Number(item.source_index))) : 0,
+            asset_id: publicRuntimeText(item.asset_id || "").slice(0, 120),
+            sha256: /^[a-f0-9]{64}$/i.test(publicRuntimeText(item.sha256 || "")) ? publicRuntimeText(item.sha256).toLowerCase() : "",
+            original_filename: publicRuntimeText(item.original_filename || "").slice(0, 120),
+            width: Number.isInteger(Number(item.width)) ? Math.max(0, Math.min(100000, Number(item.width))) : 0,
+            height: Number.isInteger(Number(item.height)) ? Math.max(0, Math.min(100000, Number(item.height))) : 0,
             rights_status: publicRuntimeText(item.rights_status || "").slice(0, 80),
+            signed_url_persisted: item.signed_url_persisted === true,
           }))
       : [],
     saved_at: publicRuntimeText(packet.saved_at || "").slice(0, 80),
@@ -15565,6 +15801,9 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
       "summary",
       "score",
       "safe_local_only",
+      "model_generated",
+      "buyer_copy_requires_validated_listing_generation",
+      "buyer_copy_status",
       "created_at",
     ]),
     listing_project_key: identity.key || publicRuntimeText(draft.listing_project_key || "").slice(0, 120),
@@ -15585,6 +15824,7 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
       "logistics",
       "risk_notes",
     ]),
+    merchant_edited_fields: saasListingMerchantEditedFields(draft),
     publish_prefill: sanitizeSaasListingPublishPrefillSnapshot(draft.publish_prefill),
     merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet),
     merchant_required_answers: Array.isArray(draft.merchant_required_answers)
@@ -17778,8 +18018,7 @@ function renderSaasDomesticRefundConfirmationAction(card = {}) {
   if (String(card.status || "") === "approved" && String(order.status || "") === "refund_review_requested") {
     return `
       <div class="runtime-confirm-actions">
-        <small>已批准但尚未提交微信退款；执行前会再次显示资金动作确认。</small>
-        <button class="primary-action" type="button" data-saas-action="domestic-billing-refund-execute" data-domestic-order-id="${escapeHtml(order.order_id || "")}">执行已批准退款</button>
+        <small data-saas-refund-progress="${escapeHtml(order.order_id || "")}">退款申请已进入运营处理。提交微信支付后，处理状态会在这里更新。</small>
       </div>
     `;
   }
@@ -17793,7 +18032,7 @@ function renderSaasDomesticRefundConfirmationAction(card = {}) {
   }
   return `
     <div class="runtime-confirm-actions">
-      <small>退款状态：${escapeHtml(saasDomesticBillingStatusLabel(order.status))}</small>
+      <small data-saas-refund-progress="${escapeHtml(order.order_id || "")}">${String(card.status || "") === "rejected" ? "退款申请未通过审核；如需补充凭证，请联系客服。" : "退款申请由捷境运营审核，你可以在付款订单中查看进度。"}</small>
     </div>
   `;
 }
@@ -21998,7 +22237,9 @@ function renderSaasConfirmPanel() {
                       }
                     </details>
                     ${
-                      status === "pending"
+                      isSaasDomesticBillingRefundConfirmation(card)
+                        ? renderSaasDomesticRefundConfirmationAction(card)
+                        : status === "pending"
                         ? `<div class="runtime-confirm-actions">
                             ${
                               isSaasReadOnlyOAuthSensitiveConfirmation(card) || isSaasInventoryLocationSensitiveConfirmation(card)
@@ -27605,6 +27846,7 @@ function saasPlatformTrialModelState() {
   const used = Math.max(0, Number(quota.used || 0));
   const hasExplicitRemaining = Object.prototype.hasOwnProperty.call(quota, "remaining");
   const remaining = Math.max(0, Number(hasExplicitRemaining ? quota.remaining : trialLimit ? trialLimit - used : 0));
+  const unlimited = quota.unlimited_when_limit_zero === true || status.unlimited_when_limit_zero === true;
   const allowed = quota.allowed === false ? false : configured;
   const hasUsage = Boolean(quota.contract_version);
   const providerLabel = status.provider ? String(status.provider).replace(/_/g, " ") : "捷境试用 AI";
@@ -27613,6 +27855,7 @@ function saasPlatformTrialModelState() {
     ? "不消耗捷境试用额度"
     : !configured
       ? "暂未开放"
+    : unlimited ? "不限次数"
     : trialLimit
       ? hasUsage
         ? `${remaining}/${trialLimit} 次可用`
@@ -27638,6 +27881,7 @@ function saasPlatformTrialModelState() {
     trialDurationDays,
     used,
     remaining,
+    unlimited,
     allowed,
     hasUsage,
     providerLabel,
@@ -27782,7 +28026,7 @@ function saasPrimaryTextAiState() {
       configured: true,
       tone: "green",
       title: "捷境试用 AI 可用",
-      value: "有限额度",
+      value: platformTrial.quotaLabel,
       detail: platformTrial.detail,
     };
   }
@@ -30593,6 +30837,15 @@ async function createSaasExistingDraftPublishConfirmation(button = null) {
 async function createSaasPublishConfirmationFromIntakeForm(mode = "publish") {
   if (!requireSaasProtectedSessionForAction()) return false;
   const draftSave = mode === "ebay-draft";
+  const currentDraft = state.saasListingComposerDraft;
+  const requiresValidatedListingGeneration =
+    currentDraft?.model_generated !== true &&
+    (currentDraft?.buyer_copy_requires_validated_listing_generation === true ||
+      String(currentDraft?.source_type || state.saasListingSourceMode || "") === "ai_ceo_product_vision");
+  if (requiresValidatedListingGeneration) {
+    showActionToast("请先在当前商品项目生成并核对 AI Listing 草稿，再创建 eBay 确认单。");
+    return false;
+  }
   const store = activeSaasStore();
   if (!store?.store_id) {
     showActionToast(draftSave ? "当前没有可用店铺上下文，不能创建 eBay 草稿确认单。" : "当前没有可用店铺上下文，不能创建发布确认单。");
@@ -32174,7 +32427,28 @@ function captureSaasListingComposerInput() {
   return state.saasListingComposerInput || "";
 }
 
-function setSaasListingDraftField(field = "", value = "") {
+function saasListingMerchantEditableFieldKeys() {
+  return [
+    "title",
+    "selling_points",
+    "description",
+    "category",
+    "item_specifics",
+    "keywords",
+    "price",
+    "images",
+    "logistics",
+    "risk_notes",
+  ];
+}
+
+function saasListingMerchantEditedFields(draft = state.saasListingComposerDraft) {
+  const allowed = new Set(saasListingMerchantEditableFieldKeys());
+  const raw = Array.isArray(draft?.merchant_edited_fields) ? draft.merchant_edited_fields : [];
+  return Array.from(new Set(raw.map((item) => String(item || "").trim()).filter((item) => allowed.has(item)))).slice(0, 12);
+}
+
+function setSaasListingDraftField(field = "", value = "", options = {}) {
   if (!state.saasListingComposerDraft) return false;
   const key = String(field || "").trim();
   if (!key) return false;
@@ -32183,6 +32457,11 @@ function setSaasListingDraftField(field = "", value = "") {
     ...(state.saasListingComposerDraft.fields || {}),
     [key]: safeValue,
   };
+  if (options?.merchantEdited === true && saasListingMerchantEditableFieldKeys().includes(key)) {
+    state.saasListingComposerDraft.merchant_edited_fields = Array.from(
+      new Set([...saasListingMerchantEditedFields(state.saasListingComposerDraft), key]),
+    );
+  }
   if (key === "title") {
     state.saasListingComposerDraft.title = safeValue.slice(0, 90) || state.saasListingComposerDraft.title;
     state.saasListingComposerDraft.product = state.saasListingComposerDraft.product || state.saasListingComposerDraft.title;
@@ -32233,6 +32512,8 @@ function saasListingItemSpecificsWithMerchantFacts(current = "", facts = {}) {
 function collectSaasMerchantProductFacts() {
   const merchantConfirmed = {};
   const unknownFacts = [];
+  const pendingSuggestionFacts = [];
+  const explicitUnknownFacts = [];
   document.querySelectorAll("[data-saas-product-fact-field]").forEach((field) => {
     const key = String(field.dataset.saasProductFactField || "").trim();
     if (!key) return;
@@ -32241,22 +32522,46 @@ function collectSaasMerchantProductFacts() {
       : sanitizeSaasWorkflowFeedbackText(field.value || "", key === "image_urls" ? 2400 : key === "source_url" ? 700 : 240);
     if (field.dataset.productFactUnknown === "true" || !saasMerchantProductFactValuePresent(key, value)) {
       unknownFacts.push(key);
+      if (field.dataset.productFactUnknown === "true") explicitUnknownFacts.push(key);
+      return;
+    }
+    const originState = String(field.dataset.productFactOriginState || "missing");
+    if (field.dataset.productFactConfirmed !== "true") {
+      if (originState === "source_confirmed") return;
+      unknownFacts.push(key);
+      if (["ai_suggested", "vision_suggested"].includes(originState)) pendingSuggestionFacts.push(key);
       return;
     }
     merchantConfirmed[key] = value;
   });
-  return { merchantConfirmed, unknownFacts };
+  return { merchantConfirmed, unknownFacts, pendingSuggestionFacts, explicitUnknownFacts };
 }
 
-async function saveSaasMerchantProductFacts() {
+function saveSaasMerchantProductFacts() {
+  if (state.saasListingProductFactSavePromise) return state.saasListingProductFactSavePromise;
+  state.saasListingProductFactSaveStatus = "saving";
+  const pending = Promise.resolve().then(() => persistSaasMerchantProductFacts()).finally(() => {
+    if (state.saasListingProductFactSavePromise === pending) state.saasListingProductFactSavePromise = null;
+    if (state.saasListingProductFactSaveStatus === "saving") state.saasListingProductFactSaveStatus = "local_only";
+    renderProductListingCenter();
+  });
+  state.saasListingProductFactSavePromise = pending;
+  return pending;
+}
+
+async function persistSaasMerchantProductFacts() {
   const draft = state.saasListingComposerDraft;
   if (!draft) return false;
   const current = saasMerchantProductFactPacket(draft);
   const collected = collectSaasMerchantProductFacts();
+  const retainedSourceConfirmedFacts = { ...(current.source_confirmed_facts || {}) };
   const retainedDerivedSuggestions = { ...(current.derived_listing_suggestions || {}) };
-  collected.unknownFacts.forEach((key) => delete retainedDerivedSuggestions[key]);
+  collected.explicitUnknownFacts.forEach((key) => {
+    delete retainedSourceConfirmedFacts[key];
+    delete retainedDerivedSuggestions[key];
+  });
   const sourceRecords = Array.isArray(current.source_records) ? current.source_records.slice(0, 12) : [];
-  const sourceUrl = collected.merchantConfirmed.source_url || "";
+  const sourceUrl = collected.merchantConfirmed.source_url || retainedSourceConfirmedFacts.source_url || "";
   if (sourceUrl) {
     collected.unknownFacts = collected.unknownFacts.filter((key) => key !== "merchant_owned_product_confirmed");
   }
@@ -32265,17 +32570,25 @@ async function saveSaasMerchantProductFacts() {
   }
   draft.merchant_product_fact_packet = {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
+    source: current.source || "",
     source_mode: sourceUrl
       ? "merchant_source_supplied"
       : collected.merchantConfirmed.merchant_owned_product_confirmed === true
       ? "merchant_owned_product"
+      : current.source_mode === "merchant_images_supplied"
+      ? "merchant_images_supplied"
       : "source_missing",
-    product_name: collected.merchantConfirmed.product_name || current.product_name || draft.product || draft.title || "",
+    product_name: collected.merchantConfirmed.product_name || retainedSourceConfirmedFacts.product_name || current.product_name || draft.product || draft.title || "",
+    vision_contract_version: current.vision_contract_version || "",
     simulation_only: current.simulation_only === true,
     fact_scope: current.simulation_only === true ? "simulation_rehearsal" : "merchant_product",
-    source_confirmed_facts: current.source_confirmed_facts || {},
+    source_confirmed_facts: retainedSourceConfirmedFacts,
     merchant_confirmed_facts: collected.merchantConfirmed,
     derived_listing_suggestions: retainedDerivedSuggestions,
+    buyer_copy_requires_validated_listing_generation:
+      current.buyer_copy_requires_validated_listing_generation === true,
+    field_evidence: current.field_evidence && typeof current.field_evidence === "object" ? { ...current.field_evidence } : {},
+    fact_conflicts: Array.isArray(current.fact_conflicts) ? [...current.fact_conflicts] : [],
     unknown_facts: collected.unknownFacts,
     source_records: sourceRecords,
     saved_at: new Date().toISOString(),
@@ -32354,9 +32667,7 @@ async function saveSaasMerchantProductFacts() {
   state.supplierFactsStatus = packet.unknown_facts.length ? "partial" : "verified";
   saveSaasProtectedStateSnapshot();
   renderProductListingCenter();
-  const localMessage = packet.unknown_facts.length
-    ? `商品资料已保存；还缺 ${packet.unknown_facts.slice(0, 4).map(saasMerchantProductFactLabel).join("、")}，不会编造或真实发布。`
-    : "商品资料已保存；可以继续审核 Listing，真实发布仍需确认中心。";
+  const localMessage = saasMerchantProductFactSavedMessage(packet);
   const store = activeSaasStore();
   if (!state.saasConnected || !store?.store_id) {
     showActionToast(`${localMessage} 登录后会写入账号工作记录。`);
@@ -32379,6 +32690,7 @@ async function saveSaasMerchantProductFacts() {
         merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(packet),
       }),
     });
+    let savedPacket = packet;
     if (response.merchant_product_fact_packet) {
       const serverIdentity = saasNormalizeListingProjectIdentity(response.listing_project_identity);
       const restoredDraft = applySaasMerchantProductFactPacketToDraft(draft, response.merchant_product_fact_packet);
@@ -32387,6 +32699,7 @@ async function saveSaasMerchantProductFacts() {
         restoredDraft.listing_project_identity = serverIdentity;
       }
       state.saasListingComposerDraft = restoredDraft;
+      savedPacket = response.merchant_product_fact_packet;
     }
     if (response.report?.report_id && state.saasListingComposerDraft) {
       state.saasListingComposerDraft.source_product_fact_report_id = String(response.report.report_id);
@@ -32395,7 +32708,7 @@ async function saveSaasMerchantProductFacts() {
     if (response.report) state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
     state.saasListingProductFactSaveStatus = "saved";
     saveSaasProtectedStateSnapshot();
-    showActionToast(`${localMessage} 已写入当前账号的工作记录。`);
+    showActionToast(`${saasMerchantProductFactSavedMessage(savedPacket)} 已写入当前账号的工作记录。`);
   } catch (error) {
     state.saasListingProductFactSaveStatus = "local_only";
     showActionToast(`${localMessage} 当前账号记录写入失败，资料仍保留在本机，可稍后再保存。`);
@@ -32418,6 +32731,44 @@ function markSaasMerchantProductFactUnknown(button) {
     origin.className = "is-neutral";
   }
   showActionToast(`已把“${saasMerchantProductFactLabel(key)}”标为暂时不知道；可以先保存，真实发布会继续停住。`);
+  return true;
+}
+
+function markSaasMerchantProductFactEdited(field) {
+  if (!field?.matches?.("[data-saas-product-fact-field]")) return false;
+  const key = String(field.dataset.saasProductFactField || "").trim();
+  const value = field.type === "checkbox" ? field.checked === true : field.value;
+  const wrapper = field.closest("[data-product-fact-key]");
+  const origin = wrapper?.querySelector("[data-product-fact-origin]");
+  if (!saasMerchantProductFactValuePresent(key, value)) {
+    field.dataset.productFactConfirmed = "false";
+    field.dataset.productFactOriginState = "missing";
+    field.dataset.productFactUnknown = "true";
+    if (origin) {
+      origin.textContent = "待补资料";
+      origin.className = "is-neutral";
+    }
+    return true;
+  }
+  field.dataset.productFactConfirmed = "true";
+  field.dataset.productFactOriginState = "merchant_confirmed";
+  delete field.dataset.productFactUnknown;
+  if (origin) {
+    origin.textContent = "商家确认";
+    origin.className = "is-green";
+  }
+  return true;
+}
+
+function confirmSaasMerchantProductFactSuggestion(button) {
+  const key = String(button?.dataset?.productFactKey || "").trim();
+  if (!key) return false;
+  const field = document.querySelector(`[data-saas-product-fact-field="${key}"]`);
+  if (!field || !saasMerchantProductFactValuePresent(key, field.type === "checkbox" ? field.checked : field.value)) return false;
+  markSaasMerchantProductFactEdited(field);
+  button.textContent = "已确认";
+  button.disabled = true;
+  showActionToast(`已确认“${saasMerchantProductFactLabel(key)}”；保存后会记录为商家确认事实。`);
   return true;
 }
 
@@ -32461,22 +32812,46 @@ function captureSaasListingFactsForAiGeneration(draft = state.saasListingCompose
     return sanitizeSaasMerchantProductFactPacketSnapshot(current);
   }
   const collected = collectSaasMerchantProductFacts();
+  const retainedSourceConfirmedFacts = { ...(current.source_confirmed_facts || {}) };
+  const retainedDerivedSuggestions = { ...(current.derived_listing_suggestions || {}) };
+  collected.explicitUnknownFacts.forEach((key) => {
+    delete retainedSourceConfirmedFacts[key];
+    delete retainedDerivedSuggestions[key];
+  });
   const productName =
     collected.merchantConfirmed.product_name || current.product_name || draft.product || draft.title || "";
   const sourceRecords = Array.isArray(current.source_records) ? current.source_records.slice(0, 12) : [];
-  const sourceUrl = collected.merchantConfirmed.source_url || "";
+  const sourceUrl = collected.merchantConfirmed.source_url || retainedSourceConfirmedFacts.source_url || "";
+  const merchantOwnedProductConfirmed = collected.merchantConfirmed.merchant_owned_product_confirmed === true;
   if (sourceUrl && !sourceRecords.some((item) => item?.url === sourceUrl)) {
     sourceRecords.push({ type: "merchant_product_link", url: sourceUrl, rights_status: "not_applicable" });
   }
   const packet = sanitizeSaasMerchantProductFactPacketSnapshot({
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
-    source_mode: sourceUrl ? "merchant_source_supplied" : "merchant_owned_product",
+    source: current.source || "",
+    source_mode: sourceUrl
+      ? "merchant_source_supplied"
+      : merchantOwnedProductConfirmed
+        ? "merchant_owned_product"
+        : current.source_mode === "merchant_images_supplied"
+          ? "merchant_images_supplied"
+          : "source_missing",
+    vision_contract_version: current.vision_contract_version || "",
     product_name: productName,
     simulation_only: current.simulation_only === true,
     fact_scope: current.simulation_only === true ? "simulation_rehearsal" : "merchant_product",
-    source_confirmed_facts: current.source_confirmed_facts || {},
+    source_confirmed_facts: retainedSourceConfirmedFacts,
     merchant_confirmed_facts: collected.merchantConfirmed,
-    derived_listing_suggestions: current.derived_listing_suggestions || {},
+    derived_listing_suggestions: retainedDerivedSuggestions,
+    listing_copy: current.listing_copy || {},
+    buyer_copy_requires_validated_listing_generation:
+      current.buyer_copy_requires_validated_listing_generation === true ||
+      current.source === "backend_product_vision_extraction" ||
+      Boolean(current.vision_contract_version),
+    field_evidence: current.field_evidence && typeof current.field_evidence === "object"
+      ? current.field_evidence
+      : {},
+    fact_conflicts: Array.isArray(current.fact_conflicts) ? current.fact_conflicts : [],
     unknown_facts: collected.unknownFacts,
     source_records: sourceRecords,
     saved_at: new Date().toISOString(),
@@ -32488,7 +32863,7 @@ function captureSaasListingFactsForAiGeneration(draft = state.saasListingCompose
 
 function saasListingCurrentDraftFieldsForAi(draft = state.saasListingComposerDraft) {
   const fields = draft?.fields && typeof draft.fields === "object" ? draft.fields : {};
-  return {
+  const currentFields = {
     title: sanitizeSaasWorkflowFeedbackText(fields.title || draft?.title || "", 80),
     selling_points: sanitizeSaasWorkflowFeedbackText(fields.selling_points || "", 2400),
     description: sanitizeSaasWorkflowFeedbackText(fields.description || "", 6000),
@@ -32496,6 +32871,10 @@ function saasListingCurrentDraftFieldsForAi(draft = state.saasListingComposerDra
     item_specifics: sanitizeSaasWorkflowFeedbackText(fields.item_specifics || "", 3000),
     keywords: sanitizeSaasWorkflowFeedbackText(fields.keywords || "", 1200),
   };
+  currentFields.merchant_edited_fields = saasListingMerchantEditedFields(draft).filter((key) =>
+    Object.prototype.hasOwnProperty.call(currentFields, key),
+  );
+  return currentFields;
 }
 
 async function generateSaasListingDraftFromCurrentProject() {
@@ -32543,10 +32922,11 @@ async function generateSaasListingDraftFromCurrentProject() {
         .filter((key) => key !== "listing_project_identity")
         .slice(0, 5)
         .map(saasMerchantProductFactLabel);
+      const merchantMessage = publicRuntimeText(response.merchant_message || "").trim().slice(0, 260);
       showActionToast(
         readableMissing.length
           ? `AI 还没有生成草稿；请先确认${readableMissing.join("、")}。已填资料不会丢失。`
-          : "当前 AI 连接暂不可用；商品资料已保留，请到设置检查 AI 连接后重试。",
+          : merchantMessage || "当前 AI 连接暂不可用；商品资料已保留，请到设置检查 AI 连接后重试。",
       );
       return false;
     }
@@ -32578,10 +32958,13 @@ async function generateSaasListingDraftFromCurrentProject() {
     return true;
   } catch (error) {
     state.saasListingAiGenerationStatus = "failed";
-    showActionToast("AI Listing 草稿暂时没有生成；商品资料和现有编辑已保留，请稍后重试。");
+    const errorPayload = error?.payload && typeof error.payload === "object" ? error.payload : {};
+    const merchantMessage = publicRuntimeText(errorPayload.merchant_message || "").trim().slice(0, 260);
+    showActionToast(merchantMessage || "AI Listing 草稿暂时没有生成；商品资料和现有编辑已保留，请稍后重试。");
     return false;
   } finally {
     state.saasLoading = false;
+    saveSaasProtectedStateSnapshot();
     renderProductListingCenter();
   }
 }
@@ -33769,34 +34152,7 @@ async function runSaasDomesticBillingRefundRequest(button) {
 }
 
 async function runSaasDomesticBillingExecuteRefund(button) {
-  const orderId = String(button?.dataset?.domesticOrderId || "").trim();
-  if (!orderId) return;
-  const confirmed = window.confirm(
-    `确认向微信支付提交订单 ${orderId} 的全额退款吗？这是资金动作；提交后可能立即进入退款处理中，不能在捷境内撤销。`,
-  );
-  if (!confirmed) return;
-  state.saasLoading = true;
-  renderSaasBillingActionSurfaces();
-  try {
-    const response = await saasFetch(`/billing/domestic/orders/${encodeURIComponent(orderId)}/refund-execute`, {
-      method: "POST",
-      body: "{}",
-    });
-    const result = response.domestic_billing_refund_execution || {};
-    await refreshSaasState({ silent: true });
-    if (result.status === "refunded") {
-      showActionToast("退款已由微信支付确认完成，订单与权益状态已经更新。");
-    } else if (result.status === "refund_processing" && result.triggers_real_refund === true) {
-      showActionToast("退款已提交微信支付，当前为退款处理中；不会自动重复提交。");
-    } else {
-      showActionToast("退款请求已受理，请按订单中的最新状态继续核对。");
-    }
-  } catch (error) {
-    showActionToast(`退款没有执行成功：${String(error.message || error)}。系统不会自动重试。`);
-  } finally {
-    state.saasLoading = false;
-    renderSaasBillingActionSurfaces();
-  }
+  showActionToast("退款由捷境运营审核和处理，请在付款订单中查看最新状态。");
 }
 
 async function runSaasDomesticBillingQueryRefund(button) {
@@ -33891,6 +34247,10 @@ function handleSaasAction(button) {
   }
   if (action === "mark-product-fact-unknown") {
     markSaasMerchantProductFactUnknown(button);
+    return;
+  }
+  if (action === "confirm-product-fact-suggestion") {
+    confirmSaasMerchantProductFactSuggestion(button);
     return;
   }
   if (action === "listing-source-ai-report") {
@@ -36852,12 +37212,12 @@ function renderSaasDomesticRefundOrderActions(order = {}) {
   );
   if (orderStatus === "refund_review_requested") {
     if (String(confirmation?.status || "") === "approved") {
-      return `<button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-refund-execute" data-domestic-order-id="${escapeHtml(orderId)}">执行已批准退款</button>`;
+      return `<small data-saas-refund-progress="${escapeHtml(orderId)}">退款申请已进入运营处理，状态会在这里更新。</small>`;
     }
-    if (String(confirmation?.status || "") === "pending") {
-      return '<button class="secondary-action compact-action" type="button" data-saas-action="open-confirm">去确认退款</button>';
+    if (String(confirmation?.status || "") === "rejected") {
+      return `<small data-saas-refund-progress="${escapeHtml(orderId)}">退款申请未通过审核；如需补充凭证，请联系客服。</small>`;
     }
-    return '<small>退款申请正在复核；尚未向微信支付提交。</small>';
+    return `<small data-saas-refund-progress="${escapeHtml(orderId)}">退款申请正在复核；尚未向微信支付提交。</small>`;
   }
   if (["refund_processing", "refund_failed"].includes(orderStatus)) {
     return `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-refund-query" data-domestic-order-id="${escapeHtml(orderId)}">刷新退款状态</button>`;
@@ -44643,7 +45003,14 @@ function bindEvents() {
       state.batchPreviewCount = 0;
     }
     if (event.target?.matches?.("[data-saas-listing-draft-field]")) {
-      setSaasListingDraftField(event.target.dataset.saasListingDraftField || "", event.target.value || "");
+      setSaasListingDraftField(
+        event.target.dataset.saasListingDraftField || "",
+        event.target.value || "",
+        { merchantEdited: true },
+      );
+    }
+    if (event.target?.matches?.("[data-saas-product-fact-field]")) {
+      markSaasMerchantProductFactEdited(event.target);
     }
   });
 

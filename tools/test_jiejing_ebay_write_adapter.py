@@ -181,6 +181,7 @@ def main() -> int:
     readiness_keys = {item.get("key") for item in readiness.get("checks", [])}
     for required_check in {
         "item_specifics_quality",
+        "buyer_copy_fact_boundary",
         "ip_vero_and_claims",
         "gpsr_regulatory_fields",
         "profit_and_fee_sanity",
@@ -359,6 +360,61 @@ def main() -> int:
         if http_request.full_url.endswith("/publish"):
             return 200, {"content-type": "application/json"}, json.dumps({"listingId": "listing_123"}).encode("utf-8")
         return 500, {"content-type": "application/json"}, b"{}"
+
+    unsafe_direct_payload = deepcopy(request.payload)
+    unsafe_direct_payload["listing"]["title"] = "Foldable iPad Stand"
+    unsafe_direct_request = ExecutionRequest(
+        action_type="publish_listing",
+        task_id="task_publish_unsafe_compatibility",
+        user_id="user_test",
+        company_id="company_test",
+        store_id="store_test",
+        platform="ebay",
+        confirmation_id="confirm_publish_unsafe_compatibility",
+        confirmed_by="user_test",
+        confirmed_at="2026-05-22T00:00:00+00:00",
+        idempotency_key="publish-test-unsafe-compatibility",
+        payload=unsafe_direct_payload,
+    )
+    unsafe_direct_result = EbayWriteHttpAdapter(settings, transport=transport).publish_listing(
+        request=unsafe_direct_request,
+        preflight=preflight,
+        connections=[
+            {
+                "platform": "ebay",
+                "connection_type": "oauth",
+                "status": "publish_authorized",
+                "scopes": ["https://api.ebay.com/oauth/api_scope/sell.inventory"],
+                "secret_ref": "secret_ref_publish",
+            }
+        ],
+        secret_refs=[{"provider": "ebay", "purpose": "ebay_refresh_token", "secret_ref": "secret_ref_publish"}],
+        marketplace_id="EBAY_US",
+    )
+    if unsafe_direct_result.get("status") != "buyer_copy_fact_boundary_blocked" or calls:
+        return fail(f"publish adapter must block unverified compatibility before token or eBay HTTP: {unsafe_direct_result}, calls={calls}")
+
+    unsafe_draft_request = ExecutionRequest(
+        action_type="save_ebay_listing_draft",
+        task_id="task_draft_unsafe_compatibility",
+        user_id="user_test",
+        company_id="company_test",
+        store_id="store_test",
+        platform="ebay",
+        confirmation_id="confirm_draft_unsafe_compatibility",
+        confirmed_by="user_test",
+        confirmed_at="2026-05-22T00:00:00+00:00",
+        idempotency_key="draft-test-unsafe-compatibility",
+        payload=unsafe_direct_payload,
+    )
+    unsafe_draft_result = EbayWriteHttpAdapter(settings, transport=transport).prepare_listing_draft(
+        request=unsafe_draft_request,
+        preflight=preflight,
+        credential_boundary={},
+        marketplace_id="EBAY_US",
+    )
+    if unsafe_draft_result.get("status") != "buyer_copy_fact_boundary_blocked" or calls:
+        return fail(f"draft adapter must block unverified compatibility before credential or eBay HTTP: {unsafe_draft_result}, calls={calls}")
 
     result = EbayWriteHttpAdapter(settings, transport=transport).publish_listing(
         request=request,

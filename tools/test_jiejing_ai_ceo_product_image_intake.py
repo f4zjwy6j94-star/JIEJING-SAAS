@@ -84,19 +84,42 @@ def main() -> None:
             {"asset_id": "media_src_two", "sha256": "b" * 64, "original_filename": "spec.jpg", "width": 800, "height": 1000},
         ],
     )
-    facts = packet["source_confirmed_facts"]
-    assert facts["product_name"] == "禅意佛手莲花倒流香炉"
-    assert facts["product_dimensions_cm"] == "16.2 x 7.7 x 17.9"
-    assert facts["net_weight_g"] == "451"
-    assert facts["product_origin"] == "中国福建德化"
-    assert facts["supplier_item_number"] == "JC2023041300002"
-    assert "material" not in facts, "conflicting material must not become a confirmed fact"
-    assert "package_weight_g" not in facts, "net weight must not be relabeled as package weight"
-    assert "item_location" not in facts, "product origin must not be relabeled as ship-from location"
-    assert packet["source_confirmed_facts"]["source_url"] == "https://qr.1688.com/s/FqVegjLr"
+    assert packet["source_confirmed_facts"] == {}, "AI vision output must never impersonate confirmed source facts"
+    suggestions = packet["derived_listing_suggestions"]
+    assert suggestions["product_name"] == "禅意佛手莲花倒流香炉"
+    assert suggestions["product_dimensions_cm"] == "16.2 x 7.7 x 17.9"
+    assert suggestions["net_weight_g"] == "451"
+    assert suggestions["product_origin"] == "中国福建德化"
+    assert suggestions["supplier_item_number"] == "JC2023041300002"
+    assert suggestions["source_url"] == "https://qr.1688.com/s/FqVegjLr"
+    assert "material" not in suggestions, "conflicting material must not become a suggested fact"
+    assert "package_weight_g" not in suggestions, "net weight must not be relabeled as package weight"
+    assert "item_location" not in suggestions, "product origin must not be relabeled as ship-from location"
+    assert set(packet["unknown_facts"]) == {
+        "product_name", "sku", "condition", "material", "package_weight_g",
+        "package_length_cm", "package_width_cm", "package_height_cm", "unit_cost",
+        "selling_price", "currency", "quantity", "item_location", "image_urls",
+        "image_rights_confirmed", "source_url", "product_dimensions_cm", "net_weight_g",
+        "product_origin", "supplier_item_number",
+    }, "every unconfirmed required or vision-extracted value must remain unknown"
     assert packet["ready_for_listing_draft"] is True
     assert packet["listing_readiness"]["ready_for_real_publish"] is False
+    assert packet["listing_copy"] == {}, "vision output must not become buyer-facing Listing copy"
+    assert packet["buyer_copy_requires_validated_listing_generation"] is True
     assert "merchant_product_fact_conflict:material" in packet["blocked_by"]
+    image_only_packet = build_product_vision_fact_packet(
+        analysis=analysis,
+        merchant_message="请识别这些商品图片并整理事实。",
+        source_assets=[
+            {"asset_id": "media_src_one", "sha256": "a" * 64, "original_filename": "front.jpg", "width": 800, "height": 800},
+        ],
+    )
+    assert image_only_packet["source_mode"] == "merchant_images_supplied", (
+        "uploading images alone must not claim merchant-owned-product provenance"
+    )
+    assert image_only_packet["source_confirmed_facts"] == {}
+    assert "merchant_owned_product_confirmed" in image_only_packet["unknown_facts"]
+    assert "merchant_product_source_unconfirmed" in image_only_packet["blocked_by"]
     serialized = json.dumps(packet, ensure_ascii=False)
     assert "signed/one" not in serialized and "signed/two" not in serialized
     assert "backend-only-key" not in serialized
@@ -109,6 +132,11 @@ def main() -> None:
     api_source = (ROOT / "jiejing_saas" / "api_server.py").read_text(encoding="utf-8")
     assert "read_for_provider(" in api_source
     assert "product_vision_fact_packet" in api_source
+    vision_save_start = api_source.index("product_vision_report = self.repository.save_merchant_product_fact_report(")
+    vision_save_call = api_source[vision_save_start : vision_save_start + 360]
+    assert "listing_project_identity=listing_project_identity" in vision_save_call, (
+        "product vision fact reports must persist the active Listing project identity"
+    )
     print("PASS jiejing_ai_ceo_product_image_intake")
 
 

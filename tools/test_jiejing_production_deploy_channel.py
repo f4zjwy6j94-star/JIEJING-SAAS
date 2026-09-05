@@ -54,6 +54,7 @@ BASE_BUNDLE_FILES = {
     "deploy/jiejing-production-release-apply.sh",
     "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
     "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
+    "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql",
     "tools/jiejing_secret_scan.py",
 }
 
@@ -1924,6 +1925,7 @@ def main(
         "bundle_javascript_invalid",
         '"jiejing_saas/migrations/002_media_credit_buckets_postgres.sql"',
         '"jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql"',
+        '"jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql"',
         "StrictHostKeyChecking=yes",
         "IdentitiesOnly=yes",
         "BatchMode=yes",
@@ -2045,6 +2047,7 @@ def main(
         *[f'"{name}"' for name in sorted(PHASE3_BUNDLE_FILES)],
         '"jiejing_saas/migrations/002_media_credit_buckets_postgres.sql"',
         '"jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql"',
+        '"jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql"',
     ]
     required_ci = [
         "python tools/test_jiejing_production_deploy_channel.py",

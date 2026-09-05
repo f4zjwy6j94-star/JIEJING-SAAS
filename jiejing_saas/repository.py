@@ -13,7 +13,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -45,6 +45,7 @@ from .product_feedback import (
     product_feedback_payload_hash,
 )
 from .security import hash_password, verify_password
+from .sensitive_text import contains_secret_like_data, contains_secret_like_text
 
 
 # Fixed PBKDF2 record used only to equalize unknown-account login work. It is
@@ -328,6 +329,19 @@ class SaaSRepository:
                   activated_at text,
                   updated_at text not null,
                   activation_json text not null
+                );
+
+                create table if not exists platform_model_trial_reservations (
+                  reservation_id text primary key,
+                  company_id text not null,
+                  period_key text not null,
+                  slot_number integer not null check (slot_number > 0),
+                  route_scope text not null,
+                  baseline_used integer not null default 0 check (baseline_used >= 0),
+                  status text not null default 'consumed' check (status in ('reserved', 'consumed', 'released')),
+                  created_at text not null,
+                  released_at text,
+                  unique (company_id, period_key, slot_number)
                 );
 
                 create table if not exists merchant_onboarding_states (
@@ -922,6 +936,7 @@ class SaaSRepository:
             self._ensure_ai_ceo_chat_merge_score_column(conn)
             self._ensure_account_scoped_confirmations(conn)
             self._ensure_user_session_refresh_column(conn)
+            self._ensure_platform_model_trial_reservation_lifecycle(conn)
             self._ensure_indexes(conn)
             self._record_schema_migration(
                 conn,
@@ -1024,6 +1039,12 @@ class SaaSRepository:
                 migration_id="20260715_platform_trial_activations",
                 checksum="jiejing-platform-trial-activations-v20260715",
                 summary="Separates merchant registration from privacy-safe activation of Jiejing-funded AI and media trials.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260901_platform_model_trial_reservations",
+                checksum="jiejing-platform-model-trial-reservations-v20260901",
+                summary="Adds durable tenant-period slots so concurrent platform-funded model calls cannot overspend trial quota.",
             )
             self._record_schema_migration(
                 conn,
@@ -1808,43 +1829,93 @@ class SaaSRepository:
             raise ValueError("email is invalid")
         if not valid_role(role) or role == "owner":
             raise ValueError("role must be admin, operator, or viewer")
-        created_at = now_iso()
-        invitation_id = _id("invite")
-        existing_user = self.get_user_by_email(email)
-        accepted_at = created_at if existing_user else None
-        status = "accepted_existing_user_added" if existing_user else "pending"
-        record = {
-            "invitation_id": invitation_id,
-            "company_id": company_id,
-            "email": email,
-            "role": role,
-            "status": status,
-            "invited_by": invited_by,
-            "created_at": created_at,
-            "accepted_at": accepted_at,
-            "permissions": permissions_for_role(role),
-            "metadata": _redact_secret_like(metadata or {}),
-            "secret_exposed": False,
-        }
         with self._connect() as conn:
-            conn.execute(
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            company = conn.execute(
+                f"select company_id from companies where company_id = ?{lock_suffix}",
+                (company_id,),
+            ).fetchone()
+            if not company:
+                raise ValueError("company not found")
+            existing_user = conn.execute(
+                "select user_id from users where lower(email) = ?",
+                (email,),
+            ).fetchone()
+            existing_member = conn.execute(
                 """
-                insert into team_invitations (
-                  invitation_id, company_id, email, role, status, invited_by, created_at, accepted_at, invite_json
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                select tm.role, tm.created_at from team_members tm
+                join users u on u.user_id = tm.user_id
+                where tm.company_id = ? and lower(u.email) = ?
                 """,
-                (
-                    invitation_id,
-                    company_id,
-                    email,
-                    role,
-                    status,
-                    invited_by,
-                    created_at,
-                    accepted_at,
-                    json.dumps(record, ensure_ascii=False),
-                ),
+                (company_id, email),
+            ).fetchone()
+            invitation = conn.execute(
+                """
+                select invitation_id, status, role, created_at, invite_json
+                from team_invitations where company_id = ? and lower(email) = ?
+                  and status in ('pending', 'accepted_existing_user_added')
+                order by case status when 'pending' then 0 else 1 end, created_at asc
+                limit 1
+                """,
+                (company_id, email),
+            ).fetchone()
+            if existing_member:
+                # Re-inviting a member is not a role-change operation and must
+                # neither reserve another seat nor silently grant more access.
+                record = _load_json_field(invitation["invite_json"]) if invitation else {
+                    "invitation_id": "", "company_id": company_id, "email": email,
+                    "status": "already_member", "created_at": existing_member["created_at"],
+                }
+                return {
+                    **record, "role": existing_member["role"],
+                    "permissions": permissions_for_role(existing_member["role"]),
+                    "reused_existing": True, "secret_exposed": False,
+                }
+            pending = invitation if invitation and invitation["status"] == "pending" else None
+            if pending and not existing_user:
+                # The pending invitation already owns this email's seat.
+                # A retry cannot create another reservation or change its role.
+                return {**_load_json_field(pending["invite_json"]), "reused_existing": True}
+
+            quota = self._team_seat_quota_in_transaction(
+                conn, company_id=company_id,
             )
+            additional_seats = 0 if pending else 1
+            if quota["quota_enforcement_enabled"] and quota["used"] + additional_seats > quota["limit"]:
+                raise TeamSeatQuotaExceeded(quota)
+            created_at = str(pending["created_at"]) if pending else now_iso()
+            invitation_id = str(pending["invitation_id"]) if pending else _id("invite")
+            # An accepted pending invitation keeps the originally invited role.
+            role = str(pending["role"]) if pending else role
+            accepted_at = now_iso() if existing_user else None
+            status = "accepted_existing_user_added" if existing_user else "pending"
+            record = {
+                "invitation_id": invitation_id, "company_id": company_id,
+                "email": email, "role": role, "status": status,
+                "invited_by": invited_by, "created_at": created_at,
+                "accepted_at": accepted_at, "permissions": permissions_for_role(role),
+                "metadata": _redact_secret_like(metadata or {}), "secret_exposed": False,
+            }
+            if pending:
+                conn.execute(
+                    """
+                    update team_invitations set status = ?, accepted_at = ?, invite_json = ?
+                    where invitation_id = ? and company_id = ? and status = 'pending'
+                    """,
+                    (status, accepted_at, json.dumps(record, ensure_ascii=False), invitation_id, company_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    insert into team_invitations (
+                      invitation_id, company_id, email, role, status, invited_by, created_at, accepted_at, invite_json
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (invitation_id, company_id, email, role, status, invited_by, created_at, accepted_at,
+                     json.dumps(record, ensure_ascii=False)),
+                )
             if existing_user:
                 conn.execute(
                     """
@@ -3132,6 +3203,46 @@ class SaaSRepository:
                 details={"queue_dispatch": dispatch},
             )
         return record
+
+    def _team_seat_quota_in_transaction(
+        self, conn: Any, *, company_id: str,
+    ) -> dict[str, Any]:
+        """Use the existing billing catalog while holding the tenant admission lock."""
+
+        from .billing_plan import _entitlement_active, _plan_by_key, _provider, _selected_plan_key
+
+        subscription_row = conn.execute(
+            "select * from billing_subscriptions where company_id = ?", (company_id,),
+        ).fetchone()
+        subscription = self._billing_subscription_row_to_dict(subscription_row) if subscription_row else None
+        plan = _plan_by_key(_selected_plan_key(
+            subscription=subscription,
+            entitlement_active=_entitlement_active(provider=_provider(), subscription=subscription),
+        ))
+        member_count = int(conn.execute(
+            "select count(*) as count from team_members where company_id = ?", (company_id,),
+        ).fetchone()["count"])
+        pending_count = int(conn.execute(
+            """
+            select count(distinct lower(inv.email)) as count from team_invitations inv
+            where inv.company_id = ? and inv.status = 'pending'
+              and not exists (
+                select 1 from team_members tm join users u on u.user_id = tm.user_id
+                where tm.company_id = inv.company_id and lower(u.email) = lower(inv.email)
+              )
+            """,
+            (company_id,),
+        ).fetchone()["count"])
+        limit = max(1, int(plan.get("team_member_quota") or 1))
+        used = member_count + pending_count
+        return {
+            "unit": "team_member", "plan_key": plan["key"], "plan_label": plan["label"],
+            "used": used, "limit": limit, "remaining": max(0, limit - used),
+            "member_count": member_count, "pending_invitation_count": pending_count,
+            "includes_owner": True,
+            "quota_enforcement_enabled": str(os.environ.get("JIEJING_QUOTA_ENFORCEMENT_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"},
+            "secret_exposed": False,
+        }
 
     def activate_prepared_queue_job(self, *, job_id: str, company_id: str) -> dict[str, Any]:
         """Commit a prepared queue record after all linked state is durable, then publish it."""
@@ -5563,21 +5674,94 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def save_merchant_product_fact_checkpoint(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        packet: dict[str, Any],
+        listing_project_identity: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Atomically save one content version; retries share its task and report."""
+        self.initialize()
+        safe_packet = normalize_merchant_product_fact_packet(packet, source="authenticated_merchant_request")
+        if safe_packet.get("sensitive_text_detected") is True or not safe_packet.get("product_name"):
+            raise ValueError("invalid merchant product facts")
+        project = normalize_listing_project_identity(listing_project_identity)
+        content = json.dumps(
+            {"company_id": company_id, "store_id": store_id, "project_key": project.get("key", ""), "packet": safe_packet},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=json_default,
+        )
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        task_id = f"task_product_facts_{digest[:40]}"
+        report_id = f"report_product_facts_{digest[:40]}"
+        created_at = now_iso()
+        title = f"商品资料：{str(safe_packet.get('product_name') or '')[:120]}"
+        task_input = {"merchant_product_fact_packet": safe_packet, "model_usage_required": False,
+                      "real_platform_writes_enabled": False, "secret_exposed": False}
+        if project:
+            task_input["listing_project_identity"] = project
+        with self._connect() as conn:
+            if not conn.execute("select store_id from stores where company_id = ? and store_id = ?", (company_id, store_id)).fetchone():
+                raise KeyError("store not found or not accessible")
+            inserted = conn.execute(
+                """insert or ignore into tasks (
+                    task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
+                    status, created_at, updated_at, input_json, output_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (task_id, company_id, store_id, user_id, None, "merchant_product_facts", title,
+                 "queued", created_at, created_at, json.dumps(task_input, ensure_ascii=False, default=json_default), "{}"),
+            )
+            created = int(inserted.rowcount or 0) == 1
+            row = conn.execute("select * from tasks where task_id = ? and company_id = ? and store_id = ?", (task_id, company_id, store_id)).fetchone()
+            if row is None:
+                raise RuntimeError("product fact checkpoint identity collision")
+            task = self._task_row_to_dict(row)
+            if created:
+                self._insert_audit(conn, company_id=company_id, store_id=store_id, user_id=user_id,
+                                   actor_type="user", action_type="task.create", target_type="task", target_id=task_id,
+                                   summary="SaaS product fact checkpoint created.", details={"task_type": "merchant_product_facts", "title": title})
+                self.save_merchant_product_fact_report(task=task, packet=safe_packet,
+                    listing_project_identity=project, _connection=conn, _report_id=report_id)
+                output = {"report_id": report_id, "unknown_fact_count": len(safe_packet.get("unknown_facts") or []),
+                          "ready_for_listing_generation": bool(safe_packet.get("listing_readiness", {}).get("ready_for_listing_generation")),
+                          "real_platform_writes_enabled": False, "secret_exposed": False}
+                conn.execute("update tasks set status = ?, updated_at = ?, output_json = ? where task_id = ? and company_id = ?",
+                             ("completed", created_at, json.dumps(output, ensure_ascii=False), task_id, company_id))
+            report_row = conn.execute(
+                """select r.*, t.company_id as company_id, t.store_id as store_id from reports r
+                join tasks t on t.task_id = r.task_id
+                where r.report_id = ? and t.company_id = ? and t.store_id = ?""", (report_id, company_id, store_id),
+            ).fetchone()
+            if report_row is None:
+                raise RuntimeError("product fact checkpoint report missing")
+            task_row = conn.execute("select * from tasks where task_id = ? and company_id = ?", (task_id, company_id)).fetchone()
+            report = self._report_row_to_dict(report_row)
+            return {"task": self._task_row_to_dict(task_row), "report": report,
+                    "merchant_product_fact_packet": report["report"]["merchant_product_fact_packet"],
+                    "listing_project_identity": report["report"].get("listing_project_identity", {}),
+                    "idempotent_replay": not created, "model_called": False,
+                    "real_platform_writes_enabled": False, "secret_exposed": False}
+
     def save_merchant_product_fact_report(
         self,
         *,
         task: dict[str, Any],
         packet: dict[str, Any],
         listing_project_identity: dict[str, Any] | None = None,
+        _connection: Any = None,
+        _report_id: str | None = None,
     ) -> dict[str, Any]:
         """Persist one authenticated merchant product-fact checkpoint."""
 
-        self.initialize()
+        if _connection is None:
+            self.initialize()
         safe_packet = _redact_secret_like(packet if isinstance(packet, dict) else {})
         safe_listing_project_identity = normalize_listing_project_identity(listing_project_identity)
         product = _sanitize_merchant_ceo_text(safe_packet.get("product_name"), limit=120) or "待确认商品"
         created_at = now_iso()
-        report_id = _id("report")
+        report_id = _report_id or _id("report")
         title = f"商品资料：{product}"[:180]
         unknown = safe_packet.get("unknown_facts") if isinstance(safe_packet.get("unknown_facts"), list) else []
         vision_extracted = str(safe_packet.get("source") or "") == "backend_product_vision_extraction"
@@ -5606,7 +5790,7 @@ class SaaSRepository:
         }
         if safe_listing_project_identity:
             report_payload["listing_project_identity"] = safe_listing_project_identity
-        with self._connect() as conn:
+        with nullcontext(_connection) if _connection is not None else self._connect() as conn:
             conn.execute(
                 """
                 insert into reports (
@@ -6935,6 +7119,116 @@ class SaaSRepository:
                 details={"action_type": existing["action_type"], "note": note},
             )
         return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+
+    def review_platform_refund_confirmation(
+        self, *, company_id: str, order_id: str, confirmation_id: str,
+        reviewer_company_id: str, reviewer_user_id: str, internal_admin_emails: tuple[str, ...],
+        decision: str, review_reason: str,
+    ) -> dict[str, Any]:
+        """Atomically bind a SaaS refund decision to its platform reviewer evidence."""
+        self.initialize()
+        reason = " ".join(str(review_reason or "").split())
+        if decision not in {"approve", "reject"} or not 10 <= len(reason) <= 500:
+            raise ValueError("refund_review_requires_decision_and_reason")
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            member = conn.execute(
+                "select u.email, u.status, tm.role from users u join team_members tm on tm.user_id = u.user_id where u.user_id = ? and tm.company_id = ?",
+                (reviewer_user_id, reviewer_company_id),
+            ).fetchone()
+            if not member or str(member["email"]).lower() not in internal_admin_emails or member["role"] not in {"owner", "admin"} or member["status"] != "active":
+                raise PermissionError("refund_review_requires_platform_internal_admin")
+            lock = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(f"select * from confirmations where company_id = ? and confirmation_id = ?{lock}", (company_id, confirmation_id)).fetchone()
+            order = conn.execute(f"select status, amount_minor, currency from billing_orders where company_id = ? and order_id = ?{lock}", (company_id, order_id)).fetchone()
+            if not row or not order:
+                raise KeyError("domestic_billing_order_not_found")
+            confirmation = self._confirmation_row_to_dict(row)
+            item = confirmation.get("item") or {}
+            if (confirmation.get("action_type") != "refund" or confirmation.get("store_id") is not None
+                or confirmation.get("runtime_run_id") != f"billing_refund:{order_id}"
+                or item.get("source") != "domestic_billing_refund_review" or item.get("order_id") != order_id
+                or item.get("amount_minor") != order["amount_minor"] or item.get("currency") != order["currency"]):
+                raise ValueError("domestic_refund_confirmation_invalid")
+            if order["status"] != "refund_review_requested" or confirmation["status"] not in {"pending", "approved"}:
+                raise ConfirmationDecisionConflict("domestic_refund_review_state_conflict")
+            decided_at = now_iso()
+            status = "approved" if decision == "approve" else "rejected"
+            safe_reason = str(_redact_secret_like({"reason": reason})["reason"])
+            conn.execute("update confirmations set status = ?, decided_by = ?, decided_at = ?, decision_note = ? where company_id = ? and confirmation_id = ?", (status, reviewer_user_id, decided_at, safe_reason, company_id, confirmation_id))
+            self._insert_audit(
+                conn, company_id=company_id, store_id=None, user_id=reviewer_user_id,
+                actor_type="platform_internal_admin", action_type="billing.domestic_refund.reviewed",
+                target_type="confirmation", target_id=confirmation_id,
+                summary="Platform operator reviewed a merchant SaaS refund request.",
+                details={"decision": decision, "review_reason": safe_reason, "reviewer_company_id": reviewer_company_id,
+                         "order_id": order_id, "amount_minor": int(order["amount_minor"]), "currency": str(order["currency"]),
+                         "decided_at": decided_at, "calls_external_payment_api": False, "triggers_real_refund": False},
+            )
+        return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+
+    def claim_platform_refund_execution(
+        self, *, company_id: str, order_id: str, confirmation_id: str,
+        reviewer_company_id: str, reviewer_user_id: str, reviewed_at: str,
+        operator_company_id: str, operator_user_id: str, internal_admin_emails: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Freeze the reviewed money action before any provider request, across workers."""
+        self.initialize()
+        lock = " for update" if self.database_engine == "postgres" else ""
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            # Same lock order as review: confirmation, then its account-scoped order.
+            row = conn.execute(f"select * from confirmations where company_id = ? and confirmation_id = ?{lock}", (company_id, confirmation_id)).fetchone()
+            order_row = conn.execute(f"select * from billing_orders where company_id = ? and order_id = ?{lock}", (company_id, order_id)).fetchone()
+            if not row or not order_row:
+                raise KeyError("domestic_billing_order_not_found")
+            confirmation = self._confirmation_row_to_dict(row)
+            order = self._domestic_billing_order_row_to_dict(order_row)
+            for member_company, member_user in ((reviewer_company_id, reviewer_user_id), (operator_company_id, operator_user_id)):
+                member = conn.execute("select u.email, u.status, tm.role from users u join team_members tm on tm.user_id = u.user_id where u.user_id = ? and tm.company_id = ?", (member_user, member_company)).fetchone()
+                if not member or str(member["email"]).lower() not in internal_admin_emails or member["role"] not in {"owner", "admin"} or member["status"] != "active":
+                    raise PermissionError("domestic_refund_execution_requires_platform_internal_admin")
+            if (confirmation["status"] != "approved" or confirmation.get("decided_by") != reviewer_user_id
+                or confirmation.get("decided_at") != reviewed_at):
+                raise ConfirmationDecisionConflict("domestic_refund_review_state_conflict")
+            if order["status"] in {"refund_processing", "refunded"}:
+                return {"claimed": False, "status": order["status"]}
+            if order["status"] != "refund_review_requested":
+                raise ConfirmationDecisionConflict("domestic_refund_review_state_conflict")
+            claim_id = f"refund_claim_{secrets.token_hex(16)}"
+            payload = order.get("order") if isinstance(order.get("order"), dict) else {}
+            state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+            payload = {**payload, "state": {**state, "refund_execution_claim_id": claim_id, "refund_execution_claimed_at": now_iso(), "refund_execution_reviewed_at": reviewed_at, "provider_query_required": True}}
+            conn.execute("update billing_orders set status = 'refund_processing', updated_at = ?, order_json = ? where company_id = ? and order_id = ?", (now_iso(), json.dumps(payload, ensure_ascii=False), company_id, order_id))
+            self._insert_audit(conn, company_id=company_id, store_id=None, user_id=operator_user_id,
+                actor_type="platform_internal_admin", action_type="billing.domestic_refund.execution_claimed",
+                target_type="billing_order", target_id=order_id, summary="Refund execution reserved before the provider request.",
+                details={"confirmation_id": confirmation_id, "claim_id": claim_id, "reviewer_user_id": reviewer_user_id, "reviewed_at": reviewed_at, "amount_minor": order["amount_minor"], "currency": order["currency"], "calls_external_payment_api": False, "triggers_real_refund": False})
+        return {"claimed": True, "claim_id": claim_id, "status": "refund_processing"}
+
+    def release_platform_refund_prewrite_claim(self, *, company_id: str, order_id: str, claim_id: str, reason: str) -> bool:
+        """Only the claiming call may undo a proven pre-provider failure, never uncertainty."""
+        self.initialize()
+        lock = " for update" if self.database_engine == "postgres" else ""
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            row = conn.execute(f"select * from billing_orders where company_id = ? and order_id = ?{lock}", (company_id, order_id)).fetchone()
+            if not row:
+                return False
+            order = self._domestic_billing_order_row_to_dict(row)
+            payload = order.get("order") if isinstance(order.get("order"), dict) else {}
+            state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+            if order["status"] != "refund_processing" or state.get("refund_execution_claim_id") != claim_id or state.get("provider_refund_status"):
+                return False
+            payload = {**payload, "state": {**state, "refund_execution_claim_id": "", "provider_query_required": False, "refund_prewrite_failure": str(reason)[:100]}}
+            conn.execute("update billing_orders set status = 'refund_review_requested', updated_at = ?, order_json = ? where company_id = ? and order_id = ?", (now_iso(), json.dumps(payload, ensure_ascii=False), company_id, order_id))
+            self._insert_audit(conn, company_id=company_id, store_id=None, user_id=None, actor_type="system",
+                action_type="billing.domestic_refund.prewrite_released", target_type="billing_order", target_id=order_id,
+                summary="Refund claim released after a proven pre-provider failure.", details={"claim_id": claim_id, "reason": str(reason)[:100], "calls_external_payment_api": False, "triggers_real_refund": False})
+        return True
 
     def reconcile_confirmation_managed_tasks(
         self,
@@ -9183,6 +9477,17 @@ class SaaSRepository:
                     json.dumps(record, ensure_ascii=False),
                 ),
             )
+            activation_row = conn.execute(
+                "select activated_at from platform_trial_activations where company_id = ?",
+                (company_id,),
+            ).fetchone()
+            canonical_activated_at = str(activation_row["activated_at"] or "") if activation_row else ""
+            if record["activated_at"] != canonical_activated_at:
+                record["activated_at"] = canonical_activated_at
+                conn.execute(
+                    "update platform_trial_activations set activation_json = ? where company_id = ?",
+                    (json.dumps(record, ensure_ascii=False), company_id),
+                )
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -10860,6 +11165,275 @@ class SaaSRepository:
         value = _load_json_field(row["activation_json"])
         return value if isinstance(value, dict) else None
 
+    def platform_model_trial_reservation_usage(
+        self,
+        *,
+        company_id: str,
+        period_key: str,
+    ) -> dict[str, int]:
+        """Return the durable baseline plus reservations that still consume quota."""
+
+        self.initialize()
+        normalized_company = str(company_id or "").strip()
+        normalized_period = str(period_key or "").strip().lower()
+        if not normalized_company or not re.fullmatch(r"[0-9a-f]{64}", normalized_period):
+            raise ValueError("platform model trial company and opaque period key are required")
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select
+                  coalesce(max(baseline_used), 0) as baseline_used,
+                  coalesce(sum(case when status in ('reserved', 'consumed') then 1 else 0 end), 0)
+                    as effective_reservation_count,
+                  coalesce(max(slot_number), 0) as max_slot
+                from platform_model_trial_reservations
+                where company_id = ? and period_key = ?
+                """,
+                (normalized_company, normalized_period),
+            ).fetchone()
+        baseline_used = max(0, int(row["baseline_used"] or 0)) if row else 0
+        effective_count = max(0, int(row["effective_reservation_count"] or 0)) if row else 0
+        return {
+            "baseline_used": baseline_used,
+            "effective_reservation_count": effective_count,
+            "reservation_used": baseline_used + effective_count,
+            "max_slot": max(0, int(row["max_slot"] or 0)) if row else 0,
+        }
+
+    def reserve_platform_model_trial_slot(
+        self,
+        *,
+        company_id: str,
+        period_key: str,
+        historical_used: int,
+        limit: int,
+        route_scope: str,
+    ) -> dict[str, Any]:
+        """Atomically reserve one durable platform-funded trial action.
+
+        Slots are never deleted. A request that made zero provider calls may
+        release its slot; a later request reuses that row with a fresh
+        reservation id so a delayed release cannot affect the new owner.
+        """
+
+        self.initialize()
+        normalized_company = str(company_id or "").strip()
+        normalized_period = str(period_key or "").strip().lower()
+        normalized_scope = str(route_scope or "").strip().lower()
+        if not normalized_company or not re.fullmatch(r"[0-9a-f]{64}", normalized_period):
+            raise ValueError("platform model trial company and opaque period key are required")
+        if normalized_scope not in {"listing_draft_generation", "merchant_ceo_chat"}:
+            raise ValueError("unsupported platform model trial route scope")
+        bounded_limit = max(0, int(limit or 0))
+        known_task_used = max(0, int(historical_used or 0))
+        if bounded_limit <= 0:
+            return {
+                "allowed": True,
+                "reservation_created": False,
+                "unlimited": True,
+                "slot_number": 0,
+                "used": known_task_used,
+                "limit": bounded_limit,
+                "storage": "shared_database",
+                "secret_exposed": False,
+            }
+
+        reserved_row = None
+        created_at = now_iso()
+        with self._connect() as conn:
+            # Reusing different released rows must share the same fresh quota
+            # snapshot. Unique slot numbers alone cannot serialize that case.
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            else:
+                conn.execute(
+                    "select company_id from companies where company_id = ? for update",
+                    (normalized_company,),
+                ).fetchone()
+            usage_row = conn.execute(
+                """
+                select
+                  count(*) as reservation_row_count,
+                  coalesce(max(baseline_used), 0) as baseline_used,
+                  coalesce(sum(case when status in ('reserved', 'consumed') then 1 else 0 end), 0)
+                    as effective_reservation_count,
+                  coalesce(max(slot_number), 0) as max_slot
+                from platform_model_trial_reservations
+                where company_id = ? and period_key = ?
+                """,
+                (normalized_company, normalized_period),
+            ).fetchone()
+            row_count = max(0, int(usage_row["reservation_row_count"] or 0)) if usage_row else 0
+            stored_baseline = (
+                max(0, int(usage_row["baseline_used"] or 0))
+                if row_count > 0 and usage_row
+                else known_task_used
+            )
+            effective_count = max(0, int(usage_row["effective_reservation_count"] or 0)) if usage_row else 0
+            baseline_used = max(stored_baseline, known_task_used - effective_count)
+            effective_used = max(known_task_used, baseline_used + effective_count)
+            if effective_used >= bounded_limit:
+                return {
+                    "allowed": False,
+                    "reservation_created": False,
+                    "unlimited": False,
+                    "reservation_id": "",
+                    "slot_number": 0,
+                    "used": effective_used,
+                    "limit": bounded_limit,
+                    "storage": "shared_database",
+                    "route_scope": normalized_scope,
+                    "secret_exposed": False,
+                }
+
+            # Reuse a released row first. Updating the primary reservation token
+            # prevents an old delayed release from touching the new request.
+            for _attempt in range(min(bounded_limit + 1, 1000)):
+                candidate_id = _id("trialres")
+                reserved_row = conn.execute(
+                    """
+                    update platform_model_trial_reservations
+                    set reservation_id = ?, route_scope = ?, baseline_used = ?,
+                        status = 'reserved', created_at = ?, released_at = null
+                    where reservation_id = (
+                      select reusable.reservation_id
+                      from platform_model_trial_reservations as reusable
+                      where reusable.company_id = ? and reusable.period_key = ?
+                        and reusable.status = 'released'
+                      order by reusable.slot_number
+                      limit 1
+                    )
+                      and status = 'released'
+                    returning reservation_id, slot_number, baseline_used, status
+                    """,
+                    (
+                        candidate_id,
+                        normalized_scope,
+                        baseline_used,
+                        created_at,
+                        normalized_company,
+                        normalized_period,
+                    ),
+                ).fetchone()
+                if reserved_row:
+                    break
+                # A competing transaction may have claimed the selected row.
+                # A fresh statement gets a new snapshot before we give up reuse.
+                released_row = conn.execute(
+                    """
+                    select reservation_id
+                    from platform_model_trial_reservations
+                    where company_id = ? and period_key = ? and status = 'released'
+                    limit 1
+                    """,
+                    (normalized_company, normalized_period),
+                ).fetchone()
+                if not released_row:
+                    break
+
+            if reserved_row is None:
+                for slot_number in range(effective_used + 1, bounded_limit + 1):
+                    candidate_id = _id("trialres")
+                    reserved_row = conn.execute(
+                        """
+                    insert into platform_model_trial_reservations (
+                      reservation_id, company_id, period_key, slot_number, route_scope,
+                      baseline_used, status, created_at, released_at
+                    ) values (?, ?, ?, ?, ?, ?, 'reserved', ?, null)
+                    on conflict (company_id, period_key, slot_number) do nothing
+                    returning reservation_id, slot_number, baseline_used, status
+                    """,
+                        (
+                            candidate_id,
+                            normalized_company,
+                            normalized_period,
+                            slot_number,
+                            normalized_scope,
+                            baseline_used,
+                            created_at,
+                        ),
+                    ).fetchone()
+                    if reserved_row:
+                        break
+
+            refreshed_row = conn.execute(
+                """
+                select
+                  coalesce(max(baseline_used), 0) as baseline_used,
+                  coalesce(sum(case when status in ('reserved', 'consumed') then 1 else 0 end), 0)
+                    as effective_reservation_count
+                from platform_model_trial_reservations
+                where company_id = ? and period_key = ?
+                """,
+                (normalized_company, normalized_period),
+            ).fetchone()
+
+        refreshed_baseline = max(0, int(refreshed_row["baseline_used"] or 0)) if refreshed_row else 0
+        refreshed_count = max(0, int(refreshed_row["effective_reservation_count"] or 0)) if refreshed_row else 0
+        slot_number = int(reserved_row["slot_number"] or 0) if reserved_row else 0
+        return {
+            "allowed": reserved_row is not None,
+            "reservation_created": reserved_row is not None,
+            "unlimited": False,
+            "reservation_id": str(reserved_row["reservation_id"] or "") if reserved_row else "",
+            "slot_number": slot_number,
+            "used": max(known_task_used, refreshed_baseline + refreshed_count),
+            "limit": bounded_limit,
+            "storage": "shared_database",
+            "route_scope": normalized_scope,
+            "prompt_persisted": False,
+            "credential_persisted": False,
+            "secret_exposed": False,
+        }
+
+    def settle_platform_model_trial_reservation(
+        self,
+        *,
+        company_id: str,
+        reservation_id: str,
+        request_count: int,
+    ) -> dict[str, Any]:
+        """Consume a provider-entered request or release a zero-request slot."""
+
+        self.initialize()
+        normalized_company = str(company_id or "").strip()
+        normalized_id = str(reservation_id or "").strip()[:160]
+        if not normalized_company or not normalized_id:
+            raise ValueError("platform model trial company and reservation are required")
+        provider_entered = max(0, int(request_count or 0)) > 0
+        target_status = "consumed" if provider_entered else "released"
+        released_at = None if provider_entered else now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                update platform_model_trial_reservations
+                set status = ?, released_at = ?
+                where company_id = ? and reservation_id = ? and status = 'reserved'
+                returning reservation_id, slot_number, status, released_at
+                """,
+                (target_status, released_at, normalized_company, normalized_id),
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    """
+                    select reservation_id, slot_number, status, released_at
+                    from platform_model_trial_reservations
+                    where company_id = ? and reservation_id = ?
+                    """,
+                    (normalized_company, normalized_id),
+                ).fetchone()
+        existing_status = str(row["status"] or "") if row else ""
+        return {
+            "settled": bool(row and existing_status == target_status),
+            "reservation_id": normalized_id if row else "",
+            "slot_number": int(row["slot_number"] or 0) if row else 0,
+            "status": existing_status,
+            "provider_request_count": max(0, int(request_count or 0)),
+            "released_at": str(row["released_at"] or "") if row else "",
+            "storage": "shared_database",
+            "secret_exposed": False,
+        }
+
     def list_media_credit_ledger(self, *, company_id: str, limit: int = 30) -> list[dict[str, Any]]:
         self.initialize()
         safe_limit = min(max(int(limit), 1), 100)
@@ -11997,6 +12571,13 @@ class SaaSRepository:
             if not duplicate_transition and current_status not in allowed_current_statuses:
                 raise ValueError("domestic billing state transition is not allowed")
             safe_order = current.get("order") if isinstance(current.get("order"), dict) else {}
+            previous_state = safe_order.get("state") if isinstance(safe_order.get("state"), dict) else {}
+            # A durable pre-send claim already uses refund_processing. The first
+            # signed PROCESSING receipt is new evidence, not a duplicate to drop.
+            refresh_processing_evidence = (duplicate_transition and status == "refund_processing"
+                and state_details.get("provider_verified") is True
+                and (previous_state.get("provider_refund_status") != state_details.get("provider_refund_status")
+                     or previous_state.get("provider_verified") is not True))
             if status in {"closed", "payment_failed", "refunded"}:
                 safe_order = _without_domestic_checkout_uri(safe_order)
             safe_order = _redact_secret_like(
@@ -12007,7 +12588,7 @@ class SaaSRepository:
                     "secret_exposed": False,
                 }
             )
-            if not duplicate_transition:
+            if not duplicate_transition or refresh_processing_evidence:
                 updated = conn.execute(
                     """
                     update billing_orders
@@ -12050,7 +12631,7 @@ class SaaSRepository:
                 """,
                 (company_id, order_id),
             ).fetchone()
-            if not duplicate_transition:
+            if not duplicate_transition or refresh_processing_evidence:
                 self._insert_audit(
                     conn,
                     company_id=company_id,
@@ -12089,6 +12670,38 @@ class SaaSRepository:
                 limit ?
                 """,
                 (company_id, safe_limit),
+            ).fetchall()
+        return [self._domestic_billing_order_row_to_dict(row) for row in rows]
+
+    def platform_refund_usage_evidence(self, *, company_id: str, paid_at: str) -> dict[str, Any]:
+        """Aggregate account use since this payment without exposing prompts or order PII."""
+        self.initialize()
+        since = str(paid_at or "")
+        if not _parse_iso_datetime(since):
+            return {"available": False, "reason": "payment_timestamp_missing"}
+        window = "cast(created_at as timestamptz) >= cast(? as timestamptz)" if self.database_engine == "postgres" else "julianday(created_at) >= julianday(?)"
+        with self._connect() as conn:
+            model = conn.execute(
+                f"select coalesce(sum(case when usage_owner = 'jiejing_platform_trial' then request_count else 0 end), 0) as platform_requests, coalesce(sum(request_count), 0) as all_requests from model_usage_ledger where company_id = ? and {window}",
+                (company_id, since),
+            ).fetchone()
+            media = conn.execute(f"select coalesce(sum(points), 0) as settled_points from media_credit_ledger where company_id = ? and operation_type = 'settle' and {window}", (company_id, since)).fetchone()
+            costs = conn.execute(f"select count(*) as operation_count from provider_cost_ledger where company_id = ? and {window}", (company_id, since)).fetchone()
+        subscription = self.get_billing_subscription(company_id=company_id) or {}
+        return {"available": True, "since": since, "usage_scope": "company_since_payment_not_order_allocated",
+                "platform_model_request_count": int(model["platform_requests"]), "all_model_request_count": int(model["all_requests"]),
+                "settled_media_points": int(media["settled_points"]), "provider_operation_count": int(costs["operation_count"]),
+                "current_subscription_status": str(subscription.get("status") or "missing"),
+                "current_entitlement_active": subscription.get("entitlement_active") is True,
+                "current_entitlement_until": str(subscription.get("active_until") or ""), "merchant_content_exposed": False}
+
+    def list_platform_refund_review_orders(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Internal operations only: bounded exact refund targets, never provider secrets."""
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select * from billing_orders where provider = 'wechat_pay_native' and status in ('refund_review_requested', 'refund_processing', 'refund_failed', 'refunded') order by updated_at desc limit ?",
+                (max(1, min(int(limit), 100)),),
             ).fetchall()
         return [self._domestic_billing_order_row_to_dict(row) for row in rows]
 
@@ -13554,6 +14167,7 @@ class SaaSRepository:
             "users",
             "companies",
             "platform_trial_activations",
+            "platform_model_trial_reservations",
             "merchant_onboarding_states",
             "team_members",
             "team_invitations",
@@ -16346,6 +16960,37 @@ class SaaSRepository:
             conn.execute("alter table user_sessions add column refresh_session_id text")
 
     @staticmethod
+    def _ensure_platform_model_trial_reservation_lifecycle(conn: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in conn.execute("pragma table_info(platform_model_trial_reservations)").fetchall()
+        }
+        if "baseline_used" not in columns:
+            conn.execute(
+                "alter table platform_model_trial_reservations "
+                "add column baseline_used integer not null default 0"
+            )
+        if "status" not in columns:
+            conn.execute(
+                "alter table platform_model_trial_reservations "
+                "add column status text not null default 'consumed'"
+            )
+        if "released_at" not in columns:
+            conn.execute("alter table platform_model_trial_reservations add column released_at text")
+        conn.execute(
+            """
+            update platform_model_trial_reservations as reservation
+            set baseline_used = (
+              select max(0, min(period_rows.slot_number) - 1)
+              from platform_model_trial_reservations as period_rows
+              where period_rows.company_id = reservation.company_id
+                and period_rows.period_key = reservation.period_key
+            )
+            where reservation.baseline_used = 0
+            """
+        )
+
+    @staticmethod
     def _ensure_account_scoped_confirmations(conn: sqlite3.Connection) -> None:
         """Make store/task ownership optional for billing and other account controls."""
 
@@ -17561,6 +18206,12 @@ def _runtime_confirmation_matches(
     )
 
 
+class TeamSeatQuotaExceeded(ValueError):
+    def __init__(self, quota: dict[str, Any]) -> None:
+        super().__init__("team_member_quota_exhausted")
+        self.quota = quota
+
+
 class ConfirmationDecisionConflict(ValueError):
     """Raised when a terminal confirmation is asked to transition again."""
 
@@ -17764,6 +18415,7 @@ def normalize_merchant_product_fact_packet(
     raw = value if isinstance(value, dict) else {}
     trusted_merchant_request = str(source or "") == "authenticated_merchant_request"
     simulation_only = raw.get("simulation_only") is True
+    sensitive_text_detected = contains_secret_like_data(raw)
     submitted = raw.get("merchant_confirmed_facts") if isinstance(raw.get("merchant_confirmed_facts"), dict) else {}
     derived_submitted = raw.get("derived_listing_suggestions") if isinstance(raw.get("derived_listing_suggestions"), dict) else {}
 
@@ -17778,6 +18430,8 @@ def normalize_merchant_product_fact_packet(
             limit = 2400 if key == "image_urls" else 700 if key == "source_url" else 240
             text = _safe_ai_ceo_supplier_text(raw_value, limit=limit)
             if not text:
+                continue
+            if contains_secret_like_text(text):
                 continue
             redacted = _redact_secret_like(text)
             if not isinstance(redacted, str) or redacted != text:
@@ -17841,14 +18495,65 @@ def normalize_merchant_product_fact_packet(
         blocked_by.append("merchant_product_source_unconfirmed")
     if simulation_only:
         blocked_by.append("simulation_only_product_facts")
+    if sensitive_text_detected:
+        blocked_by.append("listing_product_fact_sensitive_text")
+    # Browser-carried evidence stays unverified metadata. Keeping it does not
+    # promote an extracted value, image right, or product ownership to a fact.
+    vision_version = _safe_ai_ceo_supplier_text(raw.get("vision_contract_version"), limit=80)
+    vision_origin = bool(vision_version) or raw.get("source") == "backend_product_vision_extraction"
+    evidence = {}
+    for key, item in (raw.get("field_evidence") if isinstance(raw.get("field_evidence"), dict) else {}).items():
+        if key not in MERCHANT_PRODUCT_FACT_KEYS or not isinstance(item, dict):
+            continue
+        confidence = item.get("confidence")
+        confidence = float(confidence) if isinstance(confidence, (int, float)) and math.isfinite(confidence) else 0.0
+        indexes = item.get("image_indexes") if isinstance(item.get("image_indexes"), list) else []
+        evidence[key] = {
+            "source_type": _safe_ai_ceo_supplier_text(item.get("source_type"), limit=80),
+            "image_indexes": [index for index in indexes if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < 20][:10],
+            "confidence": max(0.0, min(1.0, confidence)),
+            "merchant_confirmation_received": key in merchant_confirmed,
+        }
+    conflicts = []
+    for item in (raw.get("fact_conflicts") if isinstance(raw.get("fact_conflicts"), list) else [])[:20]:
+        if not isinstance(item, dict) or item.get("field") not in MERCHANT_PRODUCT_FACT_KEYS:
+            continue
+        values = item.get("values") if isinstance(item.get("values"), list) else []
+        conflicts.append({"field": item["field"], "values": [_safe_ai_ceo_supplier_text(item, limit=240) for item in values[:5]],
+                          "reason": _safe_ai_ceo_supplier_text(item.get("reason"), limit=320)})
+    for item in (raw.get("source_records") if isinstance(raw.get("source_records"), list) else [])[:12]:
+        if not isinstance(item, dict) or item.get("type") not in {"merchant_product_link", "merchant_product_image"}:
+            continue
+        record = {"type": item["type"], "rights_status": "not_applicable" if item["type"] == "merchant_product_link" else "pending_merchant_confirmation",
+                  "signed_url_persisted": False, "secret_exposed": False}
+        for key, limit in (("url", 700), ("asset_id", 120), ("sha256", 64), ("original_filename", 120)):
+            value = _safe_ai_ceo_supplier_text(item.get(key), limit=limit)
+            if value and (key != "url" or re.match(r"^https?://", value, flags=re.IGNORECASE)):
+                record[key] = value
+        for key in ("source_index", "width", "height"):
+            value = item.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and 0 < value < 1_000_000:
+                record[key] = value
+        if not record.get("url") and not record.get("asset_id"):
+            continue
+        if any((record.get("url") and existing.get("url") == record["url"]) or
+               (record.get("asset_id") and existing.get("asset_id") == record["asset_id"]) for existing in source_records):
+            continue
+        source_records.append(record)
     return {
         "contract_version": MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION,
-        "source": "authenticated_merchant_request" if trusted_merchant_request else "untrusted_input",
+        "source": "backend_product_vision_extraction" if vision_origin else "authenticated_merchant_request" if trusted_merchant_request else "untrusted_input",
+        "vision_contract_version": vision_version,
+        "buyer_copy_requires_validated_listing_generation": vision_origin or raw.get("buyer_copy_requires_validated_listing_generation") is True,
+        "field_evidence": evidence,
+        "fact_conflicts": conflicts,
         "source_mode": (
             "merchant_source_supplied"
             if source_url
             else "merchant_owned_product"
             if merchant_owned_product_confirmed
+            else "merchant_images_supplied"
+            if raw.get("source_mode") == "merchant_images_supplied"
             else "source_missing"
         ),
         "product_name": str(merchant_confirmed.get("product_name") or derived.get("product_name") or "")[:120],
@@ -17876,6 +18581,7 @@ def normalize_merchant_product_fact_packet(
             ),
         },
         "blocked_by": blocked_by,
+        "sensitive_text_detected": sensitive_text_detected,
         "real_platform_writes_enabled": False,
         "secret_exposed": False,
     }

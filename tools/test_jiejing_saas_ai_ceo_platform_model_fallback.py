@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -348,6 +349,129 @@ def main() -> int:
             return fail(f"capability answer should explain the active account BYOK connection: {capability_answer}")
         if FakeModelHandler.calls:
             return fail("capability question should not call the text model provider")
+
+        # A Listing quality failure may use one automatic repair request, but it
+        # remains one merchant-visible Jiejing trial action. The next platform-
+        # managed Listing must be rejected before another provider request.
+        listing_auth = post_json(
+            f"{base_url}/auth/register",
+            {
+                "email": "listing-platform-trial@example.com",
+                "password": "password123",
+                "company_name": "Listing Platform Trial Co",
+            },
+        )
+        listing_token = str(listing_auth.get("token") or "")
+        listing_store = post_json(
+            f"{base_url}/stores",
+            {"platform": "ebay", "store_name": "Listing Trial Store", "marketplace": "EBAY_US", "stage": "store_opened"},
+            token=listing_token,
+        ).get("store", {})
+        listing_store_id = str(listing_store.get("store_id") or "")
+        listing_payload = {
+            "listing_project_identity": {"key": "listing-project-platform-trial-http"},
+            "merchant_product_fact_packet": {
+                "merchant_confirmed_facts": {
+                    "product_name": "Foldable Tablet Stand",
+                    "condition": "NEW",
+                    "material": "Aluminum alloy",
+                }
+            },
+            "current_draft_fields": {},
+        }
+        FakeModelHandler.calls.clear()
+        failed_status, failed_listing = post_json_expect_error(
+            f"{base_url}/stores/{listing_store_id}/listing-drafts/generate",
+            listing_payload,
+            token=listing_token,
+        )
+        if failed_status != 502 or failed_listing.get("failure_code") != "listing_model_output_invalid_json":
+            return fail(f"invalid platform Listing should fail after one repair: {failed_status} {failed_listing}")
+        if failed_listing.get("model_called") is not True or failed_listing.get("model_usage", {}).get("request_count") != 2:
+            return fail(f"failed Listing must report both provider requests: {failed_listing}")
+        if len(FakeModelHandler.calls) != 2:
+            return fail(f"Listing quality repair should make exactly two provider requests: {FakeModelHandler.calls}")
+        listing_tasks = fetch_json(
+            f"{base_url}/tasks?store_id={listing_store_id}&limit=30",
+            token=listing_token,
+        ).get("tasks", [])
+        metered_listing_tasks = [item for item in listing_tasks if item.get("task_type") == "listing_draft_generation"]
+        if len(metered_listing_tasks) != 1:
+            return fail(f"one failed Listing action should leave exactly one metered task: {listing_tasks}")
+        listing_output = metered_listing_tasks[0].get("output", {})
+        if (
+            metered_listing_tasks[0].get("status") != "failed"
+            or listing_output.get("usage_consumed") is not True
+            or listing_output.get("model_request_count") != 2
+        ):
+            return fail(f"failed Listing task lost precise usage: {metered_listing_tasks[0]}")
+        listing_reports = fetch_json(f"{base_url}/reports?limit=100", token=listing_token).get("reports", [])
+        if any(item.get("report_type") == "listing.package" for item in listing_reports):
+            return fail(f"quality-blocked Listing created a report: {listing_reports}")
+        with sqlite3.connect(SAAS_DB) as connection:
+            usage_row = connection.execute(
+                "select usage_owner, request_count, usage_json from model_usage_ledger where task_id = ?",
+                (metered_listing_tasks[0].get("task_id"),),
+            ).fetchone()
+        if not usage_row or usage_row[0] != "jiejing_platform_trial" or int(usage_row[1] or 0) != 2:
+            return fail(f"failed Listing usage ledger is incomplete: {usage_row}")
+        usage_details = json.loads(str(usage_row[2] or "{}")).get("details", {})
+        if usage_details.get("outcome") != "failed":
+            return fail(f"failed Listing usage ledger lost its outcome: {usage_details}")
+        listing_quota = fetch_json(
+            f"{base_url}/stores/{listing_store_id}/model/settings",
+            token=listing_token,
+        ).get("model_settings", {}).get("platform_trial_quota", {})
+        if listing_quota.get("used") != 1 or listing_quota.get("remaining") != 0 or listing_quota.get("allowed") is not False:
+            return fail(f"one failed Listing action should consume one trial unit: {listing_quota}")
+
+        blocked_call_count = len(FakeModelHandler.calls)
+        blocked_listing_status, blocked_listing = post_json_expect_error(
+            f"{base_url}/stores/{listing_store_id}/listing-drafts/generate",
+            listing_payload,
+            token=listing_token,
+        )
+        if blocked_listing_status != 402 or "platform_default_model_trial_exhausted" not in set(blocked_listing.get("blocked_by") or []):
+            return fail(f"second platform Listing should be blocked before model use: {blocked_listing_status} {blocked_listing}")
+        if len(FakeModelHandler.calls) != blocked_call_count:
+            return fail("trial-blocked Listing called the provider")
+        tasks_after_listing_block = fetch_json(
+            f"{base_url}/tasks?store_id={listing_store_id}&limit=30",
+            token=listing_token,
+        ).get("tasks", [])
+        if len([item for item in tasks_after_listing_block if item.get("task_type") == "listing_draft_generation"]) != 1:
+            return fail(f"trial-blocked Listing created another metered task: {tasks_after_listing_block}")
+
+        listing_byok_key = "unit-listing-byok-key-not-returned"
+        saved_listing_byok = post_json(
+            f"{base_url}/stores/{listing_store_id}/model/api-key",
+            {
+                "provider_key": "deepseek",
+                "api_key": listing_byok_key,
+                "model": "deepseek-v4-pro",
+                "base_url": f"http://127.0.0.1:{model_server.server_address[1]}/v1",
+                "connection_scope": "account",
+            },
+            token=listing_token,
+        )
+        if listing_byok_key in json.dumps(saved_listing_byok, ensure_ascii=False):
+            return fail("Listing BYOK response exposed the merchant model key")
+        byok_baseline_calls = len(FakeModelHandler.calls)
+        byok_listing_status, byok_listing = post_json_expect_error(
+            f"{base_url}/stores/{listing_store_id}/listing-drafts/generate",
+            {**listing_payload, "listing_project_identity": {"key": "listing-project-byok-after-trial"}},
+            token=listing_token,
+        )
+        if byok_listing_status != 502 or byok_listing.get("failure_code") != "listing_model_output_invalid_json":
+            return fail(f"BYOK Listing should bypass trial exhaustion and reach the model: {byok_listing_status} {byok_listing}")
+        if len(FakeModelHandler.calls) != byok_baseline_calls + 2:
+            return fail("BYOK Listing did not reach the provider for generation and one repair")
+        quota_after_listing_byok = fetch_json(
+            f"{base_url}/stores/{listing_store_id}/model/settings",
+            token=listing_token,
+        ).get("model_settings", {}).get("platform_trial_quota", {})
+        if quota_after_listing_byok.get("used") != 1 or quota_after_listing_byok.get("allowed") is not False:
+            return fail(f"BYOK Listing changed Jiejing-funded trial usage: {quota_after_listing_byok}")
         print("PASS jiejing_saas_ai_ceo_platform_model_fallback")
         return 0
     finally:

@@ -28,7 +28,13 @@ def main() -> None:
     assert "applySaasMerchantProductFactPacketToDraft(importedDraft, handoffFields.merchant_product_fact_packet)" in app_js
     assert "explicitUnknownFacts.forEach((key) => delete derivedSuggestions[key])" not in app_js
     assert "const retainedDerivedSuggestions" in app_js
-    assert "collected.unknownFacts.forEach((key) => delete retainedDerivedSuggestions[key])" in app_js
+    assert "collected.explicitUnknownFacts.forEach((key) => {" in app_js
+    assert "delete retainedSourceConfirmedFacts[key]" in app_js
+    assert "delete retainedDerivedSuggestions[key]" in app_js
+    assert '["ai_suggested", "vision_suggested"].includes(origin.state)' in app_js
+    assert 'data-saas-action="confirm-product-fact-suggestion"' in app_js
+    assert 'if (field.dataset.productFactConfirmed !== "true")' in app_js
+    assert '["ai_suggested", "vision_suggested"].includes(originState)' in app_js
     assert "模拟演练资料" in app_js
     assert "simulation_only: state.saasListingComposerDraft?.merchant_product_fact_packet?.simulation_only === true" in app_js
     assert '["merchant_owned_product_confirmed", "自有商品归属确认"' in app_js

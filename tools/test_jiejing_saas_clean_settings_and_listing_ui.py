@@ -742,6 +742,12 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(app_js, "图片生成", "model settings exposes image generation capability")
     require(app_js, "不支持图片的模型不会被要求猜图", "model settings explains the text and vision boundary")
     require(app_js, ': !configured\n      ? "暂未开放"', "unavailable platform trial never shows a usable quota")
+    require(
+        app_js,
+        "quota.unlimited_when_limit_zero === true",
+        "platform trial UI honors the backend unlimited-zero-limit contract",
+    )
+    require(app_js, 'unlimited ? "不限次数"', "unlimited trial is never rendered as a finite allowance")
     require(app_js, "账号 AI 或捷境试用 AI", "merchant setup guide accepts account AI or platform trial AI")
     require(app_js, "优先用账号自己的 AI；没有账号 AI 时使用捷境试用 AI 的有限额度", "model value proof request uses BYOK first then trial AI")
     require(app_js, "图片和视频仍由素材工坊生成并审核", "model settings explains media review before listing use")
@@ -1133,7 +1139,7 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     draft_body = app_js[draft_start:draft_end]
     primary_index = draft_body.index("saas-listing-v2-draft-primary")
     title_index = draft_body.index('"eBay 标题"')
-    points_index = draft_body.index('"五点卖点"')
+    points_index = draft_body.index('"核心卖点（3–5 条）"')
     description_index = draft_body.index('"商品描述"')
     side_index = draft_body.index("saas-listing-v2-draft-side")
     price_index = draft_body.index('"价格 / 成本线索"')

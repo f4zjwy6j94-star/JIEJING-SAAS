@@ -4,14 +4,169 @@
    survives reload, and triggers no eBay/payment action. */
 
 const fs = require("fs");
+const crypto = require("crypto");
+const net = require("net");
+const os = require("os");
 const path = require("path");
+const { spawn } = require("child_process");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
+const {
+  assertSafeMutationBase,
+  mappedIpv4Address,
+  normalizedHostname,
+} = require("./jiejing_browser_smoke_mutation_guard");
 
-const base = process.env.JIEJING_TEST_BASE || "http://127.0.0.1:8788";
+let base = String(process.env.JIEJING_TEST_BASE || "").trim();
 const localStaticRoot = path.resolve(process.env.JIEJING_LOCAL_STATIC_ROOT || path.join(__dirname, ".."));
 const browserChannel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
 const viewportWidth = Number(process.env.JIEJING_SMOKE_VIEWPORT_WIDTH || 1440);
 const viewportHeight = Number(process.env.JIEJING_SMOKE_VIEWPORT_HEIGHT || 1000);
+const ownedBackendTempPrefix = "jiejing-listing-ai-smoke-";
+
+function assertLoopbackMutationBase(testBase) {
+  const cleanBase = String(testBase || "").trim();
+  const parsed = new URL(cleanBase);
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error(`Listing AI browser smoke requires an HTTP(S) base: ${parsed.protocol}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Listing AI browser smoke refuses credentials in JIEJING_TEST_BASE");
+  }
+  assertSafeMutationBase(cleanBase);
+  const hostname = normalizedHostname(cleanBase);
+  const effectiveHostname = mappedIpv4Address(hostname) || hostname;
+  if (!["127.0.0.1", "localhost", "::1"].includes(effectiveHostname)) {
+    throw new Error(`Listing AI browser smoke only permits a loopback base: ${effectiveHostname}`);
+  }
+  return parsed.origin;
+}
+
+function reserveLocalPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = address && typeof address === "object" ? address.port : 0;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
+async function waitForOwnedBackend(owned) {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (owned.spawnError) throw owned.spawnError;
+    if (owned.child.exitCode !== null) {
+      throw new Error(`isolated Listing AI backend exited before health check: ${owned.child.exitCode}`);
+    }
+    try {
+      const response = await fetch(`${owned.backendBase}/health`, { cache: "no-store" });
+      if (response.ok) return;
+    } catch (_error) {
+      // The isolated backend may still be initializing its temporary schema.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error("isolated Listing AI backend did not become healthy within 30 seconds");
+}
+
+async function startOwnedBackend() {
+  const tempParent = path.resolve(os.tmpdir());
+  const tempRoot = fs.mkdtempSync(path.join(tempParent, ownedBackendTempPrefix));
+  const owned = {
+    backendBase: "",
+    child: null,
+    spawnError: null,
+    tempParent,
+    tempRoot,
+  };
+  try {
+    const port = await reserveLocalPort();
+    owned.backendBase = `http://127.0.0.1:${port}`;
+    const python = process.env.JIEJING_TEST_PYTHON || (process.platform === "win32" ? "python" : "python3");
+    owned.child = spawn(
+      python,
+      [
+        path.join(localStaticRoot, "tools", "jiejing_saas_backend_cli.py"),
+        "serve",
+        "--db",
+        path.join(tempRoot, "saas.sqlite"),
+        "--runtime-db",
+        path.join(tempRoot, "runtime.sqlite"),
+        "--output-root",
+        path.join(tempRoot, "output"),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(port),
+      ],
+      {
+        cwd: localStaticRoot,
+        env: {
+          ...process.env,
+          JIEJING_SAAS_ENV: "test",
+          JIEJING_SAAS_SESSION_SECRET: crypto.randomBytes(32).toString("hex"),
+          JIEJING_PUBLIC_BASE_URL: owned.backendBase,
+          JIEJING_DATABASE_ENGINE: "sqlite",
+          JIEJING_DATABASE_ADAPTER: "sqlite-local",
+          JIEJING_DATABASE_URL: "",
+          JIEJING_QUEUE_PROVIDER: "local_worker",
+          JIEJING_QUEUE_URL: "",
+          JIEJING_EXECUTION_ADAPTER: "demo_no_platform_write",
+          JIEJING_ALLOW_HERMES_ADAPTERS: "0",
+          JIEJING_ENABLE_REAL_PLATFORM_WRITES: "0",
+          JIEJING_EBAY_OAUTH_EXCHANGE_LIVE: "0",
+          JIEJING_EBAY_TOKEN_REFRESH_LIVE: "0",
+          JIEJING_EBAY_READ_ONLY_LIVE: "0",
+          JIEJING_EBAY_WRITE_LIVE: "0",
+          JIEJING_EBAY_DRAFT_SAVE_LIVE: "0",
+          JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE: "0",
+          JIEJING_WECHAT_PAY_CHARGE_ALLOWED: "0",
+          JIEJING_WECHAT_PAY_REFUND_ALLOWED: "0",
+          JIEJING_VAULT_ENABLED: "0",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    );
+    owned.child.once("error", (error) => {
+      owned.spawnError = error;
+    });
+    owned.child.stdout.resume();
+    owned.child.stderr.resume();
+    await waitForOwnedBackend(owned);
+    return owned;
+  } catch (error) {
+    await stopOwnedBackend(owned);
+    throw error;
+  }
+}
+
+async function stopOwnedBackend(owned) {
+  if (!owned) return;
+  if (owned.child && owned.child.exitCode === null) {
+    owned.child.kill();
+    await Promise.race([
+      new Promise((resolve) => owned.child.once("exit", resolve)),
+      new Promise((resolve) => setTimeout(resolve, 5000)),
+    ]);
+    if (owned.child.exitCode === null) {
+      owned.child.kill("SIGKILL");
+      await Promise.race([
+        new Promise((resolve) => owned.child.once("exit", resolve)),
+        new Promise((resolve) => setTimeout(resolve, 2000)),
+      ]);
+    }
+  }
+  const resolvedRoot = path.resolve(owned.tempRoot);
+  const expectedParent = path.resolve(owned.tempParent);
+  if (path.dirname(resolvedRoot) !== expectedParent || !path.basename(resolvedRoot).startsWith(ownedBackendTempPrefix)) {
+    throw new Error(`refusing to remove unexpected Listing AI smoke path: ${resolvedRoot}`);
+  }
+  fs.rmSync(resolvedRoot, { recursive: true, force: true });
+}
 
 async function api(pathname, { token = "", method = "GET", body } = {}) {
   const response = await fetch(`${base}${pathname}`, {
@@ -79,7 +234,7 @@ function generatedPayload(requestBody, storeId) {
         listing_fields: {
           contract_version: "listing_ai_draft_generation_v1",
           title,
-          selling_points: ["Lotus hand silhouette", "Backflow smoke display"],
+          selling_points: ["Lotus hand silhouette", "Backflow smoke display", "Resin construction"],
           description_seed: description,
           category_id: "20682",
           category_suggestion: "Incense Holders",
@@ -142,7 +297,7 @@ function generatedPayload(requestBody, storeId) {
   };
 }
 
-async function main() {
+async function runSmoke() {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const email = `codex-listing-ai-${suffix}@local.invalid`;
   const registered = await api("/auth/register", {
@@ -160,7 +315,9 @@ async function main() {
   ).store;
 
   let capturedGenerationBody = null;
-  const browser = await chromium.launch({ channel: browserChannel, headless: true });
+  let browser = null;
+  try {
+  browser = await chromium.launch({ channel: browserChannel, headless: true });
   const context = await browser.newContext({ viewport: { width: viewportWidth, height: viewportHeight }, deviceScaleFactor: 1 });
   const baseUrl = new URL(base);
   await context.addCookies([
@@ -257,6 +414,10 @@ async function main() {
   if (capturedGenerationBody?.current_draft_fields?.title !== "Merchant Edited Zen Lotus Incense Burner") {
     throw new Error("Listing AI request did not preserve the merchant-edited title");
   }
+  const merchantEditedFields = capturedGenerationBody?.current_draft_fields?.merchant_edited_fields || [];
+  if (!merchantEditedFields.includes("title") || !merchantEditedFields.includes("description")) {
+    throw new Error(`Listing AI request lost explicit merchant-edit provenance: ${JSON.stringify(merchantEditedFields)}`);
+  }
   if (/api_key|secret_ref|secret_value|access_token|refresh_token|password/i.test(JSON.stringify(capturedGenerationBody))) {
     throw new Error("Listing AI request contained credential-shaped fields");
   }
@@ -309,10 +470,37 @@ async function main() {
     no_real_platform_writes_triggered: true,
     no_charge_or_refund_triggered: true,
   }, null, 2));
-  await browser.close();
+  } finally {
+    if (browser) await browser.close();
+  }
 }
 
-main().catch((error) => {
-  console.error(error?.stack || error);
-  process.exit(1);
-});
+async function main() {
+  let ownedBackend = null;
+  try {
+    if (base) {
+      base = assertLoopbackMutationBase(base);
+    } else {
+      ownedBackend = await startOwnedBackend();
+      base = assertLoopbackMutationBase(ownedBackend.backendBase);
+    }
+    await runSmoke();
+  } finally {
+    await stopOwnedBackend(ownedBackend);
+  }
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  assertLoopbackMutationBase,
+  main,
+  runSmoke,
+  startOwnedBackend,
+  stopOwnedBackend,
+};

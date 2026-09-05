@@ -654,6 +654,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const sanitizeSaasListingPublishPrefillSnapshot = (value) => value || {};",
                     "const sanitizeSaasMerchantProductFactPacketSnapshot = (value) => value || null;",
                     "const sanitizeSaasListingMediaWritebackSnapshot = (value) => value || null;",
+                    "const saasListingMerchantEditedFields = () => [];",
                     snapshot_function,
                     "const snapshot = sanitizeSaasListingComposerDraftSnapshot({",
                     "  product: 'Same Name Incense Burner',",
@@ -1167,6 +1168,69 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertNotIn("b.example", json.dumps(packet, ensure_ascii=False))
         self.assertNotIn("PARTIAL-", json.dumps(packet, ensure_ascii=False))
 
+    def test_exact_project_restore_keeps_vision_suggestions_that_still_await_confirmation(self) -> None:
+        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identity = { key: 'project-vision-a', source_report_id: 'vision-a', candidate_id: '' };",
+                    "const state = {",
+                    "  saasListingComposerDraft: { product: 'Tablet Stand', listing_project_identity: identity, merchant_product_fact_packet: { product_name: 'Tablet Stand', source_confirmed_facts: {}, merchant_confirmed_facts: { material: 'STALE' }, derived_listing_suggestions: {}, unknown_facts: [] } },",
+                    "  saasReports: [{ report_id: 'facts-vision-a', report_type: 'merchant.product_facts', report: { listing_project_identity: identity, merchant_product_fact_packet: { source: 'backend_product_vision_extraction', vision_contract_version: 'jiejing_ai_ceo_product_vision_intake_v1', product_name: 'Tablet Stand', source_confirmed_facts: {}, merchant_confirmed_facts: {}, derived_listing_suggestions: { material: 'Aluminum Alloy' }, unknown_facts: ['material'], blocked_by: ['merchant_product_fact_missing:material'] } } }],",
+                    "};",
+                    "const saasListingDraftHasConcreteProduct = () => true;",
+                    "const latestSaasActionableProductReportByTypes = () => null;",
+                    "const saasListingDraftFromReport = () => null;",
+                    "const saasCurrentListingProjectIdentity = (draft) => ({ ...draft.listing_project_identity, source_id: draft.listing_project_identity.source_report_id, product: draft.product });",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? ({ key: value.key, source_report_id: value.source_report_id || '', candidate_id: value.candidate_id || '' }) : null;",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const isLegacySampleMediaDraftKey = () => false;",
+                    "const saasMarketCandidateMatchKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '');",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
+                    restore_listing,
+                    "const restored = restoreSaasListingComposerDraftFromBackendReports();",
+                    "console.log(JSON.stringify(restored));",
+                ]
+            )
+        )
+        packet = result.get("merchant_product_fact_packet") or {}
+        self.assertEqual("Aluminum Alloy", (packet.get("derived_listing_suggestions") or {}).get("material"))
+        self.assertIn("material", packet.get("unknown_facts") or [])
+        self.assertNotIn("material", packet.get("merchant_confirmed_facts") or {})
+
+    def test_exact_project_restore_honors_a_newer_explicitly_cleared_vision_suggestion(self) -> None:
+        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identity = { key: 'project-vision-clear', source_report_id: 'vision-clear', candidate_id: '' };",
+                    "const state = {",
+                    "  saasListingComposerDraft: { product: 'Tablet Stand', listing_project_identity: identity, merchant_product_fact_packet: { product_name: 'Tablet Stand', source_confirmed_facts: {}, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: [] } },",
+                    "  saasReports: [",
+                    "    { report_id: 'facts-old', report_type: 'merchant.product_facts', created_at: '2026-09-01T01:00:00Z', report: { listing_project_identity: identity, merchant_product_fact_packet: { source: 'backend_product_vision_extraction', product_name: 'Tablet Stand', source_confirmed_facts: {}, merchant_confirmed_facts: {}, derived_listing_suggestions: { material: 'Aluminum Alloy' }, unknown_facts: ['material'] } } },",
+                    "    { report_id: 'facts-cleared', report_type: 'merchant.product_facts', created_at: '2026-09-01T02:00:00Z', report: { listing_project_identity: identity, merchant_product_fact_packet: { source: 'authenticated_merchant_request', product_name: 'Tablet Stand', source_confirmed_facts: {}, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: ['material'] } } },",
+                    "  ],",
+                    "};",
+                    "const saasListingDraftHasConcreteProduct = () => true;",
+                    "const latestSaasActionableProductReportByTypes = () => null;",
+                    "const saasListingDraftFromReport = () => null;",
+                    "const saasCurrentListingProjectIdentity = (draft) => ({ ...draft.listing_project_identity, source_id: draft.listing_project_identity.source_report_id, product: draft.product });",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? ({ key: value.key, source_report_id: value.source_report_id || '', candidate_id: value.candidate_id || '' }) : null;",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const isLegacySampleMediaDraftKey = () => false;",
+                    "const saasTimestampMillis = (value) => Date.parse(value || '') || 0;",
+                    "const saasMarketCandidateMatchKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '');",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
+                    restore_listing,
+                    "const restored = restoreSaasListingComposerDraftFromBackendReports();",
+                    "console.log(JSON.stringify(restored));",
+                ]
+            )
+        )
+        packet = result.get("merchant_product_fact_packet") or {}
+        self.assertNotIn("material", packet.get("derived_listing_suggestions") or {})
+        self.assertIn("material", packet.get("unknown_facts") or [])
+
     def test_manual_structured_restore_rejects_incoming_extra_identity_fields(self) -> None:
         restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
         result = run_node_json(
@@ -1245,11 +1309,12 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "  saasConnected: true, saasTasks: [], saasReports: [],",
                     "  saasListingComposerDraft: { product: 'Incense Burner', title: 'Incense Burner', listing_project_key: 'project-a', listing_project_identity: identity, fields: {}, publish_prefill: {}, merchant_product_fact_packet: { product_name: 'Incense Burner', source_records: [], source_confirmed_facts: {}, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: ['material'] } },",
                     "};",
-                    "const collectSaasMerchantProductFacts = () => ({ merchantConfirmed: { product_name: 'Incense Burner' }, unknownFacts: ['material'] });",
+                    "const collectSaasMerchantProductFacts = () => ({ merchantConfirmed: { product_name: 'Incense Burner' }, unknownFacts: ['material'], pendingSuggestionFacts: [], explicitUnknownFacts: [] });",
                     "const saasMerchantProductFactPacket = (draft) => ({ ...draft.merchant_product_fact_packet, listing_readiness: { ready_for_listing_generation: false } });",
                     "const saasMerchantProductFactProjectedValue = (_packet, facts, key, fallback) => facts[key] || fallback || '';",
                     "const saasListingItemSpecificsWithMerchantFacts = (value) => value;",
                     "const saasMerchantProductFactLabel = (value) => value;",
+                    "const saasMerchantProductFactSavedMessage = () => 'saved';",
                     "const saveSaasProtectedStateSnapshot = () => {};",
                     "const renderProductListingCenter = () => {};",
                     "const activeSaasStore = () => ({ store_id: 'store-a' });",
@@ -1322,6 +1387,55 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertEqual("JC2023041300002", packet.get("merchant_confirmed_facts", {}).get("supplier_item_number"))
         self.assertEqual([5], packet.get("field_evidence", {}).get("net_weight_g", {}).get("image_indexes"))
         self.assertEqual("backend_product_fact_restore", result.get("sourceMode"))
+
+    def test_identity_bearing_vision_fact_report_restores_without_a_listing_report(self) -> None:
+        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identity = { key: 'project-vision-only', source_report_id: 'vision-facts-a', candidate_id: '' };",
+                    "const state = { saasListingComposerDraft: null, saasListingSourceMode: '', activeMediaDraft: '', saasReports: [{",
+                    "  report_id: 'vision-facts-a', report_type: 'merchant.product_facts', created_at: '2026-09-01T01:00:00Z',",
+                    "  report: { product: 'Foldable Tablet Stand', listing_project_identity: identity, merchant_product_fact_packet: {",
+                    "    source: 'backend_product_vision_extraction', vision_contract_version: 'jiejing_ai_ceo_product_vision_intake_v1',",
+                    "    product_name: 'Foldable Tablet Stand', source_confirmed_facts: {}, merchant_confirmed_facts: {},",
+                    "    derived_listing_suggestions: { product_name: 'Foldable Tablet Stand', material: 'Aluminum Alloy' },",
+                    "    listing_copy: { title: 'LEGACY VISION TITLE', selling_points: ['LEGACY'], description: 'LEGACY DESCRIPTION' },",
+                    "    buyer_copy_requires_validated_listing_generation: true, unknown_facts: ['product_name', 'material', 'sku']",
+                    "  } }",
+                    "}] };",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? { key: value.key, source_report_id: value.source_report_id || '', candidate_id: value.candidate_id || '' } : null;",
+                    "const saasListingProjectIdentityFromReport = (item) => saasNormalizeListingProjectIdentity(item?.report?.listing_project_identity);",
+                    "const saasTimestampMillis = (value) => Date.parse(value || '') || 0;",
+                    "const saasListingDraftHasConcreteProduct = (draft) => Boolean(draft?.product || draft?.title);",
+                    "const saasListingDraftFromReport = () => null;",
+                    "const saasCurrentListingProjectIdentity = (draft) => saasNormalizeListingProjectIdentity(draft?.listing_project_identity) || { key: draft?.listing_project_key || '', source_report_id: '', candidate_id: '' };",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const saasMarketCandidateMatchKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '');",
+                    "const saasListingComposerDraftFromText = (value) => ({ product: value, title: value, fields: { title: value, selling_points: 'old', description: 'old' }, publish_prefill: {} });",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
+                    "const isLegacySampleMediaDraftKey = () => false;",
+                    restore_listing,
+                    "const restored = restoreSaasListingComposerDraftFromBackendReports();",
+                    "console.log(JSON.stringify({ restored, sourceMode: state.saasListingSourceMode, activeMediaDraft: state.activeMediaDraft }));",
+                ]
+            )
+        )
+        restored = result.get("restored") or {}
+        packet = restored.get("merchant_product_fact_packet") or {}
+        self.assertEqual(identity := {"key": "project-vision-only", "source_report_id": "vision-facts-a", "candidate_id": ""}, restored.get("listing_project_identity"))
+        self.assertEqual(identity["key"], restored.get("listing_project_key"))
+        self.assertEqual("ai_ceo_product_vision", restored.get("source_type"))
+        self.assertEqual("vision-facts-a", restored.get("source_product_fact_report_id"))
+        self.assertEqual("Foldable Tablet Stand", restored.get("product"))
+        self.assertEqual("", (restored.get("fields") or {}).get("title"))
+        self.assertEqual("", (restored.get("fields") or {}).get("selling_points"))
+        self.assertEqual("", (restored.get("fields") or {}).get("description"))
+        self.assertIs(restored.get("model_generated"), False)
+        self.assertIs(restored.get("buyer_copy_requires_validated_listing_generation"), True)
+        self.assertEqual({}, packet.get("listing_copy"))
+        self.assertEqual("backend_product_fact_restore", result.get("sourceMode"))
+        self.assertEqual(identity["key"], result.get("activeMediaDraft"))
 
     def test_product_vision_chat_gets_a_longer_timeout_without_slowing_text_chat(self) -> None:
         request_command_snapshot = function_body(APP_JS, "sanitizeSaasAiCeoRequestCommandSnapshot")

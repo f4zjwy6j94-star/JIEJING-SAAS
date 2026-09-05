@@ -202,6 +202,7 @@ def _check_postgres_migration_shape() -> dict[str, Any]:
         migration_root / "001_initial_schema_postgres.sql",
         migration_root / "002_media_credit_buckets_postgres.sql",
         migration_root / "003_runtime_schema_reconciliation_postgres.sql",
+        migration_root / "004_platform_model_trial_reservations_postgres.sql",
     ]
     text = "\n".join(
         path.read_text(encoding="utf-8")

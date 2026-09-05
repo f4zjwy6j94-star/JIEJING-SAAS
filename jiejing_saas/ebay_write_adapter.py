@@ -24,6 +24,11 @@ from jiejing_runtime.execution_preflight import validate_publish_evidence
 from .config import SaaSSettings
 from .ebay_http_client import EbayReadOnlyHttpClient, HttpTransport, _urlopen_transport
 from .ebay_oauth import UNPUBLISHED_DRAFT_SCOPES
+from .listing_draft_generation import (
+    _COMPATIBILITY_ASPECT_KEY_PATTERN,
+    _UNVERIFIED_DEVICE_PRODUCT_TYPE_PATTERN,
+    _contains_unverified_compatibility,
+)
 
 
 WRITE_ACTIONS = [
@@ -444,6 +449,20 @@ def build_publish_readiness(
             str(listing.get("description_html") or ""),
             " ".join(str(value) for value in item_specifics.values()),
         ]
+    )
+    buyer_copy_findings = _buyer_copy_fact_boundary_findings(listing)
+    _add_check(
+        checks,
+        key="buyer_copy_fact_boundary",
+        label="买家文案事实边界",
+        status="blocked" if buyer_copy_findings.get("blocking_terms") else "passed",
+        summary=(
+            "标题、描述或 Item specifics 含未经商品事实确认的设备兼容性/适配尺寸，不能进入 eBay 写入。"
+            if buyer_copy_findings.get("blocking_terms")
+            else "未发现未经确认的设备兼容性或适配尺寸表述。"
+        ),
+        blocking=bool(buyer_copy_findings.get("blocking_terms")),
+        details=buyer_copy_findings,
     )
     ip_findings = _ip_and_prohibited_findings(text_blob=text_blob, brand=str(item_specifics.get("Brand") or item_specifics.get("brand") or ""))
     _add_check(
@@ -1028,6 +1047,15 @@ class EbayWriteHttpAdapter:
                 _publish_evidence_blockers(evidence_review),
                 preflight=preflight,
             )
+        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        buyer_copy_findings = _buyer_copy_fact_boundary_findings(listing)
+        if buyer_copy_findings.get("blocking_terms"):
+            return _blocked(
+                "buyer_copy_fact_boundary_blocked",
+                buyer_copy_findings["blocking_terms"],
+                preflight=preflight,
+            )
 
         connection = _find_publish_connection(connections)
         if not connection:
@@ -1042,8 +1070,6 @@ class EbayWriteHttpAdapter:
         if not token.get("ok"):
             return _blocked("token_resolution_failed", token.get("blocked_by") or ["access_token_unavailable"], preflight=preflight)
 
-        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
-        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
         sku = str(listing.get("sku") or "").strip()
         base_url = _base_url(self.settings)
         inventory_body = _inventory_item_body(payload)
@@ -1387,6 +1413,15 @@ class EbayWriteHttpAdapter:
                 _publish_evidence_blockers(evidence_review),
                 preflight=preflight,
             )
+        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        buyer_copy_findings = _buyer_copy_fact_boundary_findings(listing)
+        if buyer_copy_findings.get("blocking_terms"):
+            return _draft_blocked(
+                "buyer_copy_fact_boundary_blocked",
+                buyer_copy_findings["blocking_terms"],
+                preflight=preflight,
+            )
 
         credential = _validated_unpublished_draft_credential_boundary(
             credential_boundary=credential_boundary,
@@ -1410,8 +1445,6 @@ class EbayWriteHttpAdapter:
         if not token.get("ok"):
             return _draft_blocked("token_resolution_failed", token.get("blocked_by") or ["access_token_unavailable"], preflight=preflight)
 
-        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
-        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
         sku = str(listing.get("sku") or "").strip()
         inventory_body = _inventory_item_body(payload)
         offer_body = _offer_body(payload, marketplace_id=marketplace_id)
@@ -2594,6 +2627,43 @@ def _similar_text(left: str, right: str) -> bool:
     return len(left_terms & right_terms) / max(1, len(left_terms | right_terms)) >= 0.72
 
 
+def _buyer_copy_fact_boundary_findings(listing: dict[str, Any]) -> dict[str, Any]:
+    listing = listing if isinstance(listing, dict) else {}
+    blocking_terms: list[str] = []
+    checked_fields: list[str] = []
+    for field in ("title", "description_html", "description"):
+        text = _plain_text(listing.get(field))
+        if not text:
+            continue
+        checked_fields.append(f"listing.{field}")
+        if _contains_unverified_compatibility(text):
+            blocking_terms.append(f"listing.{field}:unverified_compatibility")
+
+    item_specifics = listing.get("item_specifics") if isinstance(listing.get("item_specifics"), dict) else {}
+    for raw_key, raw_value in item_specifics.items():
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        checked_fields.append(f"listing.item_specifics.{key}")
+        values = raw_value if isinstance(raw_value, list) else [raw_value]
+        if _COMPATIBILITY_ASPECT_KEY_PATTERN.search(key):
+            blocking_terms.append(f"listing.item_specifics.{key}:unverified_compatibility_key")
+            continue
+        if any(
+            _contains_unverified_compatibility(value)
+            or _UNVERIFIED_DEVICE_PRODUCT_TYPE_PATTERN.search(str(value or ""))
+            for value in values
+        ):
+            blocking_terms.append(f"listing.item_specifics.{key}:unverified_compatibility_value")
+
+    return {
+        "blocking_terms": sorted(set(blocking_terms)),
+        "checked_fields": checked_fields,
+        "policy": "Compatibility and device-fit claims require authoritative product facts before eBay draft or publish.",
+        "secret_exposed": False,
+    }
+
+
 def _ip_and_prohibited_findings(*, text_blob: str, brand: str) -> dict[str, Any]:
     text = str(text_blob or "").lower()
     brand_text = str(brand or "").strip().lower()
@@ -2620,7 +2690,7 @@ def _ip_and_prohibited_findings(*, text_blob: str, brand: str) -> dict[str, Any]
         "prescription",
         "medical cure",
     ]
-    detected_brands = [term for term in watched_brands if re.search(rf"\b{re.escape(term)}\b", text)]
+    detected_brands = [term for term in watched_brands if _brand_reference_present(term=term, text=text)]
     detected_prohibited = [term for term in prohibited_terms if term in text]
     unbranded = brand_text in {"", "unbranded", "generic", "no brand"}
     blocking_terms = list(detected_prohibited)
@@ -2635,6 +2705,23 @@ def _ip_and_prohibited_findings(*, text_blob: str, brand: str) -> dict[str, Any]
         "brand": brand,
         "policy": "Use own text/images, verify brand rights, and only use compatibility wording when truthful and necessary.",
     }
+
+
+def _brand_reference_present(*, term: str, text: str) -> bool:
+    term = str(term or "").casefold().strip()
+    text = str(text or "").casefold()
+    if term != "apple":
+        return re.search(rf"\b{re.escape(term)}\b", text) is not None
+    # "Apple" is also an ordinary fruit/color word.  Remove only narrow,
+    # explicit non-brand phrases; any remaining standalone Apple mention still
+    # enters the normal IP/VeRO review path.
+    non_brand_removed = re.sub(
+        r"\bapple(?:[-\s]+(?:green|corers?|shaped|fruit|orchard|slicers?|peelers?))\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.search(r"\bapple\b", non_brand_removed) is not None
 
 
 def _gpsr_required(payload: dict[str, Any], *, listing: dict[str, Any]) -> bool:
@@ -2765,6 +2852,7 @@ def _publish_check_source_records(key: str, details: dict[str, Any]) -> list[dic
         "asset_reachability": ["merchant_input", "public_asset_urls"],
         "new_product_duplicate_guard": ["confirmation_history", "execution_results"],
         "item_specifics_quality": ["merchant_input", "ebay_category_rules"],
+        "buyer_copy_fact_boundary": ["policy_screening", "merchant_input"],
         "ip_vero_and_claims": ["policy_screening", "merchant_input"],
         "gpsr_regulatory_fields": ["regulatory_screening", "merchant_input"],
         "price_quantity_exposure": ["finance_records", "merchant_input"],
@@ -2815,6 +2903,7 @@ def _publish_check_fix_action(key: str, *, blocking: bool) -> dict[str, Any]:
         "asset_reachability": ("focus-publish-intake", "Replace or upload assets", "product.assets"),
         "new_product_duplicate_guard": ("focus-publish-intake", "Use fresh SKU and assets", "product.publish_intake"),
         "item_specifics_quality": ("focus-publish-intake", "Complete item specifics", "product.publish_intake"),
+        "buyer_copy_fact_boundary": ("focus-publish-intake", "Remove unverified compatibility claims", "product.listing_copy"),
         "ip_vero_and_claims": ("focus-publish-intake", "Remove IP or policy risk", "product.policy_review"),
         "gpsr_regulatory_fields": ("focus-publish-intake", "Add regulatory fields", "product.regulatory"),
         "price_quantity_exposure": ("focus-publish-intake", "Review price and quantity", "product.finance"),

@@ -176,7 +176,7 @@ def build_product_vision_fact_packet(
     product_name_record = body.get("product_name")
     facts_body = body.get("facts") if isinstance(body.get("facts"), dict) else {}
     candidates = {**facts_body, "product_name": product_name_record}
-    source_confirmed: dict[str, Any] = {}
+    extracted_suggestions: dict[str, Any] = {}
     evidence: dict[str, Any] = {}
     for key, record in candidates.items():
         safe_key = str(key or "").strip()
@@ -185,7 +185,7 @@ def build_product_vision_fact_packet(
         value, confidence, image_indexes = _fact_record(record)
         if not value or confidence < 0.82:
             continue
-        source_confirmed[safe_key] = value
+        extracted_suggestions[safe_key] = value
         evidence[safe_key] = {
             "source_type": "ai_extracted_from_merchant_image",
             "image_indexes": image_indexes,
@@ -194,17 +194,19 @@ def build_product_vision_fact_packet(
         }
     source_url = _first_http_url(merchant_message)
     if source_url:
-        source_confirmed["source_url"] = source_url
+        extracted_suggestions["source_url"] = source_url
         evidence["source_url"] = {
             "source_type": "merchant_supplied_link",
             "image_indexes": [],
             "confidence": 1.0,
             "merchant_confirmation_received": False,
         }
-    listing_copy = _normalize_listing_copy(body.get("listing_copy"))
+    # Vision is an evidence extractor, not the buyer-copy authority.  Even if a
+    # provider returns legacy ``listing_copy`` output, keep it outside the
+    # persisted product-fact packet so it cannot flow into a publish form.
+    listing_copy: dict[str, Any] = {}
     derived = {
-        "product_name": source_confirmed.get("product_name") or listing_copy.get("product_name") or "",
-        "source_url": source_url,
+        **extracted_suggestions,
         "condition": "NEW",
         "currency": "USD",
     }
@@ -233,32 +235,43 @@ def build_product_vision_fact_packet(
                 "secret_exposed": False,
             }
         )
-    unknown = [key for key in _CRITICAL_REQUIRED_KEYS if key not in source_confirmed]
-    blocked_by = [f"merchant_product_fact_missing:{key}" for key in unknown]
+    # Neither model extraction nor a URL pasted into chat is merchant
+    # confirmation.  Keep every required field unknown until the merchant
+    # explicitly confirms it in the product-fact module.
+    vision_suggestion_keys = [
+        key
+        for key, value in derived.items()
+        if value not in (None, "", [], {})
+    ]
+    source_confirmation_unknown = ["source_url" if source_url else "merchant_owned_product_confirmed"]
+    unknown = list(dict.fromkeys([*_CRITICAL_REQUIRED_KEYS, *vision_suggestion_keys, *source_confirmation_unknown]))
+    blocked_by = [f"merchant_product_fact_missing:{key}" for key in _CRITICAL_REQUIRED_KEYS]
+    blocked_by.append("merchant_product_source_unconfirmed")
     blocked_by.extend(f"merchant_product_fact_conflict:{key}" for key in sorted(conflict_keys) if key)
-    product_name = _safe_text(source_confirmed.get("product_name") or derived.get("product_name"), 120)
+    product_name = _safe_text(derived.get("product_name"), 120)
     return {
         "contract_version": "merchant_product_fact_packet_v1",
         "vision_contract_version": PRODUCT_VISION_CONTRACT_VERSION,
         "source": "backend_product_vision_extraction",
-        "source_mode": "merchant_source_supplied" if source_url else "merchant_owned_product",
+        "source_mode": "merchant_source_supplied" if source_url else "merchant_images_supplied",
         "product_name": product_name,
-        "source_confirmed_facts": source_confirmed,
+        "source_confirmed_facts": {},
         "merchant_confirmed_facts": {},
         "derived_listing_suggestions": derived,
         "listing_copy": listing_copy,
+        "buyer_copy_requires_validated_listing_generation": True,
         "field_evidence": evidence,
         "fact_conflicts": conflicts,
         "unknown_facts": unknown,
         "source_records": source_records,
         "ready_for_listing_draft": bool(product_name),
         "listing_readiness": {
-            "ready_fact_count": len(_CRITICAL_REQUIRED_KEYS) - len(unknown),
-            "total_fact_count": len(_CRITICAL_REQUIRED_KEYS),
-            "completion_percent": round(((len(_CRITICAL_REQUIRED_KEYS) - len(unknown)) / len(_CRITICAL_REQUIRED_KEYS)) * 100),
-            "ready_for_listing_generation": bool(product_name),
+            "ready_fact_count": 0,
+            "total_fact_count": len(_CRITICAL_REQUIRED_KEYS) + 1,
+            "completion_percent": 0,
+            "ready_for_listing_generation": False,
             "ready_for_real_publish": False,
-            "reason": "图片与链接已形成待核对 Listing 草稿；冲突和发布必填项仍需商家确认",
+            "reason": "图片与链接已形成待核对商品事实；买家文案必须再经过 AI Listing 生成与校验",
         },
         "blocked_by": blocked_by,
         "vision_usage": analysis.get("usage") if isinstance(analysis.get("usage"), dict) else {},
@@ -277,7 +290,8 @@ def product_vision_prompt_context(packet: dict[str, Any]) -> dict[str, Any]:
         "product_name": _safe_text(packet.get("product_name"), 120),
         "source_confirmed_facts": packet.get("source_confirmed_facts") if isinstance(packet.get("source_confirmed_facts"), dict) else {},
         "derived_listing_suggestions": packet.get("derived_listing_suggestions") if isinstance(packet.get("derived_listing_suggestions"), dict) else {},
-        "listing_copy": packet.get("listing_copy") if isinstance(packet.get("listing_copy"), dict) else {},
+        "listing_copy": {},
+        "buyer_copy_requires_validated_listing_generation": True,
         "fact_conflicts": packet.get("fact_conflicts") if isinstance(packet.get("fact_conflicts"), list) else [],
         "unknown_facts": packet.get("unknown_facts") if isinstance(packet.get("unknown_facts"), list) else [],
         "source_record_count": len(packet.get("source_records") or []),
@@ -316,7 +330,6 @@ def _vision_prompt(*, merchant_message: str, image_count: int) -> str:
                 },
                 "conflicts": [{"field": "material", "values": [], "image_indexes": [], "reason": ""}],
                 "missing_facts": [],
-                "listing_copy": {"title": "", "selling_points": [], "description": ""},
             },
             "rules": [
                 "Return JSON only.",
@@ -326,7 +339,7 @@ def _vision_prompt(*, merchant_message: str, image_count: int) -> str:
                 "An origin such as Dehua, Fujian is product_origin only, never item_location or ship-from.",
                 "A supplier brand is supplier_brand only; it does not prove merchant brand authorization.",
                 "Do not claim image commercial rights, stock, price, cost, condition, ship-from, handling time, or package dimensions unless explicit.",
-                "listing_copy may describe only the visible design and confirmed facts; avoid medical, religious-performance, stress-relief, IP, and certification claims.",
+                "Do not produce buyer-facing Listing title, selling points, description, compatibility, or device-fit claims; a separate validated Listing generator owns that step.",
             ],
         },
         ensure_ascii=False,

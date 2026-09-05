@@ -275,7 +275,7 @@ def _resolved_model(self, **kwargs):
 
 _api.SaaSBackendHandler._resolve_model_client_for_store = _resolved_model
 
-if _FAULT_MODE in {{"provider_execution_exception", "model_task_creation_exception"}}:
+if _FAULT_MODE in {{"provider_execution_exception", "model_task_creation_exception", "pre_model_after_reservation_exception"}}:
     _original_resolved_model = _resolved_model
     def _platform_resolved_model(self, **kwargs):
         resolved = _original_resolved_model(self, **kwargs)
@@ -302,6 +302,11 @@ if _FAULT_MODE == "provider_execution_exception":
         resolved = _platform_resolved_model(self, **kwargs)
         return {{**resolved, "model_client": _FailingModelClient()}}
     _api.SaaSBackendHandler._resolve_model_client_for_store = _provider_failure_model
+
+if _FAULT_MODE == "pre_model_after_reservation_exception":
+    def _fail_before_provider_entry(*args, **kwargs):
+        raise RuntimeError(_SENTINEL)
+    _api.run_ai_ceo_chat = _fail_before_provider_entry
 
 if _FAULT_MODE == "model_task_creation_exception":
     _original_create_task = _Repository.create_task
@@ -505,6 +510,22 @@ class AiCeoBackendAuthorityRedTests(unittest.TestCase):
             expected_stage="model_provider",
             expected_error_type="model_network_or_timeout",
         )
+
+    def test_pre_provider_failure_releases_trial_reservation(self) -> None:
+        result = run_attempt_fault_fixture("pre_model_after_reservation_exception")
+        self.assertTrue(500 <= int(result.get("response_status") or 0) < 600)
+        response = result.get("response_payload") or {}
+        attempts = result.get("attempts") or []
+        model_tasks = [item for item in result.get("tasks") or [] if item.get("task_type") == "merchant_ceo_chat"]
+        self.assertEqual(1, len(attempts))
+        self.assertEqual([], model_tasks)
+        self.assertEqual([], result.get("model_usage_rows") or [])
+        self.assertIs(response.get("usage_consumed"), False)
+        self.assertIn("未消耗次数", str((response.get("ai_ceo_chat") or {}).get("answer") or ""))
+        quota = result.get("platform_trial_quota") or {}
+        self.assertEqual(0, int(quota.get("used") or 0), quota)
+        self.assertGreater(int(quota.get("remaining") or 0), 0, quota)
+        self.assertIs(quota.get("allowed"), True)
 
     def test_first_metered_task_create_failure_recovers_one_trial_fact(self) -> None:
         result = run_attempt_fault_fixture("model_task_creation_exception")

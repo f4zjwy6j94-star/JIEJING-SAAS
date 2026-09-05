@@ -110,12 +110,19 @@ def main() -> int:
         reason="订阅不再需要",
     )
     confirmation_id = str(review.get("confirmation_id") or "")
-    repository.decide_confirmation(
+    operator = repository.create_user_with_company(email="platform-refund-operator@example.test", password="Local-refund-operator-2026", company_name="Platform Operations")
+    operator_company_id = operator["company"]["company_id"]
+    operator_user_id = operator["user"]["user_id"]
+    internal_admin_emails = ("platform-refund-operator@example.test",)
+    repository.review_platform_refund_confirmation(
         company_id=company_id,
+        order_id=order_id,
         confirmation_id=confirmation_id,
         decision="approve",
-        decided_by=user_id,
-        note="同意按原支付金额全额退款",
+        reviewer_company_id=operator_company_id,
+        reviewer_user_id=operator_user_id,
+        internal_admin_emails=internal_admin_emails,
+        review_reason="已核对付款和用量，同意按原支付金额全额退款",
     )
 
     merchant_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -189,7 +196,9 @@ def main() -> int:
     processing = execute_approved_domestic_billing_refund(
         repository,
         company_id=company_id,
-        user_id=user_id,
+        user_id=operator_user_id,
+        operator_company_id=operator_company_id,
+        internal_admin_emails=internal_admin_emails,
         order_id=order_id,
         provider_refund=approved_provider_refund,
     )
@@ -208,7 +217,9 @@ def main() -> int:
     duplicate_processing = execute_approved_domestic_billing_refund(
         repository,
         company_id=company_id,
-        user_id=user_id,
+        user_id=operator_user_id,
+        operator_company_id=operator_company_id,
+        internal_admin_emails=internal_admin_emails,
         order_id=order_id,
         provider_refund=approved_provider_refund,
     )

@@ -9,12 +9,13 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from jiejing_saas.listing_draft_generation import generate_listing_draft
+from jiejing_saas.listing_draft_generation import ListingDraftGenerationError, generate_listing_draft
 from jiejing_saas.repository import SaaSRepository
 
 
@@ -35,6 +36,9 @@ class FakeLiveModelClient:
                     "selling_points": [
                         "Decorative lotus and hand silhouette",
                         "Backflow smoke display for a calm room setting",
+                        "Resin construction",
+                        "Measures 16.2 x 7.7 x 17.9 cm",
+                        "Designed for indoor display",
                     ],
                     "description": "A decorative backflow incense burner for indoor display.",
                     "category_id": "999999",
@@ -182,6 +186,7 @@ def main() -> None:
             current_draft_fields={
                 "title": "Merchant Edited Lotus Backflow Incense Burner",
                 "description": "Merchant-confirmed copy stays unchanged.",
+                "merchant_edited_fields": ["title", "description"],
                 "api_key": secret_sample,
             },
             model_client=fake,
@@ -247,6 +252,34 @@ def main() -> None:
             raise AssertionError(f"provider-reported usage was not persisted: {(usage_count, total_tokens)}")
         if execution_count != 0:
             raise AssertionError("Listing generation triggered a platform execution")
+
+        # A failure while persisting failure audit must not erase a provider
+        # request that already happened. The HTTP quota settlement uses this
+        # structured error to decide whether to consume or release its slot.
+        audit_failure_model = FakeLiveModelClient()
+        with patch.object(repository, "update_task_status", side_effect=RuntimeError("audit store unavailable")):
+            try:
+                generate_listing_draft(
+                    repository=repository,
+                    company_id=company["company_id"],
+                    store_id=store["store_id"],
+                    user_id=user["user_id"],
+                    listing_project_identity={"key": "listing-audit-failure-after-provider"},
+                    merchant_product_fact_packet=complete_packet(),
+                    current_draft_fields={},
+                    model_client=audit_failure_model,
+                    model_resolution={"provider_key": "fake", "model": fake.model, "mode": "platform_managed_default"},
+                    packet_record=packet_record,
+                )
+            except ListingDraftGenerationError as exc:
+                if not exc.model_called or not exc.usage_consumed or exc.model_usage.get("request_count") != 1:
+                    raise AssertionError(f"audit failure lost the real provider request: {exc.model_usage}")
+                if exc.model_usage.get("total_tokens") != 400 or not exc.task_id:
+                    raise AssertionError("audit failure lost provider usage or the original task identity")
+            else:
+                raise AssertionError("an audit persistence failure must return a structured generation error")
+        if len(audit_failure_model.calls) != 1:
+            raise AssertionError("audit persistence failure caused duplicate provider requests")
 
     print("PASS jiejing_listing_draft_generation")
 

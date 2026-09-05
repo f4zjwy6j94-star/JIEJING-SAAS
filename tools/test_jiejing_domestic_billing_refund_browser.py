@@ -232,7 +232,7 @@ def _inspect_browser(*, base: str, token: str, email: str, user_id: str, store_i
             }
         page.locator('.nav-item[data-view="confirm"]').click()
         page.wait_for_selector(
-            f'[data-saas-action="domestic-billing-refund-execute"][data-domestic-order-id="{order_id}"]',
+            f'[data-saas-refund-progress="{order_id}"]',
             state="visible",
             timeout=30000,
         )
@@ -241,27 +241,29 @@ def _inspect_browser(*, base: str, token: str, email: str, user_id: str, store_i
         page.wait_for_selector('.saas-settings-clean-nav [data-saas-settings-tab="billing"]', state="visible")
         page.locator('.saas-settings-clean-nav [data-saas-settings-tab="billing"]').click()
         page.wait_for_selector(
-            f'[data-saas-action="domestic-billing-refund-execute"][data-domestic-order-id="{order_id}"]',
+            f'[data-saas-refund-progress="{order_id}"]',
             state="visible",
         )
         checks.append(_capture(page, "desktop-billing", screenshots))
         page.set_viewport_size({"width": 390, "height": 844})
         page.locator('.nav-item[data-view="confirm"]').click()
         page.wait_for_selector(
-            f'[data-saas-action="domestic-billing-refund-execute"][data-domestic-order-id="{order_id}"]',
+            f'[data-saas-refund-progress="{order_id}"]',
             state="visible",
         )
         checks.append(_capture(page, "mobile-confirm", screenshots))
         page.locator('.nav-item[data-view="connect"]').click()
         page.locator('.saas-settings-clean-nav [data-saas-settings-tab="billing"]').click()
         page.wait_for_selector(
-            f'[data-saas-action="domestic-billing-refund-execute"][data-domestic-order-id="{order_id}"]',
+            f'[data-saas-refund-progress="{order_id}"]',
             state="visible",
         )
         checks.append(_capture(page, "mobile-billing", screenshots))
         browser.close()
     ok = not page_errors and all(
-        check.get("execute_button_visible") is True
+        check.get("execute_button_visible") is False
+        and check.get("refund_progress_visible") is True
+        and check.get("self_approval_visible") is False
         and check.get("horizontal_overflow") is False
         and check.get("internal_copy_visible") is False
         and check.get("account_refund_inherits_listing_copy") is False
@@ -280,10 +282,14 @@ def _capture(page, label: str, screenshots: list[str]) -> dict[str, Any]:
           const button = Array.from(document.querySelectorAll('[data-saas-action="domestic-billing-refund-execute"]'))
             .find((item) => item.getClientRects().length > 0);
           const text = document.body.innerText || "";
-          const actionCardText = button?.closest("article")?.innerText || "";
+          const progress = Array.from(document.querySelectorAll('[data-saas-refund-progress]')).find((item) => item.getClientRects().length > 0);
+          const card = progress?.closest("article");
+          const actionCardText = card?.innerText || "";
           return {
             label,
             execute_button_visible: Boolean(button),
+            refund_progress_visible: Boolean(progress),
+            self_approval_visible: Boolean(card?.querySelector('[data-saas-action="approve-confirmation"]')),
             horizontal_overflow: document.documentElement.scrollWidth > window.innerWidth + 2,
             internal_copy_visible: ["client_secret", "api_v3_key", "主理人", "内部验收"].some((marker) => text.includes(marker)),
             account_refund_inherits_listing_copy: actionCardText.includes("eBay 店铺资料还没有指定 SKU"),

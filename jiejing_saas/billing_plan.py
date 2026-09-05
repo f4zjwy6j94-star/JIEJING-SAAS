@@ -1365,11 +1365,24 @@ def _company_usage(repository: SaaSRepository, *, company_id: str) -> dict[str, 
         for item in tasks
         if _timestamp_utc_month(str(item.get("created_at") or "")) == month_prefix
     ]
-    provider_tasks = [
-        item
-        for item in monthly_tasks
-        if str(item.get("task_type") or "") in {"provider_job", "ebay_read_only_sync", "ebay_read_only_live_plan", "model_value_rehearsal"}
-    ]
+    provider_tasks = []
+    for item in monthly_tasks:
+        task_type = str(item.get("task_type") or "")
+        if task_type in {"provider_job", "ebay_read_only_sync", "ebay_read_only_live_plan", "model_value_rehearsal"}:
+            provider_tasks.append(item)
+            continue
+        task_input = item.get("input") if isinstance(item.get("input"), dict) else {}
+        if task_type == "merchant_ceo_chat" and (
+            task_input.get("model_resolution_mode") == "platform_managed_default"
+            or task_input.get("model_usage_owner") == "jiejing_platform_trial"
+        ):
+            provider_tasks.append(item)
+            continue
+        output = item.get("output") if isinstance(item.get("output"), dict) else {}
+        if task_type == "listing_draft_generation" and (
+            output.get("usage_consumed") is True or int(output.get("model_request_count") or 0) > 0
+        ):
+            provider_tasks.append(item)
     model_reports = [
         item
         for item in reports
@@ -1407,7 +1420,7 @@ def _quota_status(*, plan: dict[str, Any], usage: dict[str, Any]) -> list[dict[s
         ("connected_store", "connected_store_count", "connected_store_quota"),
         ("ai_ceo_task", "monthly_task_count", "monthly_task_quota"),
         ("provider_job", "monthly_provider_job_count", "provider_job_quota"),
-        ("model_report_assist", "monthly_model_report_assist_count", "provider_job_quota"),
+        ("model_report_assist", "monthly_provider_job_count", "provider_job_quota"),
     ]
     status = []
     for unit, usage_key, quota_key in rows:
@@ -1489,9 +1502,22 @@ def _canonical_provider(raw: str) -> str:
 def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None) -> bool:
     if provider == "manual_seed":
         return True
-    if provider not in {"stripe", "paddle", "lemon_squeezy"} and provider not in TEST_BILLING_PROVIDERS and provider not in PRIVATE_BETA_BILLING_PROVIDERS:
+    if provider not in {"stripe", "paddle", "lemon_squeezy", "wechat_pay_native"} and provider not in TEST_BILLING_PROVIDERS and provider not in PRIVATE_BETA_BILLING_PROVIDERS:
         return False
-    return bool(subscription and subscription.get("entitlement_active") and not subscription.get("payment_attention_required"))
+    if not subscription or not subscription.get("entitlement_active") or subscription.get("payment_attention_required"):
+        return False
+    details = subscription.get("subscription") if isinstance(subscription.get("subscription"), dict) else {}
+    active_until = str(details.get("active_until") or "").strip()
+    if active_until:
+        try:
+            expires_at = datetime.fromisoformat(active_until.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            return False
+    return True
 
 
 def _plan_source(*, provider: str, subscription: dict[str, Any] | None) -> str:

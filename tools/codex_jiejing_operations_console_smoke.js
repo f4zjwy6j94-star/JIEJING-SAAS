@@ -202,6 +202,27 @@ async function runViewport(browser, base, name, viewport) {
   let failNextFeedbackLoadMore = false;
   let feedbackHasMore = false;
   let overviewRequestCount = 0;
+  let refundStatus = "refund_review_requested";
+  let refundApproved = false;
+  let refundReviewReason = "";
+  let refundExecuteCalls = 0;
+  const refundMoneyToken = "refund:company_refund_fixture:order_refund_fixture:9900:CNY:confirm_refund_fixture";
+  await page.route("**/owner/billing/domestic/refunds**", (route) => {
+    const operation = new URL(route.request().url()).pathname.split("/").at(-1);
+    if (operation === "refunds") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ refund_reviews: [{ company_id: "company_refund_fixture", order_id: "order_refund_fixture", plan_key: "starter", amount_minor: 9900, currency: "CNY", status: refundStatus, paid_at: "2026-09-05T00:00:00Z", confirmation_id: "confirm_refund_fixture", confirmation_status: refundApproved ? "approved" : "pending", platform_review_verified: refundApproved, refund_reason: "Paid entitlement unavailable.", review_reason: refundReviewReason, execution_confirmation: refundMoneyToken, review_evidence: { available: true, platform_model_request_count: 2, all_model_request_count: 3, settled_media_points: 20, provider_operation_count: 4, current_subscription_status: "active", current_entitlement_active: true, current_entitlement_until: "2026-10-05T00:00:00Z" } }], secret_exposed: false }) });
+    const body = route.request().postDataJSON();
+    if (body.company_id !== "company_refund_fixture") throw new Error("refund UI lost exact target company");
+    if (operation === "review") {
+      if (body.decision !== "approve" || body.review_reason.length < 10) throw new Error("refund review omitted meaningful reason");
+      refundApproved = true;
+      refundReviewReason = body.review_reason;
+    } else if (operation === "execute") {
+      if (!refundApproved || body.exact_confirmation !== refundMoneyToken) throw new Error("refund UI lost the reviewed exact money confirmation");
+      refundExecuteCalls += 1;
+      refundStatus = "refund_processing";
+    } else if (operation !== "query") throw new Error(`unexpected refund operation ${operation}`);
+    return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ ok: true, secret_exposed: false }) });
+  });
   await page.route("**/permissions/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ role: "owner", platform_internal_admin: true, secret_exposed: false }) }));
   await page.route("**/owner/operations-overview**", (route) => {
     overviewRequestCount += 1;
@@ -252,12 +273,31 @@ async function runViewport(browser, base, name, viewport) {
   const views = name === "desktop"
     ? Object.keys({ overview: 1, traffic: 1, merchants: 1, transactions: 1, costs: 1, workflows: 1, feedback: 1, reliability: 1, audit: 1, settings: 1 })
     : name === "mobile"
-      ? ["overview", "feedback", "reliability"]
+      ? ["overview", "transactions", "feedback", "reliability"]
       : ["overview", "transactions", "reliability"];
   for (const view of views) {
     await page.click(`[data-view="${view}"]`);
     await page.waitForFunction((title) => document.querySelector("#ops-title")?.textContent === title, ({ overview: "经营总览", traffic: "流量与转化", merchants: "商家与订阅", transactions: "交易与退款", costs: "AI 与素材成本", workflows: "任务与工作流", feedback: "产品反馈", reliability: "系统可靠性", audit: "安全与审计", settings: "内部设置" })[view]);
     await page.waitForTimeout(60);
+    if (view === "transactions") {
+      await page.locator('[data-refund-action="approve"]').waitFor();
+      const evidence = await page.locator('[data-refund-row="0"]').innerText();
+      for (const expected of ["order_refund_fixture", "company_refund_fixture", "付款时间", "当前权益", "全部模型 3", "素材已消耗 20"]) {
+        if (!evidence.includes(expected)) throw new Error(`${name}/refund review evidence missing: ${expected}`);
+      }
+      await page.locator('[data-refund-reason="0"]').fill("Verified payment, entitlement failure and the usage allocation for this request.");
+      await page.locator('[data-refund-action="approve"]').click();
+      await page.locator('[data-refund-action="execute"]').waitFor();
+      page.once("dialog", async (dialog) => {
+        if (!["99.00", "company_refund_fixture", "order_refund_fixture", "不能撤销"].every((value) => dialog.message().includes(value))) throw new Error("refund execution dialog omitted exact money or target");
+        await dialog.accept();
+      });
+      await page.locator('[data-refund-action="execute"]').click();
+      await page.locator('[data-refund-action="query"]').waitFor();
+      if (refundExecuteCalls !== 1 || await page.locator('[data-refund-action="execute"]').count()) throw new Error("processing refund must expose query, not another money action");
+      await page.locator('[data-refund-action="query"]').click();
+      await page.waitForFunction(() => document.querySelector("#ops-data-status")?.textContent === "退款信息已更新");
+    }
     if (view === "reliability") {
       const alertDetail = await page.locator(".ops-reliability-alert-detail").innerText();
       for (const expected of ["告警明细", "模型能力", "关注", "高延迟", "检查模型路由与超时策略", "样本 214"]) {

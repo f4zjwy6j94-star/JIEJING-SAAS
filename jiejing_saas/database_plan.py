@@ -158,6 +158,11 @@ def build_database_plan(settings: SaaSSettings, repository: SaaSRepository) -> d
                 "path": "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
                 "status": "prepared_not_applied",
             },
+            {
+                "database": "postgres",
+                "path": "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql",
+                "status": "prepared_not_applied",
+            },
         ],
         "production_steps": PRODUCTION_DATABASE_STEPS,
         "tenant_isolation_contract": {

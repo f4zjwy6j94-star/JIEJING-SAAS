@@ -34,11 +34,18 @@ BUCKET_MIGRATION = ROOT / "jiejing_saas" / "migrations" / "002_media_credit_buck
 RUNTIME_RECONCILIATION_MIGRATION = (
     ROOT / "jiejing_saas" / "migrations" / "003_runtime_schema_reconciliation_postgres.sql"
 )
+PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION = (
+    ROOT / "jiejing_saas" / "migrations" / "004_platform_model_trial_reservations_postgres.sql"
+)
 INITIAL_MIGRATION_CANONICAL_SHA256 = "d76293f426d20cdcc0a2667284900c8cb91606f26e464ff1a4e1b96e409444f6"
 BUCKET_MIGRATION_ID = "20260823_002_media_credit_buckets_postgres"
 BUCKET_MIGRATION_CHECKSUM = "jiejing-media-credit-buckets-postgres-v20260823"
 RUNTIME_RECONCILIATION_MIGRATION_ID = "20260823_003_runtime_schema_reconciliation_postgres"
 RUNTIME_RECONCILIATION_MIGRATION_CHECKSUM = "jiejing-runtime-schema-reconciliation-postgres-v20260823"
+PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION_ID = "20260901_004_platform_model_trial_reservations_postgres"
+PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION_CHECKSUM = (
+    "jiejing-platform-model-trial-reservations-postgres-v20260901"
+)
 DATABASE_URL = "postgresql://jiejing:red-light-secret@postgres:5432/jiejing"
 # Signed int64 from sha256("jiejing-postgres-schema-migration-v1")[:8].
 POSTGRES_MIGRATION_ADVISORY_LOCK_KEY = -1280677561506917264
@@ -59,6 +66,10 @@ AdvisoryLockKey = tuple[int, ...]
 MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID = "media_credit_buckets.company_fk"
 MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID = "media_credit_buckets.company_source_reference_unique"
 USER_SESSION_REFRESH_FK_CONTRACT_ID = "user_sessions_refresh_session_id_fkey"
+PLATFORM_MODEL_TRIAL_COMPANY_FK_CONTRACT_ID = "platform_model_trial_reservations.company_fk"
+PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID = (
+    "platform_model_trial_reservations.company_period_slot_unique"
+)
 
 
 @dataclass(frozen=True)
@@ -174,6 +185,18 @@ def _expected_constraint_definitions() -> dict[str, _FakeConstraintDefinition]:
             "user_refresh_sessions",
             ("session_id",),
         ),
+        PLATFORM_MODEL_TRIAL_COMPANY_FK_CONTRACT_ID: _FakeConstraintDefinition(
+            "f",
+            "platform_model_trial_reservations",
+            ("company_id",),
+            "companies",
+            ("company_id",),
+        ),
+        PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID: _FakeConstraintDefinition(
+            "u",
+            "platform_model_trial_reservations",
+            ("company_id", "period_key", "slot_number"),
+        ),
     }
 
 
@@ -232,6 +255,17 @@ def _expected_column_definitions() -> dict[str, dict[str, _FakeColumnDefinition]
         },
         "user_sessions": {
             "refresh_session_id": required("text", True),
+        },
+        "platform_model_trial_reservations": {
+            "reservation_id": required("text", False),
+            "company_id": required("text", False),
+            "period_key": required("text", False),
+            "slot_number": required("integer", False),
+            "route_scope": required("text", False),
+            "baseline_used": required("integer", False),
+            "status": required("text", False),
+            "created_at": required("timestamptz", False),
+            "released_at": required("timestamptz", True),
         },
     }
 
@@ -630,6 +664,16 @@ class _FakeCursor:
                     MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID,
                     expected_constraints[MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID],
                 )
+            if "platform_model_trial_reservations" in new_relations:
+                expected_constraints = _expected_constraint_definitions()
+                self.state.constraints.setdefault(
+                    PLATFORM_MODEL_TRIAL_COMPANY_FK_CONTRACT_ID,
+                    expected_constraints[PLATFORM_MODEL_TRIAL_COMPANY_FK_CONTRACT_ID],
+                )
+                self.state.constraints.setdefault(
+                    PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID,
+                    expected_constraints[PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID],
+                )
 
     def _enforce_inline_schema_postconditions(self, sql: str) -> None:
         marker_match = re.search(
@@ -683,6 +727,20 @@ class _FakeCursor:
             }
             required_constraints = {
                 USER_SESSION_REFRESH_FK_CONTRACT_ID: expected_constraints[USER_SESSION_REFRESH_FK_CONTRACT_ID]
+            }
+        elif migration_id == PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION_ID:
+            required_columns = {
+                "platform_model_trial_reservations": expected_columns[
+                    "platform_model_trial_reservations"
+                ],
+            }
+            required_indexes = {}
+            required_constraints = {
+                key: expected_constraints[key]
+                for key in (
+                    PLATFORM_MODEL_TRIAL_COMPANY_FK_CONTRACT_ID,
+                    PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID,
+                )
             }
         else:
             return
@@ -832,6 +890,7 @@ def _column_definitions_from_table_body(table_body: str) -> dict[str, _FakeColum
 def _intended_schema_state(
     *,
     include_runtime_reconciliation_marker: bool = True,
+    include_platform_model_trial_reservation_marker: bool = True,
 ) -> tuple[
     set[str],
     dict[str, str],
@@ -844,6 +903,11 @@ def _intended_schema_state(
     migrations[BUCKET_MIGRATION_ID] = BUCKET_MIGRATION_CHECKSUM
     if include_runtime_reconciliation_marker:
         migrations[RUNTIME_RECONCILIATION_MIGRATION_ID] = RUNTIME_RECONCILIATION_MIGRATION_CHECKSUM
+    relations.add("platform_model_trial_reservations")
+    if include_platform_model_trial_reservation_marker:
+        migrations[PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION_ID] = (
+            PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION_CHECKSUM
+        )
     relation_columns = {
         relation: set(definitions)
         for relation, definitions in _expected_column_definitions().items()
@@ -1042,6 +1106,60 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
         )
         self.assertRegex(migration_sql, r"(?is)on\s+conflict\s*\(\s*migration_id\s*\)\s+do\s+nothing")
 
+    def test_004_is_an_independent_atomic_platform_trial_reservation_migration(self) -> None:
+        initial_sql = INITIAL_MIGRATION.read_text(encoding="utf-8")
+        self.assertNotIn("platform_model_trial_reservations", initial_sql.lower())
+        self.assertTrue(PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION.is_file())
+        migration_sql = PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION.read_text(encoding="utf-8")
+        self.assertRegex(migration_sql, r"(?is)^\s*begin\s*;")
+        self.assertRegex(migration_sql, r"(?is)commit\s*;\s*$")
+        table_body = _create_table_body(migration_sql, "platform_model_trial_reservations")
+        for pattern in (
+            r"\breservation_id\s+text\s+primary\s+key\b",
+            r"\bcompany_id\s+text\s+not\s+null\s+references\s+companies\s*\(\s*company_id\s*\)",
+            r"\bperiod_key\s+text\s+not\s+null\b",
+            r"\bslot_number\s+integer\s+not\s+null\s+check\s*\(\s*slot_number\s*>\s*0\s*\)",
+            r"\broute_scope\s+text\s+not\s+null\b",
+            r"\bbaseline_used\s+integer\s+not\s+null\s+default\s+0\b",
+            r"\bstatus\s+text\s+not\s+null\s+default\s+'consumed'",
+            r"\bcreated_at\s+timestamptz\s+not\s+null\b",
+            r"\breleased_at\s+timestamptz\b",
+            r"\bunique\s*\(\s*company_id\s*,\s*period_key\s*,\s*slot_number\s*\)",
+        ):
+            self.assertRegex(table_body, pattern)
+        guard = _fail_closed_guard_before_marker(migration_sql)
+        self.assertRegex(guard, r"(?is)information_schema\.columns")
+        self.assertRegex(guard, r"(?is)pg_constraint")
+        self.assertIn("company_id", guard)
+        self.assertIn("period_key", guard)
+        self.assertIn("slot_number", guard)
+        self.assertIn("baseline_used", guard)
+        self.assertIn("status", guard)
+        self.assertIn("released_at", guard)
+        self.assertRegex(
+            migration_sql,
+            r"(?is)alter\s+table\s+platform_model_trial_reservations\s+add\s+column\s+if\s+not\s+exists\s+status",
+        )
+        self.assertRegex(
+            migration_sql,
+            r"(?is)update\s+platform_model_trial_reservations.*?baseline_used",
+        )
+        migration_records = dict(
+            re.findall(
+                r"insert\s+into\s+schema_migrations.*?values\s*\(\s*'([^']+)'\s*,\s*'([^']+)'",
+                migration_sql,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        )
+        self.assertEqual(
+            {
+                PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION_ID:
+                    PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION_CHECKSUM,
+            },
+            migration_records,
+        )
+        self.assertRegex(migration_sql, r"(?is)on\s+conflict\s*\(\s*migration_id\s*\)\s+do\s+nothing")
+
     def test_002_and_003_fail_closed_validate_physical_definitions_before_marker(self) -> None:
         contracts = {
             BUCKET_MIGRATION: (
@@ -1116,11 +1234,18 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
 
     def test_default_manifest_reconciles_legacy_marker_database_once_then_probes_clean(self) -> None:
         relations, migrations, relation_columns, indexes, constraints = _intended_schema_state(
-            include_runtime_reconciliation_marker=False
+            include_runtime_reconciliation_marker=False,
+            include_platform_model_trial_reservation_marker=False,
         )
         relations.difference_update(
-            {"external_execution_claims", "user_refresh_sessions", "user_refresh_token_history"}
+            {
+                "external_execution_claims",
+                "user_refresh_sessions",
+                "user_refresh_token_history",
+                "platform_model_trial_reservations",
+            }
         )
+        relation_columns.pop("platform_model_trial_reservations", None)
         relation_columns["user_sessions"].discard("refresh_session_id")
         for index_name in (
             "idx_user_refresh_sessions_owner",
@@ -1129,6 +1254,8 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
         ):
             indexes.pop(index_name)
         constraints.pop(USER_SESSION_REFRESH_FK_CONTRACT_ID)
+        constraints.pop(PLATFORM_MODEL_TRIAL_COMPANY_FK_CONTRACT_ID)
+        constraints.pop(PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID)
         state = _FakePostgresState(
             relations=relations,
             migration_checksums=migrations,
@@ -1145,9 +1272,9 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
 
         self.assertEqual("ok", first.get("status"), first)
         self.assertEqual(
-            [RUNTIME_RECONCILIATION_MIGRATION_ID],
+            [RUNTIME_RECONCILIATION_MIGRATION_ID, PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION_ID],
             first.get("applied_migration_ids"),
-            "a legacy marker database must execute only the additive reconciliation migration",
+            "a legacy marker database must execute each missing additive migration",
         )
         self.assertEqual("ok", second.get("status"), second)
         self.assertIn(
@@ -1155,7 +1282,12 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
             second.get("skipped_migration_ids", []),
             "a second runner must observe the 003 marker and skip DDL",
         )
-        self.assertEqual(1, state.migration_execution_count, "003 DDL must execute exactly once")
+        self.assertIn(
+            PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION_ID,
+            second.get("skipped_migration_ids", []),
+            "a second runner must observe the 004 marker and skip DDL",
+        )
+        self.assertEqual(2, state.migration_execution_count, "003 and 004 DDL must each execute exactly once")
         self.assertEqual("ok", probe.get("status"), probe)
         self.assertIs(False, probe.get("secret_exposed"))
 
