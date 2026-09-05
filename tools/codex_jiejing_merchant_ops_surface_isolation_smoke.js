@@ -326,10 +326,24 @@ function staticFixtureContract() {
   if (ownerPrefixRejects.length !== 1) {
     failures.push("ops nginx host needs one explicit /owner/ prefix 404 for every non-allowlisted owner path");
   }
+  const refundActionHeader = "location ~ ^/owner/billing/domestic/refunds/[A-Za-z0-9_-]+/(review|execute|query)$";
+  const isExactRefundActionProxy = (block) =>
+    block.header.replace(/\s+/g, " ").trim() === refundActionHeader &&
+    block.body.includes("$request_method != POST") && /\breturn\s+405\b/.test(block.body) &&
+    block.body.includes("proxy_pass http://jiejing-saas:8788;") && block.body.includes("proxy_set_header Host $host;");
+  if (opsLocations.filter(isExactRefundActionProxy).length !== 1) {
+    failures.push("ops refund actions need one fully anchored order-scoped POST-only proxy");
+  }
+  const refundListProxies = opsLocations.filter((block) =>
+    block.header.replace(/\s+/g, " ").trim() === "location = /owner/billing/domestic/refunds" &&
+    block.body.includes("$request_method != GET") && /\breturn\s+405\b/.test(block.body) &&
+    block.body.includes("proxy_pass http://jiejing-saas:8788;") && block.body.includes("proxy_set_header Host $host;"));
+  if (refundListProxies.length !== 1) failures.push("ops refund list needs one exact GET-only proxy");
   const unsafeOpsOwnerProxies = opsLocations.filter((block) => {
     if (!block.body.includes("proxy_pass")) return false;
     const normalized = block.header.replace(/\s+/g, " ").trim();
     if (normalized.startsWith("location = /owner/")) return false;
+    if (isExactRefundActionProxy(block)) return false;
     return nginxProxyCouldMatchOwnerPrefix(normalized);
   });
   if (unsafeOpsOwnerProxies.length) {

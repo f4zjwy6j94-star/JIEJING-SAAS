@@ -40,6 +40,38 @@ def fail(message: str) -> int:
     return 1
 
 
+def refund_proxy_contract_error(nginx: str) -> str:
+    marker = "server {\n    listen 80 default_server;"
+    if marker not in nginx:
+        return "merchant default server is missing"
+    ops_server, app_server = nginx.split(marker, 1)
+    action_pattern = r"^/owner/billing/domestic/refunds/[A-Za-z0-9_-]+/(review|execute|query)$"
+    for location, method in (("location = /owner/billing/domestic/refunds", "GET"), (f"location ~ {action_pattern}", "POST")):
+        start = ops_server.find(location + " {")
+        end = ops_server.find("\n    location ", start + len(location))
+        block = ops_server[start:end if end >= 0 else len(ops_server)]
+        if start < 0 or ops_server.count(location + " {") != 1:
+            return f"missing exact ops refund allowlist: {location}"
+        if f"$request_method != {method}" not in block or "return 405" not in block:
+            return f"ops refund route must be {method}-only: {location}"
+        if "proxy_pass http://jiejing-saas:8788;" not in block or "proxy_set_header Host $host;" not in block:
+            return f"ops refund route must preserve the scoped backend host: {location}"
+        if start >= ops_server.find("location ~ ^/owner(?:/|$)"):
+            return "ops refund action route must precede the final owner-prefix denial"
+        if location in app_server:
+            return "merchant host must not have an ops refund proxy allowlist"
+    app_owner_deny = re.search(r"location ~ \^/\(\?:owner\|vault\|database\|backup\|queue\)\(\?:/\|\$\)\s*\{([^}]*)\}", app_server)
+    if not app_owner_deny or "return 404" not in app_owner_deny.group(1) or "proxy_pass" in app_owner_deny.group(1):
+        return "merchant host must retain its non-proxy owner-prefix 404"
+    for route in ("/owner/billing/domestic/refunds/order-1/review", "/owner/billing/domestic/refunds/order_1/execute", "/owner/billing/domestic/refunds/order1/query"):
+        if not re.fullmatch(action_pattern, route):
+            return f"valid exact refund action rejected: {route}"
+    for route in ("/owner/billing/domestic/refunds/order1/delete", "/owner/billing/domestic/refunds/order1/execute/extra", "/owner/billing/domestic/refunds/../execute", "/owner/billing/domestic/refunds//query", "/owner/unrelated"):
+        if re.fullmatch(action_pattern, route):
+            return f"refund proxy is broader than its audited API: {route}"
+    return ""
+
+
 def _sanitized_backend_env() -> dict[str, str]:
     inherited = {"COMSPEC", "LANG", "LC_ALL", "PATH", "PATHEXT", "SYSTEMROOT", "TEMP", "TMP", "WINDIR"}
     env = {name: value for name in inherited if (value := os.environ.get(name)) is not None}
@@ -70,6 +102,9 @@ def _sanitized_backend_env() -> dict[str, str]:
 
 
 def main() -> int:
+    proxy_error = refund_proxy_contract_error((ROOT / "deploy" / "nginx.public-staging.conf").read_text(encoding="utf-8"))
+    if proxy_error:
+        return fail(proxy_error)
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -211,6 +246,17 @@ def main() -> int:
         unauthenticated = _get_json(f"{base}/owner/operations-overview", host=OPS_HOST)
         if unauthenticated["status"] != 401:
             return fail(f"unauthenticated overview should be 401: {unauthenticated}")
+
+        refund_list = f"{base}/owner/billing/domestic/refunds"
+        for token, host, expected in (("", OPS_HOST, 401), (merchant_token, OPS_HOST, 403), (admin_token, "app.jiejing.shop", 403), (admin_token, OPS_HOST, 200)):
+            response = _get_json(refund_list, token=token, host=host)
+            if response["status"] != expected:
+                return fail(f"refund list backend authorization expected {expected}: {response}")
+        for operation in ("review", "execute", "query"):
+            for token, host, expected in (("", OPS_HOST, 401), (merchant_token, OPS_HOST, 403), (admin_token, "app.jiejing.shop", 403), (admin_token, OPS_HOST, 404)):
+                response = _post_json(f"{refund_list}/nonexistent-proxy-fixture/{operation}", {"company_id": "nonexistent-company"}, token=token, host=host)
+                if response["status"] != expected:
+                    return fail(f"refund {operation} backend authorization expected {expected}: {response}")
 
         merchant_overview = _get_json(f"{base}/owner/operations-overview", token=merchant_token, host=OPS_HOST)
         merchant_details = [
