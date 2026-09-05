@@ -13,7 +13,7 @@
 ## 精确续接点
 
 - 实际仓库：`C:\Users\57249\Documents\Codex\2026-04-29\hermes-agents\software-demo`。
-- 分支：`codex/ai-ceo-real-merchant-loop`；当前候选HEAD：`f2ce76032c6460bd959cc4fc469740c304be7258`（`fix: stabilize merchant workflows and bind release evidence`），W1–W6/C1/C2/UI本批31文件已提交、未部署。原修复基线为`66032b3`；恢复时再次核对，不能将基线当永久HEAD。
+- 分支：`codex/ai-ceo-real-merchant-loop`；当前候选HEAD：`0250ce60af4d1a957bdd79f295c67bae14423262`（`test: align workflow fixtures and preflight budget`），包含`f2ce760`的W1–W6/C1/C2/UI本批31文件及后续测试/CI预算修订，均已提交、未部署。原修复基线为`66032b3`；恢复时再次核对，不能将基线当永久HEAD。
 - 商家生产主机已部署 `4c26ebc487dd40ff1bae45336723eb2910af30fb`（包含此前 `ca5a20d`、`801dc88`、`7a92620` 修复）；完整门禁211/211、dry-run、apply和线上健康复核通过。独立ops仍是旧前后端，见下方新确认阻断；不能称整套退款运营链路已完成。主工作区仍保留三项原有用户修改，不得重置、清理或覆盖。
 - 三个原有用户修改文件不要顺手暂存/提交：`jiejing_saas/readiness.py`、`tools/test_jiejing_phase2_response_boundary_hardening.py`、`tools/test_jiejing_platform_trial_activation_guard.py`。
 - 当前商品：平板电脑支架（折叠便携款）；项目 `listing-project-0ef70f19c079b4261e82`；报告 `report_19fcfc7b9f88f0eb`；候选 `candidate_1`。
@@ -83,6 +83,7 @@
 - 既有AGENTS要求staging自动部署走GitHub手动通道，workflow仅允许main执行；本轮 `gh auth status` 未认证，本地origin/main为旧 `d809cfb`。未强推/合并main、未绕过规范用旧SSH staging全量apply；直接SSH更新旧ops前后端属于需要明确例外授权的路径。
 - ops精确代理补丁已本地完成：仅GET退款列表、仅POST指定订单的review/execute/query，保留商家域owner路径404。`test_jiejing_operations_console.py` 的代理合同与本地HTTP匿名401/商家403/错误Host403/运营列表200/不存在订单404通过，`codex_jiejing_merchant_ops_surface_isolation_smoke.js` 离线矩阵通过；5种内存规则变异及独立泛路径变异被拒绝。只修改上述配置与两测试文件，尚未部署旧运营端，尚未实测真实Nginx新配置。
 - 旧专用部署脚本/旧API同步仍待处理；没有新建绕过手动发布规范的路径。主站已完成的4c26ebc发布不要重跑。后续HEAD里的ops补丁只有专项通过，211/211证据只对应已部署4c26ebc，不能混为同一候选。
+- 2026-09-06只读复查通道范围：GitHub白名单能包含新ops/API，但实际apply还更新Worker、Vault/边缘并处理两项私有配置，不是仅退款UI发布；旧ops专用脚本仅五静态/代理文件和前端，不含API。若以后获准窄范围SSH例外，必须另审具体执行：仅旧主机ops前端/代理/对应API，保存并验证旧API/前端实际镜像和文件、Compose身份，禁止碰主站、DNS、Vault/私有配置、Worker及共享PG恢复；回滚不能回滚共享数据库。现有GitHub回滚未明确恢复旧镜像，不能当成已验证窄范围恢复方案。本轮未连接服务器、未改脚本、未获得或使用该例外。
 
 ## 2026-09-05 结构/续接审查基线
 
@@ -119,7 +120,7 @@
 
 - W4b服务端可靠归档、W5批量无货源入口、W6商家反馈与请求归属已冻结。W4b后端15组及HTTP、浏览器桌面/平板各26场景通过；独立后端7组、12并发claim和10并发旧SYNC不覆盖终态通过。W5/W6实际页面17组通过。不是生产用户操作或真实PostgreSQL并发证明。
 - 新协议将请求终态与聊天归档同事务提交；浏览器未确认终态不SYNC，断流按精确ID恢复，旧缓存不能覆盖终态。旧客户端与纯本地时钟快捷回答仍沿用旧同步，不承诺任何场景零丢失或找回已删除历史。
-- C1/C2已冻结：完整检查结果绑定源commit/tree及检查清单，拒绝脏目录、运行中变化、隐藏Git跟踪标记和错源/缺项证明；16组证据专项、候选微型包和部署/回滚合同通过。门禁清单现216项，**本候选尚未完整运行**；历史211通过不能用于这批补丁。
+- C1/C2已冻结：完整检查结果绑定源commit/tree及检查清单，拒绝脏目录、运行中变化、隐藏Git跟踪标记和错源/缺项证明；16组证据专项、候选微型包和部署/回滚合同通过。门禁清单216项；第二候选`0250ce6`已完整216/216通过，证据见下方，不能用历史211通过替代。
 - 官网保留已批准内容/圆形AI CEO图/六板块/套餐，调整中文标题排印；修复手机登录被桌面双栏挤压、顶部关闭不可达及小平板输入过窄。桌面/平板/手机首页交互与320–1024共8组登录宽度/填写/关闭通过，无真实登录或POST。首页browser已加入门禁与部署白名单。
 - 本地完整app截图确认的1024平板空状态输入裁切、任务摘要遮首条消息均已修复；桌面收起态同因遮挡一起修，桌面展开仍聊天746px/任务351px。复用历史browser runner增加4个实际app布局场景及展开/收起按钮、输入下沿hit-test，26历史场景与4布局场景通过。仅CSS位置/占位，不改业务/导航/聊天主次；平板展开仍沿用既有抽屉行为。
 - 本次公开只读刷新：health=ok、deep=ready；production_ready/beta_ready/can_accept_real_customers=true，billing.public_charging_allowed/charge_now_allowed/billing_ready_for_paid_launch=true；blocker/warning=0。全面real_platform_writes_enabled=false，不代表受控通道关闭。公开投影没有退款执行结论；独立ops仍20260828旧资产，app域ops.html=404。没有重新核验/执行真实退款或eBay操作。
@@ -128,10 +129,22 @@
 
 ## 下一步（按顺序，不另起产品方向）
 
-先收口上述两项回归测试，再提交/建立新干净候选并跑完整216项门禁，然后打包及dry-run。正式部署需当前候选的明确确认；不重新部署已完成的旧商家版本。W1–W6及C1/C2已处理的缺陷不要重做。下列运营端及生产UI验收约束仍有效，不因此重新选品。
+2026-09-06用户已明确“批准，继续推进”，批准本批主站修复部署；现场HEAD/候选/包/216项证明/dry_run均未漂移，主站active仍`20260905T113551Z-4c26ebc487dd`，健康、私测与公开收费为true，ops仍旧版、app域ops路径404。生产手册另要求CI；普通`Jiejing CI`支持codex/** push，无需合并main或操作staging。虽然`gh auth status`仍未认证，但应用GitHub连接及Git凭据通道已验证可用，不应再次把CLI未登录说成所有GitHub通道不可用，也不需要用户重新登录。
+
+发布前历史扫描覆盖`d809cfb..0250ce6`的177提交、1019个唯一新增文本blob约294MB（含18个超2.5MB旧文本），283关联/134新增路径；无禁止路径或秘密规则命中。已将`0250ce6`推送到既有私有仓库`f4zjwy6j94-star/JIEJING-SAAS`的新`codex/ai-ceo-real-merchant-loop`远端分支，未改main。普通CI run=`33982650298`，URL=`https://github.com/f4zjwy6j94-star/JIEJING-SAAS/actions/runs/33982650298`，精确SHA相同，**失败**：旧`test_jiejing_new_ebay_account_low_risk_runbook.py`仍要求`renderSaasNewEbayAccountOnboardingPanel`。已本地复现；历史`d2158a6`为商家/运营隔离主动删除该内部验收面板，而当前merchant_surface_isolation正向禁止它，属于测试相互冲突，不是Linux差异或已确认业务缺陷。不要恢复面板、不要将旧216通过当成CI通过，`0250ce6`暂不可apply。
+
+当前只修验证代码：旧runbook测试改为禁止内部面板回流并保留当前店铺连接证据，原checker的OAuth/写入/动作确认合同未改；18个负例和跨模块移动正例、原专项/商家隔离/OAuth UI专项通过。独立AST审查确认原checker调用及其后32条语句完全不变。另8个普通CI专项均已补入门禁，现224项、224个唯一名称，26个普通CI Python脚本全部覆盖；增加实际run脚本子集检查及漏接/错误解释器负例。部署四专项、版本绑定证据16/16及其余7个新接专项通过，部署白名单本来齐全无需修改。下一候选须重新完整224项并通过精确SHA的CI。app.js/CSS/后端/生产配置未改，本批已批准的产品内容没有扩大。尚未正式部署；Chrome明确不可用，不是用户登出证明，未重复登录或安装。
+
+上述两项回归修正和CI预算已提交`0250ce6`。第二个独立干净候选`C:\Users\57249\Documents\Codex\2026-09-06\jiejing-release-workflow-r2`已完整216/216通过，失败0，耗时1445.32秒，source_stable/release_eligible均true、secret_exposed=false，session73812已结束exit0。不要修改此目录或重跑同一检查。门禁run_id=`0bbaca06fb64436fadb4c0e3996cb9cc`，source_tree=`5e5900cb14eef85fc9743f24ac813e16120dd06a`，UTC开始/结束`2026-09-05T16:44:27.565227Z`/`2026-09-05T17:08:32.877065Z`；证据`output/jiejing-precloud-deployment-gate/latest.json`。
+
+对应457文件发布包`output/jiejing-public-staging-bundle/jiejing-public-staging-20260905-170914.zip`及同名`.manifest.json`已生成；BUNDLE_SHA256=`4d9549f2acac2efc3aef221b2476cc6f7daa328411a6a414c22eb5eb36210f87`，MANIFEST_SHA256=`60f44d5fbc05a3f33c98246cf3ec9eda4ff0f4e4446c2eb325ba019f8a9c6a26`。生产dry_run已通过、session49208 exit0：candidate_release_persisted=false、active_switched=false、private_env_normalization_required/applied=false，仍为原`20260905T113551Z-4c26ebc487dd`发布。工具实际输出的脱敏副本为该候选`output/jiejing-production-deploy/dry-run-20260905-170914.json`。后续CI失败已使此候选停止apply；该旧包与dry_run只保留为历史证据，不重复运行或冒充下一候选证明。未更新独立ops、未跑生产用户商品流程。
+
+独立只读包审查通过：216项唯一且全通过；manifest证明/原报告SHA/源文件指纹/检查清单一致；457个ZIP条目逐文件摘要及Git blob等于`0250ce6`；无私有env、output、截图、数据库或第三方依赖目录（六个公开`.env.example`模板例外）。三项用户原有修改未混入包。候选仍干净；主仓库两份执行/审查文档为本批验证结果更新，尚未提交，三项原用户修改原样保留。
+
+正式部署授权已收到；先冻结本次验证修订的新提交，在第三个独立干净候选`C:\Users\57249\Documents\Codex\2026-09-06\jiejing-release-workflow-r3`并行执行完整224项与GitHub普通CI，两者通过后重新打包/dry_run/apply。不是重新申请普通方案或扩张产品范围。独立ops仍需既有GitHub通道或明确例外，不能把主站生产dry_run解释为该权限。W1–W6及C1/C2已处理的缺陷不要重做，不重新部署已完成的旧商家版本，也不重新选品。
 
 1. 本地ops精确路由回归已收口；通过现有GitHub手动通道规划并执行运营端前后端同版发布，或取得针对旧运营主机的明确SSH部署例外授权。不能仅凭HTTP200、静态更新或refund能力布尔宣布成功。
-2. 商家主机的完整门禁、dry-run、apply和健康复核已完成，不重做。当前 app hash=`1f4d60564877`，styles=`9e2a50d2359c`，候选ops=`d205c9c5f13b`但独立ops尚未提供此版本；保留三项用户原有修改。
+2. 商家主机旧`4c26ebc`的部署已经完成，不重做；当前正在推进的是新增W1–W6/C1/C2/UI批次。线上 app hash=`1f4d60564877`，styles=`9e2a50d2359c`，候选ops=`d205c9c5f13b`但独立ops尚未提供此版本；保留三项用户原有修改。
 3. 运营端后续发布要核对前端资产、后端代码、精确退款API路径、内部身份限制及app域ops路径404。不得执行真实收费/退款作为默认部署测试。
 4. 网站在线、私测可用、公开收费可用、退款端到端可用、受控eBay通道启用及真实发布验收分别报告。
 5. Chrome 接续同一个平板支架项目，全程通过捷境 UI 复验生成、素材与发布前检查；真实来源或账号资格不满足时停在该明确阻断，不造成功回执，不重复 OAuth/支付/退款。

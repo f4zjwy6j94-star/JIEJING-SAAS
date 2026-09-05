@@ -150,3 +150,21 @@
 - 实际完整检查24分24秒已接近GitHub preflight原25分钟，另有依赖安装等准备步骤。这是预算不足风险，不是观察到GitHub超时。仅将此完整检查job上限有界调整为45分钟并增加合同，其他专项workflow、runner、权限、分支与发布命令不变；不触发CI。
 
 以上后续修订须另提交新候选重跑完整216项，成功后才允许打包和生产dry-run。正式apply以及独立ops发布权限边界不变。
+
+### 第二候选完整验证与发布准备（2026-09-06，未正式部署）
+
+修订提交`0250ce60af4d1a957bdd79f295c67bae14423262`在独立干净目录`C:\Users\57249\Documents\Codex\2026-09-06\jiejing-release-workflow-r2`完成216/216，失败0，1445.32秒；source稳定、release_eligible=true、secret_exposed=false。run_id=`0bbaca06fb64436fadb4c0e3996cb9cc`，tree=`5e5900cb14eef85fc9743f24ac813e16120dd06a`。证据是此目录`output/jiejing-precloud-deployment-gate/latest.json`，不是首轮214/216报告。
+
+发布包457文件，`output/jiejing-public-staging-bundle/jiejing-public-staging-20260905-170914.zip`及同名manifest；包SHA=`4d9549f2acac2efc3aef221b2476cc6f7daa328411a6a414c22eb5eb36210f87`，manifest SHA=`60f44d5fbc05a3f33c98246cf3ec9eda4ff0f4e4446c2eb325ba019f8a9c6a26`。主生产通道dry_run通过，候选未永久落入release root、active未切换、私有配置未规范化或修改。脱敏实际输出副本位于候选`output/jiejing-production-deploy/dry-run-20260905-170914.json`。
+
+本批完成的是有版本依据的本地修复候选、桌面/平板/手机针对性验收和生产dry_run，不是已上线、GitHub CI通过、生产商家全流程、退款运营完整可用或真实eBay发布证明。GitHub CLI本轮未认证，旧ops尚待同版发布；正式部署仍需当前候选确认及发布前验证。用户无需重新提供已知商品/重做OAuth或支付；后续仍从同一平板支架项目续接，缺真实事实/图片权利/账号资格时如实停在具体条件。
+
+### 部署获准后的真实CI发现与修复（2026-09-06）
+
+用户已批准继续本批主站部署。只读复核候选/包/216项/dry_run未漂移；生产仍`4c26ebc`。虽gh CLI未认证，应用GitHub连接与Git非交互凭据可用，无需用户重新登录。对`d809cfb..0250ce6`的177提交、1019个唯一新增文本blob（含大文件及删除版本）扫描无秘密规则/禁止路径命中后，已将0250ce6推至私有仓库codex分支，未改main或staging。
+
+普通CI run `33982650298`（精确SHA0250ce6）失败于旧`test_jiejing_new_ebay_account_low_risk_runbook.py`要求已删除的内部新账号演练面板。历史d2158a6按商家/运营隔离主动删除它，而现行商家隔离测试禁止恢复；本地复现相同失败，不是Linux差异。测试现改为禁止5个旧内部标记回流到3个商家模块、保留3个当前店铺证据hook；15注入/3缺失负例及跨模块移动正例通过。独立AST比较确认checker调用及其后32条语句未改，OAuth、禁止静默同步/重新授权、写入与动作确认规则保留；专项/商家隔离/OAuth UI通过。
+
+发现另8个普通CI专项未入本地216清单（其中上述失败1项，其余7项隔离复跑通过）。全部补入CHECKS后为224项且名称唯一，26个普通CI Python脚本全部覆盖；既有部署合同直接解析CI实际run脚本并比较CHECKS，覆盖inline/block/folded/quoted形式，排除名称/注释/env伪匹配，有逐项漏接及非Python反例。部署四专项、版本绑定证据16/16、语法/diff通过。部署白名单及编译本来已有这8项，未改脚本。
+
+只改3个测试/门禁文件与本批证据文档；app.js/CSS/后端/生产配置未变，不扩大已批准产品内容。下一步冻结新提交并在第三个干净目录完整224项、精确SHA GitHub CI；旧216通过不能替代，旧0250ce6包不得apply。独立ops未获SSH例外，生产用户UI及真实平台/资金操作未进行。

@@ -12,6 +12,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RUNBOOK = ROOT / "docs" / "JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md"
 CHECKER = ROOT / "tools" / "jiejing_new_ebay_account_low_risk_check.py"
+RETIRED_MERCHANT_MARKERS = (
+    "function renderSaasNewEbayAccountOnboardingPanel",
+    "saas-new-ebay-onboarding-panel",
+    "old_frozen_account_reuse_allowed=false",
+    "本面板没有 eBay 授权按钮",
+    "new_ebay_account_smoke_runbook",
+)
+CURRENT_STORE_EVIDENCE_MARKERS = (
+    "data-ebay-oauth-confirmation-status=",
+    "data-ebay-draft-oauth-confirmation-status=",
+    "data-ebay-refresh-proof-status=",
+)
 
 
 def fail(message: str) -> int:
@@ -19,9 +31,20 @@ def fail(message: str) -> int:
     return 1
 
 
+def merchant_onboarding_contract(sources: dict[str, str]) -> bool:
+    """Internal rehearsal stays internal; merchants keep current-store evidence."""
+    return (
+        all(marker not in source for source in sources.values() for marker in RETIRED_MERCHANT_MARKERS)
+        and all(any(marker in source for source in sources.values()) for marker in CURRENT_STORE_EVIDENCE_MARKERS)
+    )
+
+
 def main() -> int:
     text = RUNBOOK.read_text(encoding="utf-8")
-    app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+    merchant_sources = {
+        name: (ROOT / name).read_text(encoding="utf-8")
+        for name in ("app.html", "app.js", "assets/jiejing-settings-panels.js")
+    }
     for marker in [
         "Do not repeat OAuth for the old frozen account",
         "New product check",
@@ -52,18 +75,26 @@ def main() -> int:
         if forbidden in text.lower():
             return fail(f"runbook should not contain secret-shaped instruction: {forbidden}")
 
-    for marker in [
-        "function renderSaasNewEbayAccountOnboardingPanel",
-        "saas-new-ebay-onboarding-panel",
-        "old_frozen_account_reuse_allowed=false",
-        "triggers_ebay_oauth=false",
-        "triggers_real_platform_write=false",
-        "repeat_oauth_allowed=false",
-        "本面板没有 eBay 授权按钮",
-        "renderSaasNewEbayAccountOnboardingPanel()",
-    ]:
-        if marker not in app_js:
-            return fail(f"app.js missing new-account onboarding marker: {marker}")
+    # d2158a6 deliberately removed the owner-only acceptance panel. Restoring
+    # it to satisfy this old regression would violate merchant/ops isolation.
+    # The checker below still owns all no-OAuth/no-write confirmation rules.
+    if not merchant_onboarding_contract(merchant_sources):
+        return fail("merchant onboarding must show current-store evidence without the retired internal rehearsal panel")
+    for filename in merchant_sources:
+        for marker in RETIRED_MERCHANT_MARKERS:
+            changed = {**merchant_sources, filename: merchant_sources[filename] + "\n" + marker}
+            if merchant_onboarding_contract(changed):
+                return fail(f"retired internal panel mutation escaped: {filename}")
+    for marker in CURRENT_STORE_EVIDENCE_MARKERS:
+        changed = {name: source.replace(marker, "removed-evidence-marker=") for name, source in merchant_sources.items()}
+        if merchant_onboarding_contract(changed):
+            return fail("missing current-store evidence mutation escaped")
+    moved_evidence = {name: source for name, source in merchant_sources.items()}
+    for marker in CURRENT_STORE_EVIDENCE_MARKERS:
+        moved_evidence = {name: source.replace(marker, "relocated-evidence-marker=") for name, source in moved_evidence.items()}
+        moved_evidence["assets/jiejing-settings-panels.js"] += "\n" + marker
+    if not merchant_onboarding_contract(moved_evidence):
+        return fail("merchant evidence contract must allow moving rendering between merchant modules")
 
     completed = subprocess.run(
         [sys.executable, str(CHECKER), "--checklist-only"],
