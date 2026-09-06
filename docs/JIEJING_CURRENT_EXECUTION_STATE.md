@@ -13,24 +13,39 @@
 ## 精确续接点
 
 - 实际仓库：`C:\Users\57249\Documents\Codex\2026-04-29\hermes-agents\software-demo`。
-- 分支：`codex/ai-ceo-real-merchant-loop`；当前产品发布提交：`1550105b53825a65f876808bff059a4e6d0c0a8a`（`test: align merchant onboarding and CI gate coverage`），包含`f2ce760`的W1–W6/C1/C2/UI及`0250ce6`测试/CI预算修订，均已提交并部署主站。原修复基线为`66032b3`；恢复时再次核对Git，后续纯证据文档提交不等于再次部署。
-- 商家生产主机已部署 `1550105`，release=`20260905T184522Z-1550105b5382`（此前`4c26ebc`为可回滚上一版本）；完整门禁224/224、精确SHA GitHub CI、dry-run、apply及线上健康/资源/公开页面复核通过。独立ops在2026-09-06已同步1550105，并经最新授权启用微信live/refund配置；主站公开收费仍true。退款能力配置已可用，但真实运营登录后界面与本轮真实退款未验收，不能称资金端到端已完成。主工作区仍保留三项原有用户修改，不得重置、清理或覆盖。
+- 分支：`codex/ai-ceo-real-merchant-loop`；当前产品发布提交：`93f7a412ede7d034d0b81044c93e9e422e598296`（`test: load product fact save context in routing fixture`），包含`f33f1da`商家验收修复及此前1550105的W1–W6/C1/C2/UI。恢复时再次核对Git，后续纯证据文档提交不等于再次部署。
+- 商家生产主机已部署 `93f7a41`，release=`20260906T074908Z-93f7a412ede7`（1550105为可回滚上一版本）；完整门禁225/225、精确SHA GitHub CI、dry-run、apply及线上健康/运行身份复核通过。独立ops仍1550105，本批无ops专属更新且不需要重发；其此前微信live/refund配置已对齐，主站本轮公开收费仍true。退款能力配置与真实运营登录界面/真实退款是不同验收，本轮未执行资金动作。主工作区仍保留三项原有用户修改，已逐文件SHA确认未变，不得重置、清理或覆盖。
 - 三个原有用户修改文件不要顺手暂存/提交：`jiejing_saas/readiness.py`、`tools/test_jiejing_phase2_response_boundary_hardening.py`、`tools/test_jiejing_platform_trial_activation_guard.py`。
 - 当前商品：平板电脑支架（折叠便携款）；项目 `listing-project-0ef70f19c079b4261e82`；报告 `report_19fcfc7b9f88f0eb`；候选 `candidate_1`。
-- 调研、导入、商品资料模块和一次有缺陷的 Listing 生成已做。续接同项目，修复上线后再生成一次验证，不从选品重新开始。
+- 调研、导入、商品资料模块和一次有缺陷的 Listing 生成已做。本批修复已上线，续接同项目；先恢复已过期的浏览器登录并核对文案/记录/素材，不能在已知模型试用到期时反复点生成。合法模型调用条件满足后再验，不从选品重新开始。
 - 2026-09-06已通过合法登录的SaaS页面为本商品生成1张FAL概念参考图，任务`media_job_2ed50839e43bb67f`，仅概念参考、不可刊登；尚无该商品eBay操作完成证明。AI生成资料不能冒充真实货源事实。
 
-## 2026-09-06 商家验收修复部署（当前进行中）
+## 2026-09-06 商家验收修复部署（已完成，勿重复）
 
 - 用户最新明确“确认，继续推进”，已批准上一轮商家验收修复的主站部署；不是重新批准旧ops或资金/eBay动作。冻结候选为`767728894292d465eb2769f594d3e1f6e45a3c06`，tree=`a2bd27ec57672ed729b68dbac7dd701f4de2c3f1`，目录`C:\Users\57249\Documents\Codex\2026-09-06\jiejing-release-merchant-acceptance`；新225项完整门禁正在运行，不复用1550105的224项结果。
 - 独立审查`1550105..7677288`六提交、20路径、26新增文本blob：秘密规则/禁止路径命中0；三项原用户文件在两个提交中逐字相同，用户未提交改动不进入本批。部署工具/Compose/workflows未变，本批不需要更新旧ops。依次完成精确SHA普通CI、新包核验、dry-run、已批准apply及生产同商品页面复验；测试不通过不得部署。
 - 当前阶段未上线、未重复FAL生成，未收费/退款/eBay发布。上线后接续原平板支架项目和既有概念图任务，不重新开始调研或生成。
 - 发布前只读核对仍为1550105：健康与公开收费true、受控draft/publish true、ops隔离正常；API/Worker容器于04:25 UTC重建但镜像/配置来源未变，原因未推断。证据`output/production-preflight-20260906/evidence.json`。候选7677288已非force推送，精确SHA普通CI run=`34017664024`、job=`101444240678`、15步骤success；这不替代完整门禁。
 - 7677288完整门禁第46项`ai_ceo_routing_supplier_http`失败，不可发布该候选：旧Node fixture漏载新增context/epoch/事实验证失效函数，30项中29通过、1在业务断言前ReferenceError。已在主仓库仅补测试9行真实源依赖，全部213条断言AST不变，修后30/30通过；独立检查其他抽取fixture未见同类遗漏。原225继续完成以收集其余失败，后续从测试修正提交建立新干净候选及新全门禁/精确CI；不回滚产品跨项目保护。
+- 原候选现已终态224/225，仅上述失败，1540.54秒，run_id=`341466ab9a014dc599f3e3204fad792f`，source_stable=true/release_eligible=false。修正已提交推送`93f7a412ede7d034d0b81044c93e9e422e598296`，r2目录`C:\Users\57249\Documents\Codex\2026-09-06\jiejing-release-merchant-acceptance-r2`、tree=`321eb870f716f7f392b25eaf1a6be7e7668766cd`，新完整225正在运行。93精确SHA CI run=`34018073755`/job=`101445384484`全部15步骤success；对应安全证明在r2的`output/jiejing-production-deploy/exact-sha-ci.json`。当前状态守卫专项通过，三项用户原修改仍29/0、1/0、10/1。
+- 浏览器原tab3在07:09 UTC左右实际跳转`index.html?reason=session_expired#ai-ceo-workbench`；这次已确认会话过期，不是Chrome工具不可用。生产部署不受影响，上线后须重新登录再复验同项目。未因跳转重新生成业务记录。
+- r2完整225/225已通过，session28980结束exit0；run_id=`9e438a38069c49578d4d61016bfa6798`，1499.33秒，UTC`07:11:27.855547`→`07:36:27.169834`，source_stable/release_eligible=true、secret_exposed=false。正式报告SHA=`3733c3c8f2a57b8fd0474cd2861c6e6c91671b1b42db6ea132246bc8fb2bccaf`；独立报告validator与当前源指纹通过，候选干净。不重跑该已完成门禁；现在打包、独立核验及dry-run，尚未apply。
+- r2新包`output/jiejing-public-staging-bundle/jiejing-public-staging-20260906-073832.zip`及同名manifest，458文件。bundleSHA=`e1b2c80768b8b90a4a6e27e239e46c50b60fea4ecb26d534036b5b826fdc5ee2`，manifestSHA=`92f39eac63931cecdcd86a61e1e56756adddf8625d33bce25e46ba8ea6d55b22`。独立逐成员Git/manifest/225proof/秘密规则/源稳定核验通过，回执在r2的`output/jiejing-production-deploy/bundle-audit-20260906-073832.json`。生产dry-run session52862已exit0、未落永久候选/切active/规范化私有env，回执`dry-run-20260906-073832.json`。用户授权已存在，下一动作apply，无需重复确认。
+- 预发布只读时间对照发现production与Windows时钟约174秒差（server−local）；生产`NTPSynchronized=yes`，未判定准确源或业务影响、未修改时间/服务。时间证据须保留来源，不把约3分钟差解释为另一次发布；active/镜像/manifest仍明确1550105。
+- **本批apply已成功，exec session26181结束exit0；不得重复执行。** release=`20260906T074908Z-93f7a412ede7`，前版1550105；回执在r2的`output/jiejing-production-deploy/apply-20260906-073832.json`。`CANDIDATE_RUNTIME_IMAGE_COHERENCE=verified`、`TIMER_FIRST_ONESHOT_VERIFIED=1`、`TIMER_INSTALL_APPLIED=1`、active切换及永久候选成功；private env normalization required/planned/applied均false。现在只做postflight读回及公开页面验证，不再apply。Docker Bake缺buildx及tat_agent旧PIDFile仅警告，构建与部署已成功，本批未安装或改系统服务。
+- 上线后只读身份核验通过：active/manifest两个SHA/四服务Compose标签一致；API image=`sha256:794227004933fb6b449f42fdb7a69a5c6934e4a14f4b156bae46d55ae65a71bc`，Worker image=`sha256:dece1e15e37e91a740951ac275426029d2d95cf135fea6d4ccd8e8d448c20032`。回滚holds匹配1550105前镜像；三个安装文件字节/权限、service success/0、timer enabled/active及下次时间、无drop-in均通过。private仍原引用与权限，未读值。回执为r2的`readback-20260906-073832.json`（位于output/jiejing-production-deploy）。
+- 公网GET 11/11通过：health/deep ready、production/beta/can_accept_real_customers与billing三收费布尔true；全面写入false、受控draft/existing_publish true，ops域200/匿名401/动作GET405，主站ops相关路径404。回执`public-readback-20260906-073832.json`。不等于具体账号能发布、真实退款或登录后整条商家旅程通过；当前浏览器仍session_expired，已非阻塞请求重新登录，未重做OAuth/FAL或商品记录。
+- 前端最终匿名读回通过（Windows UTC07:53:55）：index.html及app.html?start=app各仅一行已知Cloudflare统计注入，排除唯一注入行后与ZIP逐字相同；app.js/CSS原始SHA及family=`20260906-merchant-acceptance-v1`均与manifest一致。readiness blocker_count=0、warning_count=0。回执`frontend-readback-20260906-073832.json`。首个ignored核验器错假设注入script必须有defer，已接受已知type属性形态并以3正例/8负例检验；没有生产HTML差异或产品改动。
+
+## 当前下一步（不是重做部署）
+
+1. 恢复已过期的商家登录后，打开同一`listing-project-0ef70f19c079b4261e82`，核对旧文案、最近任务、已存在的概念图和真实额度/到期提示；不重复OAuth、FAL、支付退款或发布。登录复验未完成，不能用225门禁代替；文本生成的合法模型/权益条件仍需核对，不能静默续期或编造生成成功。
+2. 下一实现批次为手改Listing云端保存/跨设备恢复，产品结构和UI风格保持不变。当前十个手改字段仍只localStorage；应保存服务器项目级版本与明确空值、权限/完整项目隔离、并发版本冲突和幂等重试，不上传客户端model_generated/审核权限标记、不覆盖AI生成报告，不因手改保存调用模型或eBay。先定清小合同与回归范围，再实施；此功能未包含在已部署93f7a41中。
+3. 待上述保存与合法文本生成可验后，继续原商品旅程到允许的发布前边界。现有素材为概念参考，真实来源/权利/事实及账号资格未满足时不得发布；不以新增样例回执冒充成功。视觉升级继续暂停，先完成真实可用的MVP闭环。
 
 ## 2026-09-06 登录后同商品实操复验（本批修复依据）
 
-- 本批代码已提交`f33f1da`（`fix: preserve merchant workflow state and truthful availability`），17文件，未push、未部署；当前线上仍1550105。根线程最终资产内容hash合同、当前状态守卫及素材点真实renderer浏览器专项通过；三项用户原修改仍原样留在工作树，没有进入提交。下次新发布候选应从f33f1da或后续明确代码提交建立，不复用旧224项证明。
+- 此节为发布前实操依据：产品代码提交`f33f1da`（`fix: preserve merchant workflow state and truthful availability`），17文件，现已随上节93f7a41发布，不再按此节重建候选。根线程资产内容hash合同、当前状态守卫及素材点真实renderer浏览器专项通过；三项用户原修改原样保留，没有进入提交。
 - 已使用用户授权的既有登录信息在实际可用的内置浏览器登录捷境；不再把Chrome工具不可用说成账号未登录，不重复登录/OAuth。当前公司`company_49c1568f37c8b1e0`、店铺`store_e5bee65c57298885`，仍为上方平板支架项目。
 - 原调研、资料、Listing后台记录存在：Listing任务`task_017a05527ae067c6`/报告`report_d42e33c659b00ab1`；商品资料任务`task_6845fd205d9aef6e`/报告`report_8e6fb0c9058972c6`。页面“最近任务”为空是只认旧任务类型导致，不是本次数据库丢记录。
 - 页面仅点击一次AI生成：账号试用于`2026-09-01T02:45:32.519235+00:00`到期，虽剩20次仍`allowed=false`，请求在模型调用前拒绝。页面却显示20/20可用；账号BYOK未配置，页面“保存失败”源于7月旧尝试，不是本轮GET失败。没有静默续期、授权新额度、索取或写入模型密钥。
@@ -42,7 +57,7 @@
 - 同因复核另已修复事实保存慢回包覆盖别的商品：复用公司/用户/店铺/完整项目身份与epoch校验，A→B及A→B→A旧响应/旧finally不改新状态；后端已保存A不被取消或重发。保存时仅冻结当前事实表输入，导航/Listing文案可用，成功/失败解锁。完整离线app实际点击最近任务继续B后，A回包仍保持B；同项目在途修改三项买家文案保留且未验证。新资产family=`20260906-merchant-acceptance-v1`，app LF hash=`150f23d4b732`、styles=`885b316fada8`；仅同步7处缓存引用，未改官网正文、CSS或页面布局。
 - 明确剩余产品缺口：手改Listing字段目前只保存本机快照；生成报告落库不等于手改云保存。应优先补同项目手改云端保存/跨设备恢复，再复验完整旅程，不先启动UI大改。真实文本生成仍需合法可用的账号模型或单独批准的测试权益；当前试用到期不能靠反复点击解决。
 - 成本说明另有既有缺口：`media_asset_pipeline._cost_guard`沿用7月固定每图80美分及blocked说明，前端draft默认填60，但该美元上限未进入provider执行校验；当前实际保护为积分quote/reserve/worker核验/settle不超预留。这不证明发生美元超支，也不能称美元硬上限有效；后续须统一过时投影并按真实provider计费明确成本控制合同，不能用20点结算替代真实美元成本证据。
-- 本批不提交用户原有三项修改，不自动部署、不申请真实发布；正式部署仍需本批明确确认及新候选完整门禁/CI/dry-run。下次从此节与Git差异续接，不重新选品、重新生成同一张图或重做已完成ops配置。
+- 本批未提交用户原有三项修改，未申请真实发布；后续明确授权、完整225/CI/dry-run及正式部署现均已在上节完成。下次从上方“当前下一步”与Git差异续接，不重新部署、选品、生同一张图或重做ops配置。
 
 ## 商家生产主机已部署的修复
 
@@ -180,7 +195,7 @@
 - app.js冻结LF内容hash=`d2dcc7345056`、styles=`885b316fada8`，7处引用family=`20260905-workflow-reliability-v1`。三项原有用户文件差异仍29/0、1/0、10/1，不进入候选。本批已提交为`f2ce760`；独立干净候选位于`C:\Users\57249\Documents\Codex\2026-09-06\jiejing-release-workflow`，完整216项结果214通过/2失败，1463.71秒，source_stable=true、release_eligible=false，证据在该目录`output/jiejing-precloud-deployment-gate/latest.json`。该候选不得打包/部署；session72669已结束exit1。
 - 两个失败为merchant_surface_guard（旧正文匹配不接受标题span排印）与ai_ceo_phase0_contracts（两个抽取submit函数的fixture缺新history request context依赖，在行为断言前ReferenceError）。前者按真实h1可见语义修复，保留错标题/非h1不能替代的负向断言，专项通过；后者抽取真实scope/epoch/canonical依赖，完整21项及stream_error8、streaming合同、历史26+4布局通过，未改生产JS。另仅将GitHub完整preflight上限25→45分钟：实际24分24秒之外还需安装依赖，属于预算风险而非已发生CI超时；job定向7负例及四部署专项通过，权限/分支/runner/命令不变，未触发CI。即将提交这些回归/预算修订，另建`jiejing-release-workflow-r2`跑完整216项，不复用214项旧结果充数。
 
-## 下一步（按顺序，不另起产品方向）
+## 历史发布过程（1550105及此前，非当前待办）
 
 2026-09-06用户明确“批准，继续推进”，批准本批主站修复部署。以下为发布前过程记录，最终上线证据见本节“正式apply已成功”：当时HEAD/候选/包/216项证明/dry_run均未漂移，主站active仍`20260905T113551Z-4c26ebc487dd`，健康、私测与公开收费为true，ops仍旧版、app域ops路径404。生产手册另要求CI；普通`Jiejing CI`支持codex/** push，无需合并main或操作staging。虽然`gh auth status`未认证，但应用GitHub连接及Git凭据通道可用，不应再次把CLI未登录说成所有GitHub通道不可用，也不需要用户重新登录。
 
