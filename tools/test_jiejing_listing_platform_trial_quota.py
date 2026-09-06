@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
@@ -156,6 +158,26 @@ def main() -> None:
             raise AssertionError("Listing route does not reuse the backend platform trial quota")
         if route.index("_platform_model_trial_quota(identity=identity)") > route.index("generate_listing_draft("):
             raise AssertionError("Listing route checks the platform trial only after calling the model")
+        messages = [
+            value
+            for node in ast.walk(ast.parse(textwrap.dedent(route)))
+            if isinstance(node, ast.Dict)
+            for key, value in zip(node.keys, node.values)
+            if isinstance(key, ast.Constant) and key.value == "merchant_message"
+            and any(isinstance(item, ast.Name) and item.id == "trial_blocker" for item in ast.walk(value))
+        ]
+        if len(messages) != 2:
+            raise AssertionError("both Listing precheck and atomic reservation must explain the trial blocker")
+        for expression in messages:
+            for blocker, expected, forbidden in (
+                ("platform_default_model_trial_expired", "到期", "额度已用完"),
+                ("platform_default_model_trial_exhausted", "额度已用完", "到期"),
+                ("platform_trial_activation_required", "尚未激活", "额度已用完"),
+                ("platform_model_temporarily_unavailable", "暂不可用", "额度已用完"),
+            ):
+                message = eval(compile(ast.Expression(expression), "<listing-trial-message>", "eval"), {}, {"trial_blocker": blocker})
+                if expected not in message or forbidden in message:
+                    raise AssertionError(f"Listing trial blocker copy was conflated: {blocker}: {message}")
 
     print("PASS jiejing_listing_platform_trial_quota")
 

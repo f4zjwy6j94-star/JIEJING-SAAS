@@ -398,7 +398,7 @@ async function runSmoke() {
     null,
     { timeout: 60000 },
   );
-  await page.evaluate(() => setView("product"));
+  await page.evaluate(() => setView("product", { listingMode: "single" }));
   await page.waitForSelector('[data-source-manual-field="product_name"]', { timeout: 20000 });
   await page.fill('[data-source-manual-field="product_name"]', "Zen Lotus Hand Backflow Incense Burner");
   await page.fill('[data-source-manual-field="material"]', "Resin");
@@ -412,6 +412,7 @@ async function runSmoke() {
 
   await page.waitForSelector('[data-saas-listing-draft-field="title"]', { timeout: 20000 });
   await page.fill('[data-saas-listing-draft-field="title"]', "Merchant Edited Zen Lotus Incense Burner");
+  await page.fill('[data-saas-listing-draft-field="selling_points"]', "Merchant first point\nMerchant second point\nMerchant third point");
   await page.fill('[data-saas-listing-draft-field="description"]', "Merchant-confirmed description must remain unchanged.");
   const generationResponse = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().includes("/listing-drafts/generate") && response.status() === 201,
@@ -431,6 +432,9 @@ async function runSmoke() {
   }
   if (capturedGenerationBody?.current_draft_fields?.title !== "Merchant Edited Zen Lotus Incense Burner") {
     throw new Error("Listing AI request did not preserve the merchant-edited title");
+  }
+  if (capturedGenerationBody?.current_draft_fields?.selling_points !== "Merchant first point\nMerchant second point\nMerchant third point") {
+    throw new Error("Listing AI request cleared existing selling points before receiving a model result");
   }
   const merchantEditedFields = capturedGenerationBody?.current_draft_fields?.merchant_edited_fields || [];
   if (!merchantEditedFields.includes("title") || !merchantEditedFields.includes("description")) {
@@ -454,7 +458,7 @@ async function runSmoke() {
     null,
     { timeout: 60000 },
   );
-  await page.evaluate(() => setView("product"));
+  await page.evaluate(() => setView("product", { listingMode: "single" }));
   await page.waitForSelector('[data-saas-listing-draft-field="title"]', { timeout: 20000 });
   const restoredTitle = await page.inputValue('[data-saas-listing-draft-field="title"]');
   const restoredDescription = await page.inputValue('[data-saas-listing-draft-field="description"]');
@@ -608,12 +612,21 @@ async function runSmoke() {
     state.saasListingAiGenerationMissingFields = [];
     setView("product", { listingMode: "single" });
   });
-  const beginHeldRequest = async () => {
+  const beginHeldRequest = async (label = "context matrix") => {
     heldGeneration = null;
     await page.click('[data-saas-action="listing-generate-ai-draft"]');
     const deadline = Date.now() + 10000;
     while (!heldGeneration && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-    if (!heldGeneration) throw new Error("context matrix request was not held");
+    if (!heldGeneration) {
+      const reason = await page.evaluate(() => ({
+        view: state.view, busy: state.saasLoading, status: state.saasListingAiGenerationStatus,
+        hasStore: Boolean(activeSaasStore()?.store_id), hasProject: Boolean(saasCurrentListingProjectIdentity().key),
+        inflight: saasListingAiGenerationInFlight.size, toast: document.querySelector("#actionToast")?.textContent,
+      }));
+      throw new Error(`${label} request was not held: ${JSON.stringify(reason)}`);
+    }
+    heldGeneration.contextKey = await page.evaluate(() => saasListingAiGenerationRequest?.contextKey);
+    if (!heldGeneration.contextKey) throw new Error(`${label} has no active client request context`);
     return heldGeneration;
   };
   const finishHeldRequest = async (held, outcome, marker) => {
@@ -624,12 +637,12 @@ async function runSmoke() {
     if (payload.task) payload.task.task_id = marker;
     await held.route.fulfill({ status: outcome === "failure" ? 503 : 200, contentType: "application/json", body: JSON.stringify(payload) });
     held.resolve();
-    await page.waitForTimeout(100);
+    await page.waitForFunction((key) => !saasListingAiGenerationInFlight.has(key), held.contextKey);
   };
   for (const scope of ["project", "company", "user"]) {
     for (const outcome of ["success", "blocked", "failure"]) {
       await restoreFixture();
-      const held = await beginHeldRequest();
+      const held = await beginHeldRequest(`${scope}/${outcome}`);
       const marker = `old-${scope}-${outcome}`;
       await page.evaluate(({ scope }) => {
         if (scope === "project") {
@@ -655,9 +668,10 @@ async function runSmoke() {
         busy: state.saasLoading,
         status: state.saasListingAiGenerationStatus,
         missing: state.saasListingAiGenerationMissingFields,
+        staleFeedback: Boolean(document.querySelector('[data-saas-listing-ai-feedback]')),
         staleArtifact: [...state.saasReports, ...state.saasTasks].some((item) => item.report_id === marker || item.task_id === marker),
       }), marker);
-      if (result.title !== "Current Context Must Keep This Title" || !result.busy || result.status !== "running" || JSON.stringify(result.missing) !== '["current-context-only"]' || result.staleArtifact) {
+      if (result.title !== "Current Context Must Keep This Title" || !result.busy || result.status !== "running" || JSON.stringify(result.missing) !== '["current-context-only"]' || result.staleArtifact || result.staleFeedback) {
         throw new Error(`stale ${scope}/${outcome} modified current editor, error, cache or busy state: ${JSON.stringify(result)}`);
       }
       contextCases.push(`${scope}_${outcome}`);
@@ -667,11 +681,12 @@ async function runSmoke() {
   const viewRequest = await beginHeldRequest();
   await page.click('.nav-item[data-view="media"]');
   await finishHeldRequest(viewRequest, "success", "same-project-other-view-result");
-  const otherViewResult = await page.evaluate(() => ({
+  const otherViewResult = await page.evaluate((requestContext) => ({
     view: state.view,
     retained: state.saasReports.some((item) => item.report_id === "same-project-other-view-result"),
     busy: state.saasLoading,
-  }));
+    sameContext: requestContext === saasListingAiGenerationContextKey(),
+  }), viewRequest.contextKey);
   if (otherViewResult.view !== "media" || !otherViewResult.retained || otherViewResult.busy) {
     throw new Error(`same-project navigation cancelled or redirected generation: ${JSON.stringify(otherViewResult)}`);
   }
@@ -729,7 +744,98 @@ async function runSmoke() {
   await finishHeldRequest(overlappingB, "success", "overlapping-b-result");
   await page.waitForFunction(() => state.saasLoading === false && state.saasListingAiGenerationStatus === "completed");
   contextCases.push("overlapping_request_busy_owner");
+  const generationFeedback = page.locator('[data-saas-listing-ai-feedback]');
   await restoreFixture();
+  await page.evaluate(() => {
+    const draft = state.saasListingComposerDraft;
+    draft.merchant_product_fact_packet.merchant_confirmed_facts.material = "Aluminum";
+    draft.model_generated = true;
+    draft.safe_local_only = false;
+    draft.buyer_copy_requires_validated_listing_generation = true;
+    renderProductListingCenter();
+  });
+  const blockedGeneration = await beginHeldRequest();
+  if (!await page.evaluate(() => state.saasListingComposerDraft.model_generated === true)) {
+    throw new Error("same-value fact capture revoked the existing Listing validation");
+  }
+  await page.fill('[data-saas-listing-draft-field="selling_points"]', "New edit while waiting");
+  await page.fill('[data-saas-product-fact-field="material"]', "New unsaved material while waiting");
+  await finishHeldRequest(blockedGeneration, "blocked", "blocked-with-new-edits");
+  if (await page.inputValue('[data-saas-listing-draft-field="selling_points"]') !== "New edit while waiting" ||
+      await page.inputValue('[data-saas-product-fact-field="material"]') !== "New unsaved material while waiting" ||
+      !await generationFeedback.isVisible() || !(await generationFeedback.textContent()).includes("材质")) {
+    throw new Error("blocked generation failed to show an inline reason while retaining in-flight edits");
+  }
+  contextCases.push("blocked_generation_inline_reason_preserves_inflight_edits");
+  await page.evaluate(() => {
+    state.saasListingComposerDraft.merchant_product_fact_packet.listing_copy = {};
+    renderProductListingCenter();
+  });
+  const retainedCopy = { title: "原中文标题", selling_points: "原卖点一\n原卖点二\n原卖点三", description: "原描述保留" };
+  for (const [key, value] of Object.entries(retainedCopy)) await page.fill(`[data-saas-listing-draft-field="${key}"]`, value);
+  await page.fill('[data-saas-product-fact-field="material"]', "Steel");
+  const rejectedGeneration = await beginHeldRequest();
+  const changedFactValidation = await page.evaluate(() => ({
+    generated: state.saasListingComposerDraft.model_generated,
+    requiresValidation: state.saasListingComposerDraft.buyer_copy_requires_validated_listing_generation,
+  }));
+  if (changedFactValidation.generated !== false || changedFactValidation.requiresValidation !== true) {
+    throw new Error("changed material retained the old Listing validation before regeneration completed");
+  }
+  if (await generationFeedback.count()) throw new Error("retry retained the previous generation error while running");
+  const expiredMessage = "捷境托管 AI 试用已到期；请在设置查看套餐或已有模型连接。";
+  await rejectedGeneration.route.fulfill({ status: 402, contentType: "application/json", body: JSON.stringify({ error: "platform_trial_expired", merchant_message: expiredMessage }) });
+  rejectedGeneration.resolve();
+  await page.waitForFunction(() => !state.saasLoading);
+  await page.waitForTimeout(2900); // The transient action toast has expired.
+  for (const [key, value] of Object.entries(retainedCopy)) {
+    if (await page.inputValue(`[data-saas-listing-draft-field="${key}"]`) !== value) throw new Error(`rejected generation lost ${key}`);
+  }
+  if (!await generationFeedback.isVisible() || !(await generationFeedback.textContent()).includes(expiredMessage)) {
+    throw new Error("rejected Listing generation has no persistent visible project-scoped reason after toast expiry");
+  }
+  for (const scope of ["company", "user", "project"]) {
+    const leaked = await page.evaluate((scope) => {
+      const original = structuredClone({ company: state.saasCompany, identity: state.saasIdentity, user: state.saasUser, draft: state.saasListingComposerDraft });
+      if (scope === "company") state.saasCompany.company_id = "different-feedback-company";
+      if (scope === "user") state.saasUser.user_id = "different-feedback-user";
+      if (scope === "project") state.saasListingComposerDraft.listing_project_identity.key = "different-feedback-project";
+      renderProductListingCenter();
+      const leaked = Boolean(document.querySelector('[data-saas-listing-ai-feedback]'));
+      Object.assign(state, { saasCompany: original.company, saasIdentity: original.identity, saasUser: original.user, saasListingComposerDraft: original.draft });
+      renderProductListingCenter();
+      return leaked;
+    }, scope);
+    if (leaked) throw new Error(`generation feedback leaked into a different ${scope}`);
+  }
+  await page.click('.nav-item[data-view="media"]');
+  await page.evaluate(() => setView("product", { listingMode: "single" }));
+  if (!await generationFeedback.isVisible()) throw new Error("generation reason disappeared after same-project navigation");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => typeof state !== "undefined" && state.saasProtectedStateReady && !state.saasLoading);
+  await page.evaluate(() => setView("product", { listingMode: "single" }));
+  if (!await generationFeedback.isVisible() || !(await generationFeedback.textContent()).includes(expiredMessage)) {
+    throw new Error("generation reason disappeared after same-project reload");
+  }
+  for (const [key, value] of Object.entries(retainedCopy)) {
+    if (await page.inputValue(`[data-saas-listing-draft-field="${key}"]`) !== value) throw new Error(`rejected generation reload lost ${key}`);
+  }
+  if (!await page.evaluate(() => state.saasListingComposerDraft.model_generated === false && state.saasListingComposerDraft.buyer_copy_requires_validated_listing_generation === true)) {
+    throw new Error("failed regeneration or reload revived the previous fact snapshot's Listing validation");
+  }
+  const publishBoundary = await page.evaluate(async () => ({
+    title: saasPublishIntakePrefillValues().title,
+    description: saasPublishIntakePrefillValues().description_html,
+    publish: await createSaasPublishConfirmationFromIntakeForm("publish"),
+    ebayDraft: await createSaasPublishConfirmationFromIntakeForm("ebay-draft"),
+  }));
+  if (publishBoundary.title || publishBoundary.description || publishBoundary.publish !== false || publishBoundary.ebayDraft !== false) {
+    throw new Error("changed facts allowed old buyer copy into publishing or eBay draft confirmation");
+  }
+  await generationFeedback.scrollIntoViewIfNeeded();
+  const failureScreenshotPath = path.join(os.tmpdir(), `jiejing-listing-generation-rejected-${viewportWidth}-${Date.now()}.png`);
+  await page.screenshot({ path: failureScreenshotPath, fullPage: false });
+  contextCases.push("rejected_generation_copy_and_persistent_reason");
   const screenshotPath = path.join(os.tmpdir(), `jiejing-listing-context-guard-${Date.now()}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
   if (pageErrors.length) throw new Error(`page errors: ${JSON.stringify(pageErrors)}`);
@@ -745,6 +851,7 @@ async function runSmoke() {
     no_real_platform_writes_triggered: true,
     no_charge_or_refund_triggered: true,
     context_guard_cases: contextCases,
+    failure_screenshot_path: failureScreenshotPath,
     screenshot_path: screenshotPath,
   }, null, 2));
   } finally {

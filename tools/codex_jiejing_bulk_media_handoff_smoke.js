@@ -556,7 +556,7 @@ async function main() {
     };
     const productTask = {
       task_id: productTaskId,
-      task_type: "product_workflow",
+      task_type: "listing_draft_generation",
       store_id: storeId,
       company_id: companyId,
       listing_project_identity: projectIdentity,
@@ -568,7 +568,7 @@ async function main() {
     };
     const noReportTask = {
       task_id: noReportTaskId,
-      task_type: "product_workflow",
+      task_type: "merchant_product_facts",
       store_id: storeId,
       company_id: companyId,
       title: "Existing task waiting for product facts",
@@ -1150,7 +1150,9 @@ async function main() {
       recentList.task_ids.includes(recentFixture.product_task_id) &&
       !recentList.task_ids.includes(recentFixture.unrelated_task_id) &&
       recentList.task_types.length === recentList.task_ids.length &&
-      recentList.task_types.every((taskType) => taskType === "product_workflow"),
+      recentList.task_types[recentList.task_ids.indexOf(recentFixture.product_task_id)] === "listing_draft_generation" &&
+      recentList.task_types[recentList.task_ids.indexOf(recentFixture.no_report_task_id)] === "merchant_product_facts" &&
+      recentList.task_types.every((taskType) => ["product_workflow", "listing_draft_generation", "merchant_product_facts", "merchant_ceo_chat"].includes(taskType)),
     recent_resumes_existing_identity_without_rerun:
       recentResume.source_report_id === recentFixture.report_id &&
       recentResume.listing_project_key.startsWith("listing-project-recent-") &&

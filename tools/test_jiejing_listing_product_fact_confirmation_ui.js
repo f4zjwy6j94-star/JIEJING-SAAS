@@ -63,6 +63,9 @@ const baseFunctionNames = [
   "saasMerchantProductFactLabel",
   "saasListingItemSpecificsWithMerchantFacts",
   "saasMerchantProductFactProjectedValue",
+  "applySaasMerchantProductFactPacketToDraft",
+  "saasCanonicalJsonValue",
+  "invalidateSaasListingValidationForFactChange",
   "collectSaasMerchantProductFacts",
   "saveSaasMerchantProductFacts",
   "persistSaasMerchantProductFacts",
@@ -147,14 +150,14 @@ async function withProductFactPage(run) {
         window.__productFactFetch = async () => ({});
         const activeSaasStore = () => window.__productFactStore;
         const saasFetch = (...args) => window.__productFactFetch(...args);
-        const saasCurrentListingProjectIdentity = () => ({ key: "listing-project-tablet-stand" });
+        const saasCurrentListingProjectIdentity = (draft = state.saasListingComposerDraft) =>
+          draft?.listing_project_identity || { key: "listing-project-tablet-stand" };
         const saasNormalizeListingProjectIdentity = (value) => value || null;
         const pickSaasSnapshotFields = (value, keys) => Object.fromEntries(
           keys.filter((key) => Object.prototype.hasOwnProperty.call(value || {}, key)).map((key) => [key, value[key]]),
         );
         const sanitizeSaasListingPublishPrefillSnapshot = (value) => ({ ...(value || {}) });
         const sanitizeSaasListingMediaWritebackSnapshot = (value) => ({ ...(value || {}) });
-        const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });
         const escapeHtml = (value) => String(value == null ? "" : value)
           .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
           .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
@@ -514,5 +517,301 @@ test("merchant edit provenance survives the protected Listing draft snapshot", a
       sanitizeSaasListingComposerDraftSnapshot(state.saasListingComposerDraft).merchant_edited_fields,
     );
     assert.deepEqual(savedFields, ["title", "description"]);
+  });
+});
+
+async function seedValidatedAluminumListing(page) {
+  await page.evaluate(() => {
+      const draft = state.saasListingComposerDraft;
+      draft.fields.title = "Aluminum Tablet Stand";
+      draft.fields.selling_points = "Aluminum frame\nFoldable stand";
+      draft.fields.description = "An aluminum tabletop stand.";
+      draft.merchant_product_fact_packet = {
+        source: "merchant_product_fact_packet", product_name: "Tablet Stand", simulation_only: false,
+        merchant_confirmed_facts: { product_name: "Tablet Stand", condition: "NEW", material: "Aluminum" },
+      };
+      draft.model_generated = true;
+      draft.safe_local_only = false;
+      draft.buyer_copy_requires_validated_listing_generation = true;
+      renderProductListingCenter();
+      document.querySelector('[data-saas-listing-draft-field="title"]').value = draft.fields.title;
+      document.querySelector('[data-saas-listing-draft-field="description"]').value = draft.fields.description;
+    });
+}
+
+test("changing a confirmed material revokes old Listing validation without replacing its copy", async () => {
+  await withProductFactPage(async (page) => {
+    await seedValidatedAluminumListing(page);
+    await page.locator('[data-saas-product-fact-field="material"]').fill("Steel");
+    const draft = await page.evaluate(() => { captureSaasListingFactsForAiGeneration(); return state.saasListingComposerDraft; });
+    assert.equal(draft.model_generated, false);
+    assert.equal(draft.buyer_copy_requires_validated_listing_generation, true);
+    assert.equal(draft.fields.title, "Aluminum Tablet Stand");
+    assert.equal(draft.fields.selling_points, "Aluminum frame\nFoldable stand");
+    assert.equal(draft.merchant_product_fact_packet.merchant_confirmed_facts.material, "Steel");
+  });
+});
+
+test("same-value fact capture and save do not revoke an already validated Listing", async () => {
+  await withProductFactPage(async (page) => {
+    await seedValidatedAluminumListing(page);
+    await page.locator('[data-saas-product-fact-field="material"]').fill("Aluminum");
+    const result = await page.evaluate(async () => {
+      captureSaasListingFactsForAiGeneration();
+      const captured = state.saasListingComposerDraft.model_generated;
+      await saveSaasMerchantProductFacts();
+      return { captured, saved: state.saasListingComposerDraft.model_generated };
+    });
+    assert.deepEqual(result, { captured: true, saved: true });
+  });
+});
+
+test("clearing a confirmed material revokes validation and does not resurrect its old value", async () => {
+  await withProductFactPage(async (page) => {
+    await seedValidatedAluminumListing(page);
+    await page.locator('[data-saas-product-fact-field="material"]').fill("");
+    const draft = await page.evaluate(() => { captureSaasListingFactsForAiGeneration(); return state.saasListingComposerDraft; });
+    assert.equal(draft.model_generated, false);
+    assert.equal(draft.buyer_copy_requires_validated_listing_generation, true);
+    assert.equal(draft.merchant_product_fact_packet.merchant_confirmed_facts.material, undefined);
+    assert.ok(draft.merchant_product_fact_packet.unknown_facts.includes("material"));
+    assert.equal(draft.fields.title, "Aluminum Tablet Stand");
+  });
+});
+
+test("failed regeneration keeps old copy visible but never restores validation for changed facts", async () => {
+  await withProductFactPage(async (page) => {
+    await seedValidatedAluminumListing(page);
+    await page.locator('[data-saas-product-fact-field="material"]').fill("Steel");
+    const result = await page.evaluate(async () => {
+      state.saasConnected = true;
+      window.__productFactStore = { store_id: "store-tablet" };
+      window.__productFactFetch = async () => { throw new Error("fixture generation refused"); };
+      const generated = await generateSaasListingDraftFromCurrentProject();
+      return { generated, draft: state.saasListingComposerDraft, snapshot: sanitizeSaasListingComposerDraftSnapshot(state.saasListingComposerDraft) };
+    });
+    assert.equal(result.generated, false);
+    for (const draft of [result.draft, result.snapshot]) {
+      assert.equal(draft.model_generated, false);
+      assert.equal(draft.buyer_copy_requires_validated_listing_generation, true);
+      assert.equal(draft.fields.title, "Aluminum Tablet Stand");
+      assert.equal(draft.fields.selling_points, "Aluminum frame\nFoldable stand");
+      assert.equal(draft.fields.description, "An aluminum tabletop stand.");
+    }
+  });
+});
+
+test("saving changed facts also revokes validation before a later same-value capture", async () => {
+  await withProductFactPage(async (page) => {
+    await seedValidatedAluminumListing(page);
+    await page.locator('[data-saas-product-fact-field="material"]').fill("Steel");
+    const result = await page.evaluate(async () => {
+      await saveSaasMerchantProductFacts();
+      const saved = state.saasListingComposerDraft.model_generated;
+      captureSaasListingFactsForAiGeneration();
+      return { saved, captured: state.saasListingComposerDraft.model_generated };
+    });
+    assert.deepEqual(result, { saved: false, captured: false });
+  });
+});
+
+async function startPendingProductFactSave(page) {
+  await page.evaluate(async () => {
+    state.saasConnected = true;
+    state.saasCompany = { company_id: "company-A" };
+    state.saasUser = { user_id: "user-A" };
+    window.__productFactStore = { store_id: "store-A" };
+    state.saasListingComposerDraft.listing_project_identity = { key: "project-A" };
+    window.__pendingFactRequests = [];
+    window.__productFactFetch = (_path, options) => new Promise((resolve, reject) => {
+      window.__pendingFactRequests.push({ resolve, reject, options, body: JSON.parse(options.body) });
+    });
+    window.__firstFactSave = saveSaasMerchantProductFacts();
+    await Promise.resolve();
+  });
+}
+
+test("a completed fact save cannot replace the project opened while its request was pending", async () => {
+  await withProductFactPage(async (page) => {
+    await startPendingProductFactSave(page);
+    const result = await page.evaluate(async () => {
+      invalidateSaasListingAiGenerationContext();
+      state.saasListingComposerDraft = {
+        product: "B product", listing_project_identity: { key: "project-B" },
+        fields: { title: "B newer copy" }, merchant_product_fact_packet: {},
+      };
+      const request = window.__pendingFactRequests[0];
+      request.resolve({ merchant_product_fact_packet: request.body.merchant_product_fact_packet,
+        listing_project_identity: request.body.listing_project_identity,
+        task: { task_id: "old-A-task" }, report: { report_id: "old-A-report" } });
+      await window.__firstFactSave;
+      return { project: state.saasListingComposerDraft.listing_project_identity.key,
+        title: state.saasListingComposerDraft.fields.title, tasks: state.saasTasks, reports: state.saasReports,
+        toasts: window.__productFactToasts };
+    });
+    assert.equal(result.project, "project-B");
+    assert.equal(result.title, "B newer copy");
+    assert.deepEqual(result.tasks, []);
+    assert.deepEqual(result.reports, []);
+    assert.deepEqual(result.toasts, []);
+  });
+});
+
+test("returning to the same project cannot accept a fact-save response from its previous visit", async () => {
+  await withProductFactPage(async (page) => {
+    await startPendingProductFactSave(page);
+    const result = await page.evaluate(async () => {
+      const original = state.saasListingComposerDraft;
+      invalidateSaasListingAiGenerationContext();
+      state.saasListingComposerDraft = { ...original, listing_project_identity: { key: "project-B" } };
+      invalidateSaasListingAiGenerationContext();
+      state.saasListingComposerDraft = { ...original, fields: { title: "A new visit edits" } };
+      const request = window.__pendingFactRequests[0];
+      const currentBeforeReply = request.options.saasRequestIsCurrent();
+      request.resolve({ merchant_product_fact_packet: request.body.merchant_product_fact_packet,
+        listing_project_identity: request.body.listing_project_identity });
+      await window.__firstFactSave;
+      return { currentBeforeReply, title: state.saasListingComposerDraft.fields.title, toasts: window.__productFactToasts };
+    });
+    assert.equal(result.currentBeforeReply, false);
+    assert.equal(result.title, "A new visit edits");
+    assert.deepEqual(result.toasts, []);
+  });
+});
+
+for (const outcome of ["success", "failure"]) {
+  test(`an old fact-save ${outcome} cannot clear a newer project's saving state or request`, async () => {
+    await withProductFactPage(async (page) => {
+      await startPendingProductFactSave(page);
+      const result = await page.evaluate(async (outcome) => {
+        invalidateSaasListingAiGenerationContext();
+        state.saasListingComposerDraft = {
+          ...state.saasListingComposerDraft, listing_project_identity: { key: "project-B" },
+          fields: { title: "B current copy" },
+        };
+        renderProductListingCenter();
+        const second = saveSaasMerchantProductFacts();
+        await Promise.resolve();
+        const requestCount = window.__pendingFactRequests.length;
+        const firstRequest = window.__pendingFactRequests[0];
+        if (outcome === "failure") firstRequest.reject(new Error("old A save failed"));
+        else firstRequest.resolve({ merchant_product_fact_packet: firstRequest.body.merchant_product_fact_packet,
+          listing_project_identity: firstRequest.body.listing_project_identity });
+        await window.__firstFactSave;
+        const intermediate = { status: state.saasListingProductFactSaveStatus,
+          samePromise: state.saasListingProductFactSavePromise === second,
+          buttonDisabled: document.querySelector('[data-saas-action="save-merchant-product-facts"]').disabled,
+          toasts: [...window.__productFactToasts], project: saasCurrentListingProjectIdentity().key };
+        const secondRequest = window.__pendingFactRequests[1];
+        if (secondRequest) secondRequest.resolve({ merchant_product_fact_packet: secondRequest.body.merchant_product_fact_packet,
+          listing_project_identity: secondRequest.body.listing_project_identity,
+          report: { report_id: "B-facts-report" } });
+        await second;
+        return { requestCount, intermediate, finalStatus: state.saasListingProductFactSaveStatus,
+          finalProject: saasCurrentListingProjectIdentity().key, savedReport: state.saasListingComposerDraft.source_product_fact_report_id,
+          finalPromise: state.saasListingProductFactSavePromise };
+      }, outcome);
+      assert.equal(result.requestCount, 2);
+      assert.deepEqual(result.intermediate, { status: "saving", samePromise: true, buttonDisabled: true, toasts: [], project: "project-B" });
+      assert.equal(result.finalStatus, "saved");
+      assert.equal(result.finalProject, "project-B");
+      assert.equal(result.savedReport, "B-facts-report");
+      assert.equal(result.finalPromise, null);
+    });
+  });
+}
+
+for (const changedScope of ["company", "user", "store", "source", "candidate"]) {
+  test(`changing only ${changedScope} invalidates a pending fact-save response`, async () => {
+    await withProductFactPage(async (page) => {
+      await startPendingProductFactSave(page);
+      const result = await page.evaluate(async (changedScope) => {
+        if (changedScope === "company") state.saasCompany = { company_id: "company-B" };
+        if (changedScope === "user") state.saasUser = { user_id: "user-B" };
+        if (changedScope === "store") window.__productFactStore = { store_id: "store-B" };
+        if (changedScope === "source") state.saasListingComposerDraft.listing_project_identity.source_report_id = "source-B";
+        if (changedScope === "candidate") state.saasListingComposerDraft.listing_project_identity.candidate_id = "candidate-B";
+        const currentDraft = state.saasListingComposerDraft;
+        const request = window.__pendingFactRequests[0];
+        const stillCurrent = request.options.saasRequestIsCurrent();
+        request.resolve({ merchant_product_fact_packet: request.body.merchant_product_fact_packet,
+          listing_project_identity: request.body.listing_project_identity,
+          report: { report_id: "stale-report" } });
+        await window.__firstFactSave;
+        return { stillCurrent, sameDraft: state.saasListingComposerDraft === currentDraft,
+          reports: state.saasReports, toasts: window.__productFactToasts };
+      }, changedScope);
+      assert.deepEqual(result, { stillCurrent: false, sameDraft: true, reports: [], toasts: [] });
+    });
+  });
+}
+
+test("a fact save still completes when only the current project's page changes", async () => {
+  await withProductFactPage(async (page) => {
+    await startPendingProductFactSave(page);
+    const result = await page.evaluate(async () => {
+      state.view = "media";
+      const request = window.__pendingFactRequests[0];
+      const stillCurrent = request.options.saasRequestIsCurrent();
+      request.resolve({ merchant_product_fact_packet: request.body.merchant_product_fact_packet,
+        listing_project_identity: request.body.listing_project_identity,
+        report: { report_id: "A-saved-report" } });
+      await window.__firstFactSave;
+      return { stillCurrent, view: state.view, status: state.saasListingProductFactSaveStatus,
+        savedReport: state.saasListingComposerDraft.source_product_fact_report_id, count: window.__pendingFactRequests.length };
+    });
+    assert.deepEqual(result, { stillCurrent: true, view: "media", status: "saved", savedReport: "A-saved-report", count: 1 });
+  });
+});
+
+test("pending fact saves lock only the fact controls and unlock them after either outcome", async () => {
+  for (const outcome of ["success", "failure"]) {
+    await withProductFactPage(async (page) => {
+      await startPendingProductFactSave(page);
+      const during = await page.evaluate(() => ({
+        factsLocked: [...document.querySelectorAll('[data-saas-product-fact-field]')].every(field => field.disabled),
+        factActionsLocked: [...document.querySelectorAll('[data-saas-action="confirm-product-fact-suggestion"], [data-saas-action="mark-product-fact-unknown"]')].every(button => button.disabled),
+        listingCopyEditable: !document.querySelector('[data-saas-listing-draft-field="title"]').disabled,
+      }));
+      assert.deepEqual(during, { factsLocked: true, factActionsLocked: true, listingCopyEditable: true });
+      await page.evaluate(async (outcome) => {
+        const request = window.__pendingFactRequests[0];
+        if (outcome === "failure") request.reject(new Error("fixture fact save failed"));
+        else request.resolve({ merchant_product_fact_packet: request.body.merchant_product_fact_packet,
+          listing_project_identity: request.body.listing_project_identity });
+        await window.__firstFactSave;
+      }, outcome);
+      assert.equal(await page.locator('[data-saas-product-fact-field="material"]').isEnabled(), true);
+      await page.locator('[data-saas-product-fact-field="material"]').fill("A later edit");
+      assert.equal(await page.locator('[data-saas-product-fact-field="material"]').inputValue(), "A later edit");
+    });
+  }
+});
+
+test("editing buyer copy during a fact save preserves those edits without restoring old validation", async () => {
+  await withProductFactPage(async (page) => {
+    await seedValidatedAluminumListing(page);
+    await page.locator('[data-saas-product-fact-field="material"]').fill("Steel");
+    await startPendingProductFactSave(page);
+    await page.evaluate(() => {
+      document.querySelector('#listing-draft-test-root').insertAdjacentHTML('beforeend',
+        '<textarea data-saas-listing-draft-field="selling_points"></textarea>');
+    });
+    await page.locator('[data-saas-listing-draft-field="title"]').fill("New merchant title");
+    await page.locator('[data-saas-listing-draft-field="selling_points"]').fill("New merchant point");
+    await page.locator('[data-saas-listing-draft-field="description"]').fill("New merchant description");
+    const result = await page.evaluate(async () => {
+      const request = window.__pendingFactRequests[0];
+      request.resolve({ merchant_product_fact_packet: request.body.merchant_product_fact_packet,
+        listing_project_identity: request.body.listing_project_identity });
+      await window.__firstFactSave;
+      return state.saasListingComposerDraft;
+    });
+    assert.equal(result.fields.title, "New merchant title");
+    assert.equal(result.fields.selling_points, "New merchant point");
+    assert.equal(result.fields.description, "New merchant description");
+    assert.equal(result.model_generated, false);
+    assert.equal(result.buyer_copy_requires_validated_listing_generation, true);
+    assert.deepEqual(result.merchant_edited_fields, ["title", "selling_points", "description"]);
   });
 });

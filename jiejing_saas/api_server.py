@@ -8767,7 +8767,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     trial_answer = (
                         "当前账号已注册，但捷境提供的 AI 试用尚未激活；你也可以在设置中连接自己的模型。"
                         if trial_blocker == "platform_trial_activation_required"
-                        else "当前账号的捷境 AI 免费体验已结束或额度已用完；你也可以在设置中连接自己的模型。"
+                        else "当前账号的捷境 AI 免费体验已到期；你可以在设置中连接自己的模型，已有资料和历史结果会保留。"
+                        if trial_blocker == "platform_default_model_trial_expired"
+                        else "当前账号的捷境 AI 免费体验额度已用完；你也可以在设置中连接自己的模型。"
+                        if trial_blocker == "platform_default_model_trial_exhausted"
+                        else "捷境 AI 试用当前暂不可用；请刷新状态或在设置中连接自己的模型。"
                     )
                     trial_answer = f"{trial_answer} 本次未调用模型、未消耗新的次数、未生成草稿。"
                     update_model_attempt(
@@ -10019,7 +10023,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "merchant_message": (
                                 "捷境托管 AI 试用尚未激活，请先完成账号验证；你也可以在设置中连接自己的模型。"
                                 if trial_blocker == "platform_trial_activation_required"
-                                else "捷境托管 AI 试用额度已用完；你可以连接自己的模型，或选择适合的套餐。"
+                                else "捷境托管 AI 试用已到期，未使用的次数不会延长有效期；请在设置中连接自己的模型。已有资料和历史结果会保留。"
+                                if trial_blocker == "platform_default_model_trial_expired"
+                                else "捷境托管 AI 试用额度已用完；请在设置中连接自己的模型。"
+                                if trial_blocker == "platform_default_model_trial_exhausted"
+                                else "捷境托管 AI 试用当前暂不可用；请刷新状态或在设置中连接自己的模型。"
                             ),
                             "platform_trial_quota": platform_trial_quota,
                             "model_resolution": safe_model_resolution,
@@ -10064,7 +10072,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "merchant_message": (
                                 "捷境托管 AI 试用尚未激活，请先完成账号验证；你也可以在设置中连接自己的模型。"
                                 if trial_blocker == "platform_trial_activation_required"
-                                else "捷境托管 AI 试用额度已用完；你可以连接自己的模型，或选择适合的套餐。"
+                                else "捷境托管 AI 试用已到期，未使用的次数不会延长有效期；请在设置中连接自己的模型。已有资料和历史结果会保留。"
+                                if trial_blocker == "platform_default_model_trial_expired"
+                                else "捷境托管 AI 试用额度已用完；请在设置中连接自己的模型。"
+                                if trial_blocker == "platform_default_model_trial_exhausted"
+                                else "捷境托管 AI 试用当前暂不可用；请刷新状态或在设置中连接自己的模型。"
                             ),
                             "platform_trial_quota": platform_trial_quota,
                             "model_resolution": safe_model_resolution,

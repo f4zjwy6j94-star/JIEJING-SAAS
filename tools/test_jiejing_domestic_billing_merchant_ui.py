@@ -4,10 +4,110 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import re
+from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def check_media_balance_browser(app: str) -> None:
+    """Replay the real Billing fetch/render path; all HTTP is local fixtures."""
+    from playwright.sync_api import sync_playwright
+
+    boot = r"exposeLocalJiejingTestHooks\(\);\r?\ninit\(\);\r?\nrunLocalJiejingQaScenarioFromUrl\(\);\s*$"
+    assert re.search(boot, app), "frontend boot boundary not found"
+    script = re.sub(boot, "exposeLocalJiejingTestHooks();", app)
+    assert app.count("fetchSaasMerchantBillingUsage(),") == 1, "Settings refresh must use the combined merchant-safe Billing fetch"
+    base = "http://127.0.0.1:45678"
+    safe = {
+        "contract_version": "2026-08-27-merchant-media-points-v1",
+        "total_points": 820, "available_points": 820,
+        "included_points": 500, "purchased_points": 320, "promotional_points": 0,
+        "packs": [{"key": "pack_1000", "points": 1000, "amount_minor": 1000}],
+        "purchase": {"status": "not_open", "purchase_enabled": False},
+    }
+    seen = []
+    summary_status = {"http": 200}
+    usage_status = {"http": 200}
+
+    def route_request(route):
+        request = route.request
+        parsed = urlparse(request.url)
+        assert f"{parsed.scheme}://{parsed.netloc}" == base
+        assert request.method == "GET", "Billing display must not mutate anything"
+        seen.append(parsed.path)
+        if parsed.path == "/app.html":
+            route.fulfill(content_type="text/html; charset=utf-8", body='<html><body><main id="billing-test"></main><script src="/app.js"></script></body></html>')
+        elif parsed.path == "/app.js":
+            route.fulfill(content_type="text/javascript; charset=utf-8", body=script)
+        elif parsed.path == "/billing/usage":
+            route.fulfill(status=usage_status["http"], json={"billing_usage": {"subscription": {"entitlement_active": True}, "media_credits": {
+                "account": {"balance": 999999, "available": 999999, "owner_testing_points": 999999},
+                "recent_activity": [{"operation_type": "settle", "points": 999999}],
+            }}} if usage_status["http"] == 200 else {"error": "temporarily_unavailable"})
+        elif parsed.path == "/billing/media-credits":
+            route.fulfill(status=summary_status["http"], json={"media_credits": safe} if summary_status["http"] == 200 else {"error": "temporarily_unavailable"})
+        else:
+            raise AssertionError(f"unexpected request: {parsed.path}")
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True, channel=os.environ.get("JIEJING_PLAYWRIGHT_CHANNEL", "chrome"))
+        try:
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route("**/*", route_request)
+            page.goto(f"{base}/app.html?start=app&qa=public-saas")
+            page.evaluate("document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel()")
+            assert "暂未获取" in page.locator(".saas-merchant-media-credits .saas-settings-card-head strong").inner_text()
+            payload = page.evaluate("""async (base) => {
+                state.saasApiBase = base;
+                const response = await fetchSaasMerchantBillingUsage();
+                state.saasBillingUsage = response.billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+                return response.billing_usage;
+            }""", base)
+            assert page.locator(".saas-merchant-media-credits .saas-settings-card-head strong").inner_text() == "素材点余额 820"
+            assert page.get_by_role("button", name="购买素材点").is_disabled()
+            assert payload["subscription"]["entitlement_active"] is True
+            assert "account" not in payload["media_credits"]
+            assert "999999" not in page.locator("#billing-test").inner_text()
+            assert "使用明细暂未提供" in page.locator("#billing-test").inner_text()
+            assert page.locator(".saas-media-credit-balance-grid article").count() == 3
+            assert "累计使用" not in page.locator(".saas-media-credit-balance-grid").inner_text()
+            assert "最近素材点记录" not in page.locator("#billing-test").inner_text()
+            assert seen.count("/billing/media-credits") == 1
+            summary_status["http"] = 503
+            page.evaluate("""async () => {
+                state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+            }""")
+            assert "暂未获取" in page.locator(".saas-merchant-media-credits .saas-settings-card-head strong").inner_text()
+            assert "素材点余额 0" not in page.locator("#billing-test").inner_text()
+            summary_status["http"] = 200
+            safe.update(available_points=0, included_points=0, purchased_points=0)
+            safe["total_points"] = 820  # A zero available balance must not fall back to another total.
+            safe["purchase"] = {"status": "available", "purchase_enabled": True}
+            page.evaluate("""async () => {
+                state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+            }""")
+            assert page.locator(".saas-merchant-media-credits .saas-settings-card-head strong").inner_text() == "素材点余额 0"
+            assert page.get_by_role("button", name="购买素材点").is_enabled()
+            safe["available_points"] = None
+            page.evaluate("""async () => {
+                state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+            }""")
+            assert "暂未获取" in page.locator(".saas-merchant-media-credits .saas-settings-card-head strong").inner_text()
+            assert page.get_by_role("button", name="购买素材点").is_disabled()
+            usage_status["http"] = 503
+            assert page.evaluate("async () => (await fetchSaasMerchantBillingUsage()).billing_usage") is None, "missing Billing usage must remain missing for subscription consumers"
+            assert errors == []
+        finally:
+            browser.close()
 
 
 def main() -> int:
@@ -239,6 +339,7 @@ def main() -> int:
         if marker in merchant_tabs:
             print(f"FAIL merchant settings expose internal operations marker: {marker}")
             return 1
+    check_media_balance_browser(app)
     print("PASS jiejing_domestic_billing_merchant_ui")
     return 0
 

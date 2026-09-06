@@ -348,6 +348,7 @@ FILES=(
   "tools/codex_jiejing_listing_ai_generation_browser_smoke.js"
   "tools/codex_jiejing_homepage_maturity_browser_smoke.js"
   "tools/test_jiejing_listing_backend_restore.js"
+  "tools/test_jiejing_recent_product_tasks.js"
   "tools/test_jiejing_listing_product_fact_confirmation_ui.js"
   "tools/test_jiejing_listing_publish_prefill_truth.js"
   "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"
@@ -868,6 +869,7 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check tools/codex_jiejing_listing_ai_generation_browser_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_homepage_maturity_browser_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_listing_backend_restore.js
+"$NODE_BIN" --check tools/test_jiejing_recent_product_tasks.js
 "$NODE_BIN" --check tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_workflow_entry_feedback.js
 "$NODE_BIN" --check tools/test_jiejing_listing_product_fact_confirmation_ui.js

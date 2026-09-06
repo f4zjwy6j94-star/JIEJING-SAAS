@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -13,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -196,6 +198,51 @@ def listing_payload(project_key: str) -> dict[str, Any]:
     }
 
 
+def assert_expired_listing_is_not_exhausted(base_url: str) -> None:
+    repository = SaaSRepository(SAAS_DB)
+    account = repository.create_user_with_company(
+        email="expired-listing-trial@local.invalid",
+        password="expired-listing-trial-password",
+        company_name="Expired Listing Trial",
+    )
+    company_id = account["company"]["company_id"]
+    user_id = account["user"]["user_id"]
+    repository.upsert_platform_trial_activation(
+        company_id=company_id, user_id=user_id, status="active", platform_trial_allowed=True,
+        requires_challenge=True, challenge_attested=True, decision_reason="isolated_expiry_fixture",
+    )
+    activation = repository.get_platform_trial_activation(company_id=company_id) or {}
+    expired_start = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    activation["activated_at"] = expired_start
+    with sqlite3.connect(SAAS_DB) as connection:
+        connection.execute(
+            "update platform_trial_activations set activated_at = ?, activation_json = ? where company_id = ?",
+            (expired_start, json.dumps(activation), company_id),
+        )
+    auth = post_json(f"{base_url}/auth/login", {
+        "email":"expired-listing-trial@local.invalid", "password":"expired-listing-trial-password",
+    })
+    token = str(auth.get("token") or "")
+    store = post_json(f"{base_url}/stores", {
+        "platform":"ebay", "store_name":"Expired Trial Store", "marketplace":"EBAY_US",
+    }, token=token)["store"]
+    quota = fetch_json(f"{base_url}/stores/{store['store_id']}/model/settings", token=token)["model_settings"]["platform_trial_quota"]
+    assert quota["used"] == 0 and quota["remaining"] == 1 and quota["allowed"] is False
+    assert quota["trial_expired"] is True and quota["blocked_by"] == "platform_default_model_trial_expired"
+    before_calls = BlockingListingModelHandler.call_count()
+    status, response = post_json_with_status(
+        f"{base_url}/stores/{store['store_id']}/listing-drafts/generate",
+        listing_payload("expired-listing-trial"), token=token,
+    )
+    assert status == 402 and response["blocked_by"] == ["platform_default_model_trial_expired"]
+    message = response.get("merchant_message", "")
+    assert "到期" in message and "额度已用完" not in message, f"expiry must not be described as exhaustion: {message}"
+    assert response["model_called"] is False and response["usage_consumed"] is False and response["report"] is None
+    assert BlockingListingModelHandler.call_count() == before_calls
+    after = fetch_json(f"{base_url}/stores/{store['store_id']}/model/settings", token=token)["model_settings"]["platform_trial_quota"]
+    assert after["used"] == 0 and after["remaining"] == 1 and after["allowed"] is False
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     for path in (SAAS_DB, RUNTIME_DB):
@@ -253,6 +300,8 @@ def main() -> int:
         if not wait_for_health(base_url):
             stderr = process.stderr.read() if process.stderr else ""
             return fail(f"saas backend did not become healthy: {stderr[-800:]}")
+
+        assert_expired_listing_is_not_exhausted(base_url)
 
         auth = post_json(
             f"{base_url}/auth/register",

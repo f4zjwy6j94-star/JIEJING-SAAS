@@ -107,6 +107,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("postgres_schema_contract", [sys.executable, "tools/test_jiejing_postgres_schema_contract.py"]),
     ("listing_ai_generation_browser", ["node", "tools/codex_jiejing_listing_ai_generation_browser_smoke.js"]),
     ("listing_backend_restore_browser", ["node", "tools/test_jiejing_listing_backend_restore.js"]),
+    ("recent_product_tasks_browser", ["node", "tools/test_jiejing_recent_product_tasks.js"]),
     ("listing_product_fact_confirmation_ui", ["node", "tools/test_jiejing_listing_product_fact_confirmation_ui.js"]),
     ("listing_concrete_product_gate", [sys.executable, "tools/test_jiejing_listing_concrete_product_gate.py"]),
     ("ai_ceo_product_label_extraction", [sys.executable, "tools/test_jiejing_ai_ceo_product_label_extraction.py"]),

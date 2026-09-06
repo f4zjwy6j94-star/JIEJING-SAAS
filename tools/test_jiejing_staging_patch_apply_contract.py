@@ -577,6 +577,7 @@ def main() -> int:
     workflow_browser_checks = {
         "ai_ceo_history_pagination_browser": "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js",
         "listing_backend_restore_browser": "tools/test_jiejing_listing_backend_restore.js",
+        "recent_product_tasks_browser": "tools/test_jiejing_recent_product_tasks.js",
         "workflow_entry_feedback": "tools/test_jiejing_workflow_entry_feedback.js",
     }
     whitelist_start = text.index("FILES=(\n")
