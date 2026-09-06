@@ -6,7 +6,7 @@
 
 最低成本完成 eBay-first AI CEO SaaS MVP：商家在捷境内留下真实对话、调研、商品资料、Listing、素材及审核记录，满足事实、图片权利与账号条件后，通过捷境保存 eBay 草稿并经动作时确认发布。不得用 Codex/API 直接造业务记录冒充商家 UI 验收。
 
-用户最新要求（2026-09-05）：由主理人自主、有序持续推进，不再要求用户逐项指导常规方案；使用已安装设计技能，改善商家便利性与UI，保留eBay-first产品方向。当前有限目标是形成可验收MVP候选：W4b服务端可靠聊天归档 → W5批量无货源入口/W6商家反馈 → C1/C2版本绑定发布证据 → 当前页面设计审查和有界改进 → 专项/完整候选验证与同一商品续接。可并行独立修复；不把“持续优化”变成无边界重构，不以模型称号或任意百分比保证成熟度、盈利或零漏洞。
+用户最新要求（2026-09-06）：先把产品流程与现有结构核对清楚、确认可用，再优化官网和工作流的高级感；当前暂停视觉重设计，不改业务逻辑、产品结构、套餐或权限。明确移除自定义`jiejing-design-system`视觉规范，不用该规范限定之后的风格。意图存在重要歧义时先复述、逐项问清并给建议，代码可查的内容自主调查，已确认决定不反复询问。上一轮W1–W6/C1/C2及局部UI补丁已完成提交部署，不重做；当前缺的是同一商品登录后真实SaaS复验，而不是继续无边界重构。技能按任务选择，不以技能名称、模型等级或任意百分比保证成熟度、盈利或零漏洞。
 
 正常实现与方案选择已授权；本批主站正式部署已获准并完成，资金与eBay高风险动作仍需动作时确认。2026-09-06用户随后明确“允许”，批准旧ops仅前端、代理及API的SSH窄范围例外；代码同步已完成。最新“好的，继续”又明确批准运营端微信退款能力配置对齐，仅旧API的公开布尔覆盖及必要重启/代理刷新；不含真实收费、退款、订单provider查询，也不含主站、Worker、Vault、Cloudflared、DNS、私有密钥复制或共享数据库变更。W1–W6补丁已提交并部署；三项原有用户修改完整保留且未混入发布。
 
@@ -180,15 +180,15 @@
 
 部署后独立读回证据为r3的`output/jiejing-production-deploy/readback-20260905-183707.json`：active/manifest两个SHA/四服务Compose标签与新release一致，DRY_RUN=0；API健康，API image=`sha256:5f8f06231ad8cb899232c22fd930c4b43371d33e202b49b56bb81533cb6b5e80`、Worker image=`sha256:df91875a5d258a83baef1eba86423729204a54fcbd65ace2539d248c3650b500`。两旧image hold分别匹配上版API/Worker。service success/0、timer enabled/active且有下次时间，service/timer无drop-in；三个安装文件与新包内容一致。private仍原引用，目录0700、两env0600且均root所有/无符号链接，未读取秘密值。
 
-本次生产GET：health/deep均200及ok/ready；production_ready/beta_ready/can_accept_real_customers和billing公开收费/charge_now/paid_launch均true，blocker/warning=0。仅读7个非秘密键计算effective：全面写入false、受控草稿保存true、受控既有草稿发布true。ops仍200及20260828旧资产，app域ops.html=404；真实退款运营UI、具体账号资格和本商品发布仍未验收。
+此前主站发布当时的生产GET（历史，ops资产状态已由上方后续发布更新）：health/deep均200及ok/ready；production_ready/beta_ready/can_accept_real_customers和billing公开收费/charge_now/paid_launch均true，blocker/warning=0。仅读7个非秘密键计算effective：全面写入false、受控草稿保存true、受控既有草稿发布true。当时ops仍200及20260828旧资产，app域ops.html=404；真实退款运营UI、具体账号资格和本商品发布仍未验收。
 
 公开UI使用可用的Codex内置浏览器验收：1440×1000、1024×900、390×844；标题按短语排印、圆形AI CEO图和既有内容保留；工作流程链接到#workflow，05素材演示可切换；手机主入口打开登录，输入宽328.8px，填写/清空测试邮箱与关闭成功，没有提交登录/注册。控制台未见相关error/warn，实页截图在本任务工具证据中。JS/CSS归一化SHA等于新包；index.html和带start=app的app.html去除唯一Cloudflare统计script行后逐字相等，未带start参数的app.html按既有规范重定向首页，不误判资产漂移。Chrome不可用仍未解除；上述不是登录后商品流程验收。
 
-1. 运营端前后端同版发布已在本轮明确SSH例外授权后完成，见上方收口，不得重复。当前下一项是对齐旧ops的微信执行配置和真实内部身份验收；live/refund运行时仍false，不得私自改私有配置、转移秘密或发起真实退款来补证据。
+1. 运营端前后端同版发布及随后live/refund能力配置对齐均已完成，见上方收口，不得重复。剩余是既有真实内部身份的页面验收；不改私有配置、转移秘密或发起真实退款来补证据。
 2. 商家主机新增W1–W6/C1/C2/UI批次已随`1550105`部署并复核，不重做。线上app hash=`d2dcc7345056`、styles=`885b316fada8`，family=`20260905-workflow-reliability-v1`；独立ops现已提供`d205c9c5f13b`同版资源；保留三项用户原有修改。
 3. 本轮已核对运营端前端资产、后端代码、精确退款API路径及app域ops路径404；内部运营已登录GET列表200仍需实际既有会话，不伪造身份/改allowlist。不得执行真实收费/退款作为默认部署测试。
 4. 网站在线、私测可用、公开收费可用、退款端到端可用、受控eBay通道启用及真实发布验收分别报告。
-5. Chrome 接续同一个平板支架项目，全程通过捷境 UI 复验生成、素材与发布前检查；真实来源或账号资格不满足时停在该明确阻断，不造成功回执，不重复 OAuth/支付/退款。
+5. 恢复流程验收后，优先通过Chrome的既有登录会话接续同一个平板支架项目；其他实际可用且合法登录的浏览器会话亦可，不伪造身份。先核对原资料并复验Listing生成、切页、刷新和重开时的内容归属及保留，再接素材与发布前检查；真实来源或账号资格不满足时停在明确阻断，不造成功回执，不重复OAuth/支付/退款。
 6. 设计工具用于有证据的当前界面审查、选定方向与视觉对照验收。保持已批准产品逻辑；先检查实际页面，再作有界调整，不凭参考库重搭全站。
 
 ## 设计工具与防漂移
@@ -197,7 +197,9 @@
 - `gh-fix-ci`、`gh-address-comments`：2026-09-05 从 `openai/skills` 安装，CI/审查辅助，不是视觉能力。
 - Product Design：官方市场插件 `product-design@openai-curated-remote`，已安装 0.1.53。用于流程截图审查、视觉探索、原型对照；不代表自动提升生产质量。
 - Awesome DESIGN.md：参考库 `VoltAgent/awesome-design-md`，固定提交 `8147538b4226ae41e2487a9179e3bcc1f68e8554`。本地在当前 Codex 任务目录的 `references/awesome-design-md`，不在生产仓库/部署包内，不是可执行 Skill。
-- `jiejing-design-system` 已移除旧四套餐、新手入口、工作记录主导航规则；`open-design` 不再把技能当产品事实来源。产品决定以本仓库 AGENTS 和用户最新要求为准。
+- `jiejing-design-system` 已按2026-09-06用户明确要求移出启用目录，原文件完整备份至`C:\Users\57249\.codex\disabled-skills\20260906-jiejing-design-system`，前后SHA一致，可恢复但不得自动启用。AGENTS强制引用及open-design中的旧引用已移除，专业审查模板也不再强制原白色/青绿风格；未删除网站CSS、页面或组件，未变更产品流程、导航能力、套餐或安全边界。旧审计中提及该技能只是历史使用记录。
+- `frontend-design` 已于2026-09-06从Anthropic官方`anthropics/skills`固定提交`41bbe19d1a1a7eaab5e7bb9050a417e5c6cffc8f`安装，仅SKILL.md及许可证，两文件Git blob与源一致；无需执行第三方脚本。用于未来选定方向的视觉工作，安装不等于完成重设计；此刻不启动UI改版。
+- 2026-09-06 04:12:09 UTC匿名只读11项公网检查通过，网站/深健康正常，私测/公开收费投影true，运营隔离保留；没有用户登录或业务流程写入。当前商品仍只有调研、导入、资料及一次有缺陷的Listing实操记录；修复后完整登录旅程、真实FAL及eBay发布未证明，不得宣称端到端已跑通。
 - 没有安装第三方记忆后台钩子，没有关闭压缩/放宽权限，没有导出完整聊天或凭据。文件降低漂移风险，但不能保证零遗漏；每次恢复仍需只读校准。
 
 ## 报告纪律

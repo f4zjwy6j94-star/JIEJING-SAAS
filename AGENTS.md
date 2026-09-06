@@ -10,12 +10,13 @@ These instructions apply to the whole repository. They exist so local Codex, Cod
 - The user's latest explicit decisions take precedence over advisory skill content. Do not let design libraries, remembered summaries, or historical documents silently change product scope, pricing, navigation, or deployment authority.
 - On a genuine conflict, inspect the smallest relevant source and explain the discrepancy; do not reset the project or invent a new plan. Updates to an existing authorised task do not require repeated generic approval, but high-risk external actions retain their action-time confirmation boundary.
 - Code review, local test success, production health, paid availability, and real eBay execution are distinct evidence. Never turn one into a claim about all of them.
+- Resolve material ambiguity before implementation: briefly restate the intended outcome, preserve agreed constraints, and ask focused questions with a recommendation when the answer changes scope or product direction. Investigate code-answerable questions independently; do not repeatedly reopen settled decisions.
 
 ## Approved UI And Product Constraints
 
 - Public entry has three choices: 免费体验、有店铺、多店铺. No beginner sourcing service, fourth pricing plan, or unsupported platform claims. Use current billing definitions for amounts and entitlements.
 - Merchants without supply receive research suggestions and find their own source; merchants with supply provide product information. 捷境 helps generate/edit Listing and media inside the SaaS, without inventing facts or sending normal listing work to manual eBay forms.
-- Preserve the approved homepage direction. UI changes must not silently change backend business logic or remove capabilities such as bulk-listing.
+- Preserve the existing product structure and capabilities. The user retired the custom Jiejing visual skill on 2026-09-06: its palette and styling prescriptions are not mandatory. Verify the functional merchant journey before a broader visual upgrade, then agree on a visible design direction before production UI changes. UI changes must not silently change backend business logic or remove capabilities such as bulk-listing.
 - AI CEO conversation is the primary workspace; product progress is secondary and compact. Check existing-project and empty states, desktop and tablet widths.
 - Do not restore a standalone 工作记录/运行记录 navigation item. Retain the actual conversations, reports, Listing versions, media jobs, and support history in their corresponding business pages.
 - Keep owner-facing project completion and engineering readiness commentary out of public pages and merchant Settings. Internal operations surfaces hold those details.
@@ -85,7 +86,7 @@ python tools/test_jiejing_staging_patch_apply_contract.py
 python tools/test_jiejing_local_first_cloud_fallback_guardrails.py
 ```
 
-For UI changes, run the relevant contract tests and browser smoke checks. Use the JIEJING design system and keep merchant-facing pages simple.
+For UI changes, run the relevant contract tests and browser smoke checks. Follow the user's selected visual direction, keep merchant-facing pages simple, and verify rendered layouts rather than treating a named skill as evidence of design quality.
 
 ## Proactive Principal Audit
 
@@ -100,7 +101,7 @@ For UI changes, run the relevant contract tests and browser smoke checks. Use th
 - Trigger the relevant prompts autonomously; do not wait for the operator to name them every time.
 - For product or prioritization work, apply Product Owner Review and Reality Checker.
 - For AI CEO behavior, apply AI CEO Routing Review, Beginner UX Walkthrough, and Reality Checker.
-- For workflow UI, onboarding, homepage, settings, or pricing UI, apply Beginner UX Walkthrough, UI Design Polish, and the JIEJING design system.
+- For workflow UI, onboarding, homepage, settings, or pricing UI, apply Beginner UX Walkthrough and UI Design Polish against the current user-approved brief; do not reinstate the retired custom visual skill.
 - For Listing and bulk-listing work, apply Listing Expert Review, Beginner UX Walkthrough, Security Threat Model, and Reality Checker.
 - For billing, subscription, quota, Stripe, or payment-provider work, apply Billing And Pricing Review, Security Threat Model, and Reliability And Launch Readiness Review.
 - For account isolation, chat history, reports, stores, orders, or tenant data, apply Tenant Isolation Audit and Security Threat Model.
