@@ -8,13 +8,13 @@
 
 用户最新要求（2026-09-05）：由主理人自主、有序持续推进，不再要求用户逐项指导常规方案；使用已安装设计技能，改善商家便利性与UI，保留eBay-first产品方向。当前有限目标是形成可验收MVP候选：W4b服务端可靠聊天归档 → W5批量无货源入口/W6商家反馈 → C1/C2版本绑定发布证据 → 当前页面设计审查和有界改进 → 专项/完整候选验证与同一商品续接。可并行独立修复；不把“持续优化”变成无边界重构，不以模型称号或任意百分比保证成熟度、盈利或零漏洞。
 
-正常实现与方案选择已授权；本批主站正式部署已获准并完成，资金与eBay高风险动作仍需动作时确认。2026-09-06用户随后明确“允许”，批准旧ops仅前端、代理及API的SSH窄范围例外；不含主站、Worker、Vault、Cloudflared、DNS、私有配置及共享数据库变更，不重跑真实商品流程/OAuth/支付。W1–W6补丁已提交并部署；三项原有用户修改完整保留且未混入发布。
+正常实现与方案选择已授权；本批主站正式部署已获准并完成，资金与eBay高风险动作仍需动作时确认。2026-09-06用户随后明确“允许”，批准旧ops仅前端、代理及API的SSH窄范围例外；代码同步已完成。最新“好的，继续”又明确批准运营端微信退款能力配置对齐，仅旧API的公开布尔覆盖及必要重启/代理刷新；不含真实收费、退款、订单provider查询，也不含主站、Worker、Vault、Cloudflared、DNS、私有密钥复制或共享数据库变更。W1–W6补丁已提交并部署；三项原有用户修改完整保留且未混入发布。
 
 ## 精确续接点
 
 - 实际仓库：`C:\Users\57249\Documents\Codex\2026-04-29\hermes-agents\software-demo`。
 - 分支：`codex/ai-ceo-real-merchant-loop`；当前产品发布提交：`1550105b53825a65f876808bff059a4e6d0c0a8a`（`test: align merchant onboarding and CI gate coverage`），包含`f2ce760`的W1–W6/C1/C2/UI及`0250ce6`测试/CI预算修订，均已提交并部署主站。原修复基线为`66032b3`；恢复时再次核对Git，后续纯证据文档提交不等于再次部署。
-- 商家生产主机已部署 `1550105`，release=`20260905T184522Z-1550105b5382`（此前`4c26ebc`为可回滚上一版本）；完整门禁224/224、精确SHA GitHub CI、dry-run、apply及线上健康/资源/公开页面复核通过。独立ops在2026-09-06获准窄范围SSH同步后也已更新到1550105，见下方新收口；不能称整套退款运营链路已完成，旧ops的微信live/refund配置仍false且真实运营身份未验收。主工作区仍保留三项原有用户修改，不得重置、清理或覆盖。
+- 商家生产主机已部署 `1550105`，release=`20260905T184522Z-1550105b5382`（此前`4c26ebc`为可回滚上一版本）；完整门禁224/224、精确SHA GitHub CI、dry-run、apply及线上健康/资源/公开页面复核通过。独立ops在2026-09-06已同步1550105，并经最新授权启用微信live/refund配置；主站公开收费仍true。退款能力配置已可用，但真实运营登录后界面与本轮真实退款未验收，不能称资金端到端已完成。主工作区仍保留三项原有用户修改，不得重置、清理或覆盖。
 - 三个原有用户修改文件不要顺手暂存/提交：`jiejing_saas/readiness.py`、`tools/test_jiejing_phase2_response_boundary_hardening.py`、`tools/test_jiejing_platform_trial_activation_guard.py`。
 - 当前商品：平板电脑支架（折叠便携款）；项目 `listing-project-0ef70f19c079b4261e82`；报告 `report_19fcfc7b9f88f0eb`；候选 `candidate_1`。
 - 调研、导入、商品资料模块和一次有缺陷的 Listing 生成已做。续接同项目，修复上线后再生成一次验证，不从选品重新开始。
@@ -22,7 +22,7 @@
 
 ## 商家生产主机已部署的修复
 
-本地专项、完整候选门禁、商家主机生产部署和独立ops代码同步已通过；已登录生产商家的UI复验、真实运营身份与退款执行配置对齐未完成。
+本地专项、完整候选门禁、商家主机生产部署、独立ops代码同步与退款执行配置对齐已通过；已登录生产商家的UI复验、真实运营身份及真实资金操作未完成。
 
 - Listing 买家文案/商品事实约束、敏感信息输入阻断、失败用量保留；eBay 写入前事实/兼容性边界。
 - 商品图片识别只产生待确认建议；清空字段不被旧建议复活；生成失败仍保留来源与冲突元数据。
@@ -74,11 +74,25 @@
 - 商家app.html已引用本次 `20260905-permission-fact-boundary-v1` 资产。上述绿色状态不覆盖独立运营端的旧版本问题，不可宣称全站各入口均已同步。
 - 本轮 CUA 仅发现空的内置浏览器，指定 Chrome 返回 `Browser is not available: chrome`。这不是用户登出证明；没有重复 OAuth/登录/重装，没有完成登录后生产页面的视觉审查或商家操作。局部本地浏览器测试不等于线上用户旅程验收。
 
-## 独立ops：代码已同步，退款执行配置待对齐
+## 独立ops：代码及退款能力配置已对齐，真实身份UI验收待完成
 
-2026-09-06本节后续授权已更新：用户明确允许仅旧ops前端、代理和API的SSH部署，以下“未授权/未同步”均为历史记录。本次窄范围apply已成功，不得重复执行：API/五文件已1550105同版，原Compose、私有配置、Worker/Vault/Cloudflared未变。旧ops运行时微信live_api/refund开关仍false，内部审核名单存在；此授权不包含将其打开或复制主站私有配置，代码同版不等于退款运营端到端已可用。
+2026-09-06本节后续授权已更新：代码窄范围apply已成功，不得重复执行。用户最新“好的，继续”已批准随后提出的运营端退款配置对齐；只使用现有密钥和独立API环境覆盖，不复制主站私有配置、不主动进行资金或provider查询。以下“未授权/未同步”均为历史记录。
 
-### 2026-09-06窄范围发布收口（当前）
+### 2026-09-06退款配置对齐收口（当前）
+
+- 03:26 UTC附近再次只读核对：旧API原微信live_api/refund/charge均false，9/9配置验证全true，内部审核名单已存在，candidate_boot_allowed=false；支付和退款回调均等于既有app生产端点，不需要更换密钥或回调。
+- 隔离短生命周期探测仅在探测进程设置live_api/refund两项，原运行服务未变；投影refund_now_allowed=true、charge_now_allowed=false、real_checkout_ready=false。禁止网络调用，没有执行provider请求或数据库业务操作。
+- 独立代码审查确认API启动不执行billing maintenance；共享Worker环境不能修改。新配置事务须独立于已完成的`.ops-switch`，保留原Compose+既有apply.json，仅增加API两布尔覆盖；失败恢复同一1550105镜像，不能调用上一轮代码回滚。
+- 本轮浏览器清单仅提供内置浏览器，未提供Chrome；这不是用户登出证明。不重复登录/OAuth或重装，不将匿名HTTP检查冒充真实运营身份验收。
+- 本次独立配置工具位于`output/ops-refund-config-20260906/refund_config_switch.py`，SHA256=`c3ea158e27dc7bf3dd96875ff83f973b2472fcf3d9083421c7328cfb56bd9898`，11/11本地故障测试及独立回放通过。预演前修复恢复路径遇外部静态文件缺失会被阻断、CSS变化导致遗漏必要代理刷新、reload短暂502被误判失败的问题；这些是本次配置工具的预上线修正，不是已发生的线上资金事故。源码包与224项门禁候选未改变；secret scan、Node语法、diff检查通过。
+- 03:35:06 UTC新的PG只读事务再次通过16/16迁移、45/45表、52/52关键列、4/4索引、5/5约束，缺项0，本次查询没有执行迁移或业务写入。03:41 UTC附近服务器dry-run通过，仅两项ENV变化、API镜像不变、4个非目标容器不变。
+- 正式apply会话28164已exit0、status=success；只重建`jiejing-saas`，固定前端nginx配置检查及reload成功，未触发真实收费、退款、订单provider查询、回调或eBay操作。只读readback=`verified_success`：退款/provider连接能力true，配置9/9通过，旧ops收费/checkout仍false；主站收费未受影响。实际退款仍要求内部运营身份、有效审核单、精确金额确认及原子防重复执行。
+- 当前旧ops API容器=`75884f559fb5cf66117ba62fbdfd333baed89b474accddd8fafd7c97aa7e15a2`，image仍`sha256:f9e867784ae0500006d3523a0b4a07d7fd63ad93b90fc12ee4fc22ad0e4912dd`。持久Compose顺序为原`/opt/jiejing-staging/app/deploy/docker-compose.public-https-staging.yml` → 已生效`/opt/jiejing-staging/releases/20260906-ops-1550105/.ops-switch/apply.json` → 新`/opt/jiejing-staging/releases/20260906-ops-refund-config/override.json`。restart policy仍unless-stopped；后续旧ops重建须保留这三份配置，避免漏带退款覆盖而回退。前端及Worker/Vault/Cloudflared共4个非目标容器ID/镜像/ENV/配置未变，5个公开文件字节未变。
+- 新工具、两布尔override、schema-receipt、receipt/state均在root私有目录`/opt/jiejing-staging/releases/20260906-ops-refund-config`，helper SHA已两端验证。紧急恢复只能使用这个新工具的`rollback`，恢复同一1550105镜像和本次之前两文件Compose链；不要调用旧`.ops-switch`代码回滚来处理本次配置。尚未真实回滚，已做本地故障恢复测试。保留旧恢复材料，不清理volume或数据库。
+- 03:42:59 UTC独立公网11/11 GET通过：health/deep正常，database/queue/worker ready；production_ready/beta_ready/can_accept_real_customers与公开收费三项均true。ops列表匿名401、review/execute/query的GET均405，app域ops资源与退款路径404。全面真实平台写入仍false且未修改；受控eBay通道不能仅据此判关闭，本商品实际发布仍未验收。证据为`output/ops-refund-config-20260906/{schema-receipt,dry-run,apply,readback,public-readback}.json`。
+- 此配置事项已完成，不再重复切换或做真实小额退款证明。下一项继续同一个平板支架项目的登录后SaaS流程复验，以及既有运营身份页面只读验收；当前Chrome未提供给工具是UI验收限制，不要求重新安装或重复OAuth。
+
+### 2026-09-06窄范围代码发布收口（此前已完成，配置被上节续接）
 
 - 复用r3已通过224/224及精确SHA CI的457文件包；本轮未重新打产品包、改业务代码、重跑既有完整门禁或主站发布。旧host的独立目录为`/opt/jiejing-staging/releases/20260906-ops-1550105`，同包/manifest摘要已逐文件验证；仅构建API，未启动候选入口作探测。
 - 现场只读PG事务核对16/16迁移ledger/checksum、45/45表、52/52关键列、4/4索引、5/5约束，缺项0；启动同版代码跳过既有迁移，不执行补schema/业务回填。原Compose有效环境与运行环境、候选镜像环境完全相同（API211项/前端6项），没有秘密值输出或私有env修改。
