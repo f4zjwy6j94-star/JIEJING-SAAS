@@ -1301,6 +1301,12 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
     def test_frontend_product_fact_save_posts_identity_and_applies_the_server_packet(self) -> None:
         save_function = function_body(APP_JS, "saveSaasMerchantProductFacts")
         persist_function = function_body(APP_JS, "persistSaasMerchantProductFacts")
+        context_function = function_body(APP_JS, "saasListingAiGenerationContextKey")
+        invalidate_function = function_body(APP_JS, "invalidateSaasListingValidationForFactChange")
+        epoch_declaration = next(
+            line for line in APP_JS.splitlines()
+            if line.startswith("let saasListingAiGenerationEpoch = ")
+        )
         result = run_node_json(
             "\n".join(
                 [
@@ -1330,6 +1336,9 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "}; };",
                     "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => { applied = true; return { ...draft, merchant_product_fact_packet: packet, applied_server_packet: true }; };",
                     "const showActionToast = () => {};",
+                    context_function,
+                    invalidate_function,
+                    epoch_declaration,
                     save_function,
                     persist_function,
                     "(async () => { const first = saveSaasMerchantProductFacts(); const second = saveSaasMerchantProductFacts(); const busy = state.saasListingProductFactSaveStatus; await first; console.log(JSON.stringify({ capturedBody, applied, draft: state.saasListingComposerDraft, requestCount, samePromise: first === second, busy, savedStatus: state.saasListingProductFactSaveStatus, pendingCleared: state.saasListingProductFactSavePromise === null, renderStatuses })); })().catch((error) => { console.error(error); process.exit(1); });",
