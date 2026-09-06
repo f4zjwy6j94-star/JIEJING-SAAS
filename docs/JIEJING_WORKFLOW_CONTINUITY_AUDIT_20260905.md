@@ -189,3 +189,17 @@
 这次修订发现并解决的是过时面板测试与CI/本地清单漏接，保留负向回归防复发；此前W1–W6/C1/C2/UI随本次首次上线。另两个只读验收脚本初始假设已纠正：无Health属性的Worker不能按API模板读取；HTML须区分入口重定向和Cloudflare统计注入。这是检查方式调整，不是修改生产行为。
 
 仍未完成：独立旧ops前后端/退款运营路径同版更新；已登录账号的同一平板支架项目续接、FAL/图片权利及发布前核对。没有新真实收费/退款/eBay写入，没有以任意完成百分比或本地全绿冒充全站成熟和业务闭环。旧ops规范外SSH仍需明确窄范围例外授权；正常手动GitHub通道的main/runner及广泛更新范围不能静默替代该授权。
+
+### 旧运营后台窄范围同步收口（2026-09-06，后续已获准）
+
+用户明确“允许”，批准仅旧ops前端/代理/API的SSH例外，不包含主站、Worker、Vault、Cloudflared、DNS、私有配置、共享数据库变更或真实资金。上述“旧ops未授权/未同步”为本批之前的历史状态，现已完成代码同步。复用同一1550105的457文件包/224项/精确SHA CI证据，不重打包或部署主站，不混入三项原有用户修改。
+
+只读前检以既有API后端连接、显式READ ONLY事务验证16条受信迁移/checksum、45表、52关键列、4索引、5约束全部匹配；没有依赖默认启动替我们补schema。API有效环境211项、前端6项与原Compose和候选镜像合并结果完全相同，未输出环境原值。两SVG已相同，无需覆盖；现场proxy与历史版仅行尾差异，候选只增两个精确location（退款GET列表及POST review/execute/query），不扩大域名、端口或owner通配范围。
+
+旧五文件脚本缺API/镜像回滚并硬编码旧资产，广泛staging脚本又会更新Worker/Vault，因此使用仅本批的receipt辅助流程。它固定五文件、两服务、源SHA、实际镜像、原Compose、schema时效和非目标容器，先验证备份再覆盖。独立审查曾用Binds数组逆序复现“误判配置漂移且回滚被同一检查堵住”，在真实切换前修正无语义顺序规范化和恢复前scope/恢复后完整配置检查；14/14故障回放及独立原例复跑通过。schema前检脚本17个隔离回放通过。此类本地模拟不等于实际掉电恢复或真实资金测试。
+
+正式dry-run通过；此前一次schema证明过期被安全拒绝，刷新实际只读查询后继续，没有放宽守卫。apply会话76472已exit0/status=success，未触发实际回滚。旧host新API image为`sha256:f9e867784ae0500006d3523a0b4a07d7fd63ad93b90fc12ee4fc22ad0e4912dd`；前端沿用原`sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10`。发布后API150源码/依赖文件与包逐字节相同，5目标文件匹配，配置、挂载、端口、网络及三个非目标容器不变。实际Compose增加该release的`.ops-switch/apply.json`镜像覆盖文件；原Compose未改，未来不能遗漏override而退回旧API。
+
+独立公网GET（2026-09-06T03:11:14Z）：ops200，HTML/CSS/JS/panels/两SVG共6/6精确匹配冻结ZIP；列表401、3动作GET405、其他owner路径404；app域ops.html/panels/退款路径404。无扩展名/ops=200只是主站首页fallback，没有ops内容。主站health/deep=200与ok/ready，数据库/队列/worker.ready=true；`readiness.provider_status.billing`的public_charging_allowed、charge_now_allowed、billing_ready_for_paid_launch三项仍true，没有关闭公开收费。
+
+完整脱敏证据与辅助脚本保留于`output/ops-narrow-20260906/`；精确容器ID、脚本SHA、主机release、原镜像hold和五文件恢复路径见当前执行索引的本次收口。没有修改或恢复数据库、导出/回显秘密、真实POST支付/退款或订单query、OAuth、FAL、eBay或生产商家工作流操作。内部登录GET200与实际运营退款流程尚未验收；旧ops运行时live_api/refund仍false，代码同版不能被汇报成退款执行已可用。下一项需要针对现有后端微信执行配置对齐的明确许可，不重复本次代码同步。
