@@ -40,10 +40,10 @@
 ## 当前下一步（不是重做部署）
 
 1. 本轮用户明确授权使用其提供的登录信息，已通过既有浏览器登录并完成同一`listing-project-0ef70f19c079b4261e82`的上线后页面复验：原文案、最近任务、已有概念图和真实额度/到期提示均已核对。不要再次为本次登录/页面复验而重复登录、OAuth、FAL、支付退款或发布。新文字生成仍未验收：账号试用已到期且无可用账号模型连接，不能静默续期或编造生成成功。
-2. 用户最新“你看着办……帮我推进”已授权推荐的手改Listing云端保存/跨设备恢复最小批次，不再重复询问同范围设计。合同/计划已提交`02b633e`，见下节；代码正在实现和专项回归，尚未提交或部署。产品结构/UI风格不变，十字段明确清空、完整身份隔离、CAS和幂等重试；不上传可信度标记、不覆盖AI报告、不调用模型/eBay。93f7a41线上仍不包含此功能；本批正式部署另需确认。
+2. 用户最新“你看着办……帮我推进”已授权推荐的手改Listing云端保存/跨设备恢复最小批次，不再重复询问同范围设计。合同/计划已提交`02b633e`；首批实现已提交`bec61e217b64f4f6935ccdfd70bcf8836ca857b2`，但新干净候选完整门禁223/227，不能部署。当前仅收口四项明确失败：旧测试适配与迁移检查接线已在主仓库修完待提交，最后的云GET空字段被误判为新手改已稳定复现、正做最窄修复及回归，见下节。产品结构/UI风格不变，十字段明确清空、完整身份隔离、CAS和幂等重试；不上传可信度标记、不覆盖AI报告、不调用模型/eBay。93f7a41上一发布不包含此功能；本批正式部署另需确认。
 3. 待上述保存与合法文本生成可验后，继续原商品旅程到允许的发布前边界。现有素材为概念参考，真实来源/权利/事实及账号资格未满足时不得发布；不以新增样例回执冒充成功。视觉升级继续暂停，先完成真实可用的MVP闭环。
 
-## 2026-09-06 Listing 手改云保存（本地实施中，未部署）
+## 2026-09-06 Listing 手改云保存（已提交，候选验证中，未部署）
 
 - 设计与分段计划：`docs/superpowers/specs/2026-09-06-listing-merchant-cloud-checkpoint-design.md`、`docs/superpowers/plans/2026-09-06-listing-merchant-cloud-checkpoint-plan.md`，提交`02b633e`。保持8个可见控件、10字段DTO；专用checkpoint head/revision表，不为每次保存建任务/AI报告。新增005迁移，001–004不变；原三项用户修改不纳入。
 - 实际本地浏览器输入已证自动保存/第二干净浏览器恢复/空值、慢POST后继续打字、初次GET单飞、断网15秒超时精确mutation重试、连续409、A→B→A及切账号迟到回包。后端真实HTTP+临时SQLite已证并发首次CAS/精确重放/租户店铺身份与viewer权限/事务故障回滚；这些不是生产商家旅程或真实PostgreSQL并发证明。
@@ -56,6 +56,15 @@
 - 2026-09-07最终冻结：新前端25/25、既有恢复/最近任务12/12及预填/素材14/14通过；实际8控件编辑、10字段保存/清空、完整身份、迟到响应、冲突/重试、Unicode和商家原文字面保真均覆盖。1440/1024本地编辑器截图已检查，页面/控制台错误和意外外部请求为0，不等于生产全流程。app LF hash=`70e9d64f53d9`，family=`20260907-listing-cloud-checkpoint-v1`，7处资产引用一致，CSS/官网正文/产品结构未改。
 - 最终真实本机 PostgreSQL 17.11验证14/14通过，包含浏览器→真实临时HTTP→数据库保存与第二干净浏览器恢复、CAS并发/幂等、事务回滚、租户/店铺/完整项目隔离以及005真实目录约束。安全证据：`output/jiejing-checkpoint-pg-20260907/checkpoint-run-m2l218dq/evidence.json`；UTC03:07:36–03:07:53，证据SHA=`fdd64e3defd9b894f79e697b6bd1de87a7a6a8017266b37700d00c208678f006`，9源码前后hash一致、source_stable=true、postgres_stopped=true、对应进程0。仅loopback临时库，未接生产/安装服务/改PATH/改生产数据；替代上方“准备PG、尚无证据”的中间状态。
 - 独立最终只读审查未发现本范围确定阻断：005/manifest/白名单/语法入口、原始完整identity、8控件与10字段、商家文本保真/秘密脱敏及安全渲染接线已核对。代码尚待本批独立提交与新干净候选227项完整门禁，旧225结果不复用；当前不部署、不重新生成、不执行资金或eBay动作。
+
+- 本批独立提交=`bec61e217b64f4f6935ccdfd70bcf8836ca857b2`，tree=`6c441bd7523ee13e42010cce8b830b36e1684ce2`，22路径；原3用户修改逐SHA保留、不入提交，001–004未改。新干净候选目录=`C:\Users\57249\Documents\Codex\2026-09-07\jiejing-release-listing-checkpoint`，完整227项exec session=`95581`、Python PID=`19932`；进度`output/jiejing-precloud-deployment-gate/progress.jsonl`，最终`latest.json`。候选跟踪源已冻结，勿改其文件或并行重跑门禁；主仓库本索引可继续记录进展。下一动作等新门禁终态与精确SHA普通CI，失败则只处理明确失败，成功再打包/dry-run并请求本批部署确认。
+- 2026-09-07 UTC03:13–03:14公网只读刷新：health/deep与数据库/队列/worker正常，production_ready/beta_ready/can_accept_real_customers/public_charging_allowed=true，blocker_count/warning_count=0；全面real_platform_writes_enabled=false。ops根200、主站ops.html404。没有查询provider订单/退款、eBay资格或秘密，也没有重新验证受控发布开关；此处不推断具体账号能发布或整条商家流程已成功。
+- bec61e2已非force推送。精确SHA普通CI run=`34079398046`/job=`101611676938`失败于Frontend contract regressions；本地227第28项同因失败：`test_jiejing_saas_clean_settings_and_listing_ui.py:693`仍强制旧`fields.title || draft?.title`，与当前“明确清空不能复活旧标题”的nullish合同冲突。不回退产品、不部署此候选；专人仅在主仓库修正该静态测试并验证防退化，当前bec候选继续跑完收集其余失败，尚无完整终态。CI由既有GitHub连接器只读获得，无需读取凭证；本机gh未登录和公开API404不等于GitHub CI不可查。
+- bec首轮完整门禁已终态223/227、4失败，1625.91秒，UTC03:16:39.931201→03:43:45.830955；run_id=`2e8e3b22b9e140359ce21c56736f7a49`，source_stable=true/release_eligible=false，报告SHA=`3402d0c28f4bc9dc5550e6c1caa2f1611995c95427b5a2d066bb45b6807138c7`。旧候选保持干净，不重跑/打包/部署。除28外：64 Listing AI browser出现report/task存在但sourceMode仍merchant_source_form；68旧fixture漏载saasListingEditableFieldText；188基础设施门禁迁移列表仅001–004导致误报新两表缺失。
+- 主仓库已完成待提交适配：28的标题/物流清空两条旧静态合同改为现有正确行为，并新增7场景+2旧逻辑变异拒绝，原418静态要求仅替换2项；68仅补真实helper名单，原116断言AST不变、35/35通过；188从既有canonical migration manifest推导路径，保留原表/索引/文件检查，并在既有driver测试内新增完整集合通过/缺005拒绝两场景，stagegate6/6、schema21/21和部署4专项通过。仍227项，不新增平行门禁。
+- 当前唯一未确诊项是64：同冻结源码单独再跑18场景通过，但原失败仍有效。正在用带标签、可控响应闸门检验“云回执结构归一化被误判为商家新编辑”“云恢复/事实刷新覆盖”“测试过早读完成状态”，不盲加sleep/删断言/接受错误状态；必要产品修复须先稳定RED。最终修好后重新冻结源码、跑专项与真实PG、提交新干净候选及新227/精确CI；本批仍无部署授权。
+- 第64根因已通过真实本地UI与受控checkpoint GET闸门复现：生成期间GET仅补`keywords:''`、`risk_notes:''`，原始JSON快照比较便误判为新手改，提前走preserve分支；handler已结束、报告/任务存在但sourceMode仍旧。两次RED（session59227/30727），生成前/后释放GET的对照均正常；事实、prefill、输入与refresh代次未变，因此不是旧回包重新覆盖。已允许最窄修正：对Listing字段按实际内容稳定比较，保留缺title键回退与显式清空区别，不截断/改写内容，不削弱真实字段/事实/输入变化保护。原smoke须等真实完成并增加可控时序，不能加固定sleep或接受错误状态；正在实施与专项回归，尚未新提交/新候选。
+- 四项失败现已全部修复并独立复核，待本批修正提交：第64仅snapshot稳定十字段值，事实/prefill/输入比较原样保留；云26+事实35+相邻26合计87/87，原生成18场景与新确定竞态合计19/19，GET在生成前/中/后三个对照全通过。实际清空、替换、长文本尾差、品牌原文变化继续触发保护，不靠sleep或删来源断言。诊断证据`output/listing-generation-checkpoint-diagnosis-20260907.json`；临时探针已清理。最终app raw SHA=`49f442f0db76face491a37ef3b3e1df54cde06589451ae659251e05c42a45e48`，LF=`ec006a752eaf8fea75bde9922aaa89877cda7e11f39741f4067fbf501afe8b0a`，7引用family=`20260907-listing-cloud-checkpoint-v2`，CSS不变。接下来只显式提交这10路径（含本索引）、建立r2干净候选，再跑新227/精确CI与绑定候选Git的PG14，未授权生产apply。
 
 ## 2026-09-06 上线后同项目页面复验（已完成，无新生成）
 

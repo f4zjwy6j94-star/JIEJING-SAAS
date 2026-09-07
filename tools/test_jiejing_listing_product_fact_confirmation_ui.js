@@ -75,6 +75,7 @@ const baseFunctionNames = [
   "generateSaasListingDraftFromCurrentProject",
   "saasListingMerchantEditableFieldKeys",
   "saasListingMerchantEditedFields",
+  "saasListingEditableFieldText",
   "setSaasListingDraftField",
   "captureSaasListingDraftEditor",
   "saasListingCurrentDraftFieldsForAi",

@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas import SaaSRepository, SaaSSettings, build_product_readiness  # noqa: E402
 from jiejing_saas.database_plan import CRITICAL_INDEXES, CRITICAL_TABLES  # noqa: E402
-from jiejing_saas.infrastructure_drivers import build_infrastructure_driver_status  # noqa: E402
+from jiejing_saas.infrastructure_drivers import POSTGRES_MIGRATION_MANIFEST, build_infrastructure_driver_status  # noqa: E402
 from jiejing_sqlite_to_postgres_rehearsal import generate_rehearsal  # noqa: E402
 
 
@@ -198,12 +198,7 @@ def _check_runtime_driver_dependency_shape() -> dict[str, Any]:
 
 def _check_postgres_migration_shape() -> dict[str, Any]:
     migration_root = ROOT / "jiejing_saas" / "migrations"
-    migration_paths = [
-        migration_root / "001_initial_schema_postgres.sql",
-        migration_root / "002_media_credit_buckets_postgres.sql",
-        migration_root / "003_runtime_schema_reconciliation_postgres.sql",
-        migration_root / "004_platform_model_trial_reservations_postgres.sql",
-    ]
+    migration_paths = [spec.path for spec in POSTGRES_MIGRATION_MANIFEST]
     text = "\n".join(
         path.read_text(encoding="utf-8")
         for path in migration_paths

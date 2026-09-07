@@ -181,6 +181,15 @@ async function api(pathname, { token = "", method = "GET", body } = {}) {
   return json;
 }
 
+async function waitForTimingGate(promise, label) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} did not reach the controlled timing gate`)), 10000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 function localStaticPath(requestUrl) {
   const url = new URL(requestUrl);
   const pathname = decodeURIComponent(url.pathname.replace(/^\/+/, "")) || "index.html";
@@ -325,6 +334,11 @@ async function runSmoke() {
   let holdGeneration = false;
   let heldGeneration = null;
   let generationRequestCount = 0;
+  let initialCloudReadHeld = false;
+  let resolveInitialCloudRead;
+  const initialCloudRead = new Promise((resolve) => { resolveInitialCloudRead = resolve; });
+  let resolveInitialGeneration;
+  const initialGeneration = new Promise((resolve) => { resolveInitialGeneration = resolve; });
   let browser = null;
   try {
   browser = await chromium.launch({ channel: browserChannel, headless: true });
@@ -343,10 +357,23 @@ async function runSmoke() {
   ]);
   await context.route(`${base}/**`, async (route) => {
     const request = route.request();
+    // Exercise a real checkpoint response arriving during generation. This
+    // previously mistook the checkpoint's missing-to-empty field normalization
+    // for new merchant edits and left the generated package unapplied.
+    if (!initialCloudReadHeld && request.method() === "GET" && /\/checkpoint(?:\?|$)/.test(request.url())) {
+      initialCloudReadHeld = true;
+      const response = await route.fetch();
+      await new Promise((resolve) => { resolveInitialCloudRead({ route, response, resolve }); });
+      return;
+    }
     const generationStore = new URL(request.url()).pathname.match(/^\/stores\/([^/]+)\/listing-drafts\/generate$/);
     if (request.method() === "POST" && generationStore) {
       generationRequestCount += 1;
       capturedGenerationBody = JSON.parse(request.postData() || "{}");
+      if (generationRequestCount === 1) {
+        await new Promise((resolve) => { resolveInitialGeneration({ route, resolve }); });
+        return;
+      }
       if (holdGeneration) {
         await new Promise((resolve) => {
           heldGeneration = { route, body: capturedGenerationBody, storeId: decodeURIComponent(generationStore[1]), resolve };
@@ -419,9 +446,22 @@ async function runSmoke() {
     { timeout: 20000 },
   );
   await page.click('[data-saas-action="listing-generate-ai-draft"]');
+  const firstGeneration = await waitForTimingGate(initialGeneration, "Listing generation");
+  const firstCloudRead = await waitForTimingGate(initialCloudRead, "Initial checkpoint read");
+  await firstCloudRead.route.fulfill({ response: firstCloudRead.response });
+  firstCloudRead.resolve();
+  await page.evaluate(async () => { await saasListingCloudRecord()?.read; });
+  await firstGeneration.route.fulfill({
+    status: 201,
+    contentType: "application/json; charset=utf-8",
+    body: JSON.stringify(generatedPayload(capturedGenerationBody, store.store_id)),
+  });
+  firstGeneration.resolve();
   await generationResponse;
   await page.waitForFunction(
-    () => document.querySelector('[data-saas-listing-draft-field="title"]')?.value === "Merchant Edited Zen Lotus Incense Burner",
+    () => state.saasListingAiGenerationStatus === "completed" && state.saasLoading === false &&
+      !saasListingAiGenerationInFlight.has(saasListingAiGenerationContextKey()) &&
+      document.querySelector('[data-saas-listing-draft-field="title"]')?.value === "Merchant Edited Zen Lotus Incense Burner",
     null,
     { timeout: 20000 },
   );
@@ -595,7 +635,7 @@ async function runSmoke() {
   await heldGeneration.route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(generatedPayload(heldGeneration.body, heldGeneration.storeId)) });
   heldGeneration.resolve();
   await page.waitForFunction(() => state.saasLoading === false);
-  const contextCases = ["store_switch", "project_leave_return", "edits_during_generation", "duplicate_inflight"];
+  const contextCases = ["checkpoint_normalization_during_generation", "store_switch", "project_leave_return", "edits_during_generation", "duplicate_inflight"];
   await page.evaluate(() => {
     stopSaasAiCeoCrossDeviceSync();
     window.__listingContextFixture = structuredClone({

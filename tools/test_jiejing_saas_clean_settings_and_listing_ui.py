@@ -690,9 +690,43 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(app_js, "价格利润", "publish form finance group")
     require(app_js, "物流履约", "publish form fulfillment group")
     require(app_js, "素材描述", "publish form asset group")
-    require(app_js, "fields.title || draft?.title", "draft title prefill source")
+    require(app_js, 'fields.title ?? draft?.title ?? ""', "draft title prefill preserves explicit clears")
+    prefill_source = scoped_body("function saasPublishIntakePrefillValues", "function renderSaasPublishInputField")
+    title_expression = re.search(r"^\s+title: (.+),$", prefill_source, re.MULTILINE).group(1)
+    logistics_expression = re.search(r"^\s+const evidenceText = (.+);$", prefill_source, re.MULTILINE).group(1)
+    title_clear_contract = f"""
+const assert = require("node:assert/strict");
+const expression = {title_expression!r};
+const evaluate = (source) => new Function("fields", "draft", "buyerCopyRequiresValidatedGeneration", `return (${{source}});`);
+function verifyTitlePrefill(title) {{
+  assert.equal(title({{ title: "" }}, {{ title: "Previous title" }}, false), "", "explicit clear cannot resurrect the old title");
+  assert.equal(title({{}}, {{ title: "Previous title" }}, false), "Previous title", "missing legacy field still has a fallback");
+  assert.equal(title({{ title: "Merchant title" }}, {{ title: "Previous title" }}, false), "Merchant title");
+  assert.equal(title({{ title: "Merchant title" }}, {{ title: "Previous title" }}, true), "", "generation guard stays closed");
+}}
+verifyTitlePrefill(evaluate(expression));
+const legacyFallback = expression.replace('fields.title ?? draft?.title ??', 'fields.title || draft?.title ||');
+assert.notEqual(legacyFallback, expression, "negative mutation must change the actual source expression");
+assert.throws(() => verifyTitlePrefill(evaluate(legacyFallback)), /explicit clear cannot resurrect/);
+const logisticsExpression = {logistics_expression!r};
+const logistics = (source) => new Function("logisticsText", "logisticsEdited", "clean", `return (${{source}});`);
+function verifyLogistics(evidence) {{
+  assert.equal(evidence("", true, "Previous logistics"), "", "explicit logistics clear cannot borrow old prompt text");
+  assert.equal(evidence("Merchant logistics", true, "Previous logistics"), "Merchant logistics");
+  assert.equal(evidence("", false, "Previous logistics"), "Previous logistics", "unedited legacy prompt remains usable");
+}}
+verifyLogistics(logistics(logisticsExpression));
+const legacyLogistics = logisticsExpression.replace('logisticsEdited ? "" : clean', 'clean');
+assert.notEqual(legacyLogistics, logisticsExpression, "negative mutation must change the actual logistics expression");
+assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logistics clear cannot borrow/);
+"""
+    title_clear_result = subprocess.run(
+        ["node", "-e", title_clear_contract], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False
+    )
+    if title_clear_result.returncode != 0:
+        raise AssertionError(f"Listing prefill clear/fallback/guard contract failed: {title_clear_result.stderr.strip()}")
     require(app_js, "parseSaasKeyValueLines(itemSpecifics)", "item specifics prefill parser")
-    require(app_js, "const evidenceText = [logisticsText, clean].filter(Boolean).join", "full merchant input logistics prefill source")
+    require(app_js, 'const evidenceText = [logisticsText, logisticsEdited ? "" : clean].filter(Boolean).join', "manual logistics prefill preserves edits and clears")
     require(app_js, 'clean.match(/https?:\\/\\/[^\\s,，；;]+/gi)', "image URL prefill from merchant input")
     require(app_js, "上架资料补全", "Listing publish data completion step")
     require(app_js, "按基础、价格利润、素材描述、平台参数和物流履约往下补", "Listing ordered publish flow copy")

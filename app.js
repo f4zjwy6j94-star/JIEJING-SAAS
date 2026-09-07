@@ -33779,8 +33779,13 @@ function setSaasListingAiGenerationFeedback(status, message, contextKey) {
 
 function saasListingAiGenerationEditSnapshot() {
   const draft = state.saasListingComposerDraft || {};
+  // Checkpoints may fill absent optional fields with empty strings or reorder
+  // keys without changing merchant content. Compare the ten editable values,
+  // while keeping an explicit title clear distinct from the visible fallback.
+  const fields = Object.fromEntries(saasListingMerchantEditableFieldKeys().map((key) => [key,
+    key === "title" ? (draft.fields?.title ?? draft.title ?? "") : (draft.fields?.[key] ?? "")]));
   return {
-    draft: JSON.stringify([draft.fields || {}, draft.merchant_product_fact_packet || {}, draft.publish_prefill || {}]),
+    draft: JSON.stringify([fields, draft.merchant_product_fact_packet || {}, draft.publish_prefill || {}]),
     inputs: Array.from(document.querySelectorAll("#view-product [data-saas-product-fact-field]"), (field) => [
       field.dataset.saasProductFactField,
       field.type === "checkbox" ? field.checked : field.value,

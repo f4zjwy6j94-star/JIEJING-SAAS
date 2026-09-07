@@ -183,6 +183,53 @@ async function openDevice(options = {}) {
   return { context, page, errors, consoleIssues };
 }
 
+test("generation edit guard ignores empty checkpoint normalization but preserves real content and legacy-title clears", async () => {
+  resetFixture();
+  const device = await openDevice();
+  try {
+    await device.page.evaluate(async () => { await hydrateSaasListingCloudCheckpoint(); });
+    const normalized = await device.page.evaluate(() => {
+      const draft = state.saasListingComposerDraft;
+      delete draft.fields.keywords;
+      delete draft.fields.risk_notes;
+      const before = saasListingAiGenerationEditSnapshot();
+      draft.fields = { risk_notes: "", ...Object.fromEntries(Object.entries(draft.fields).reverse()), keywords: "" };
+      return saasListingAiGenerationHasNewEdits(before);
+    });
+    assert.equal(normalized, false, "same ten field values with extra empty keys or reordered keys are not merchant edits");
+
+    await device.page.evaluate(() => {
+      delete state.saasListingComposerDraft.fields.title;
+      document.querySelector("#view-product").innerHTML = renderSaasListingDraftEditor();
+      window.__generationSnapshotBeforeClear = saasListingAiGenerationEditSnapshot();
+    });
+    assert.equal(await device.page.inputValue('[data-saas-listing-draft-field="title"]'), "Original title");
+    await device.page.fill('[data-saas-listing-draft-field="title"]', "");
+    assert.equal(await device.page.evaluate(() => saasListingAiGenerationHasNewEdits(window.__generationSnapshotBeforeClear)), true,
+      "explicit clearing of a visible fallback title remains a real merchant edit");
+    await device.page.evaluate(() => { window.__generationSnapshotBeforeFill = saasListingAiGenerationEditSnapshot(); });
+    await device.page.fill('[data-saas-listing-draft-field="title"]', "Merchant replacement title");
+    assert.equal(await device.page.evaluate(() => saasListingAiGenerationHasNewEdits(window.__generationSnapshotBeforeFill)), true,
+      "empty to nonempty merchant input remains protected");
+
+    const contentGuards = await device.page.evaluate(() => {
+      const draft = state.saasListingComposerDraft;
+      const changed = (prepare, mutate) => { prepare(); const before = saasListingAiGenerationEditSnapshot(); mutate(); return saasListingAiGenerationHasNewEdits(before); };
+      return {
+        longTail: changed(() => { draft.fields.description = "x".repeat(1400) + "A"; }, () => { draft.fields.description = "x".repeat(1400) + "B"; }),
+        literalText: changed(() => { draft.fields.description = "Hermes 样例"; }, () => { draft.fields.description = "捷境系统 历史占位"; }),
+        nonemptyToEmpty: changed(() => { draft.fields.description = "Real description"; }, () => { draft.fields.description = ""; }),
+        facts: changed(() => { draft.merchant_product_fact_packet = { material: "Resin" }; }, () => { draft.merchant_product_fact_packet.material = "Steel"; }),
+        prefill: changed(() => { draft.publish_prefill = { quantity: "1" }; }, () => { draft.publish_prefill.quantity = "2"; }),
+      };
+    });
+    assert.deepEqual(contentGuards, { longTail: true, literalText: true, nonemptyToEmpty: true, facts: true, prefill: true },
+      "the comparison must not truncate, rewrite, or discard actual field, fact, or prefill changes");
+    assert.deepEqual(device.errors, []);
+    assert.deepEqual(unexpected, []);
+  } finally { await device.context.close(); }
+});
+
 test("editing the eight visible fields autosaves all ten fields, including clears, and a clean second device restores them", async () => {
   resetFixture();
   const first = await openDevice();

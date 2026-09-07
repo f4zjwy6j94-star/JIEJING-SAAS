@@ -4,9 +4,14 @@
 from __future__ import annotations
 
 import json
+import io
+import gc
 import os
 import sys
+import tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +19,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas import SaaSSettings  # noqa: E402
-from jiejing_saas.infrastructure_drivers import build_infrastructure_driver_status  # noqa: E402
+from jiejing_saas.infrastructure_drivers import POSTGRES_MIGRATION_MANIFEST, build_infrastructure_driver_status  # noqa: E402
+import jiejing_infrastructure_stage_gate as stage_gate  # noqa: E402
 
 
 OUT = ROOT / "output" / "jiejing-infrastructure-drivers-test"
@@ -39,6 +45,9 @@ def fail(message: str) -> int:
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
+    migration_error = _check_stage_gate_migrations()
+    if migration_error:
+        return fail(migration_error)
     previous = {key: os.environ.get(key) for key in ENV_KEYS}
     try:
         os.environ.update(
@@ -103,6 +112,45 @@ def main() -> int:
     print(json.dumps(status, ensure_ascii=False, indent=2))
     print("PASS jiejing_infrastructure_drivers")
     return 0
+
+
+def _check_stage_gate_migrations() -> str:
+    # Exercise the published gate report, not its private migration helper.
+    def run_gate(missing_file: Path | None = None) -> tuple[int, dict]:
+        exists = Path.exists
+        with tempfile.TemporaryDirectory(prefix="jiejing-infra-manifest-", dir=OUT) as directory:
+            output = Path(directory)
+            # Fault only the filesystem boundary; no migration is actually removed.
+            with patch.object(stage_gate, "OUT", output), patch.dict(os.environ, {}, clear=True), \
+                    patch.object(Path, "exists", lambda path: False if path == missing_file else exists(path)), \
+                    redirect_stdout(io.StringIO()):
+                try:
+                    exit_code = stage_gate.main()
+                finally:
+                    gc.collect()  # Release fixture connections before Windows removes the owned directory.
+            report = json.loads((output / "latest.json").read_text(encoding="utf-8"))
+        return exit_code, report
+
+    exit_code, report = run_gate()
+    migration = next(item for item in report["checks"] if item["key"] == "postgres_migration_shape")
+    expected_paths = [str(spec.path.relative_to(ROOT)) for spec in POSTGRES_MIGRATION_MANIFEST]
+    if exit_code != 0 or migration["pass"] is not True:
+        return "infrastructure stage gate must accept every checked-in canonical migration"
+    if migration["migration_paths"] != expected_paths:
+        return "infrastructure stage gate must cover the complete canonical migration manifest in order"
+    if migration["missing_migration_files"] or migration["missing_tables"] or migration["missing_indexes"]:
+        return "complete migration files must preserve every critical table and index check"
+    missing = ROOT / "jiejing_saas" / "migrations" / "005_listing_draft_edit_checkpoints_postgres.sql"
+    exit_code, report = run_gate(missing)
+    migration = next(item for item in report["checks"] if item["key"] == "postgres_migration_shape")
+    if exit_code != 1 or report["status"] != "failed" or migration["pass"] is not False:
+        return "infrastructure stage gate must fail closed when migration 005 is unavailable"
+    if migration["migration_paths"] != expected_paths or migration["missing_migration_files"] != [str(missing.relative_to(ROOT))]:
+        return "missing migration 005 must remain in the manifest and be reported as unavailable"
+    if set(migration["missing_tables"]) != {"listing_draft_edit_heads", "listing_draft_edit_revisions"}:
+        return "missing migration 005 must still fail the critical Listing table checks"
+    print("PASS infrastructure_stage_gate_manifest_regressions 2/2")
+    return ""
 
 
 def _restore_env(previous: dict[str, str | None]) -> None:
