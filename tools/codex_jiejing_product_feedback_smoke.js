@@ -15,6 +15,35 @@ const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const outDir = path.join(os.tmpdir(), "jiejing-product-feedback-smoke", stamp);
 fs.mkdirSync(outDir, { recursive: true });
 
+function safeDiagnosticUrl(raw) {
+  try {
+    const url = new URL(raw);
+    if (!/^https?:$/.test(url.protocol)) throw new Error("non-http diagnostic URL");
+    const origin_kind = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ? "local" : "external";
+    let pathname = "/:redacted";
+    if (/^\/(app\.html|index\.html|app\.js|styles\.css|favicon\.ico|product-feedback|me|health|stores|connections|tasks|reports|confirmations|permissions\/me|readiness\/product-saas)$/.test(url.pathname)) {
+      pathname = url.pathname;
+    } else if (/^\/stores\/[^/]+\/listing-drafts\/[^/]+\/checkpoint$/.test(url.pathname)) {
+      pathname = "/stores/:id/listing-drafts/:id/checkpoint";
+    } else {
+      const scoped = url.pathname.match(/^\/stores\/[^/]+\/(media-asset-jobs|ip-risk-screening|product-facts|listing-drafts|merchant-memory)(\/[^/]+)?$/);
+      const record = url.pathname.match(/^\/(reports|tasks|connections|confirmations)\/[^/]+$/);
+      const asset = url.pathname.match(/^\/assets\/.+\.(js|css|svg|png|webp|jpg|jpeg|ico|woff2?)$/i);
+      if (scoped) pathname = `/stores/:id/${scoped[1]}${scoped[2] ? "/:id" : ""}`;
+      else if (record) pathname = `/${record[1]}/:id`;
+      else if (asset) pathname = `/assets/:asset.${asset[1].toLowerCase()}`;
+    }
+    return { origin_kind, pathname };
+  } catch (_error) {
+    return { origin_kind: "unknown", pathname: "/:redacted" };
+  }
+}
+
+function appendBoundedDiagnostic(entries, entry) {
+  if (entries.length === 20) entries.shift();
+  entries.push(entry); // Keep the latest 20, including failures after expected errors.
+}
+
 const accountA = {
   companyId: "company-feedback-smoke-a",
   userId: "user-feedback-smoke-a",
@@ -259,9 +288,29 @@ async function main() {
   const page = await context.newPage();
   const pageErrors = [];
   const consoleErrors = [];
+  const diagnosticStartedAt = performance.now();
+  const diagnostics = { requestFailures: [], consoleLocations: [] };
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("requestfailed", (request) => {
+    const resourceType = request.resourceType();
+    appendBoundedDiagnostic(diagnostics.requestFailures, {
+      time_ms: Math.round(performance.now() - diagnosticStartedAt),
+      method: /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/.test(request.method()) ? request.method() : "other",
+      resource_type: /^(document|stylesheet|image|media|font|script|texttrack|xhr|fetch|eventsource|websocket|manifest|other)$/.test(resourceType) ? resourceType : "other",
+      ...safeDiagnosticUrl(request.url()),
+      error_code: (request.failure()?.errorText || "").match(/\bnet::ERR_[A-Z0-9_]{1,60}\b/)?.[0] || "other",
+    });
+  });
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    const location = message.location();
+    appendBoundedDiagnostic(diagnostics.consoleLocations, {
+      time_ms: Math.round(performance.now() - diagnosticStartedAt),
+      ...safeDiagnosticUrl(location.url), line: location.lineNumber, column: location.columnNumber,
+    });
   });
   await page.addInitScript(
     ({ apiBase, userId, storeId }) => {
@@ -774,7 +823,7 @@ async function main() {
       (message) => !/Failed to load resource: (the server responded with a status of (400|401|409|429|503)|net::ERR_EMPTY_RESPONSE)/i.test(message),
     );
     if (pageErrors.length || unexpectedConsoleErrors.length) {
-      throw new Error(`browser errors: ${JSON.stringify({ pageErrors, unexpectedConsoleErrors })}`);
+      throw new Error(`browser errors: ${JSON.stringify({ pageErrors, unexpectedConsoleErrors, diagnostics })}`);
     }
     console.log(`PASS codex_jiejing_product_feedback_smoke ${outDir}`);
   } finally {
