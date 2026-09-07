@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.merchant_project_status import _now_iso, build_merchant_project_status  # noqa: E402
-from jiejing_saas.repository import SaaSRepository  # noqa: E402
+from jiejing_saas.repository import SaaSRepository, _id as repository_id  # noqa: E402
 from jiejing_saas.postgres_repository_runtime import PostgresConnectionAdapter, placeholder_count  # noqa: E402
 
 
@@ -351,11 +351,23 @@ def assert_single_progress(snapshot: dict[str, Any]) -> None:
         assert forbidden not in serialized
 
 
+def create_fixture_store(repository, *, company_id, store_id, user_id="user-a"):
+    # Only make the generated ID deterministic; persist the real store and audit.
+    with patch("jiejing_saas.repository._id", side_effect=lambda prefix: (
+        store_id if prefix == "store" else repository_id(prefix)
+    )):
+        return repository.create_store(
+            company_id=company_id, user_id=user_id,
+            payload={"store_name": "Local fixture", "platform": "ebay", "marketplace": "EBAY_US"},
+        )
+
+
 class MerchantProjectEvidenceScopeTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="jiejing-project-evidence-scope-", ignore_cleanup_errors=True)
         self.addCleanup(self.temp.cleanup)
         self.repository = SaaSRepository(Path(self.temp.name) / "saas.sqlite", database_engine="sqlite", database_url="")
+        create_fixture_store(self.repository, company_id="company-a", store_id="store-a")
         self.identity = {
             "key": "project-tablet-stand",
             "source_report_id": "report-tablet-source",
@@ -514,7 +526,9 @@ class MerchantProjectEvidenceScopeTest(unittest.TestCase):
         )
         before = self.snapshot()
         excluded_ids = set()
-        for company, store in (("company-b", "store-a"), ("company-a", "store-b")):
+        # store_id is globally unique, including stores owned by another company.
+        for company, store in (("company-b", "store-other-company"), ("company-a", "store-b")):
+            create_fixture_store(self.repository, company_id=company, store_id=store)
             other_identity = {**self.identity, "candidate_id": "other-candidate"}
             other_task = self.task(other_identity, company_id=company, store_id=store)
             other_facts = self.repository.save_merchant_product_fact_report(
@@ -684,6 +698,10 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="jiejing-new-market-project-status-", ignore_cleanup_errors=True) as temp:
         repository = SaaSRepository(Path(temp) / "saas.sqlite")
+        create_fixture_store(
+            repository, company_id="company-new-market-project", store_id="store-new-market-project",
+            user_id="user-new-market-project",
+        )
         unbound_task = repository.create_task(
             company_id="company-new-market-project",
             store_id="store-new-market-project",
