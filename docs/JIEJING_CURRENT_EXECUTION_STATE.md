@@ -8,7 +8,7 @@
 
 用户最新要求（2026-09-06）：先把产品流程与现有结构核对清楚、确认可用，再优化官网和工作流的高级感；当前暂停视觉重设计，不改业务逻辑、产品结构、套餐或权限。明确移除自定义`jiejing-design-system`视觉规范，不用该规范限定之后的风格。意图存在重要歧义时先复述、逐项问清并给建议，代码可查的内容自主调查，已确认决定不反复询问。上一轮W1–W6/C1/C2及局部UI补丁已完成提交部署，不重做；当前缺的是同一商品登录后真实SaaS复验，而不是继续无边界重构。技能按任务选择，不以技能名称、模型等级或任意百分比保证成熟度、盈利或零漏洞。
 
-正常实现与方案选择已授权；本批主站正式部署已获准并完成，资金与eBay高风险动作仍需动作时确认。2026-09-06用户随后明确“允许”，批准旧ops仅前端、代理及API的SSH窄范围例外；代码同步已完成。最新“好的，继续”又明确批准运营端微信退款能力配置对齐，仅旧API的公开布尔覆盖及必要重启/代理刷新；不含真实收费、退款、订单provider查询，也不含主站、Worker、Vault、Cloudflared、DNS、私有密钥复制或共享数据库变更。W1–W6补丁已提交并部署；三项原有用户修改完整保留且未混入发布。
+正常实现与方案选择已授权；2026-09-06上一批商家验收修复主站部署已获准并完成，当前2026-09-07 Listing云保存批次尚未获准正式apply，资金与eBay高风险动作仍需动作时确认。2026-09-06用户随后明确“允许”，批准旧ops仅前端、代理及API的SSH窄范围例外；代码同步已完成。其后“好的，继续”又明确批准运营端微信退款能力配置对齐，仅旧API的公开布尔覆盖及必要重启/代理刷新；不含真实收费、退款、订单provider查询，也不含主站、Worker、Vault、Cloudflared、DNS、私有密钥复制或共享数据库变更。W1–W6补丁已提交并部署；三项原有用户修改完整保留且未混入发布。
 
 ## 精确续接点
 
@@ -40,10 +40,10 @@
 ## 当前下一步（不是重做部署）
 
 1. 本轮用户明确授权使用其提供的登录信息，已通过既有浏览器登录并完成同一`listing-project-0ef70f19c079b4261e82`的上线后页面复验：原文案、最近任务、已有概念图和真实额度/到期提示均已核对。不要再次为本次登录/页面复验而重复登录、OAuth、FAL、支付退款或发布。新文字生成仍未验收：账号试用已到期且无可用账号模型连接，不能静默续期或编造生成成功。
-2. 用户最新“你看着办……帮我推进”已授权推荐的手改Listing云端保存/跨设备恢复最小批次，不再重复询问同范围设计。合同/计划已提交`02b633e`；首批实现已提交`bec61e217b64f4f6935ccdfd70bcf8836ca857b2`，但新干净候选完整门禁223/227，不能部署。当前仅收口四项明确失败：旧测试适配与迁移检查接线已在主仓库修完待提交，最后的云GET空字段被误判为新手改已稳定复现、正做最窄修复及回归，见下节。产品结构/UI风格不变，十字段明确清空、完整身份隔离、CAS和幂等重试；不上传可信度标记、不覆盖AI报告、不调用模型/eBay。93f7a41上一发布不包含此功能；本批正式部署另需确认。
+2. 用户最新“你看着办……帮我推进”已授权推荐的手改Listing云端保存/跨设备恢复最小批次，不再重复询问同范围设计。合同/计划已提交`02b633e`；首批`bec61e2`完整门禁223/227不可部署，其四项失败已全部修复并提交`898210e9fc21561324dafdce420e845c012d7c72`。898的r2干净候选新227完整门禁、精确CI、绑定候选的PG14、独立核包及production dry-run现已全部通过；当前等待用户确认本批正式部署，见下节，不重跑这些已完成步骤。产品结构/UI风格不变，十字段明确清空、完整身份隔离、CAS和幂等重试；不上传可信度标记、不覆盖AI报告、不调用模型/eBay。线上仍93f7a41，不包含此云保存功能。获批后复核候选未漂移再apply该精确包，随后健康/隔离/运行身份与原平板支架项目的手改保存/刷新/跨设备恢复实操验收，不重新选品、生图、OAuth或执行资金/eBay动作。
 3. 待上述保存与合法文本生成可验后，继续原商品旅程到允许的发布前边界。现有素材为概念参考，真实来源/权利/事实及账号资格未满足时不得发布；不以新增样例回执冒充成功。视觉升级继续暂停，先完成真实可用的MVP闭环。
 
-## 2026-09-06 Listing 手改云保存（已提交，候选验证中，未部署）
+## 2026-09-06 Listing 手改云保存（验收与dry-run通过，等待部署确认）
 
 - 设计与分段计划：`docs/superpowers/specs/2026-09-06-listing-merchant-cloud-checkpoint-design.md`、`docs/superpowers/plans/2026-09-06-listing-merchant-cloud-checkpoint-plan.md`，提交`02b633e`。保持8个可见控件、10字段DTO；专用checkpoint head/revision表，不为每次保存建任务/AI报告。新增005迁移，001–004不变；原三项用户修改不纳入。
 - 实际本地浏览器输入已证自动保存/第二干净浏览器恢复/空值、慢POST后继续打字、初次GET单飞、断网15秒超时精确mutation重试、连续409、A→B→A及切账号迟到回包。后端真实HTTP+临时SQLite已证并发首次CAS/精确重放/租户店铺身份与viewer权限/事务故障回滚；这些不是生产商家旅程或真实PostgreSQL并发证明。
@@ -65,6 +65,12 @@
 - 当前唯一未确诊项是64：同冻结源码单独再跑18场景通过，但原失败仍有效。正在用带标签、可控响应闸门检验“云回执结构归一化被误判为商家新编辑”“云恢复/事实刷新覆盖”“测试过早读完成状态”，不盲加sleep/删断言/接受错误状态；必要产品修复须先稳定RED。最终修好后重新冻结源码、跑专项与真实PG、提交新干净候选及新227/精确CI；本批仍无部署授权。
 - 第64根因已通过真实本地UI与受控checkpoint GET闸门复现：生成期间GET仅补`keywords:''`、`risk_notes:''`，原始JSON快照比较便误判为新手改，提前走preserve分支；handler已结束、报告/任务存在但sourceMode仍旧。两次RED（session59227/30727），生成前/后释放GET的对照均正常；事实、prefill、输入与refresh代次未变，因此不是旧回包重新覆盖。已允许最窄修正：对Listing字段按实际内容稳定比较，保留缺title键回退与显式清空区别，不截断/改写内容，不削弱真实字段/事实/输入变化保护。原smoke须等真实完成并增加可控时序，不能加固定sleep或接受错误状态；正在实施与专项回归，尚未新提交/新候选。
 - 四项失败现已全部修复并独立复核，待本批修正提交：第64仅snapshot稳定十字段值，事实/prefill/输入比较原样保留；云26+事实35+相邻26合计87/87，原生成18场景与新确定竞态合计19/19，GET在生成前/中/后三个对照全通过。实际清空、替换、长文本尾差、品牌原文变化继续触发保护，不靠sleep或删来源断言。诊断证据`output/listing-generation-checkpoint-diagnosis-20260907.json`；临时探针已清理。最终app raw SHA=`49f442f0db76face491a37ef3b3e1df54cde06589451ae659251e05c42a45e48`，LF=`ec006a752eaf8fea75bde9922aaa89877cda7e11f39741f4067fbf501afe8b0a`，7引用family=`20260907-listing-cloud-checkpoint-v2`，CSS不变。接下来只显式提交这10路径（含本索引）、建立r2干净候选，再跑新227/精确CI与绑定候选Git的PG14，未授权生产apply。
+- 修正已独立提交并非force推送`898210e9fc21561324dafdce420e845c012d7c72`，tree=`0ed9237a5fc0fb0339ae794d5a899bdef670e67a`，仅10路径；三项原用户dirty SHA原样保留，迁移文件未再改。新候选=`C:\Users\57249\Documents\Codex\2026-09-07\jiejing-release-listing-checkpoint-r2`，完整227正在exec session=`68844`、Python PID=`18876`；新进度/报告位于该候选`output/jiejing-precloud-deployment-gate`，每项失败即时写`failures/NNN-key.json`，仍执行原门禁全部项、不改结果。旧bec完整失败证据保留，不能重跑或覆盖。898精确SHA普通CI run=`34082109776`已queued，未触发部署。PG runner已支持明确--source-root/--expected-commit，以候选Git/9源SHA前后稳定绑定；最终14尚待本次执行结果，不能沿用旧app的PG证据。
+- 898的精确SHA普通CI已完整通过：run=`34082109776`/job=`101619234439`，15/15步骤success；r2的`output/jiejing-production-deploy/exact-sha-ci.json` SHA=`9bc7fcd852a73c52b567617ab11d2f3bb2d45ce76494f1b07207f3b40fd09e74`。同一r2干净候选真实PostgreSQL17.11最终14/14通过，源commit/tree/clean及9SHA前后一致，source_stable=true；Windows UTC04:09:56.935954→04:10:16.401016，证据主仓库`output/jiejing-checkpoint-pg-20260907/checkpoint-run-88vgs9lr/evidence.json` SHA=`d85614644d5bf641549167683be5ea437616ca46250052364eda0a0bf50fb8dd`。PG已停、独立查询postgres.exe=0，无生产访问/安装/时区或服务修改。仍等待同898完整227终态，不能用CI/PG替代它。
+- r2完整227/227正式通过、失败0，exec68844 exit0、PID18876已结束；1566.13秒，UTC04:05:26.228247→04:31:32.337395，run_id=`f394ae56abc34caaa8b8c57c40d6a54a`，source_stable/release_eligible=true、secret_exposed=false。r2 `output/jiejing-precloud-deployment-gate/latest.json` SHA=`6cdd1f777fcc6f386d7d5a3c6072b1ca5dd968ec9ab6bba74f462bab06a592f2`；严格validator、fresh source capture、clean/hidden-flags与898/tree0ed全部核对通过。不得重跑此已完成门禁。现在仅按既有runbook打包、独立核验与production dry_run；尚未apply、未改变线上服务。未来正式启动005增加两表/ledger，应用回滚保留新增表和checkpoint数据，不执行数据库逆向删除。
+- r2新包及独立审计已通过：`output/jiejing-public-staging-bundle/jiejing-public-staging-20260907-043403.zip`，463文件，bundleSHA=`0bc0fe7c43289af2432da74d7184ea1149df3008cbaab3f2a9b736b3af327f6e`；同名manifest SHA=`0feb7ba06c51880e2a9fbe5719f46e3da082f433f89680875e8c2f0ae05aba6f`。逐ZIP成员与manifest/Git blob一致，456文本秘密扫描0命中；绑定同898的227/CI/PG证据逐项核验。r2 `output/jiejing-production-deploy/bundle-audit-20260907-043403.json` SHA=`654d3836644e88759a38df13a11d38a7d710e9ee7458bc519b387fc6ca76d538`。未变化的是production release apply脚本；`deploy/apply-staging-patch.sh`本批确实新增9行白名单/语法接线，两者不得混称。
+- production dry-run已通过，exec70668 exit0，UTC04:41:03.586264→04:42:28.463928；回执r2 `output/jiejing-production-deploy/dry-run-20260907-043403.json` SHA=`206cd8833ff2f5cf86b6b1a51ec1a6f9fa79c895781f9f471d59c075a3572056`。candidate_release_persisted/active_switched/private_env_normalization_required/planned/applied全false，stderr空、远端输出符合安全白名单，无秘密。原active=`20260906T074908Z-93f7a412ede7`。未apply、未执行005迁移、未重启或切换线上服务，不重跑dry-run来恢复上下文。
+- UTC04:41:21公网只读复核仍健康：health ok/deep ready、数据库/队列/worker ready；production/beta/can_accept_real_customers/public_charging_allowed=true，blocker/warning均0；全面写入false，不推断具体eBay账号资格。ops200、主站ops.html404；实际served app LF SHA=`150f23d4b73231cdcd7ca51e109bd44af25bb5f877a7f852a28154c774aad6dc`匹配原93版本，不是新ec006a版本。当前云保存尚未生产商家UI验收；现有模型试用到期、模拟商品事实/素材和账号限制仍是之后旅程的独立条件，不能因本批通过就称整条真实发布已完成。
 
 ## 2026-09-06 上线后同项目页面复验（已完成，无新生成）
 
