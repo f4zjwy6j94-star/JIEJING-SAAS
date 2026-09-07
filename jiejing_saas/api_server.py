@@ -614,6 +614,10 @@ _DATABASE_DEPENDENCY_SQLSTATES = frozenset(
 class JiejingSafeThreadingHTTPServer(ThreadingHTTPServer):
     """Emit a bounded event for unhandled handlers without request or exception details."""
 
+    # Queue a merchant refresh's parallel connections while accept resumes.
+    # This bounds pending connections, not handler threads or HTTP keepalive.
+    request_queue_size = 128
+
     def handle_error(self, request: Any, client_address: Any) -> None:
         event = {
             "event": "http_request_handler_error",

@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +19,7 @@ import urllib.request
 from contextlib import redirect_stderr
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -43,9 +45,66 @@ def find_free_port() -> int:
         return int(probe.getsockname()[1])
 
 
+def test_http_refresh_burst_accept_queue() -> str:
+    """Keep one refresh's HTTP requests queued until the accept loop can resume."""
+    from jiejing_saas.api_server import JiejingSafeThreadingHTTPServer, SaaSBackendHandler
+
+    class RefreshBurstHandler(SaaSBackendHandler):
+        settings = SimpleNamespace(is_production_like=False, cors_origin="")
+
+        def _handle_get(self) -> None:
+            self._write_json({"burst_request": self.path.rsplit("/", 1)[-1]})
+
+    server = JiejingSafeThreadingHTTPServer(("127.0.0.1", 0), RefreshBurstHandler)
+    clients: list[socket.socket] = []
+    server_thread: threading.Thread | None = None
+    burst_size = 16
+    try:
+        # Listening without starting serve_forever is the accept gate. No handler
+        # can drain the real kernel queue while this refresh burst is admitted.
+        # The timeout only bounds an unadmitted connection; elapsed time is not
+        # a performance assertion and accept scheduling cannot change the count.
+        for index in range(burst_size):
+            try:
+                client = socket.create_connection(server.server_address, timeout=2)
+                clients.append(client)
+                client.settimeout(5)
+                client.sendall(
+                    f"GET /refresh-burst/{index} HTTP/1.1\r\n"
+                    "Host: localhost\r\nConnection: close\r\n\r\n".encode("ascii")
+                )
+            except OSError as exc:
+                return (
+                    "HTTP accept queue must retain all 16 refresh requests before handlers resume: "
+                    f"admitted={len(clients)}/16, error={type(exc).__name__}"
+                )
+
+        server_thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
+        server_thread.start()
+        for index, client in enumerate(clients):
+            with http.client.HTTPResponse(client) as response:
+                response.begin()
+                body = json.loads(response.read().decode("utf-8"))
+                if response.status != 200 or body != {"burst_request": str(index)}:
+                    return "queued refresh requests must each receive their own complete JSON response"
+        return ""
+    finally:
+        for client in clients:
+            client.close()
+        if server_thread is not None:
+            server.shutdown()
+            server_thread.join(timeout=5)
+        server.server_close()
+
+
 def main() -> int:
     from jiejing_saas.api_server import SaaSBackendHandler
     from jiejing_saas.repository import SaaSRepository
+
+    if burst_error := test_http_refresh_burst_accept_queue():
+        return fail(burst_error)
 
     access_log_sentinel = "OAUTH_CONFIRMATION_LOG_SENTINEL"
     access_log_handler = object.__new__(SaaSBackendHandler)
