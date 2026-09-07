@@ -1301,6 +1301,10 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
     def test_frontend_product_fact_save_posts_identity_and_applies_the_server_packet(self) -> None:
         save_function = function_body(APP_JS, "saveSaasMerchantProductFacts")
         persist_function = function_body(APP_JS, "persistSaasMerchantProductFacts")
+        save_dependencies = [function_body(APP_JS, name) for name in (
+            "saasCanonicalJsonValue", "prepareSaasProductFactSaveAttempt",
+            "assertSaasProductFactSaveIsCurrent", "saasProductFactSaveFailureMessage",
+        )]
         context_function = function_body(APP_JS, "saasListingAiGenerationContextKey")
         invalidate_function = function_body(APP_JS, "invalidateSaasListingValidationForFactChange")
         epoch_declaration = next(
@@ -1330,6 +1334,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? value : null;",
                     "let capturedBody = null; let applied = false; let requestCount = 0;",
                     "const saasFetch = async (_path, options) => { requestCount += 1; capturedBody = JSON.parse(options.body); return {",
+                    "  is_current: true, current_fact_report_id: 'facts-a',",
                     "  listing_project_identity: identity,",
                     "  merchant_product_fact_packet: { product_name: 'Incense Burner', source_confirmed_facts: { material: 'Resin' }, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: [], blocked_by: [] },",
                     "  task: { task_id: 'task-a' }, report: { report_id: 'facts-a' },",
@@ -1339,6 +1344,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     context_function,
                     invalidate_function,
                     epoch_declaration,
+                    *save_dependencies,
                     save_function,
                     persist_function,
                     "(async () => { const first = saveSaasMerchantProductFacts(); const second = saveSaasMerchantProductFacts(); const busy = state.saasListingProductFactSaveStatus; await first; console.log(JSON.stringify({ capturedBody, applied, draft: state.saasListingComposerDraft, requestCount, samePromise: first === second, busy, savedStatus: state.saasListingProductFactSaveStatus, pendingCleared: state.saasListingProductFactSavePromise === null, renderStatuses })); })().catch((error) => { console.error(error); process.exit(1); });",
@@ -1358,6 +1364,10 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertIs(result.get("pendingCleared"), True)
         self.assertIn("saving", result.get("renderStatuses", []))
         self.assertEqual("saved", result.get("renderStatuses", [])[-1])
+        save_context = result.get("capturedBody", {}).get("save_context", {})
+        self.assertEqual("merchant_product_fact_save_v1", save_context.get("contract_version"))
+        self.assertEqual("", save_context.get("expected_fact_report_id"))
+        self.assertRegex(save_context.get("mutation_id", ""), r"^[A-Za-z0-9._:-]{8,160}$")
 
     def test_completed_vision_report_recovers_into_the_matching_existing_listing(self) -> None:
         restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
@@ -1454,6 +1464,60 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertEqual({}, packet.get("listing_copy"))
         self.assertEqual("backend_product_fact_restore", result.get("sourceMode"))
         self.assertEqual(identity["key"], result.get("activeMediaDraft"))
+
+    def test_saved_authenticated_fact_only_project_restores_without_inventing_a_listing(self) -> None:
+        dependencies = [function_body(APP_JS, name) for name in (
+            "saasNormalizeListingProjectIdentity", "saasListingProjectIdentityFromReport",
+            "saasCanonicalJsonValue", "restoreSaasListingComposerDraftFromBackendReports",
+        )]
+        result = run_node_json("\n".join([
+            "const identity = { key: 'manual-facts-only', source_report_id: '', candidate_id: '' };",
+            "const packet = { source: 'authenticated_merchant_request', product_name: 'Foldable Tablet Stand',",
+            "  source_confirmed_facts: {}, merchant_confirmed_facts: { product_name: 'Foldable Tablet Stand', material: 'Aluminum' },",
+            "  derived_listing_suggestions: {}, unknown_facts: ['sku'], listing_copy: { title: 'UNVERIFIED OLD TITLE', description: 'UNVERIFIED OLD DESCRIPTION' } };",
+            "const report = { report_id: 'facts-third-A', report_type: 'merchant.product_facts', status: 'saved',",
+            "  company_id: 'company-a', store_id: 'store-a', created_at: '2026-09-07T09:00:00Z',",
+            "  report: { product: packet.product_name, listing_project_identity: identity, merchant_product_fact_packet: packet } };",
+            "const state = { saasIdentity: { company_id: 'company-a', user_id: 'user-a' }, saasCompany: { company_id: 'company-a' },",
+            "  saasListingComposerDraft: null, saasListingSourceMode: '', activeMediaDraft: '', saasReports: [] };",
+            "const activeSaasStore = () => ({ store_id: 'store-a' });",
+            "const publicRuntimeText = (value = '') => String(value || '');",
+            "const saasTimestampMillis = (value) => Date.parse(value || '') || 0;",
+            "const saasListingDraftHasConcreteProduct = (draft) => Boolean(draft?.product || draft?.title);",
+            "const saasListingDraftFromReport = () => null;",
+            "const saasCurrentListingProjectIdentity = (draft = state.saasListingComposerDraft) => saasNormalizeListingProjectIdentity(draft?.listing_project_identity) || { key: '', source_report_id: '', candidate_id: '' };",
+            "const saasMarketCandidateMatchKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');",
+            "const saasListingComposerDraftFromText = (value) => ({ product: value, title: value, fields: { title: value, description: 'unverified seed', selling_points: 'unverified seed' }, publish_prefill: {} });",
+            "const applySaasMerchantProductFactPacketToDraft = (draft, facts) => ({ ...draft, merchant_product_fact_packet: facts });",
+            "const isLegacySampleMediaDraftKey = () => false;",
+            *dependencies,
+            "const output = {};",
+            "for (const variant of ['valid', 'not_saved', 'missing_identity', 'partial_identity', 'other_store', 'other_company']) {",
+            "  const candidate = JSON.parse(JSON.stringify(report));",
+            "  if (variant === 'not_saved') candidate.status = 'failed';",
+            "  if (variant === 'missing_identity') delete candidate.report.listing_project_identity;",
+            "  if (variant === 'partial_identity') candidate.report.listing_project_identity = { key: identity.key };",
+            "  if (variant === 'other_store') candidate.store_id = 'store-b';",
+            "  if (variant === 'other_company') candidate.company_id = 'company-b';",
+            "  state.saasReports = [candidate]; state.saasListingComposerDraft = { product: packet.product_name, listing_project_identity: identity };",
+            "  state.saasListingSourceMode = ''; state.activeMediaDraft = '';",
+            "  output[variant] = restoreSaasListingComposerDraftFromBackendReports({ reports: [candidate], preferBackendLatest: true, projectId: identity.key, restoreDetachedDraft: false });",
+            "}",
+            "console.log(JSON.stringify(output));",
+        ]))
+        restored = result.get("valid") or {}
+        self.assertEqual("Foldable Tablet Stand", restored.get("product"))
+        self.assertEqual("Aluminum", restored.get("merchant_product_fact_packet", {}).get("merchant_confirmed_facts", {}).get("material"))
+        self.assertEqual("facts-third-A", restored.get("source_product_fact_report_id"))
+        self.assertEqual({"key": "manual-facts-only", "source_report_id": "", "candidate_id": ""}, restored.get("listing_project_identity"))
+        self.assertIs(restored.get("model_generated"), False)
+        self.assertIs(restored.get("buyer_copy_requires_validated_listing_generation"), True)
+        self.assertEqual("", restored.get("fields", {}).get("title"))
+        self.assertEqual("", restored.get("fields", {}).get("description"))
+        self.assertEqual("", restored.get("fields", {}).get("selling_points"))
+        self.assertEqual({}, restored.get("merchant_product_fact_packet", {}).get("listing_copy"))
+        for variant in ("not_saved", "missing_identity", "partial_identity", "other_store", "other_company"):
+            self.assertIsNone(result.get(variant), variant)
 
     def test_product_vision_chat_gets_a_longer_timeout_without_slowing_text_chat(self) -> None:
         request_command_snapshot = function_body(APP_JS, "sanitizeSaasAiCeoRequestCommandSnapshot")

@@ -194,6 +194,8 @@ from .repository import (
     ConfirmationDecisionConflict,
     HIGH_RISK_ACTIONS,
     OAuthPlanExactApprovalError,
+    ProductFactSaveConflict,
+    ProductFactSaveValidationError,
     SaaSRepository,
     TeamSeatQuotaExceeded,
     ai_ceo_market_artifact_eligible,
@@ -859,9 +861,9 @@ def _reconcile_media_asset_job_review_readiness(
     company_id: str,
     media_job: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Repair the durable state after credit settlement succeeded but the final media update failed."""
+    """Repair a stranded media state only from its authoritative credit outcome."""
 
-    if not isinstance(media_job, dict) or media_job.get("status") != "provider_returned":
+    if not isinstance(media_job, dict) or media_job.get("status") not in {"running", "provider_returned"}:
         return media_job
     manifest = media_job.get("asset_manifest") if isinstance(media_job.get("asset_manifest"), list) else []
     validation = media_job.get("asset_manifest_validation") if isinstance(media_job.get("asset_manifest_validation"), dict) else {}
@@ -883,12 +885,18 @@ def _reconcile_media_asset_job_review_readiness(
             company_id=company_id,
             reservation_id=reservation_id,
         )
+        if isinstance(terminal, dict) and terminal.get("operation_type") == "release":
+            return repository.reconcile_released_media_asset_job(
+                company_id=company_id, media_job_id=str(media_job.get("media_job_id") or ""),
+            )
         if not (
             isinstance(terminal, dict)
             and terminal.get("operation_type") == "settle"
             and terminal.get("status") in {"completed", "settled"}
         ):
             return media_job
+    if media_job.get("status") != "provider_returned":
+        return media_job
     if not (
         media_job.get("live_provider_called") is True
         and manifest
@@ -9944,13 +9952,21 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not packet.get("product_name"):
                 self._send_error(HTTPStatus.BAD_REQUEST, "商品名称还没有确认，不能保存商品资料。")
                 return
-            response_payload = self.repository.save_merchant_product_fact_checkpoint(
-                company_id=identity["company_id"],
-                store_id=store_id,
-                user_id=identity["user_id"],
-                packet=packet,
-                listing_project_identity=listing_project_identity,
-            )
+            try:
+                response_payload = self.repository.save_merchant_product_fact_checkpoint(
+                    company_id=identity["company_id"], store_id=store_id, user_id=identity["user_id"],
+                    packet=packet, listing_project_identity=listing_project_identity,
+                    **({"save_context": body["save_context"]} if "save_context" in body else {}),
+                )
+            except ProductFactSaveValidationError:
+                self._send_json({"error_code": "product_fact_invalid_save_context", "secret_exposed": False}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except ProductFactSaveConflict as exc:
+                self._send_json(exc.payload, status=HTTPStatus.CONFLICT)
+                return
+            except Exception:
+                self._send_json({"error_code": "product_fact_storage_unavailable", "secret_exposed": False}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
             self._send_json(response_payload, status=HTTPStatus.OK if response_payload["idempotent_replay"] else HTTPStatus.CREATED)
             return
 

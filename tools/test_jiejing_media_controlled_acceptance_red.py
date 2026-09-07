@@ -21,7 +21,7 @@ import textwrap
 import unittest
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
@@ -1083,6 +1083,259 @@ class MediaSettlementContractTest(unittest.TestCase):
             media_job=repaired,
         )
         self.assertEqual("waiting_review", second.get("status"))
+
+    def _released_failed_media_job(self, *, status: str = "provider_returned") -> dict[str, Any]:
+        inputs = self._canonical_inputs()
+        _, job_body = self._reservation(inputs=inputs)
+        store = self.repository.create_store(
+            company_id=self.company_id, user_id=self.user_id,
+            payload={"platform": "ebay", "store_name": "released-media-recovery", "marketplace": "EBAY_US"},
+        )
+        task = self.repository.create_task(
+            company_id=self.company_id, store_id=store["store_id"], user_id=self.user_id,
+            task_type="provider_job", title="Released media recovery",
+            input_data={"provider_job_key": "media.asset_generation"},
+        )
+        media = self.repository.create_media_asset_job(
+            company_id=self.company_id, store_id=store["store_id"], task_id=task["task_id"],
+            user_id=self.user_id, provider_job_key="media.asset_generation",
+            idempotency_key=job_body["idempotency_key"],
+            job_spec={**job_body, "media_credits": {**job_body["media_credits"], "enforcement_enabled": True}},
+        )
+        job_body.update({"kind": "provider_job", "media_job_id": media["media_job_id"]})
+        queue = self.repository.create_queue_job(
+            company_id=self.company_id, task_id=task["task_id"], job_data=job_body, publish=False,
+        )
+        self.repository.update_media_asset_job(
+            company_id=self.company_id, media_job_id=media["media_job_id"], status=status,
+            queue_job_id=queue["job_id"], provider_output=self._canonical_provider_output(inputs=inputs),
+            error_reason="media_credit_settlement_pending",
+        )
+        self.worker._release_media_credit_reservation(task=task, job_body=job_body, reason="settlement_write_failed")
+        self.repository.update_task_status(task_id=task["task_id"], company_id=self.company_id, status="failed")
+        self.repository.update_queue_job(job_id=queue["job_id"], company_id=self.company_id, status="failed")
+        return self.repository.get_media_asset_job(company_id=self.company_id, media_job_id=media["media_job_id"]) or {}
+
+    def test_released_failed_media_job_becomes_retryable_without_restoring_review(self) -> None:
+        media = self._released_failed_media_job()
+        before_ledger = self.repository.list_media_credit_ledger(company_id=self.company_id, limit=100)
+        before_account = self.repository.get_media_credit_account(company_id=self.company_id)
+        repaired = _reconcile_media_asset_job_review_readiness(
+            self.repository, company_id=self.company_id, media_job=media,
+        )
+        self.assertEqual("needs_rework", repaired.get("status"))
+        self.assertEqual("needs_rework", repaired["asset_review"]["listing_use_status"])
+        self.assertTrue(all(asset["listing_use_status"] == "needs_rework" for asset in repaired["asset_manifest"]))
+        second = _reconcile_media_asset_job_review_readiness(
+            self.repository, company_id=self.company_id, media_job=media,
+        )
+        self.assertEqual(repaired, second)
+        self.assertEqual(before_ledger, self.repository.list_media_credit_ledger(company_id=self.company_id, limit=100))
+        self.assertEqual(before_account, self.repository.get_media_credit_account(company_id=self.company_id))
+        self.assertEqual(1, len(self.repository.list_queue_jobs_for_task(company_id=self.company_id, task_id=media["task_id"])))
+
+    @contextmanager
+    def _released_media_http(self) -> Iterator[tuple[str, str]]:
+        safe_root = Path(self.temp.name)
+        with _temporary_safe_process_env(
+            db_path=self.repository.db_path, runtime_db_path=safe_root / "runtime.sqlite", output_root=safe_root / "output",
+        ), patch.dict(os.environ, {"JIEJING_MEDIA_CREDIT_ENFORCEMENT_ENABLED": "true"}):
+            settings = SaaSSettings.from_env(
+                db_path=self.repository.db_path, runtime_db_path=safe_root / "runtime.sqlite",
+                output_root=safe_root / "output", host="127.0.0.1", port=0,
+            )
+            sessions = SessionManager(secret="released-media-repair-local-http-secret")
+
+            class TestHandler(SaaSBackendHandler):
+                def log_message(self, _format: str, *args: object) -> None:
+                    return
+
+            TestHandler.repository = self.repository
+            TestHandler.settings = settings
+            TestHandler.sessions = sessions
+            TestHandler.secret_store_boundary = SecretStoreBoundary(settings)
+            TestHandler.queue_worker = self.worker
+            server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                yield f"http://127.0.0.1:{server.server_address[1]}", sessions.create_token(
+                    user_id=self.user_id, company_id=self.company_id, email=self.email,
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+
+    def test_released_retry_child_can_be_read_repaired_and_explicitly_retried_again(self) -> None:
+        media = self._released_failed_media_job()
+        with self._released_media_http() as (base, token):
+            def get_media(media_id: str) -> dict[str, Any]:
+                request = urllib.request.Request(
+                    f"{base}/media-asset-jobs/{media_id}", headers={"Authorization": f"Bearer {token}"},
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    self.assertEqual(200, response.status)
+                    return json.loads(response.read())["media_asset_job"]
+
+            repaired = get_media(media["media_job_id"])
+            self.assertEqual("needs_rework", repaired["status"])
+            review_status, _ = _post_local(base, f"/media-asset-jobs/{media['media_job_id']}/review", {
+                "decision": "approve_for_listing_draft",
+                "confirmations": {"fact_consistency_confirmed": True, "commercial_rights_confirmed": True, "platform_rules_checked": True},
+            }, token)
+            self.assertEqual(422, review_status)
+            request_body = {"reason": "explicit merchant retry", "run_mode": "queued"}
+            status, response = _post_local(base, f"/media-asset-jobs/{media['media_job_id']}/retry", request_body, token)
+            self.assertEqual(202, status, response)
+            child = response["media_asset_job"]
+            self.assertEqual(2, child["asset_version"]["version"])
+            self.assertEqual("queued", child["status"])
+            self.assertFalse(child["live_provider_called"])
+            replay_status, replay = _post_local(base, f"/media-asset-jobs/{media['media_job_id']}/retry", request_body, token)
+            self.assertEqual(202, replay_status, replay)
+            self.assertEqual(child["media_job_id"], replay["media_asset_job"]["media_job_id"])
+            queue = self.repository.get_queue_job(company_id=self.company_id, job_id=child["queue_job_id"])
+            task = self.repository.get_task(company_id=self.company_id, task_id=child["task_id"])
+            self.repository.update_media_asset_job(
+                company_id=self.company_id, media_job_id=child["media_job_id"], status="provider_returned",
+                provider_output=self._canonical_provider_output(inputs=queue["job"]["inputs"]),
+            )
+            self.worker._release_media_credit_reservation(task=task, job_body=queue["job"], reason="settlement_write_failed")
+            self.repository.update_task_status(company_id=self.company_id, task_id=child["task_id"], status="failed")
+            self.repository.update_queue_job(company_id=self.company_id, job_id=child["queue_job_id"], status="failed")
+            reserve_id = queue["job"]["media_credits"]["reservation"]["ledger_entry"]["ledger_id"]
+            for wrong_field in ("parent_media_job_id", "version"):
+                with self.subTest(rework_association=wrong_field), closing(sqlite3.connect(self.repository.db_path)) as conn, conn:
+                    original_json = conn.execute("select ledger_json from media_credit_ledger where ledger_id = ?", (reserve_id,)).fetchone()[0]
+                    bad_payload = json.loads(original_json)
+                    bad_payload["details"][wrong_field] = "unrelated"
+                    conn.execute("update media_credit_ledger set ledger_json = ? where ledger_id = ?", (json.dumps(bad_payload), reserve_id))
+                    conn.commit()
+                    try:
+                        self.assertEqual("provider_returned", get_media(child["media_job_id"])["status"])
+                    finally:
+                        conn.execute("update media_credit_ledger set ledger_json = ? where ledger_id = ?", (original_json, reserve_id))
+            before = self.repository.list_media_credit_ledger(company_id=self.company_id, limit=100)
+            recovered_child = get_media(child["media_job_id"])
+            self.assertEqual("needs_rework", recovered_child["status"])
+            self.assertEqual(recovered_child, get_media(child["media_job_id"]))
+            self.assertEqual(before, self.repository.list_media_credit_ledger(company_id=self.company_id, limit=100))
+            status, retried = _post_local(base, f"/media-asset-jobs/{child['media_job_id']}/retry", request_body, token)
+            self.assertEqual(202, status, retried)
+            self.assertEqual(3, retried["media_asset_job"]["asset_version"]["version"])
+            self.assertFalse(retried["media_asset_job"]["live_provider_called"])
+
+    def test_released_repair_rejects_active_or_mismatched_authority(self) -> None:
+        cases = (
+            "queue_queued", "queue_preparing", "queue_dispatch_uncertain", "task_queued", "task_running",
+            "queue_media", "queue_reservation", "queue_key", "queue_provider", "queue_task", "task_store",
+            "reserve_reference", "terminal_reference", "settled_terminal", "unreleased_reserve", "missing_terminal",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                media = self._released_failed_media_job()
+                credits = media["job"]["job_spec"]["media_credits"]
+                reservation_id = credits["reservation"]["ledger_entry"]["ledger_id"]
+                queue = self.repository.get_queue_job(company_id=self.company_id, job_id=media["queue_job_id"])
+                with closing(sqlite3.connect(self.repository.db_path)) as conn, conn:
+                    if case.startswith("queue_") and case[6:] in {"queued", "preparing", "dispatch_uncertain"}:
+                        conn.execute("update queue_jobs set status = ? where job_id = ?", (case[6:], media["queue_job_id"]))
+                    elif case in {"task_queued", "task_running"}:
+                        conn.execute("update tasks set status = ? where task_id = ?", (case[5:], media["task_id"]))
+                    elif case in {"queue_media", "queue_reservation", "queue_key", "queue_provider"}:
+                        queued = queue["job"]
+                        if case == "queue_reservation":
+                            queued["media_credits"]["reservation"]["ledger_entry"]["ledger_id"] = "unrelated-reservation"
+                        else:
+                            key = {"queue_media": "media_job_id", "queue_key": "idempotency_key", "queue_provider": "provider_job_key"}[case]
+                            queued[key] = "unrelated"
+                        conn.execute("update queue_jobs set job_json = ? where job_id = ?", (json.dumps(queued), media["queue_job_id"]))
+                    elif case == "queue_task":
+                        conn.execute("update queue_jobs set task_id = 'unrelated-task' where job_id = ?", (media["queue_job_id"],))
+                    elif case == "task_store":
+                        conn.execute("update tasks set store_id = 'unrelated-store' where task_id = ?", (media["task_id"],))
+                    elif case == "reserve_reference":
+                        conn.execute("update media_credit_ledger set reference_id = 'unrelated' where ledger_id = ?", (reservation_id,))
+                    elif case == "terminal_reference":
+                        conn.execute("update media_credit_ledger set reference_id = 'unrelated' where reservation_id = ?", (reservation_id,))
+                    elif case == "settled_terminal":
+                        conn.execute("update media_credit_ledger set operation_type = 'settle' where reservation_id = ?", (reservation_id,))
+                    elif case == "unreleased_reserve":
+                        conn.execute("update media_credit_ledger set status = 'reserved' where ledger_id = ?", (reservation_id,))
+                    elif case == "missing_terminal":
+                        conn.execute("delete from media_credit_ledger where reservation_id = ?", (reservation_id,))
+                ledger = self.repository.list_media_credit_ledger(company_id=self.company_id, limit=100)
+                # Direct repository interface must enforce the same boundary even
+                # when the API's early terminal filter is not involved.
+                repaired = self.repository.reconcile_released_media_asset_job(
+                    company_id=self.company_id, media_job_id=media["media_job_id"],
+                )
+                self.assertEqual(media, repaired)
+                self.assertEqual(ledger, self.repository.list_media_credit_ledger(company_id=self.company_id, limit=100))
+
+    def test_released_running_job_recovers_but_stale_reads_cannot_overwrite_new_states(self) -> None:
+        media = self._released_failed_media_job(status="running")
+        repaired = _reconcile_media_asset_job_review_readiness(self.repository, company_id=self.company_id, media_job=media)
+        self.assertEqual("needs_rework", repaired["status"])
+        for status in ("queued", "waiting_review", "approved_for_listing", "validation_failed"):
+            with self.subTest(status=status):
+                current = self.repository.update_media_asset_job(company_id=self.company_id, media_job_id=media["media_job_id"], status=status)
+                self.assertEqual(current, _reconcile_media_asset_job_review_readiness(self.repository, company_id=self.company_id, media_job=media))
+        self.assertIsNone(self.repository.reconcile_released_media_asset_job(company_id="unrelated-company", media_job_id=media["media_job_id"]))
+
+    def test_released_repair_does_not_overwrite_a_queue_retry_committed_while_waiting_for_lock(self) -> None:
+        media = self._released_failed_media_job()
+        # Delay the read-repair at the real SQLite writer lock, not at a mocked
+        # permission/ledger method. The competing task transition commits first.
+        lock_requested, allow_lock, done = threading.Event(), threading.Event(), threading.Event()
+        results: list[Any] = []
+        errors: list[BaseException] = []
+        real_connect = sqlite3.connect
+
+        def observed_connection(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+            connection = real_connect(*args, **kwargs)
+
+            def before_statement(statement: str) -> None:
+                if statement.strip().lower() == "begin immediate":
+                    lock_requested.set()
+                    allow_lock.wait(10)
+
+            connection.set_trace_callback(before_statement)
+            return connection
+
+        def repair() -> None:
+            try:
+                results.append(_reconcile_media_asset_job_review_readiness(self.repository, company_id=self.company_id, media_job=media))
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        with closing(sqlite3.connect(self.repository.db_path)) as conn, conn:
+            # Observe only the real DB driver's lock request; all queries and
+            # domain decisions remain real. No timing threshold is the oracle.
+            with patch("jiejing_saas.repository.sqlite3.connect", side_effect=observed_connection):
+                thread = threading.Thread(target=repair)
+                thread.start()
+                try:
+                    self.assertTrue(lock_requested.wait(5))
+                    conn.execute("begin immediate")
+                    conn.execute("update tasks set status = 'queued' where task_id = ?", (media["task_id"],))
+                    self.assertFalse(done.is_set())
+                finally:
+                    conn.commit()
+                    allow_lock.set()
+                    thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(errors, errors)
+        self.assertEqual([media], results)
+        # The real retry API also creates another queue while leaving the old
+        # failed queue untouched. That new queue alone must prevent recovery.
+        self.repository.retry_queue_job(company_id=self.company_id, job_id=media["queue_job_id"], user_id=self.user_id)
+        self.repository.update_task_status(company_id=self.company_id, task_id=media["task_id"], status="failed")
+        self.assertEqual(media, _reconcile_media_asset_job_review_readiness(self.repository, company_id=self.company_id, media_job=media))
 
     def test_queue_setup_failure_at_every_stage_releases_once_and_never_leaves_claimable_work(self) -> None:
         failure_methods = (

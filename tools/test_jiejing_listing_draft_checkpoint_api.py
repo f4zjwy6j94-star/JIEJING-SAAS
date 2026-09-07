@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import gc
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import socket
@@ -62,6 +64,9 @@ class CheckpointHTTPTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.process.terminate()
         cls.process.wait(timeout=10)
+        # Independent repository-writer cases use real sqlite connections whose
+        # context exits commit but whose driver objects may await collection.
+        gc.collect()
         cls.directory.cleanup()
 
     @classmethod
@@ -94,6 +99,8 @@ class CheckpointHTTPTests(unittest.TestCase):
         status, facts = self.request(f"/stores/{self.store_id}/product-facts", method="POST", body=self.fact_body)
         self.assertEqual(status, 201)
         self.base_report_id = facts["report"]["report_id"]
+        self.company_id = facts["task"]["company_id"]
+        self.user_id = facts["task"]["user_id"]
         self.body = {"contract_version": "listing_merchant_edit_v1", "listing_project_identity": self.identity,
                      "base_report_id": self.base_report_id, "expected_revision": 0,
                      "mutation_id": str(uuid.uuid4()), "fields": {key: "" for key in FIELD_KEYS},
@@ -161,6 +168,279 @@ class CheckpointHTTPTests(unittest.TestCase):
         self.assertEqual(read["current_revision"], 1)
         self.assertEqual(self.request("/tasks")[1], before_tasks)
         self.assertEqual(self.request("/reports")[1], before_reports)
+
+    def fact_action(self, material, expected, *, mutation=None, identity=None):
+        body = copy.deepcopy(self.fact_body)
+        body["listing_project_identity"] = identity or self.identity
+        body["merchant_product_fact_packet"]["merchant_confirmed_facts"]["material"] = material
+        body["save_context"] = {"contract_version": "merchant_product_fact_save_v1",
+                                "mutation_id": mutation or str(uuid.uuid4()),
+                                "expected_fact_report_id": expected}
+        return body
+
+    def test_fact_actions_a_b_a_create_a_new_authoritative_report(self):
+        path = f"/stores/{self.store_id}/product-facts"
+        before_a = self.base_report_id
+        status, b = self.request(path, method="POST", body=self.fact_action("Wood", before_a))
+        self.assertEqual(status, 201)
+        status, a = self.request(path, method="POST", body=self.fact_action("Aluminum", b["report"]["report_id"]))
+        self.assertEqual(status, 201, "an intentional A after B is a new action, not the first A's delivery retry")
+        self.assertNotEqual(before_a, a["report"]["report_id"])
+        self.assertEqual(a["report"]["report_id"], self.request(self.path + self.query)[1]["current_base_report_id"])
+        self.assertTrue(a["is_current"])
+        self.assertEqual(a["current_fact_report_id"], a["report"]["report_id"])
+
+    def test_legacy_fact_retry_only_replays_current_and_cannot_overwrite_modern_scope(self):
+        path = f"/stores/{self.store_id}/product-facts"
+        self.assertEqual(self.request(path, method="POST", body=self.fact_body)[0], 200)
+        legacy_b = copy.deepcopy(self.fact_body)
+        legacy_b["merchant_product_fact_packet"]["merchant_confirmed_facts"]["material"] = "Wood"
+        status, b = self.request(path, method="POST", body=legacy_b)
+        self.assertEqual(status, 201)
+        before_reports = self.request("/reports")[1]
+        status, stale = self.request(path, method="POST", body=self.fact_body)
+        self.assertEqual(status, 409)
+        self.assertEqual(stale["error_code"], "product_fact_client_upgrade_required")
+        self.assertEqual(self.request("/reports")[1], before_reports)
+        modern = self.fact_action("Wood", b["report"]["report_id"])
+        status, modern_b = self.request(path, method="POST", body=modern)
+        self.assertEqual(status, 201)
+        self.assertEqual(self.request(path, method="POST", body=legacy_b)[0], 409)
+        # A later independent vision-style fact report must not erase the scope's
+        # historical modern-client protection.
+        vision = self.report_fixture("later_vision", "merchant.product_facts", "2100-01-01T00:00:00+00:00")
+        status, rejected = self.request(path, method="POST", body=legacy_b)
+        self.assertEqual(status, 409)
+        self.assertEqual(rejected["current_fact_report_id"], vision)
+        self.assertNotEqual(vision, modern_b["report"]["report_id"])
+
+    def test_old_fact_action_replay_returns_original_receipt_without_advancing_current(self):
+        path = f"/stores/{self.store_id}/product-facts"
+        action = self.fact_action("Wood", self.base_report_id)
+        status, original = self.request(path, method="POST", body=action)
+        self.assertEqual(status, 201)
+        status, later = self.request(path, method="POST", body=self.fact_action("Steel", original["report"]["report_id"]))
+        self.assertEqual(status, 201)
+        before_tasks, before_reports = self.request("/tasks")[1], self.request("/reports")[1]
+        status, replay = self.request(path, method="POST", body=action)
+        self.assertEqual(status, 200)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertFalse(replay["is_current"])
+        self.assertEqual(replay["task"], original["task"])
+        self.assertEqual(replay["report"], original["report"])
+        self.assertEqual(replay["current_fact_report_id"], later["report"]["report_id"])
+        self.assertEqual(replay["current_fact_report"], later["report"])
+        self.assertEqual(self.request(self.path + self.query)[1]["current_base_report_id"], later["report"]["report_id"])
+        for field in ("packet", "expected"):
+            changed = copy.deepcopy(action)
+            if field == "packet":
+                changed["merchant_product_fact_packet"]["merchant_confirmed_facts"]["material"] = "Plastic"
+            else:
+                changed["save_context"]["expected_fact_report_id"] = later["report"]["report_id"]
+            status, conflict = self.request(path, method="POST", body=changed)
+            self.assertEqual(status, 409)
+            self.assertEqual(conflict["error_code"], "product_fact_mutation_conflict")
+        self.assertEqual(self.request("/tasks")[1], before_tasks)
+        self.assertEqual(self.request("/reports")[1], before_reports)
+
+    def test_fact_action_concurrency_and_duplicate_delivery_are_serialized(self):
+        path = f"/stores/{self.store_id}/product-facts"
+        actions = [self.fact_action(material, self.base_report_id) for material in ("Wood", "Steel")]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda body: self.request(path, method="POST", body=body), actions))
+        self.assertEqual(sorted(status for status, _ in results), [201, 409])
+        winner = next(body for status, body in results if status == 201)
+        loser = next(body for status, body in results if status == 409)
+        self.assertEqual(loser["error_code"], "product_fact_version_conflict")
+        self.assertEqual(loser["current_fact_report"], winner["report"])
+        action = self.fact_action("Aluminum", winner["report"]["report_id"])
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results = list(pool.map(lambda _: self.request(path, method="POST", body=action), range(3)))
+        self.assertEqual(sorted(status for status, _ in results), [200, 200, 201])
+        self.assertEqual(len({body["report"]["report_id"] for _, body in results}), 1)
+        self.assertEqual(len({body["task"]["task_id"] for _, body in results}), 1)
+
+    def test_invalid_fact_save_context_does_not_create_records(self):
+        path = f"/stores/{self.store_id}/product-facts"
+        valid = self.fact_action("Wood", self.base_report_id)
+        contexts = [None, [], "legacy", {}, {**valid["save_context"], "contract_version": "other"},
+                    {**valid["save_context"], "unknown": True}]
+        for field, values in (("mutation_id", (None, True, 123, "short", "x" * 161, "bad/id--", "标识123456")),
+                              ("expected_fact_report_id", (None, 123, False, [], "x" * 161, "bad/id"))):
+            contexts.extend({**valid["save_context"], field: value} for value in values)
+        before_tasks, before_reports = self.request("/tasks")[1], self.request("/reports")[1]
+        for index, context in enumerate(contexts):
+            with self.subTest(context=index):
+                status, error = self.request(path, method="POST", body={**valid, "save_context": context})
+                self.assertEqual(status, 400)
+                self.assertEqual(error["error_code"], "product_fact_invalid_save_context")
+        self.assertEqual(self.request("/tasks")[1], before_tasks)
+        self.assertEqual(self.request("/reports")[1], before_reports)
+        self.assertEqual(self.request(path, method="POST", body=valid)[0], 201)
+
+    def test_fact_action_scopes_and_user_fingerprint_do_not_leak_or_alias(self):
+        path = f"/stores/{self.store_id}/product-facts"
+        action = self.fact_action("Wood", self.base_report_id)
+        _, saved = self.request(path, method="POST", body=action)
+        report_ids = {saved["report"]["report_id"]}
+        for anchor in ("key", "source_report_id", "candidate_id"):
+            scoped = copy.deepcopy(action)
+            scoped["listing_project_identity"][anchor] += "other"
+            scoped["save_context"]["expected_fact_report_id"] = ""
+            status, receipt = self.request(path, method="POST", body=scoped)
+            self.assertEqual(status, 201)
+            self.assertEqual(receipt["listing_project_identity"], scoped["listing_project_identity"])
+            report_ids.add(receipt["report"]["report_id"])
+        self.assertEqual(len(report_ids), 4)
+        _, store = self.request("/stores", method="POST", body={"platform": "ebay", "store_name": "Fact scope other", "marketplace": "EBAY_US"})
+        scoped = copy.deepcopy(action)
+        scoped["save_context"]["expected_fact_report_id"] = ""
+        status, other_store = self.request(f"/stores/{store['store']['store_id']}/product-facts", method="POST", body=scoped)
+        self.assertEqual(status, 201)
+        self.assertNotIn(other_store["report"]["report_id"], report_ids)
+        password = "local-fact-user-fixture-pass"
+        email = "fact-other-" + uuid.uuid4().hex + "@local.invalid"
+        status, user = self.request("/auth/register", method="POST", token="", body={
+            "email": email, "password": password, "company_name": "Other fact tenant"})
+        self.assertEqual(status, 201)
+        status, forbidden = self.request(path, method="POST", body=action, token=user["token"])
+        self.assertEqual(status, 404)
+        self.assertNotIn(saved["report"]["report_id"], json.dumps(forbidden))
+        # Synthetic membership at the DB boundary; the subsequent login and
+        # request still run real authentication and create_task permission checks.
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+            conn.execute("insert into team_members(company_id,user_id,role,created_at) values (?,?,'admin',?)",
+                         (self.company_id, user["user"]["user_id"], "2026-09-07T00:00:00+00:00"))
+            conn.execute("update users set default_company_id = ? where user_id = ?", (self.company_id, user["user"]["user_id"]))
+        status, login = self.request("/auth/login", method="POST", token="", body={"email": email, "password": password})
+        self.assertEqual(status, 200)
+        status, conflict = self.request(path, method="POST", body=action, token=login["token"])
+        self.assertEqual(status, 409)
+        self.assertEqual(conflict["error_code"], "product_fact_mutation_conflict")
+
+    def test_legacy_fact_digest_binds_all_identity_anchors(self):
+        path = f"/stores/{self.store_id}/product-facts"
+        for anchor in ("source_report_id", "candidate_id"):
+            changed = copy.deepcopy(self.fact_body)
+            changed["listing_project_identity"][anchor] = "legacy-other-anchor"
+            status, saved = self.request(path, method="POST", body=changed)
+            self.assertEqual(status, 201)
+            self.assertNotEqual(saved["report"]["report_id"], self.base_report_id)
+            self.assertEqual(saved["listing_project_identity"], changed["listing_project_identity"])
+            self.assertEqual(self.request(path, method="POST", body=changed)[0], 200)
+
+    def test_new_fact_report_is_ordered_after_same_millisecond_primary_base(self):
+        path = f"/stores/{self.store_id}/product-facts"
+        previous_time = "2100-01-01T00:00:00.123456+00:00"
+        previous = self.report_fixture("future_listing", "listing.package", previous_time)
+        self.report_fixture("future_research", "ai_ceo.market_research", "2200-01-01T00:00:00+00:00")
+        status, saved = self.request(path, method="POST", body=self.fact_action("Wood", self.base_report_id))
+        self.assertEqual(status, 201)
+        created = datetime.fromisoformat(saved["report"]["created_at"])
+        self.assertGreaterEqual(created - datetime.fromisoformat(previous_time), timedelta(milliseconds=1))
+        self.assertEqual(created.year, 2100, "research fallback must not displace a primary fact/Listing base")
+        self.assertEqual(self.request(self.path + self.query)[1]["current_base_report_id"], saved["report"]["report_id"])
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn:
+            self.assertEqual(conn.execute("select created_at from reports where report_id = ?", (previous,)).fetchone()[0], previous_time)
+            self.assertEqual(conn.execute("select created_at from reports where report_id = ?", (saved["report"]["report_id"],)).fetchone()[0], saved["report"]["created_at"])
+        status, next_saved = self.request(path, method="POST", body=self.fact_action("Steel", saved["report"]["report_id"]))
+        self.assertEqual(status, 201)
+        self.assertGreaterEqual(datetime.fromisoformat(next_saved["report"]["created_at"]) - created, timedelta(milliseconds=1))
+
+    def test_incomplete_report_identity_is_not_an_empty_anchor_fact_scope(self):
+        self.report_fixture("incomplete_fact", "merchant.product_facts", "2200-01-01T00:00:00+00:00",
+                            identity={"key": self.identity["key"]})
+        status, saved = self.request(f"/stores/{self.store_id}/product-facts", method="POST",
+                                     body=self.fact_action("Wood", self.base_report_id))
+        self.assertEqual(status, 201, "missing report anchors are not the same identity as explicit empty anchors")
+        self.assertLess(datetime.fromisoformat(saved["report"]["created_at"]).year, 2200)
+
+    def test_mixed_offset_primary_base_does_not_hide_a_newer_fact_action(self):
+        previous_time = "2100-01-01T08:00:00.123456+08:00"
+        old_id = self.report_fixture("offset_listing", "listing.package", previous_time)
+        status, saved = self.request(f"/stores/{self.store_id}/product-facts", method="POST",
+                                     body=self.fact_action("Wood", self.base_report_id))
+        self.assertEqual(status, 201)
+        self.assertGreaterEqual(datetime.fromisoformat(saved["report"]["created_at"]) - datetime.fromisoformat(previous_time), timedelta(milliseconds=1))
+        self.assertEqual(self.request(self.path + self.query)[1]["current_base_report_id"], saved["report"]["report_id"])
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn:
+            self.assertEqual(conn.execute("select created_at from reports where report_id=?", (old_id,)).fetchone()[0], previous_time)
+
+    def test_independent_fact_report_writer_updates_authority_without_a_model_call(self):
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from jiejing_saas.repository import SaaSRepository
+        repository = SaaSRepository(self.root / "saas.sqlite", database_engine="sqlite", database_url="")
+        future = "2100-01-01T00:00:00.333000+00:00"
+        self.report_fixture("vision_previous_listing", "listing.package", future)
+        task = repository.create_task(company_id=self.company_id, store_id=self.store_id, user_id=self.user_id,
+                                      task_type="product_vision", title="Synthetic report writer", input_data={})
+        # Exercise the same independent storage entry as vision, with no client,
+        # provider adapter, upload, model or outbound request.
+        report = repository.save_merchant_product_fact_report(
+            task=task, packet={"source": "backend_product_vision_extraction", "product_name": "Foldable Tablet Stand",
+                               "unknown_facts": ["material"]}, listing_project_identity=self.identity)
+        self.assertGreaterEqual(datetime.fromisoformat(report["created_at"]) - datetime.fromisoformat(future), timedelta(milliseconds=1))
+        status, conflict = self.request(f"/stores/{self.store_id}/product-facts", method="POST",
+                                        body=self.fact_action("Wood", self.base_report_id))
+        self.assertEqual(status, 409)
+        self.assertEqual(conflict["error_code"], "product_fact_version_conflict")
+        self.assertEqual(conflict["current_fact_report_id"], report["report_id"])
+        self.assertEqual(conflict["current_fact_report"]["created_at"], report["created_at"])
+
+    def test_pre_action_digest_legacy_receipt_replays_only_in_its_exact_scope(self):
+        import hashlib
+        # Materialize the previous release's deterministic IDs without changing
+        # its payload or timestamps; this is migration-free compatibility data.
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("select r.*,t.company_id,t.store_id from reports r join tasks t on t.task_id=r.task_id where r.report_id=?",
+                               (self.base_report_id,)).fetchone()
+            payload = json.loads(row["report_json"])
+            content = json.dumps({"company_id": self.company_id, "store_id": self.store_id,
+                "project_key": self.identity["key"], "packet": payload["merchant_product_fact_packet"]},
+                sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+            digest = hashlib.sha256(content.encode()).hexdigest()[:40]
+            old_report, old_task = f"report_product_facts_{digest}", f"task_product_facts_{digest}"
+            conn.execute("update tasks set task_id=? where task_id=?", (old_task, row["task_id"]))
+            conn.execute("update reports set report_id=?,task_id=? where report_id=?", (old_report, old_task, self.base_report_id))
+        path = f"/stores/{self.store_id}/product-facts"
+        status, replay = self.request(path, method="POST", body=self.fact_body)
+        self.assertEqual(status, 200)
+        self.assertEqual(replay["report"]["report_id"], old_report)
+        different = copy.deepcopy(self.fact_body)
+        different["listing_project_identity"]["candidate_id"] = "another-old-scope"
+        status, separate = self.request(path, method="POST", body=different)
+        self.assertEqual(status, 201)
+        self.assertNotEqual(separate["report"]["report_id"], old_report)
+        changed = copy.deepcopy(self.fact_body)
+        changed["merchant_product_fact_packet"]["merchant_confirmed_facts"]["material"] = "Wood"
+        self.assertEqual(self.request(path, method="POST", body=changed)[0], 201)
+        self.assertEqual(self.request(path, method="POST", body=self.fact_body)[0], 409)
+
+    def test_fact_action_audit_failure_rolls_back_task_report_memory_and_mutation(self):
+        action = self.fact_action("Wood", self.base_report_id)
+        path = f"/stores/{self.store_id}/product-facts"
+        before_tasks, before_reports = self.request("/tasks")[1], self.request("/reports")[1]
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+            before_memory = conn.execute("select count(*) from merchant_memory").fetchone()[0]
+            conn.execute("""create trigger fact_save_audit_fault before insert on audit_logs
+                when NEW.action_type = 'merchant.product_facts.saved'
+                begin select raise(ABORT, 'fixture fact audit unavailable'); end""")
+        try:
+            status, failure = self.request(path, method="POST", body=action)
+            self.assertEqual(status, 503)
+            self.assertEqual(failure["error_code"], "product_fact_storage_unavailable")
+            self.assertNotIn("fixture fact", json.dumps(failure))
+            self.assertEqual(self.request("/tasks")[1], before_tasks)
+            self.assertEqual(self.request("/reports")[1], before_reports)
+            self.assertEqual(self.request(self.path + self.query)[1]["current_base_report_id"], self.base_report_id)
+            with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn:
+                self.assertEqual(conn.execute("select count(*) from merchant_memory").fetchone()[0], before_memory)
+        finally:
+            with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+                conn.execute("drop trigger fact_save_audit_fault")
+        self.assertEqual(self.request(path, method="POST", body=action)[0], 201)
 
     def test_revision_cas_and_explicit_clear(self):
         self.assertEqual(self.request(self.path, method="POST", body=self.body)[0], 201)

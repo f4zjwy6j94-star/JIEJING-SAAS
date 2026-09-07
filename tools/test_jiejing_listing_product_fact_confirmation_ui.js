@@ -5,11 +5,13 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const http = require("node:http");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
 
 const root = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
 const browserChannel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
+const manualSourceBrowserRuns = [];
 
 function extractFunction(name) {
   const asyncMarker = `async function ${name}(`;
@@ -50,6 +52,343 @@ function extractOptionalFunction(name) {
   return source.includes(`function ${name}(`) ? extractFunction(name) : "";
 }
 
+async function withManualSourcePage(run) {
+  const startedAt = new Date().toISOString();
+  const pending = [];
+  const server = http.createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end('<!doctype html><title>Local product fact save</title><main id="view-product"></main>');
+      return;
+    }
+    if (req.method !== "POST" || !/^\/stores\/fixture-store-[AB]\/product-facts$/.test(req.url)) {
+      res.writeHead(404); res.end(); return;
+    }
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    req.on("end", () => {
+      const body = JSON.parse(raw);
+      pending.push({ body, reply(status = 201, extra = {}) {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ...(status === 201 ? {
+          merchant_product_fact_packet: body.merchant_product_fact_packet,
+          listing_project_identity: body.listing_project_identity,
+          report: { report_id: `fixture-report-${pending.indexOf(this)}` },
+          task: { task_id: `fixture-task-${pending.indexOf(this)}` },
+        } : { error: "synthetic local save failure" }), ...extra }));
+      } });
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const browser = await chromium.launch({ channel: browserChannel, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors = [];
+    const observed = { loopback: 0, external: 0 };
+    page.on("pageerror", (error) => errors.push(String(error)));
+    page.on("request", (request) => {
+      const host = new URL(request.url()).hostname;
+      observed[host === "127.0.0.1" ? "loopback" : "external"]++;
+    });
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    const starterBegin = source.indexOf('<section class="source-manual-form is-active saas-listing-source-facts-starter"');
+    const starter = source.slice(starterBegin, source.indexOf("</section>", starterBegin) + "</section>".length);
+    const functions = [...new Set([...baseFunctionNames, "handleSaasAction", "collectManualSourceFacts",
+      "persistSaasManualSourceFacts", "saasFetch", "saasListingDraftFromManualSourceFacts",
+      "buildSaasAiCeoSupplierFactIntake", "isFilledOperationalValue", "saasListingComposerDraftFromText",
+      "saasListingSafeMaterialValue", "saasIsConcreteProductLabel", "saasIsInvalidMarketProductLabel",
+      "saasCurrentListingProjectIdentity", "saasNormalizeListingProjectIdentity", "hashString",
+      "resetSaasListingPublishEvidenceForNewProject", "setSaasAiCeoTaskContextState", "saasAiCeoTaskContextState",
+      "parseSaasKeyValueLines"] )].map(extractFunction).join("\n");
+    await page.evaluate((html) => { document.querySelector("main").innerHTML = html; }, starter);
+    await page.addScriptTag({ content: `
+      const SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT = "merchant_product_fact_packet_v1";
+      let saasStateRefreshGeneration = 0;
+      const state = { saasConnected: true, saasApiBase: location.origin, saasToken: "", saasTasks: [], saasReports: [],
+        saasIdentity: { company_id: "fixture-company-A", user_id: "fixture-user-A" }, manualSourceFacts: {} };
+      window.__storeId = "fixture-store-A";
+      window.__savePromises = []; window.__toasts = []; window.__snapshots = []; window.__unauthorized = 0;
+      const publicRuntimeText = (value) => String(value ?? "");
+      const sanitizeSaasWorkflowFeedbackText = (value, limit = 1000) => String(value ?? "").slice(0, limit);
+      const activeSaasStore = () => ({ store_id: window.__storeId });
+      const activeListingDraft = () => null;
+      const isSaasPublicMvpMode = () => true;
+      const isLegacySampleMediaDraftKey = () => false;
+      const requireSaasProtectedSessionForAction = () => true;
+      const formatDecisionTime = () => "synthetic local time";
+      const recordSaasServerClock = () => {};
+      const saasRequestCanRetryAfterSessionRefresh = () => false;
+      const saasBackendErrorMessage = () => "synthetic local error";
+      const handleSaasUnrecoverableSession = () => { window.__unauthorized++; };
+      const showActionToast = (message) => window.__toasts.push(message);
+      const saveSaasProtectedStateSnapshot = () => window.__snapshots.push(state.saasListingComposerDraft?.product);
+      const renderSourceIntakePanel = () => {};
+      const renderProductListingCenter = () => {};
+      const scheduleSaasListingDraftSnapshotSave = () => {};
+      ${generationContextHelpers}
+      ${functions}
+      const originalManualSave = persistSaasManualSourceFacts;
+      persistSaasManualSourceFacts = (...args) => { const promise = originalManualSave(...args); window.__savePromises.push(promise); return promise; };
+      document.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-saas-action]");
+        if (button) handleSaasAction(button);
+      });
+      document.addEventListener("input", (event) => {
+        if (event.target.matches("[data-saas-listing-draft-field]")) {
+          setSaasListingDraftField(event.target.dataset.saasListingDraftField, event.target.value, { merchantEdited: true });
+        }
+      });
+    ` });
+    const fill = async (name) => page.locator('[data-source-manual-field="product_name"]').fill(name);
+    const click = async () => page.locator('[data-saas-action="save-new-product-facts"]').click();
+    const waitRequests = async (count) => {
+      for (let i = 0; i < 100 && pending.length < count; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(pending.length, count);
+    };
+    await run({ page, pending, fill, click, waitRequests });
+    assert.deepEqual(errors, []);
+    assert.equal(observed.external, 0);
+    manualSourceBrowserRuns.push({ started_at: startedAt, ended_at: new Date().toISOString(),
+      channel: browserChannel, browser_version: browser.version(), viewport: "1280x900",
+      requests: observed, page_errors: errors.length, real_DOM_and_loopback_HTTP: true,
+      route_handlers: 0, app_functions_extracted: true, full_app_rendering: false });
+  } finally {
+    await browser.close();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+test.after(() => {
+  if (manualSourceBrowserRuns.length) console.log(JSON.stringify({ manual_source_browser_runs: manualSourceBrowserRuns }));
+});
+
+test("manual product save sends a distinct action and its observed fact version", async () => {
+  await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+    await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+    const first = pending[0].body.save_context;
+    assert.equal(first?.contract_version, "merchant_product_fact_save_v1");
+    assert.match(first.mutation_id, /^[A-Za-z0-9._:-]{8,160}$/);
+    assert.equal(first.expected_fact_report_id, "");
+    pending[0].reply(); await page.evaluate(() => window.__savePromises[0]);
+    await page.locator('[data-source-manual-field="material"]').fill("Steel");
+    await click(); await waitRequests(2);
+    const second = pending[1].body.save_context;
+    assert.equal(second.expected_fact_report_id, "fixture-report-0");
+    assert.notEqual(second.mutation_id, first.mutation_id);
+    pending[1].reply(); await page.evaluate(() => window.__savePromises[1]);
+  });
+});
+
+test("manual product retry retains the failed action and base despite a fresh draft object", async () => {
+  await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+    await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+    pending[0].reply(); await page.evaluate(() => window.__savePromises[0]);
+    await page.locator('[data-source-manual-field="material"]').fill("Steel");
+    await click(); await waitRequests(2);
+    pending[1].reply(500); await page.evaluate(() => window.__savePromises[1]);
+    await click(); await waitRequests(3);
+    assert.deepEqual(pending[2].body.save_context, pending[1].body.save_context);
+    assert.equal(pending[2].body.save_context.expected_fact_report_id, "fixture-report-0");
+    pending[2].reply(); await page.evaluate(() => window.__savePromises[2]);
+  });
+});
+
+for (const status of [201, 409]) {
+  test(`manual facts preserve edits when ${status} reports a newer authoritative version`, async () => {
+    await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+      await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+      pending[0].reply(status, { is_current: false, current_fact_report_id: "newer-cloud-version" });
+      assert.equal(await page.evaluate(() => window.__savePromises[0]), false);
+      assert.equal(await page.locator('[data-source-manual-field="product_name"]').inputValue(), "Fixture Tablet Stand A");
+      assert.deepEqual(await page.evaluate(() => state.saasReports), []);
+      assert.equal(await page.evaluate(() => state.saasListingProductFactSaveStatus), "local_only");
+      assert.match(await page.evaluate(() => window.__toasts.at(-1)), /已有更新.*没有覆盖新版本/);
+      assert.equal(pending.length, 1, "conflict must not automatically send another write");
+    });
+  });
+}
+
+test("existing fact form reuses a failed action but versions an intentional revert", async () => {
+  await withProductFactPage(async (page) => {
+    await page.evaluate(() => {
+      state.saasConnected = true;
+      state.saasCompany = { company_id: "company-A" };
+      state.saasUser = { user_id: "user-A" };
+      window.__productFactStore = { store_id: "store-A" };
+      state.saasListingComposerDraft.source_product_fact_report_id = "fact-base-A";
+      window.__factActions = [];
+      window.__productFactFetch = async (_path, options) => {
+        const body = JSON.parse(options.body);
+        window.__factActions.push(body);
+        if (window.__factActions.length === 1) throw new Error("synthetic lost response");
+        return { merchant_product_fact_packet: body.merchant_product_fact_packet,
+          listing_project_identity: body.listing_project_identity,
+          report: { report_id: "fact-result-" + window.__factActions.length }, is_current: true };
+      };
+    });
+    await page.locator('[data-saas-product-fact-field="material"]').fill("Steel");
+    const save = page.locator('[data-saas-action="save-merchant-product-facts"]');
+    await save.click(); await page.evaluate(() => window.__productFactSavePromise);
+    await save.click(); await page.evaluate(() => window.__productFactSavePromise);
+    await page.locator('[data-saas-product-fact-field="material"]').fill("Aluminum");
+    await save.click(); await page.evaluate(() => window.__productFactSavePromise);
+    const actions = await page.evaluate(() => window.__factActions.map(body => body.save_context));
+    assert.deepEqual(actions[1], actions[0]);
+    assert.equal(actions[0].expected_fact_report_id, "fact-base-A");
+    assert.equal(actions[2].expected_fact_report_id, "fact-result-2");
+    assert.notEqual(actions[2].mutation_id, actions[1].mutation_id);
+    assert.equal(await page.locator('[data-saas-product-fact-field="material"]').inputValue(), "Aluminum");
+  });
+});
+
+test("fact version fallback ignores other stores and candidates and keeps an observed draft base", async () => {
+  await withProductFactPage(async (page) => {
+    const result = await page.evaluate(() => {
+      state.saasCompany = { company_id: "company-A" };
+      state.saasUser = { user_id: "user-A" };
+      window.__productFactStore = { store_id: "store-A" };
+      const draft = state.saasListingComposerDraft;
+      draft.listing_project_identity = { key: "project-A", source_report_id: "source-A", candidate_id: "candidate-A" };
+      const row = { report_id: "matching-facts", company_id: "company-A", store_id: "store-A", status: "saved",
+        report_type: "merchant.product_facts", created_at: "2026-09-07T08:00:00Z",
+        report: { listing_project_identity: draft.listing_project_identity } };
+      state.saasReports = [row, { ...row, report_id: "wrong-store", store_id: "store-B", created_at: "2027-01-01T00:00:00Z" },
+        { ...row, report_id: "wrong-candidate", created_at: "2027-01-01T00:00:00Z",
+          report: { listing_project_identity: { ...draft.listing_project_identity, candidate_id: "candidate-B" } } }];
+      const fallback = prepareSaasProductFactSaveAttempt(draft, draft.merchant_product_fact_packet).saveContext;
+      draft.source_product_fact_report_id = "observed-older-base";
+      const observed = prepareSaasProductFactSaveAttempt(draft, draft.merchant_product_fact_packet).saveContext;
+      const restoredDraft = sanitizeSaasListingComposerDraftSnapshot(draft);
+      state.saasListingComposerDraft = restoredDraft;
+      const restored = prepareSaasProductFactSaveAttempt(restoredDraft, restoredDraft.merchant_product_fact_packet).saveContext;
+      state.saasListingComposerDraft = draft;
+      draft.source_product_fact_report_id = "";
+      const emptyBase = prepareSaasProductFactSaveAttempt(draft, draft.merchant_product_fact_packet).saveContext;
+      draft.source_product_fact_report_id = "observed-older-base";
+      state.saasUser = { user_id: "user-B" };
+      const switched = prepareSaasProductFactSaveAttempt(draft, draft.merchant_product_fact_packet).saveContext;
+      draft.listing_project_identity = { key: "legacy-key", source_report_id: "", candidate_id: "" };
+      delete draft.source_product_fact_report_id;
+      state.saasReports = [{ ...row, report_id: "partial-identity", report: { listing_project_identity: { key: "legacy-key" } } }];
+      const partial = prepareSaasProductFactSaveAttempt(draft, draft.merchant_product_fact_packet).saveContext;
+      return { fallback, observed, restored, emptyBase, switched, partial };
+    });
+    assert.equal(result.fallback.expected_fact_report_id, "matching-facts");
+    assert.equal(result.observed.expected_fact_report_id, "observed-older-base");
+    assert.equal(result.restored.expected_fact_report_id, "observed-older-base", "cached edits must retain their observed concurrency base, not borrow a newer report token");
+    assert.equal(result.emptyBase.expected_fact_report_id, "", "an observed empty base must not borrow a newly arrived report token");
+    assert.notEqual(result.switched.mutation_id, result.observed.mutation_id);
+    assert.equal(result.partial.expected_fact_report_id, "");
+  });
+});
+
+test("new source save preserves B when A replies after B's visible save", async () => {
+  await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+    await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+    await fill("Fixture Tablet Stand B"); await click(); await waitRequests(2);
+    pending[1].reply(); await page.evaluate(() => window.__savePromises[1]);
+    pending[0].reply(); await page.evaluate(() => window.__savePromises[0]);
+    assert.equal(await page.evaluate(() => state.saasListingComposerDraft.product), "Fixture Tablet Stand B");
+    assert.equal(await page.locator('[data-source-manual-field="product_name"]').inputValue(), "Fixture Tablet Stand B");
+    assert.deepEqual(await page.evaluate(() => state.saasReports.map((item) => item.report_id)), ["fixture-report-1"]);
+  });
+});
+
+for (const status of [201, 500, 401]) {
+  test(`new source save ignores late ${status} while B is still saving`, async () => {
+    await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+      await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+      await fill("Fixture Tablet Stand B"); await click(); await waitRequests(2);
+      pending[0].reply(status); await page.evaluate(() => window.__savePromises[0]);
+      assert.deepEqual(await page.evaluate(() => ({ product: state.saasListingComposerDraft.product,
+        status: state.saasListingProductFactSaveStatus, unauthorized: window.__unauthorized,
+        reports: state.saasReports.length, toasts: window.__toasts.length,
+        pending: Boolean(state.saasListingProductFactSaveRequest) })),
+      { product: "Fixture Tablet Stand B", status: "saving", unauthorized: 0, reports: 0, toasts: 0, pending: true });
+      pending[1].reply(); await page.evaluate(() => window.__savePromises[1]);
+      assert.equal(await page.evaluate(() => state.saasListingProductFactSaveStatus), "saved");
+    });
+  });
+}
+
+test("new source save does not overwrite a newer visit to A or changed facts in the same project", async () => {
+  for (const sameProject of [false, true]) {
+    await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+      await fill("Fixture Tablet Stand A");
+      await page.locator('[data-source-manual-field="material"]').fill("Aluminum");
+      await click(); await waitRequests(1);
+      if (!sameProject) await fill("Fixture Tablet Stand B");
+      await page.locator('[data-source-manual-field="material"]').fill("Steel");
+      await click(); await waitRequests(2);
+      await fill("Fixture Tablet Stand A");
+      await page.locator('[data-source-manual-field="material"]').fill("Aluminum");
+      await click(); await waitRequests(3);
+      pending[2].reply(); await page.evaluate(() => window.__savePromises[2]);
+      for (const index of [0, 1]) { pending[index].reply(); await page.evaluate((i) => window.__savePromises[i], index); }
+      assert.equal(await page.evaluate(() => state.saasListingComposerDraft.product), "Fixture Tablet Stand A");
+      assert.equal(await page.evaluate(() => state.saasListingComposerDraft.merchant_product_fact_packet.merchant_confirmed_facts.material), "Aluminum");
+      assert.deepEqual(await page.evaluate(() => state.saasReports.map((item) => item.report_id)), ["fixture-report-2"]);
+    });
+  }
+});
+
+test("new source save deduplicates identical pending clicks without resetting hand edits", async () => {
+  await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+    await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+    await page.evaluate(() => {
+      const input = document.createElement("input"); input.dataset.saasListingDraftField = "title";
+      document.querySelector("main").append(input);
+    });
+    await page.locator('[data-saas-listing-draft-field="title"]').fill("Merchant copy written during save");
+    await click();
+    assert.equal(await page.evaluate(() => window.__savePromises.length), 2);
+    pending[0].reply(); await page.evaluate(() => Promise.all(window.__savePromises));
+    assert.equal(pending.length, 1);
+    assert.equal(await page.evaluate(() => state.saasListingComposerDraft.fields.title), "Merchant copy written during save");
+    assert.equal(await page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Merchant copy written during save");
+    assert.match(await page.evaluate(() => window.__toasts.at(-1)), /新修改仍保留/);
+  });
+});
+
+for (const scope of ["company", "user", "store", "refresh", "visit"]) {
+  test(`new source save rejects success and 401 after ${scope} changes`, async () => {
+    for (const status of [201, 401]) {
+      await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+        await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+        await page.evaluate((scope) => {
+          if (scope === "company") state.saasIdentity.company_id = "fixture-company-B";
+          if (scope === "user") state.saasIdentity.user_id = "fixture-user-B";
+          if (scope === "store") window.__storeId = "fixture-store-B";
+          if (scope === "refresh") saasStateRefreshGeneration++;
+          if (scope === "visit") invalidateSaasListingAiGenerationContext();
+          state.saasListingComposerDraft.fields.title = "Current scope copy";
+          state.saasListingProductFactSaveStatus = "idle";
+        }, scope);
+        pending[0].reply(status); await page.evaluate(() => window.__savePromises[0]);
+        assert.deepEqual(await page.evaluate(() => ({ reports: state.saasReports.length, tasks: state.saasTasks.length,
+          snapshots: window.__snapshots.length, unauthorized: window.__unauthorized, toasts: window.__toasts.length,
+          title: state.saasListingComposerDraft.fields.title, status: state.saasListingProductFactSaveStatus })),
+        { reports: 0, tasks: 0, snapshots: 0, unauthorized: 0, toasts: 0, title: "Current scope copy", status: "idle" });
+      });
+    }
+  });
+}
+
+test("new source save preserves unsaved manual input and still handles a current failure", async () => {
+  for (const status of [201, 500]) {
+    await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+      await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+      await fill("New unsaved product name");
+      pending[0].reply(status); await page.evaluate(() => window.__savePromises[0]);
+      assert.equal(await page.locator('[data-source-manual-field="product_name"]').inputValue(), "New unsaved product name");
+      assert.equal(await page.evaluate(() => state.saasListingProductFactSaveStatus), status === 201 ? "saved" : "local_only");
+      assert.equal(await page.evaluate(() => state.saasListingProductFactSaveRequest), null);
+      assert.equal(await page.evaluate(() => state.saasListingProductFactSavePromise), null);
+    });
+  }
+});
+
 const baseFunctionNames = [
   "saasMerchantProductFactDefinitions",
   "saasMerchantProductFactRequiredKeys",
@@ -69,6 +408,9 @@ const baseFunctionNames = [
   "collectSaasMerchantProductFacts",
   "saveSaasMerchantProductFacts",
   "persistSaasMerchantProductFacts",
+  "prepareSaasProductFactSaveAttempt",
+  "assertSaasProductFactSaveIsCurrent",
+  "saasProductFactSaveFailureMessage",
   "sanitizeSaasMerchantProductFactValues",
   "sanitizeSaasMerchantProductFactPacketSnapshot",
   "captureSaasListingFactsForAiGeneration",

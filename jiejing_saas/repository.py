@@ -295,6 +295,19 @@ def _account_classification_for_email(email: str) -> str:
     )
 
 
+_PRODUCT_FACT_CONTEXT_ABSENT = object()
+
+
+class ProductFactSaveValidationError(ValueError):
+    pass
+
+
+class ProductFactSaveConflict(Exception):
+    def __init__(self, payload: dict[str, Any]) -> None:
+        super().__init__(payload["error_code"])
+        self.payload = payload
+
+
 class SaaSRepository:
     def __init__(self, db_path: Path, *, database_engine: str | None = None, database_url: str | None = None) -> None:
         self.db_path = db_path
@@ -3890,6 +3903,139 @@ class SaaSRepository:
             )
         return self.get_media_asset_job(company_id=company_id, media_job_id=media_job_id) or {}
 
+    def reconcile_released_media_asset_job(self, *, company_id: str, media_job_id: str) -> dict[str, Any] | None:
+        """Make a failed, released generation retryable without restoring asset approval."""
+
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                "select * from media_asset_jobs where company_id = ? and media_job_id = ?" + lock,
+                (company_id, media_job_id),
+            ).fetchone()
+            if not row:
+                return None
+            unchanged = self._media_asset_job_row_to_dict(row)
+            if row["status"] not in {"running", "provider_returned"} or not row["queue_job_id"]:
+                return unchanged
+            # On Postgres this task lock also excludes a new queue INSERT through
+            # its task_id foreign key; SQLite's immediate transaction excludes writers.
+            task = conn.execute(
+                "select * from tasks where company_id = ? and task_id = ? and store_id = ?" + lock,
+                (company_id, row["task_id"], row["store_id"]),
+            ).fetchone()
+            queue = conn.execute(
+                "select * from queue_jobs where company_id = ? and job_id = ? and task_id = ?" + lock,
+                (company_id, row["queue_job_id"], row["task_id"]),
+            ).fetchone()
+            if not task or task["status"] != "failed" or task["task_type"] != "provider_job" or not queue or queue["status"] != "failed":
+                return unchanged
+            other_active = conn.execute(
+                "select job_id from queue_jobs where company_id = ? and task_id = ? and status not in ('failed', 'cancelled', 'completed', 'dead_letter') limit 1",
+                (company_id, row["task_id"]),
+            ).fetchone()
+            if other_active:
+                return unchanged
+            payload = _load_json_field(row["media_job_json"])
+            spec = payload.get("job_spec") if isinstance(payload, dict) else None
+            queued = _load_json_field(queue["job_json"])
+            if not isinstance(spec, dict) or not isinstance(queued, dict):
+                return unchanged
+            def reservation_id(value: Any) -> str:
+                credits = value.get("media_credits") if isinstance(value, dict) else None
+                reservation = credits.get("reservation") if isinstance(credits, dict) else None
+                entry = reservation.get("ledger_entry") if isinstance(reservation, dict) else None
+                return str(entry.get("ledger_id") or "") if isinstance(entry, dict) else ""
+            reserved_id = reservation_id(spec)
+            if not (
+                reserved_id and reservation_id(queued) == reserved_id
+                and queued.get("kind") == "provider_job"
+                and queued.get("media_job_id") == media_job_id
+                and queued.get("provider_job_key") == row["provider_job_key"]
+                and queued.get("idempotency_key") == row["idempotency_key"]
+            ):
+                return unchanged
+            reservation = conn.execute(
+                "select * from media_credit_ledger where company_id = ? and ledger_id = ?" + lock,
+                (company_id, reserved_id),
+            ).fetchone()
+            terminal = conn.execute(
+                "select * from media_credit_ledger where company_id = ? and reservation_id = ? and operation_type in ('settle', 'release', 'revoke') order by created_at asc, ledger_id asc limit 1" + lock,
+                (company_id, reserved_id),
+            ).fetchone()
+            if not (
+                reservation and reservation["operation_type"] == "reserve" and reservation["status"] == "released"
+                and reservation["reference_type"] in {"media_job", "media_rework"} and reservation["reference_id"] == row["idempotency_key"]
+                and terminal and terminal["operation_type"] == "release" and terminal["status"] == "completed"
+                and terminal["reference_type"] == "media_job" and terminal["reference_id"] == media_job_id
+            ):
+                return unchanged
+            if reservation["reference_type"] == "media_rework":
+                version = payload.get("asset_version") or {}
+                if not isinstance(version, dict):
+                    return unchanged
+                parent_id = version.get("parent_media_job_id")
+                number = version.get("version")
+                credit_payload = _load_json_field(reservation["ledger_json"])
+                credit_details = credit_payload.get("details") if isinstance(credit_payload, dict) else None
+                if not (
+                    isinstance(number, int) and not isinstance(number, bool) and number >= 2 and parent_id
+                    and row["idempotency_key"] == f"media-rework:{parent_id}:v{number}"
+                    and isinstance(credit_details, dict)
+                    and credit_details.get("parent_media_job_id") == parent_id and credit_details.get("version") == number
+                ):
+                    return unchanged
+                rework = conn.execute(
+                    "select media_job_id from media_rework_reservations where company_id = ? and parent_media_job_id = ? and version = ? and status = 'created'" + lock,
+                    (company_id, parent_id, number),
+                ).fetchone()
+                parent = conn.execute(
+                    "select media_job_json from media_asset_jobs where company_id = ? and store_id = ? and media_job_id = ?" + lock,
+                    (company_id, row["store_id"], parent_id),
+                ).fetchone()
+                parent_payload = _load_json_field(parent["media_job_json"]) if parent else {}
+                parent_version = parent_payload.get("asset_version") if isinstance(parent_payload, dict) else None
+                if not rework or rework["media_job_id"] != media_job_id or not isinstance(parent_version, dict) or parent_version.get("version") != number - 1:
+                    return unchanged
+            updated_at = now_iso()
+            reason = "media_credit_released_after_queue_failure"
+            for asset in payload.get("asset_manifest") or []:
+                if isinstance(asset, dict):
+                    for field in ("fact_review_status", "commercial_use_status", "listing_use_status", "review_status"):
+                        asset[field] = "needs_rework"
+            review = payload.get("asset_review") if isinstance(payload.get("asset_review"), dict) else {}
+            review.update({"status": "needs_rework", "listing_use_status": "needs_rework"})
+            payload["asset_review"] = review
+            payload.pop("merchant_review", None)
+            payload.setdefault("state_history", []).append({
+                "status": "needs_rework", "created_at": updated_at,
+                "queue_job_id": row["queue_job_id"], "error_reason": reason,
+            })
+            changed = conn.execute(
+                """
+                update media_asset_jobs set status = 'needs_rework', error_reason = ?, updated_at = ?, media_job_json = ?
+                where company_id = ? and media_job_id = ? and status = ? and updated_at = ?
+                  and task_id = ? and queue_job_id = ?
+                  and exists (select 1 from tasks where company_id = ? and task_id = ? and status = 'failed')
+                  and exists (select 1 from queue_jobs where company_id = ? and job_id = ? and status = 'failed')
+                """,
+                (reason, updated_at, json.dumps(_redact_secret_like(payload), ensure_ascii=False, default=json_default),
+                 company_id, media_job_id, row["status"], row["updated_at"], row["task_id"], row["queue_job_id"],
+                 company_id, row["task_id"], company_id, row["queue_job_id"]),
+            )
+            if int(changed.rowcount or 0) != 1:
+                return unchanged
+            self._insert_audit(
+                conn, company_id=company_id, store_id=row["store_id"], user_id=row["created_by"], actor_type="system",
+                action_type="media.asset_job.released_read_repair", target_type="media_asset_job", target_id=media_job_id,
+                summary="Released failed media generation restored to needs rework without provider calls or credit changes.",
+                details={"task_id": row["task_id"], "queue_job_id": row["queue_job_id"], "status": "needs_rework",
+                         "provider_call_triggered": False, "real_platform_writes_enabled": False, "secret_exposed": False},
+            )
+        return self.get_media_asset_job(company_id=company_id, media_job_id=media_job_id)
+
     def get_media_asset_job(self, *, company_id: str, media_job_id: str) -> dict[str, Any] | None:
         self.initialize()
         with self._connect() as conn:
@@ -5773,15 +5919,29 @@ class SaaSRepository:
         user_id: str,
         packet: dict[str, Any],
         listing_project_identity: dict[str, Any] | None = None,
+        save_context: Any = _PRODUCT_FACT_CONTEXT_ABSENT,
     ) -> dict[str, Any]:
-        """Atomically save one content version; retries share its task and report."""
-        self.initialize()
+        """Save one merchant action; replay its receipt without reviving old facts."""
         safe_packet = normalize_merchant_product_fact_packet(packet, source="authenticated_merchant_request")
         if safe_packet.get("sensitive_text_detected") is True or not safe_packet.get("product_name"):
             raise ValueError("invalid merchant product facts")
         project = normalize_listing_project_identity(listing_project_identity)
+        versioned = save_context is not _PRODUCT_FACT_CONTEXT_ABSENT
+        if versioned and not (
+            isinstance(save_context, dict)
+            and set(save_context) == {"contract_version", "mutation_id", "expected_fact_report_id"}
+            and save_context.get("contract_version") == "merchant_product_fact_save_v1"
+            and isinstance(save_context.get("mutation_id"), str)
+            and re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", save_context["mutation_id"])
+            and isinstance(save_context.get("expected_fact_report_id"), str)
+            and re.fullmatch(r"[A-Za-z0-9._:-]{0,160}", save_context["expected_fact_report_id"])
+            and project
+        ):
+            raise ProductFactSaveValidationError("product_fact_invalid_save_context")
+        self.initialize()
         content = json.dumps(
-            {"company_id": company_id, "store_id": store_id, "project_key": project.get("key", ""), "packet": safe_packet},
+            {"company_id": company_id, "store_id": store_id, "listing_project_identity": project,
+             **({"mutation_id": save_context["mutation_id"]} if versioned else {"packet": safe_packet})},
             ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=json_default,
         )
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -5793,9 +5953,51 @@ class SaaSRepository:
                       "real_platform_writes_enabled": False, "secret_exposed": False}
         if project:
             task_input["listing_project_identity"] = project
+        if versioned:
+            task_input["merchant_product_fact_save"] = {
+                **save_context,
+                "payload_fingerprint": hashlib.sha256(json.dumps(
+                    {"user_id": user_id, "listing_project_identity": project, "packet": safe_packet, "save_context": save_context},
+                    ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=json_default,
+                ).encode("utf-8")).hexdigest(),
+            }
         with self._connect() as conn:
-            if not conn.execute("select store_id from stores where company_id = ? and store_id = ?", (company_id, store_id)).fetchone():
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock = " for update" if self.database_engine == "postgres" else ""
+            if not conn.execute("select store_id from stores where company_id = ? and store_id = ?" + lock, (company_id, store_id)).fetchone():
                 raise KeyError("store not found or not accessible")
+            current = self._merchant_product_fact_scope_report(conn, company_id, store_id, project, facts_only=True)
+            current_id = str(current["report_id"]) if current else ""
+            previous = conn.execute("select * from tasks where task_id = ? and company_id = ? and store_id = ?", (task_id, company_id, store_id)).fetchone()
+            if not versioned:
+                if self._merchant_product_fact_versioned_scope_exists(conn, company_id, store_id, project):
+                    raise ProductFactSaveConflict({"error_code": "product_fact_client_upgrade_required", "current_fact_report_id": current_id,
+                        "current_fact_report": self._report_row_to_dict(current) if current else None, "secret_exposed": False})
+                # Compatibility lookup for pre-action releases whose digest used
+                # only project_key. Never replay that receipt across full anchors.
+                if not previous:
+                    old_content = json.dumps({"company_id": company_id, "store_id": store_id,
+                        "project_key": project.get("key", ""), "packet": safe_packet},
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=json_default)
+                    old_digest = hashlib.sha256(old_content.encode("utf-8")).hexdigest()[:40]
+                    old_task = conn.execute("select * from tasks where task_id = ? and company_id = ? and store_id = ?",
+                                            (f"task_product_facts_{old_digest}", company_id, store_id)).fetchone()
+                    if old_task and normalize_listing_project_identity(_load_json_field(old_task["input_json"]).get("listing_project_identity")) == project:
+                        previous = old_task
+                        task_id, report_id = f"task_product_facts_{old_digest}", f"report_product_facts_{old_digest}"
+                if previous and current_id != report_id:
+                    raise ProductFactSaveConflict({"error_code": "product_fact_client_upgrade_required", "current_fact_report_id": current_id,
+                        "current_fact_report": self._report_row_to_dict(current) if current else None, "secret_exposed": False})
+            if versioned and previous:
+                prior_input = _load_json_field(previous["input_json"])
+                if prior_input.get("merchant_product_fact_save") != task_input["merchant_product_fact_save"]:
+                    raise ProductFactSaveConflict({"error_code": "product_fact_mutation_conflict", "current_fact_report_id": current_id,
+                        "current_fact_report": self._report_row_to_dict(current) if current else None, "secret_exposed": False})
+            elif versioned and save_context["expected_fact_report_id"] != current_id:
+                raise ProductFactSaveConflict({"error_code": "product_fact_version_conflict", "current_fact_report_id": current_id,
+                    "current_fact_report": self._report_row_to_dict(current) if current else None, "secret_exposed": False})
+            created_at = self._merchant_product_fact_next_time(conn, company_id, store_id, project)
             inserted = conn.execute(
                 """insert or ignore into tasks (
                     task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
@@ -5814,7 +6016,7 @@ class SaaSRepository:
                                    actor_type="user", action_type="task.create", target_type="task", target_id=task_id,
                                    summary="SaaS product fact checkpoint created.", details={"task_type": "merchant_product_facts", "title": title})
                 self.save_merchant_product_fact_report(task=task, packet=safe_packet,
-                    listing_project_identity=project, _connection=conn, _report_id=report_id)
+                    listing_project_identity=project, _connection=conn, _report_id=report_id, _created_at=created_at)
                 output = {"report_id": report_id, "unknown_fact_count": len(safe_packet.get("unknown_facts") or []),
                           "ready_for_listing_generation": bool(safe_packet.get("listing_readiness", {}).get("ready_for_listing_generation")),
                           "real_platform_writes_enabled": False, "secret_exposed": False}
@@ -5829,12 +6031,54 @@ class SaaSRepository:
                 raise RuntimeError("product fact checkpoint report missing")
             task_row = conn.execute("select * from tasks where task_id = ? and company_id = ?", (task_id, company_id)).fetchone()
             report = self._report_row_to_dict(report_row)
+            current_id = report_id if created else current_id
             return {"task": self._task_row_to_dict(task_row), "report": report,
                     "merchant_product_fact_packet": report["report"]["merchant_product_fact_packet"],
                     **({"listing_project_identity": report["report"]["listing_project_identity"]}
                        if report["report"].get("listing_project_identity") else {}),
                     "idempotent_replay": not created, "model_called": False,
+                    "current_fact_report_id": current_id, "is_current": current_id == report_id,
+                    **({"current_fact_report": self._report_row_to_dict(current) if current else None} if current_id != report_id else {}),
                     "real_platform_writes_enabled": False, "secret_exposed": False}
+
+    def _merchant_product_fact_scope_report(self, conn: Any, company_id: str, store_id: str,
+                                            project: dict[str, str], *, facts_only: bool = False) -> Any:
+        def field(key: str) -> str:
+            if self.database_engine == "postgres":
+                return f"r.report_json -> 'listing_project_identity' ->> '{key}'"
+            return f"json_extract(r.report_json, '$.listing_project_identity.{key}')"
+        keys = ("key", "source_report_id", "candidate_id")
+        columns = [field(key) for key in keys]
+        predicates = " and ".join(f"{column} = ?" if project else f"coalesce({column}, '') = ?" for column in columns)
+        types = "('merchant.product_facts')" if facts_only else "('merchant.product_facts','listing.package','product.listing')"
+        order_time = "r.created_at"
+        if self.database_engine != "postgres":
+            conn.create_function("jiejing_fact_time", 1, _project_evidence_time, deterministic=True)
+            order_time = "jiejing_fact_time(r.created_at)"
+        return conn.execute(f"""select r.*, t.company_id, t.store_id from reports r join tasks t on t.task_id = r.task_id
+            where t.company_id = ? and t.store_id = ? and r.status = 'saved' and r.report_type in {types}
+              and {predicates} order by {order_time} desc, r.report_id desc limit 1""",
+            (company_id, store_id, *(project.get(key, "") for key in keys))).fetchone()
+
+    def _merchant_product_fact_next_time(self, conn: Any, company_id: str, store_id: str, project: dict[str, str]) -> str:
+        latest = self._merchant_product_fact_scope_report(conn, company_id, store_id, project)
+        instant = datetime.fromisoformat(_project_evidence_time(now_iso()))
+        if latest:
+            instant = max(instant, datetime.fromisoformat(_project_evidence_time(latest["created_at"])) + timedelta(milliseconds=1))
+        return instant.isoformat(timespec="microseconds")
+
+    def _merchant_product_fact_versioned_scope_exists(self, conn: Any, company_id: str, store_id: str, project: dict[str, str]) -> bool:
+        def field(path: str) -> str:
+            if self.database_engine == "postgres":
+                return f"input_json #>> '{{{path.replace('.', ',')}}}'"
+            return f"json_extract(input_json, '$.{path}')"
+        keys = ("key", "source_report_id", "candidate_id")
+        columns = [field("listing_project_identity." + key) for key in keys]
+        predicates = " and ".join(f"{column} = ?" if project else f"coalesce({column}, '') = ?" for column in columns)
+        return conn.execute(f"""select task_id from tasks where company_id = ? and store_id = ?
+            and task_type = 'merchant_product_facts' and {predicates}
+            and {field('merchant_product_fact_save.contract_version')} = 'merchant_product_fact_save_v1' limit 1""",
+            (company_id, store_id, *(project.get(key, "") for key in keys))).fetchone() is not None
 
     def save_merchant_product_fact_report(
         self,
@@ -5844,6 +6088,7 @@ class SaaSRepository:
         listing_project_identity: dict[str, Any] | None = None,
         _connection: Any = None,
         _report_id: str | None = None,
+        _created_at: str | None = None,
     ) -> dict[str, Any]:
         """Persist one authenticated merchant product-fact checkpoint."""
 
@@ -5883,6 +6128,14 @@ class SaaSRepository:
         if safe_listing_project_identity:
             report_payload["listing_project_identity"] = safe_listing_project_identity
         with nullcontext(_connection) if _connection is not None else self._connect() as conn:
+            if _connection is None:
+                if self.database_engine != "postgres":
+                    conn.execute("begin immediate")
+                lock = " for update" if self.database_engine == "postgres" else ""
+                if not conn.execute("select store_id from stores where company_id = ? and store_id = ?" + lock,
+                                    (task["company_id"], task["store_id"])).fetchone():
+                    raise KeyError("store not found or not accessible")
+            created_at = _created_at or self._merchant_product_fact_next_time(conn, task["company_id"], task["store_id"], safe_listing_project_identity)
             conn.execute(
                 """
                 insert into reports (

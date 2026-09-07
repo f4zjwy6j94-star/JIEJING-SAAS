@@ -15543,7 +15543,48 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
     return state.saasListingComposerDraft;
   }
   const report = validatedListingReport || latestReportByTypes(["listing.package", "product.listing"]) || latestReportByTypes(["ai_ceo.market_research", "market.report"]);
-  if (!report) return null;
+  if (!report) {
+    // A merchant can save facts before any AI/vision/Listing report exists.
+    // Restore that durable project without claiming generated buyer copy.
+    const factSeed = factReports.filter((item) => {
+      const body = item?.report || {};
+      const identity = body.listing_project_identity;
+      return item.status === "saved" && item.company_id === activeCompanyId && item.store_id === activeStoreId &&
+        body.merchant_product_fact_packet?.source === "authenticated_merchant_request" &&
+        Boolean(publicRuntimeText(body.merchant_product_fact_packet?.product_name || "").trim()) &&
+        Boolean(reportIdentityForRestore(item)?.key) && identity &&
+        ["key", "source_report_id", "candidate_id"].every((key) =>
+          Object.prototype.hasOwnProperty.call(identity, key) && typeof identity[key] === "string");
+    }).sort((a, b) => saasTimestampMillis(b.created_at) - saasTimestampMillis(a.created_at) ||
+      (a.report_id < b.report_id ? 1 : -1))[0];
+    if (!factSeed) return null;
+    const identity = reportIdentityForRestore(factSeed);
+    const packet = { ...factSeed.report.merchant_product_fact_packet, listing_copy: {},
+      buyer_copy_requires_validated_listing_generation: true };
+    const productName = publicRuntimeText(packet.product_name).slice(0, 120);
+    const seedDraft = typeof saasListingComposerDraftFromText === "function"
+      ? saasListingComposerDraftFromText(productName)
+      : { product: productName, title: productName, fields: {}, publish_prefill: {} };
+    const projected = applySaasMerchantProductFactPacketToDraft(seedDraft, packet);
+    state.saasListingComposerDraft = {
+      ...projected, product: productName, title: productName,
+      source_type: "merchant_source_form", source_label: "商家商品资料",
+      source_report_id: identity.source_report_id,
+      source_product_fact_report_id: String(factSeed.report_id || ""),
+      listing_project_key: identity.key, listing_project_identity: identity,
+      fields: { ...(projected.fields || {}), title: "", selling_points: "", description: "" },
+      model_generated: false, safe_local_only: true,
+      buyer_copy_requires_validated_listing_generation: true,
+      buyer_copy_status: "waiting_for_validated_listing_generation",
+    };
+    state.saasListingSourceMode = "backend_product_fact_restore";
+    if (!state.activeMediaDraft || isLegacySampleMediaDraftKey(state.activeMediaDraft)) state.activeMediaDraft = identity.key;
+    if (restoreDetachedDraft) {
+      const detached = restoreSaasDetachedListingProjectDraftForBackendDraft(state.saasListingComposerDraft);
+      if (detached) return detached;
+    }
+    return state.saasListingComposerDraft;
+  }
   const restored = saasListingDraftFromReport(report, report.report_type === "ai_ceo.market_research" ? "ai_ceo_market_report" : "ai_report");
   if (!restored || !saasListingDraftHasConcreteProduct(restored)) return null;
   const identity = saasCurrentListingProjectIdentity(restored);
@@ -15917,6 +15958,8 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
       "buyer_copy_status",
       "created_at",
     ]),
+    ...(typeof draft.source_product_fact_report_id === "string" && /^[A-Za-z0-9._:-]{0,160}$/.test(draft.source_product_fact_report_id)
+      ? { source_product_fact_report_id: draft.source_product_fact_report_id } : {}),
     listing_project_key: identity.key || publicRuntimeText(draft.listing_project_key || "").slice(0, 120),
     listing_project_identity: structuredIdentity,
     selected_product_candidate: selected
@@ -16015,6 +16058,8 @@ function saasListingDraftSourceReportTimestamp(draft = null) {
     const reportIdentity = saasListingProjectIdentityFromReport(record);
     if (
       !reportIdentity?.key || reportIdentity.key !== draftIdentity.key ||
+      reportIdentity.source_report_id !== draftIdentity.source_report_id ||
+      reportIdentity.candidate_id !== draftIdentity.candidate_id ||
       !reportStoreId || reportStoreId !== currentStoreId ||
       (reportCompanyId && reportCompanyId !== currentCompanyId)
     ) return [];
@@ -16075,8 +16120,8 @@ function restoreSaasDetachedListingProjectDraftForBackendDraft(backendDraft = nu
   const detachedSavedAt = saasTimestampMillis(detachedDraft.saved_at || "");
   const identityMatches = Boolean(
     detachedIdentity?.key === backendIdentity.key &&
-      (!backendIdentity.source_report_id || detachedIdentity.source_report_id === backendIdentity.source_report_id) &&
-      (!backendIdentity.candidate_id || detachedIdentity.candidate_id === backendIdentity.candidate_id),
+      detachedIdentity.source_report_id === backendIdentity.source_report_id &&
+      detachedIdentity.candidate_id === backendIdentity.candidate_id,
   );
   const canRestore = Boolean(
     identityMatches &&
@@ -33339,6 +33384,53 @@ function collectSaasMerchantProductFacts() {
   return { merchantConfirmed, unknownFacts, pendingSuggestionFacts, explicitUnknownFacts };
 }
 
+function prepareSaasProductFactSaveAttempt(draft, packet) {
+  const contextKey = saasListingAiGenerationContextKey(draft);
+  const identity = saasCurrentListingProjectIdentity(draft);
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "");
+  const storeId = String(activeSaasStore()?.store_id || "");
+  const currentDraft = contextKey === saasListingAiGenerationContextKey() ? state.saasListingComposerDraft : null;
+  const reports = (state.saasReports || []).filter((report) => {
+    const reportIdentity = report?.report?.listing_project_identity;
+    return report?.report_type === "merchant.product_facts" && report.status === "saved" &&
+      report.company_id === companyId && report.store_id === storeId && reportIdentity &&
+      ["key", "source_report_id", "candidate_id"].every((key) =>
+        Object.prototype.hasOwnProperty.call(reportIdentity, key) && typeof reportIdentity[key] === "string" &&
+        reportIdentity[key] === String(identity[key] || ""));
+  }).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || (a.report_id < b.report_id ? 1 : -1));
+  const observedDraft = [draft, currentDraft].find((item) => typeof item?.source_product_fact_report_id === "string");
+  const expected = observedDraft ? observedDraft.source_product_fact_report_id : String(reports[0]?.report_id || "");
+  const safePacket = sanitizeSaasMerchantProductFactPacketSnapshot(packet);
+  const content = { ...safePacket };
+  delete content.saved_at;
+  const signature = JSON.stringify(saasCanonicalJsonValue([contextKey, expected, content]));
+  const previous = state.saasProductFactSaveAttempt;
+  // Only an unresolved identical submission can reuse an action. A later
+  // intentional save, even with old content, is a new version.
+  if (previous?.signature === signature) return previous;
+  const attempt = { signature, saveContext: {
+    contract_version: "merchant_product_fact_save_v1",
+    mutation_id: globalThis.crypto?.randomUUID?.() || `facts_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    expected_fact_report_id: expected,
+  } };
+  state.saasProductFactSaveAttempt = attempt;
+  return attempt;
+}
+
+function assertSaasProductFactSaveIsCurrent(response) {
+  if (response?.is_current !== false) return;
+  const error = new Error("product_fact_version_conflict");
+  error.status = 409;
+  error.payload = response;
+  throw error;
+}
+
+function saasProductFactSaveFailureMessage(error, fallback) {
+  return error?.status === 409
+    ? "商品资料已有更新，本页修改仍保留。请重新打开商品核对最新资料后再保存；本次没有覆盖新版本。"
+    : fallback;
+}
+
 function saveSaasMerchantProductFacts() {
   const contextKey = saasListingAiGenerationContextKey();
   const epoch = saasListingAiGenerationEpoch;
@@ -33501,17 +33593,20 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
           candidate_id: listingProject.candidate_id || "",
         }
       : null;
+    const saveAttempt = prepareSaasProductFactSaveAttempt(draft, packet);
     const response = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/product-facts`, {
       method: "POST",
       saasRequestIsCurrent: isCurrentRequest,
       body: JSON.stringify({
         listing_project_identity: listingProjectIdentity,
         merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(packet),
+        save_context: saveAttempt.saveContext,
       }),
     });
     // The server may finish saving the original project; a late response must
     // not replace another project or a newer visit to the same project.
     if (!isCurrentRequest()) return true;
+    assertSaasProductFactSaveIsCurrent(response);
     let savedPacket = packet;
     if (response.merchant_product_fact_packet) {
       const serverIdentity = saasNormalizeListingProjectIdentity(response.listing_project_identity);
@@ -33529,12 +33624,14 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
     if (response.task) state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
     if (response.report) state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
     state.saasListingProductFactSaveStatus = "saved";
+    if (state.saasProductFactSaveAttempt === saveAttempt) state.saasProductFactSaveAttempt = null;
     saveSaasProtectedStateSnapshot();
     showActionToast(`${saasMerchantProductFactSavedMessage(savedPacket)} 已写入当前账号的工作记录。`);
   } catch (error) {
     if (!isCurrentRequest()) return false;
     state.saasListingProductFactSaveStatus = "local_only";
-    showActionToast(`${localMessage} 当前账号记录写入失败，资料仍保留在本机，可稍后再保存。`);
+    showActionToast(saasProductFactSaveFailureMessage(error, `${localMessage} 当前账号记录写入失败，资料仍保留在本机，可稍后再保存。`));
+    return false;
   }
   return true;
 }
@@ -42544,6 +42641,18 @@ async function persistSaasManualSourceFacts(facts = {}) {
     showActionToast("请先填写实际准备销售的商品名称；没有商品名称就无法建立项目记录。");
     return false;
   }
+  const contextKey = saasListingAiGenerationContextKey(draft);
+  const saveAttempt = state.saasConnected && activeSaasStore()?.store_id
+    ? prepareSaasProductFactSaveAttempt(draft, draft.merchant_product_fact_packet) : null;
+  if (saveAttempt) draft.source_product_fact_report_id = saveAttempt.saveContext.expected_fact_report_id;
+  const manualSourceSignature = JSON.stringify(saasCanonicalJsonValue(
+    sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet),
+  ));
+  const previous = state.saasListingProductFactSaveRequest;
+  if (previous?.manualSourceSignature === manualSourceSignature && previous.contextKey === contextKey &&
+      previous.epoch === saasListingAiGenerationEpoch && previous.refreshGeneration === saasStateRefreshGeneration &&
+      contextKey === saasListingAiGenerationContextKey() && previous.promise) return previous.promise;
+  invalidateSaasListingAiGenerationContext();
   resetSaasListingPublishEvidenceForNewProject();
   state.activeMediaDraft = draft.listing_project_key || draft.listing_project_identity?.key || "";
   state.saasMediaSourceUploadEpoch = Number(state.saasMediaSourceUploadEpoch || 0) + 1;
@@ -42559,46 +42668,76 @@ async function persistSaasManualSourceFacts(facts = {}) {
     showActionToast("商品资料尚未写入账号；请先登录后重试。");
     return false;
   }
-  try {
-    state.saasListingProductFactSaveStatus = "saving";
-    const response = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/product-facts`, {
-      method: "POST",
-      body: JSON.stringify({
-        listing_project_identity: draft.listing_project_identity,
-        merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet),
-      }),
-    });
-    const serverIdentity = saasNormalizeListingProjectIdentity(response.listing_project_identity);
-    if (response.merchant_product_fact_packet) {
-      state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft(
-        draft,
-        response.merchant_product_fact_packet,
-      );
+  const request = { contextKey, manualSourceSignature, epoch: saasListingAiGenerationEpoch,
+    refreshGeneration: saasStateRefreshGeneration, promise: null };
+  state.saasListingProductFactSaveRequest = request;
+  const isCurrentRequest = () => state.saasListingProductFactSaveRequest === request &&
+    request.epoch === saasListingAiGenerationEpoch && request.refreshGeneration === saasStateRefreshGeneration &&
+    request.contextKey === saasListingAiGenerationContextKey();
+  const editSnapshot = saasListingAiGenerationEditSnapshot();
+  const manualInputValues = () => JSON.stringify(Array.from(document.querySelectorAll("[data-source-manual-field]"),
+    (field) => [field.dataset.sourceManualField, field.value]));
+  const manualInputSnapshot = manualInputValues();
+  const pending = (async () => {
+    try {
+      state.saasListingProductFactSaveStatus = "saving";
+      const response = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/product-facts`, {
+        method: "POST",
+        saasRequestIsCurrent: isCurrentRequest,
+        body: JSON.stringify({
+          listing_project_identity: draft.listing_project_identity,
+          merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet),
+          save_context: saveAttempt.saveContext,
+        }),
+      });
+      if (!isCurrentRequest()) return false;
+      assertSaasProductFactSaveIsCurrent(response);
+      const preservePendingEdits = saasListingAiGenerationHasNewEdits(editSnapshot) || manualInputValues() !== manualInputSnapshot;
+      const serverIdentity = saasNormalizeListingProjectIdentity(response.listing_project_identity);
+      if (!preservePendingEdits && response.merchant_product_fact_packet) {
+        state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft(
+          draft,
+          response.merchant_product_fact_packet,
+        );
+      }
+      if (!preservePendingEdits && serverIdentity) {
+        state.saasListingComposerDraft.listing_project_key = serverIdentity.key;
+        state.saasListingComposerDraft.listing_project_identity = serverIdentity;
+      }
+      if (response.task) {
+        state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
+      }
+      if (response.report) {
+        state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
+        state.saasListingComposerDraft.source_product_fact_report_id = String(response.report.report_id || "");
+      }
+      state.sourceManualStatus = "saved";
+      state.saasListingProductFactSaveStatus = "saved";
+      if (state.saasProductFactSaveAttempt === saveAttempt) state.saasProductFactSaveAttempt = null;
+      saveSaasProtectedStateSnapshot();
+      if (!preservePendingEdits) {
+        renderSourceIntakePanel();
+        renderProductListingCenter();
+      }
+      showActionToast(preservePendingEdits
+        ? "已保存提交时的商品资料；保存期间的新修改仍保留在页面，尚未写入账号。"
+        : "商品资料已保存到当前账号；可以到 Listing 继续补充和生成草稿。");
+      return true;
+    } catch (error) {
+      if (!isCurrentRequest()) return false;
+      state.saasListingProductFactSaveStatus = "local_only";
+      saveSaasProtectedStateSnapshot();
+      showActionToast(saasProductFactSaveFailureMessage(error, "商品资料未写入账号，页面内容仍保留；请稍后重试。"));
+      return false;
     }
-    if (serverIdentity) {
-      state.saasListingComposerDraft.listing_project_key = serverIdentity.key;
-      state.saasListingComposerDraft.listing_project_identity = serverIdentity;
-    }
-    if (response.task) {
-      state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
-    }
-    if (response.report) {
-      state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
-      state.saasListingComposerDraft.source_product_fact_report_id = String(response.report.report_id || "");
-    }
-    state.sourceManualStatus = "saved";
-    state.saasListingProductFactSaveStatus = "saved";
-    saveSaasProtectedStateSnapshot();
-    renderSourceIntakePanel();
-    renderProductListingCenter();
-    showActionToast("商品资料已保存到当前账号；可以到 Listing 继续补充和生成草稿。");
-    return true;
-  } catch (error) {
-    state.saasListingProductFactSaveStatus = "local_only";
-    saveSaasProtectedStateSnapshot();
-    showActionToast("商品资料未写入账号，页面内容仍保留；请稍后重试。");
-    return false;
-  }
+  })().finally(() => {
+    if (state.saasListingProductFactSaveRequest !== request) return;
+    state.saasListingProductFactSaveRequest = null;
+    state.saasListingProductFactSavePromise = null;
+  });
+  request.promise = pending;
+  state.saasListingProductFactSavePromise = pending;
+  return pending;
 }
 
 async function handleSourceIntakeAction(action) {

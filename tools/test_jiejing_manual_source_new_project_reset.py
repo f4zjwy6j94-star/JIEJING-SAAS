@@ -45,13 +45,30 @@ def run_node_json(script: str) -> dict[str, object]:
 def main() -> None:
     reset_evidence = function_body(APP_JS, "resetSaasListingPublishEvidenceForNewProject")
     persist_facts = function_body(APP_JS, "persistSaasManualSourceFacts")
+    # Use the real scope/signature/invalidation chain even in this disconnected
+    # fixture. Public-mode browser state is synthetic; the scope key is not.
+    dependencies = [function_body(APP_JS, name) for name in (
+        "productizeJiejingProductCopy", "merchantConversationText", "publicRuntimeText",
+        "isSaasPublicMvpMode", "isLegacySampleMediaDraftKey", "saasIsInvalidMarketProductLabel",
+        "saasIsConcreteProductLabel", "saasNormalizeListingProjectIdentity", "saasCurrentListingProjectIdentity",
+        "saasListingAiGenerationContextKey", "saasCanonicalJsonValue",
+        "sanitizeSaasMerchantProductFactPacketSnapshot", "invalidateSaasListingAiGenerationContext",
+    )]
+    copy_constants = APP_JS[APP_JS.index("const legacyExecutionBrand ="):APP_JS.index("function productizeJiejingProductCopy(")]
     result = run_node_json(
         "\n".join(
             [
                 "const oldConfirmation = { confirmation_id: 'confirm-old', action_type: 'save_ebay_listing_draft' };",
                 "const oldExecution = { execution_id: 'execution-old', confirmation_id: 'confirm-old' };",
+                "const window = { __JIEJING_FORCE_PUBLIC_MVP__: true };",
+                "let saasListingAiGenerationEpoch = 3;",
+                "const saasStateRefreshGeneration = 9;",
+                "let saasListingAiGenerationRequest = { refreshGeneration: 9 };",
                 "const state = {",
                 "  saasConnected: false,",
+                "  saasLoading: true,",
+                "  saasListingAiGenerationStatus: 'running',",
+                "  saasListingAiGenerationMissingFields: ['old-project-field'],",
                 "  saasListingComposerDraft: { listing_project_key: 'project-old', media_writeback: { media_job_id: 'media-old' } },",
                 "  activeMediaDraft: 'project-old',",
                 "  saasMediaSourceUploadEpoch: 7,",
@@ -75,6 +92,8 @@ def main() -> None:
                 "const activeSaasStore = () => ({ store_id: 'store-unit' });",
                 "const saveSaasProtectedStateSnapshot = () => {};",
                 "const showActionToast = () => {};",
+                copy_constants,
+                *dependencies,
                 reset_evidence,
                 persist_facts,
                 "(async () => {",
@@ -93,6 +112,11 @@ def main() -> None:
                 "    preTestCheck: state.saasPreTestCheck,",
                 "    confirmationHistoryPreserved: state.saasConfirmations[0] === oldConfirmation,",
                 "    executionHistoryPreserved: state.saasExecutionResults[0] === oldExecution,",
+                "    generationEpoch: saasListingAiGenerationEpoch,",
+                "    generationRequest: saasListingAiGenerationRequest,",
+                "    generationStatus: state.saasListingAiGenerationStatus,",
+                "    generationMissingFields: state.saasListingAiGenerationMissingFields,",
+                "    loading: state.saasLoading,",
                 "  }));",
                 "})().catch((error) => { console.error(error); process.exit(1); });",
             ]
@@ -112,6 +136,11 @@ def main() -> None:
     assert result["preTestCheck"] is None, result
     assert result["confirmationHistoryPreserved"] is True, result
     assert result["executionHistoryPreserved"] is True, result
+    assert result["generationEpoch"] == 4, result
+    assert result["generationRequest"] is None, result
+    assert result["generationStatus"] == "idle", result
+    assert result["generationMissingFields"] == [], result
+    assert result["loading"] is False, result
     print("PASS jiejing_manual_source_new_project_reset")
 
 

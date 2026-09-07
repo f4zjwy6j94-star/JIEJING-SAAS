@@ -286,3 +286,66 @@ test("vision-only latest explicit clears stay empty while source evidence and co
     assert.deepEqual(packet.fact_conflicts, [{ field: "material", values: ["Aluminum", "Steel"] }]);
   });
 });
+
+test("facts-only restore preserves exact empty-anchor edits but rejects another origin's detached draft", async () => {
+  const emptyIdentity = { key: identity.key, source_report_id: "", candidate_id: "" };
+  const facts = factReport({ report_id: "manual-facts-current", created_at: "2026-09-03T01:00:00Z" });
+  facts.report.listing_project_identity = emptyIdentity;
+  facts.report.merchant_product_fact_packet = {
+    source: "authenticated_merchant_request", product_name: product,
+    source_confirmed_facts: {}, merchant_confirmed_facts: { product_name: product, material: "Aluminum" },
+    derived_listing_suggestions: {}, listing_copy: {}, unknown_facts: ["sku"], fact_conflicts: [],
+  };
+  const outcomes = {};
+  for (const variant of ["same", "source", "candidate"]) {
+    await withRestorePage([facts], async (page) => {
+      outcomes[variant] = await page.evaluate((variant) => {
+        const backend = restoreSaasListingComposerDraftFromBackendReports({
+          ...window.restoreOptions, preferBackendLatest: true, restoreDetachedDraft: false,
+        });
+        const local = structuredClone(backend);
+        local.fields.title = "My locally edited tablet stand title";
+        if (variant === "source") local.listing_project_identity.source_report_id = "different-source";
+        if (variant === "candidate") local.listing_project_identity.candidate_id = "different-candidate";
+        if (variant !== "same") local.source_product_fact_report_id = "another-origin-facts";
+        state.saasListingComposerDraft = local;
+        state.saasListingSourceMode = "local_unsaved_draft";
+        const stashed = stashSaasCurrentListingProjectDraft();
+        const watermarks = [];
+        if (variant === "same") {
+          // New reports in another origin can arrive after this exact-origin
+          // draft was stashed. They must not invalidate its local edit baseline.
+          for (const [index, anchor] of ["source_report_id", "candidate_id"].entries()) {
+            const foreign = structuredClone(state.saasReports[0]);
+            foreign.report_id = `other-origin-facts-${index}`;
+            foreign.created_at = `2026-09-0${4 + index}T01:00:00Z`;
+            foreign.report.listing_project_identity[anchor] = `different-${anchor}`;
+            state.saasReports.push(foreign);
+            watermarks.push(saasListingDraftSourceReportTimestamp(local));
+          }
+        }
+        const restored = restoreSaasListingComposerDraftFromBackendReports({
+          ...window.restoreOptions, reports: [state.saasReports[0]],
+          preferBackendLatest: true, restoreDetachedDraft: true,
+        });
+        document.querySelector("#view-product").innerHTML = renderSaasListingDraftEditor(restored);
+        return { stashed, watermarks, draft: restored,
+          titleInput: document.querySelector('[data-saas-listing-draft-field="title"]').value };
+      }, variant);
+    });
+  }
+  assert.equal(outcomes.same.stashed, true);
+  assert.deepEqual(outcomes.same.watermarks, [facts.created_at, facts.created_at],
+    "later reports from either different origin anchor must not change this draft's backend watermark");
+  assert.deepEqual(outcomes.same.draft.listing_project_identity, emptyIdentity);
+  assert.equal(outcomes.same.draft.source_product_fact_report_id, facts.report_id);
+  assert.equal(outcomes.same.titleInput, "My locally edited tablet stand title");
+  for (const variant of ["source", "candidate"]) {
+    assert.equal(outcomes[variant].stashed, true, `${variant}: exercise a real sanitized detached snapshot`);
+    assert.deepEqual(outcomes[variant].draft.listing_project_identity, emptyIdentity,
+      `${variant}: an explicit empty origin must not act as a wildcard for local drafts`);
+    assert.equal(outcomes[variant].draft.source_product_fact_report_id, facts.report_id);
+    assert.equal(outcomes[variant].titleInput, "", `${variant}: another origin's buyer copy must not be rendered`);
+    assert.equal(outcomes[variant].draft.model_generated, false);
+  }
+});

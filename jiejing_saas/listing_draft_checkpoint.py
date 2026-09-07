@@ -108,6 +108,9 @@ def _base(repository, conn, company_id, store_id, identity):
             return f"r.report_json -> 'listing_project_identity' ->> '{key}'"
         return f"json_extract(r.report_json, '$.listing_project_identity.{key}')"
     predicates = " and ".join(f"({field(key)}) = ?" for key in IDENTITY_KEYS)
+    # Compare instants, not offset-bearing SQLite text; new fact actions advance
+    # primary reports by at least a millisecond. Postgres already uses timestamptz.
+    order_time = "r.created_at" if repository.database_engine == "postgres" else "julianday(r.created_at)"
     row = conn.execute(
         f"""select r.*, t.company_id, t.store_id from reports r
         join tasks t on t.task_id = r.task_id
@@ -115,7 +118,7 @@ def _base(repository, conn, company_id, store_id, identity):
           and r.report_type in ('listing.package','product.listing','merchant.product_facts','ai_ceo.market_research')
           and {predicates}
         order by case when r.report_type = 'ai_ceo.market_research' then 1 else 0 end,
-          r.created_at desc, r.report_id desc limit 1""",
+          {order_time} desc, r.report_id desc limit 1""",
         (company_id, store_id, *(identity[key] for key in IDENTITY_KEYS)),
     ).fetchone()
     if not row:
