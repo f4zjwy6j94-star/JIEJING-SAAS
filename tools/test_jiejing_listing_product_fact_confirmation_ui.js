@@ -1528,3 +1528,119 @@ test("pending fact editor retains same-base HTTP failures across a later server 
     });
   }
 });
+test("fact footer and save feedback retain every pending or missing label at summary boundaries", async () => {
+  await withProductFactPage(async (page) => {
+    const facts = [
+      ["sku", "SKU"],
+      ["material", "材质"],
+      ["package_weight_g", "包装重量 g"],
+      ["package_length_cm", "包装长 cm"],
+      ["package_width_cm", "包装宽 cm"],
+      ["package_height_cm", "包装高 cm"],
+    ];
+    for (const kind of ["missing", "pending"]) {
+      for (const count of [0, 4, 5, 6]) {
+        const selected = facts.slice(0, count);
+        await page.evaluate(({ kind, selected }) => {
+          const definitions = saasMerchantProductFactDefinitions().flatMap((group) => group.fields);
+          const merchant = { source_url: "https://example.invalid/owned-fixture" };
+          for (const key of saasMerchantProductFactRequiredKeys()) {
+            const type = definitions.find(([field]) => field === key)[3];
+            merchant[key] = type === "checkbox" ? true : type === "number" ? "1"
+              : key === "image_urls" ? "https://example.invalid/owned-fixture.jpg" : `Confirmed ${key}`;
+          }
+          const derived = {};
+          for (const [key] of selected) {
+            if (kind === "pending") derived[key] = merchant[key];
+            delete merchant[key];
+          }
+          state.saasListingComposerDraft = {
+            product: "Summary Boundary Fixture", title: "Summary Boundary Fixture",
+            fields: {}, publish_prefill: {},
+            merchant_product_fact_packet: {
+              contract_version: "merchant_product_fact_packet_v1", simulation_only: true,
+              merchant_confirmed_facts: merchant, source_confirmed_facts: {},
+              derived_listing_suggestions: derived, unknown_facts: selected.map(([key]) => key),
+            },
+          };
+          window.__productFactToasts = [];
+          renderProductListingCenter();
+        }, { kind, selected });
+        const footer = await page.locator(".saas-product-facts-footer strong").innerText();
+        const labels = selected.map(([, label]) => label).join("、");
+        assert.equal(footer, count ? `${kind === "pending" ? "待确认" : "仍缺"}：${labels}`
+          : "可以继续生成 Listing 文案和发布体检", `${kind} ${count}: footer must list every field`);
+        const status = await page.locator(".saas-product-facts-module").innerText();
+        if (count) assert.ok(status.includes(`${count} 项${kind === "pending" ? " AI 建议待确认" : "资料缺失"}`));
+        await page.locator('[data-saas-action="save-merchant-product-facts"]').click();
+        await page.evaluate(() => window.__productFactSavePromise);
+        const message = await page.evaluate(() => window.__productFactToasts.at(-1));
+        assert.equal(message, (count
+          ? `商品资料已保存；${kind === "pending" ? "待确认" : "仍缺"} ${labels}，不会编造或真实发布。`
+          : "商品资料已保存；可以继续审核 Listing，真实发布仍需确认中心。") + " 登录后会写入账号工作记录。",
+        `${kind} ${count}: actual save feedback must list every field`);
+      }
+    }
+  });
+});
+
+test("fact module copy requires an explicit AI generation action after saving", async () => {
+  await withProductFactPage(async (page) => {
+    const explanation = await page.locator(".saas-product-facts-head p").innerText();
+    const generateLabel = await page.locator('[data-saas-action="listing-generate-ai-draft"]').innerText();
+    assert.doesNotMatch(explanation, /保存后[^。]*会继续生成/, "saving must not promise automatic generation or preflight");
+    assert.match(explanation, /保存只记录资料/);
+    assert.ok(explanation.includes(`请点击“${generateLabel}”`), "the next action must name the actual separate generation button");
+    assert.match(explanation, /再进行本地发布体检/);
+  });
+});
+
+test("all Listing confirmation entrances share real draft readiness while local preflight stays available", async () => {
+  await withProductFactPage(async (page) => {
+    await page.addScriptTag({ content: [
+      "saasListingMediaWritebackForDraft", "saasListingMediaWritebackImageUrls", "saasListingMediaWritebackRightsReady",
+      "saasListingDraftPreflightSummary", "renderSaasListingPreflightBridgePanel",
+      "renderSaasListingPublishFeedbackPanel", "renderSaasListingVisiblePublishBridge",
+      "saasPreTestPayloadText", "saasPreTestDuplicateSignal", "saasPreTestFormSummary", "saasPreTestCheckRows",
+      "saasPublishHealthSummary", "saasAccountHealthSnapshot", "saasAccountHealthTone",
+      "saasLatestExecutionResult", "saasExecutionResultForConfirmation", "saasLatestPublishConfirmation",
+      "saasLatestProductWorkflowTask", "saasReportsForDisplay", "latestSaasReportByTypes",
+      "saasMerchantVisiblePublishCode", "saasListingPublishLoopSteps", "renderSaasListingPublishLoopTracker",
+    ].map(extractFunction).join("\n\n") });
+    for (const scenario of ["missing image", "missing title", "missing buyer copy", "missing packet", "ready", "loading"]) {
+      await page.evaluate((scenario) => {
+        const draft = {
+          product: "Publish Button Fixture", title: "Publish Button Fixture",
+          merchant_product_fact_packet: { simulation_only: true },
+          fields: {
+            title: "Publish Button Fixture", selling_points: "Synthetic owned product",
+            description: "Synthetic fixture description", images: "https://example.invalid/owned-fixture.jpg",
+          },
+        };
+        if (scenario === "missing image") draft.fields.images = "";
+        if (scenario === "missing title") draft.fields.title = "";
+        if (scenario === "missing buyer copy") draft.fields.selling_points = draft.fields.description = "";
+        const ctx = { hasPacket: scenario !== "missing packet" };
+        state.saasListingComposerDraft = draft;
+        state.saasLoading = scenario === "loading";
+        document.querySelector("#product-fact-test-root").innerHTML =
+          renderSaasListingPreflightBridgePanel(draft, ctx, []) +
+          renderSaasListingPublishFeedbackPanel(draft, ctx, []) +
+          renderSaasListingVisiblePublishBridge(draft, ctx, []);
+      }, scenario);
+      const buttons = await page.locator('[data-saas-action="create-publish-confirmation"]').evaluateAll(
+        (elements) => elements.map((element) => ({ text: element.textContent.trim(), disabled: element.disabled })),
+      );
+      assert.deepEqual(buttons.map((button) => button.text), ["生成确认单", "生成确认单并体检", "生成确认单", "生成确认单并体检"]);
+      const expectedDisabled = scenario !== "ready";
+      assert.equal(buttons[0].disabled, expectedDisabled, `${scenario}: ordinary entrance is the existing reference`);
+      for (const button of buttons) {
+        assert.equal(button.disabled, expectedDisabled, `${scenario}: ${button.text} must share the ordinary entrance guard`);
+      }
+      const localPreflight = await page.locator('[data-saas-action="run-pretest-check"]').evaluateAll(
+        (elements) => elements.map((element) => element.disabled),
+      );
+      assert.deepEqual(localPreflight, [false, false, false, false], `${scenario}: local preflight must remain available`);
+    }
+  });
+});

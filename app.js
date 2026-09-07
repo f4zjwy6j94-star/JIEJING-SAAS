@@ -9514,8 +9514,8 @@ function saasMerchantProductFactReviewSummary(packet = {}) {
 function saasMerchantProductFactSavedMessage(packet = {}) {
   const { pendingSuggestionLabels, missingLabels } = saasMerchantProductFactReviewSummary(packet);
   const status = [
-    pendingSuggestionLabels.length ? `待确认 ${pendingSuggestionLabels.slice(0, 4).join("、")}` : "",
-    missingLabels.length ? `仍缺 ${missingLabels.slice(0, 4).join("、")}` : "",
+    pendingSuggestionLabels.length ? `待确认 ${pendingSuggestionLabels.join("、")}` : "",
+    missingLabels.length ? `仍缺 ${missingLabels.join("、")}` : "",
   ].filter(Boolean).join("；");
   return status
     ? `商品资料已保存；${status}，不会编造或真实发布。`
@@ -9559,8 +9559,8 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
     missingLabels.length ? `${missingLabels.length} 项资料缺失` : "",
   ].filter(Boolean).join(" · ") || "商品事实已补齐";
   const footerStatus = [
-    pendingSuggestionLabels.length ? `待确认：${pendingSuggestionLabels.slice(0, 4).join("、")}` : "",
-    missingLabels.length ? `仍缺：${missingLabels.slice(0, 4).join("、")}` : "",
+    pendingSuggestionLabels.length ? `待确认：${pendingSuggestionLabels.join("、")}` : "",
+    missingLabels.length ? `仍缺：${missingLabels.join("、")}` : "",
   ].filter(Boolean).join("；") || "可以继续生成 Listing 文案和发布体检";
   const generationFeedback = renderSaasListingAiGenerationFeedback(draft);
   return `
@@ -9569,7 +9569,7 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
         <div>
           <span>商品资料</span>
           <strong>AI 先填能整理的，你只确认真实缺口</strong>
-          <p>材质、成本、库存、发货和图片权利以你的真实资料为准。保存后 JIEJING 会继续生成和体检 Listing，不用去 eBay 手工填写。</p>
+          <p>材质、成本、库存、发货和图片权利以你的真实资料为准。保存只记录资料；请点击“AI 生成 Listing 草稿”，再进行本地发布体检，不用去 eBay 手工填写。</p>
         </div>
         <div class="saas-product-facts-score">
           <b>${escapeHtml(factStatusLabel)}</b>
@@ -10172,6 +10172,7 @@ function renderSaasListingPublishFeedbackPanel(
   pendingConfirmations = [],
 ) {
   if (!draft) return "";
+  const summary = saasListingDraftPreflightSummary(draft, ctx, pendingConfirmations);
   const rows = saasPreTestCheckRows(ctx, null);
   const localSummary = saasPublishHealthSummary(rows);
   const readiness = state.saasLastPublishReadiness && typeof state.saasLastPublishReadiness === "object" ? state.saasLastPublishReadiness : {};
@@ -10248,7 +10249,7 @@ function renderSaasListingPublishFeedbackPanel(
       ${renderSaasListingPublishLoopTracker({ localSummary, hasBackendReadiness, backendBlocked, confirmation, execution })}
       <div class="saas-listing-publish-feedback-actions">
         <button class="secondary-action" type="button" data-saas-action="run-pretest-check">重新本地体检</button>
-        <button class="secondary-action" type="button" data-saas-action="create-publish-confirmation" ${state.saasLoading ? "disabled" : ""}>生成确认单并体检</button>
+        <button class="secondary-action" type="button" data-saas-action="create-publish-confirmation" ${!summary.readyForConfirmation || state.saasLoading ? "disabled" : ""}>生成确认单并体检</button>
         <button class="primary-action" type="button" data-saas-action="open-confirm" ${canOpenConfirm ? "" : "disabled"}>打开确认中心</button>
       </div>
     </section>
@@ -10310,7 +10311,7 @@ function renderSaasListingVisiblePublishBridge(
         ${renderSaasListingPublishLoopTracker({ localSummary, hasBackendReadiness, backendBlocked, confirmation, execution })}
         <div class="saas-listing-publish-feedback-actions">
           <button class="secondary-action" type="button" data-saas-action="run-pretest-check">重新本地体检</button>
-          <button class="secondary-action" type="button" data-saas-action="create-publish-confirmation" ${state.saasLoading ? "disabled" : ""}>生成确认单并体检</button>
+          <button class="secondary-action" type="button" data-saas-action="create-publish-confirmation" ${!summary.readyForConfirmation || state.saasLoading ? "disabled" : ""}>生成确认单并体检</button>
           <button class="primary-action" type="button" data-saas-action="open-confirm" ${canOpenConfirm ? "" : "disabled"}>打开确认中心</button>
         </div>
       </section>
