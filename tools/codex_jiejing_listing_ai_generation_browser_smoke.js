@@ -878,6 +878,259 @@ async function runSmoke() {
   contextCases.push("rejected_generation_copy_and_persistent_reason");
   const screenshotPath = path.join(os.tmpdir(), `jiejing-listing-context-guard-${Date.now()}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
+
+  // A refresh exposes the editor after core data, before its second-stage
+  // reports GET completes. Hold a real local response, not a fabricated fact
+  // packet, and wait for the actual refresh promise rather than a sleep.
+  await waitForTimingGate(page.evaluate(async () => {
+    await state.saasListingProductFactSavePromise;
+    await refreshSaasState({ silent: true });
+  }), "Refresh regression baseline");
+  const refreshScope = await page.evaluate(() => ({
+    companyId: state.saasIdentity?.company_id,
+    userId: state.saasIdentity?.user_id,
+    storeId: activeSaasStore()?.store_id,
+    identity: saasCurrentListingProjectIdentity(),
+    baseReportId: state.saasListingComposerDraft?.source_product_fact_report_id,
+  }));
+  const matchingFacts = (payload) => (payload.reports || []).filter((report) =>
+    report.report_type === "merchant.product_facts" && report.status === "saved" &&
+    report.company_id === refreshScope.companyId && report.store_id === refreshScope.storeId &&
+    ["key", "source_report_id", "candidate_id"].every((key) =>
+      typeof report.report?.listing_project_identity?.[key] === "string" &&
+      report.report.listing_project_identity[key] === refreshScope.identity[key]))
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.report_id.localeCompare(a.report_id));
+  const baselineFactReport = matchingFacts(await api("/reports?limit=24", { token }))[0];
+  if (!baselineFactReport || baselineFactReport.report_id !== refreshScope.baseReportId) {
+    throw new Error("refresh regression requires the current project's real saved fact baseline");
+  }
+  const baselineMaterial = baselineFactReport.report.merchant_product_fact_packet.merchant_confirmed_facts.material;
+  let factPostCount = 0;
+  const countFactPosts = (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === `/stores/${refreshScope.storeId}/product-facts`) factPostCount += 1;
+  };
+  page.on("request", countFactPosts);
+  const reportsUrl = `${base}/reports?limit=24`;
+  let releaseReports;
+  let resolveHeldReports;
+  let reportsHeldOnce = false;
+  const heldReports = new Promise((resolve) => { resolveHeldReports = resolve; });
+  const holdReports = async (route) => {
+    if (route.request().method() !== "GET" || reportsHeldOnce) return route.continue();
+    reportsHeldOnce = true;
+    const response = await route.fetch();
+    await new Promise((resolve) => {
+      releaseReports = resolve;
+      resolveHeldReports(response);
+    });
+    await route.fulfill({ response });
+  };
+  await page.route(reportsUrl, holdReports);
+  try {
+    await page.evaluate(() => {
+      window.__listingRefreshRegressionDone = false;
+      window.__listingRefreshRegressionPromise = refreshSaasState({ silent: true }).then(() => {
+        window.__listingRefreshRegressionDone = true;
+      });
+    });
+    const reportsResponse = await waitForTimingGate(heldReports, "Second-stage reports response");
+    if (!reportsResponse.ok()) throw new Error("held second-stage reports GET was not a successful real response");
+    const heldFactReport = matchingFacts(await reportsResponse.json())[0];
+    if (heldFactReport?.report_id !== baselineFactReport.report_id) throw new Error("fact baseline changed before controlled refresh edits");
+    if (!await page.evaluate(() => state.saasLoading === false && window.__listingRefreshRegressionDone === false)) {
+      throw new Error("reports response was not held inside the real core-ready, refresh-pending window");
+    }
+    const refreshTitle = "Merchant Title While Refresh Is Pending";
+    const refreshMaterial = "Merchant material awaiting explicit save";
+    await page.fill('[data-saas-listing-draft-field="title"]', refreshTitle);
+    await page.fill('[data-saas-product-fact-field="material"]', refreshMaterial);
+    const factProvenanceAfterInput = await page.evaluate(() => Array.from(
+      document.querySelectorAll("#view-product [data-saas-product-fact-field]"), (field) => [
+        field.dataset.saasProductFactField, field.dataset.productFactConfirmed || "",
+        field.dataset.productFactOriginState || "", field.dataset.productFactUnknown || "",
+      ]));
+    releaseReports();
+    await waitForTimingGate(page.evaluate(() => window.__listingRefreshRegressionPromise), "Second-stage refresh completion");
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    const afterRefresh = await page.evaluate(() => ({
+      companyId: state.saasIdentity?.company_id, userId: state.saasIdentity?.user_id,
+      storeId: activeSaasStore()?.store_id, identity: saasCurrentListingProjectIdentity(),
+      baseReportId: state.saasListingComposerDraft?.source_product_fact_report_id,
+      title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+      material: document.querySelector('[data-saas-product-fact-field="material"]')?.value,
+      provenance: Array.from(document.querySelectorAll("#view-product [data-saas-product-fact-field]"), (field) => [
+        field.dataset.saasProductFactField, field.dataset.productFactConfirmed || "",
+        field.dataset.productFactOriginState || "", field.dataset.productFactUnknown || "",
+      ]),
+    }));
+    if (afterRefresh.companyId !== refreshScope.companyId || afterRefresh.userId !== refreshScope.userId ||
+        afterRefresh.storeId !== refreshScope.storeId || afterRefresh.baseReportId !== refreshScope.baseReportId ||
+        ["key", "source_report_id", "candidate_id"].some((key) => afterRefresh.identity[key] !== refreshScope.identity[key])) {
+      throw new Error("controlled refresh changed the merchant's project scope or fact baseline");
+    }
+    if (afterRefresh.title !== refreshTitle || afterRefresh.material !== refreshMaterial) {
+      throw new Error("second-stage refresh discarded unsaved title or merchant material");
+    }
+    if (JSON.stringify(afterRefresh.provenance) !== JSON.stringify(factProvenanceAfterInput)) {
+      throw new Error("second-stage refresh changed untouched fact confirmation or unknown provenance");
+    }
+    const stillSaved = matchingFacts(await api("/reports?limit=24", { token }))[0];
+    if (factPostCount !== 0 || stillSaved?.report_id !== baselineFactReport.report_id ||
+        stillSaved.report.merchant_product_fact_packet.merchant_confirmed_facts.material !== baselineMaterial) {
+      throw new Error("refresh saved pending merchant facts without an explicit save action");
+    }
+    const explicitFactSave = page.waitForResponse((response) => response.request().method() === "POST" &&
+      new URL(response.url()).pathname === `/stores/${refreshScope.storeId}/product-facts` && response.status() === 201,
+    { timeout: 20000 });
+    await page.click('[data-saas-action="save-merchant-product-facts"]');
+    const savedFactResponse = await explicitFactSave;
+    await page.evaluate(async () => { await state.saasListingProductFactSavePromise; });
+    const savedFactPayload = await savedFactResponse.json();
+    const independentlySaved = matchingFacts(await api("/reports?limit=24", { token }))[0];
+    if (factPostCount !== 1 || independentlySaved?.report_id !== savedFactPayload.report?.report_id ||
+        independentlySaved.report_id === baselineFactReport.report_id ||
+        independentlySaved.report.merchant_product_fact_packet.merchant_confirmed_facts.material !== refreshMaterial) {
+      throw new Error("explicit merchant save did not persist the retained material in the real backend");
+    }
+    contextCases.push("second_stage_refresh_preserves_unsaved_facts_until_explicit_save");
+  } finally {
+    releaseReports?.();
+    await page.unroute(reportsUrl, holdReports);
+    page.off("request", countFactPosts);
+  }
+
+  // The second client below is a synthetic local HTTP fixture, not a claimed
+  // merchant UI journey. Its new fact version must not discard this page's
+  // unsaved input or silently advance the page's compare-and-swap baseline.
+  const factVersionA = matchingFacts(await api("/reports?limit=24", { token }))[0];
+  if (!factVersionA || !await page.evaluate((reportId) =>
+    state.saasListingComposerDraft?.source_product_fact_report_id === reportId, factVersionA.report_id)) {
+    throw new Error("cross-base regression requires the fact version saved by the preceding UI case");
+  }
+  const pendingMaterialC = "Unsaved material C from the first client";
+  await page.fill('[data-saas-product-fact-field="material"]', pendingMaterialC);
+  const secondClientPacket = structuredClone(factVersionA.report.merchant_product_fact_packet);
+  const secondClientMaterialB = "Saved material B from the second client";
+  secondClientPacket.merchant_confirmed_facts.material = secondClientMaterialB;
+  const savedBySecondClient = await api(`/stores/${refreshScope.storeId}/product-facts`, {
+    token, method: "POST", body: {
+      listing_project_identity: Object.fromEntries(["key", "source_report_id", "candidate_id"].map((key) => [key, refreshScope.identity[key]])),
+      merchant_product_fact_packet: secondClientPacket,
+      save_context: { contract_version: "merchant_product_fact_save_v1", mutation_id: crypto.randomUUID(),
+        expected_fact_report_id: factVersionA.report_id },
+    },
+  });
+  const factVersionB = savedBySecondClient.report;
+  if (!factVersionB?.report_id || factVersionB.report_id === factVersionA.report_id) {
+    throw new Error("second-client HTTP fixture did not save a distinct real fact version B");
+  }
+  const firstClientFactBodies = [];
+  const captureFirstClientFactPost = (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === `/stores/${refreshScope.storeId}/product-facts`) {
+      firstClientFactBodies.push(JSON.parse(request.postData() || "{}"));
+    }
+  };
+  page.on("request", captureFirstClientFactPost);
+  try {
+    await waitForTimingGate(page.evaluate(() => refreshSaasState({ silent: true })), "Refresh to fact version B");
+    if (await page.inputValue('[data-saas-product-fact-field="material"]') !== pendingMaterialC) {
+      throw new Error("new fact version discarded the first client's unsaved material C");
+    }
+    const versionWarning = page.locator('[data-saas-product-fact-version-warning]');
+    if (!await versionWarning.isVisible() || !/更新/.test(await versionWarning.textContent()) ||
+        !/保留/.test(await versionWarning.textContent())) {
+      throw new Error("retained old-base facts have no visible new-version warning");
+    }
+    if (firstClientFactBodies.length !== 0) throw new Error("refresh automatically submitted old-base merchant facts");
+    // Merely visiting another workspace is not the explicit project reopen
+    // below. Both routes really remove the fact controls before returning.
+    const readNavigationFactState = () => page.evaluate(() => ({
+      context: saasListingAiGenerationContextKey(), epoch: saasListingAiGenerationEpoch,
+      baseReportId: state.saasListingComposerDraft?.source_product_fact_report_id,
+      material: document.querySelector('#view-product [data-saas-product-fact-field="material"]')?.value,
+      provenance: Array.from(document.querySelectorAll("#view-product [data-saas-product-fact-field]"), (field) => [
+        field.dataset.saasProductFactField, field.dataset.productFactConfirmed || "",
+        field.dataset.productFactOriginState || "", field.dataset.productFactUnknown || "",
+      ]),
+    }));
+    const beforeTemporaryNavigation = await readNavigationFactState();
+    for (const target of ["recent", "media"]) {
+      if (target === "recent") {
+        await page.click('#view-product [data-listing-mode="recent"]');
+        await page.waitForFunction(() => state.view === "product" && state.saasListingMode === "recent" &&
+          !document.querySelector("#view-product [data-saas-product-fact-field]"));
+        await page.click('#view-product [data-listing-mode="single"]');
+      } else {
+        await page.click('.nav-item[data-view="media"]');
+        await page.waitForFunction(() => state.view === "media" &&
+          !document.querySelector("#view-product [data-saas-product-fact-field]"));
+        await page.click('.nav-item[data-view="product"]');
+      }
+      await page.waitForFunction(() => state.view === "product" && state.saasListingMode === "single" &&
+        document.querySelector('#view-product [data-saas-product-fact-field="material"]'));
+      const afterTemporaryNavigation = await readNavigationFactState();
+      if (JSON.stringify(afterTemporaryNavigation) !== JSON.stringify(beforeTemporaryNavigation) ||
+          afterTemporaryNavigation.material !== pendingMaterialC || firstClientFactBodies.length !== 0 ||
+          !await versionWarning.isVisible() || !/更新/.test(await versionWarning.textContent()) ||
+          !/保留/.test(await versionWarning.textContent())) {
+        throw new Error(`temporary ${target} navigation lost pending facts, changed scope, hid the version warning, or submitted facts`);
+      }
+    }
+    // The original real POST/409 assertion next proves that navigation did not
+    // silently rebase the retained input from A onto the newer saved version B.
+    const conflictResponse = page.waitForResponse((response) => response.request().method() === "POST" &&
+      new URL(response.url()).pathname === `/stores/${refreshScope.storeId}/product-facts` && response.status() === 409,
+    { timeout: 20000 });
+    await page.click('[data-saas-action="save-merchant-product-facts"]');
+    await conflictResponse;
+    await page.evaluate(async () => { await state.saasListingProductFactSavePromise; });
+    if (firstClientFactBodies.length !== 1 || firstClientFactBodies[0].save_context?.expected_fact_report_id !== factVersionA.report_id ||
+        await page.inputValue('[data-saas-product-fact-field="material"]') !== pendingMaterialC) {
+      throw new Error("old-base save did not retain input C and submit the original fact version A for CAS");
+    }
+    // Exercise real completion boundaries after the 409; no automatic retry or
+    // fabricated timer delay is needed to finish a read-only refresh.
+    await waitForTimingGate(page.evaluate(() => refreshSaasState({ silent: true })), "Refresh after fact CAS conflict");
+    const afterConflict = matchingFacts(await api("/reports?limit=24", { token }))[0];
+    const conflictSettled = await page.evaluate(() =>
+      state.saasListingProductFactSaveRequest == null && state.saasListingProductFactSavePromise == null);
+    if (firstClientFactBodies.length !== 1 || !conflictSettled || afterConflict?.report_id !== factVersionB.report_id ||
+        afterConflict.report.merchant_product_fact_packet.merchant_confirmed_facts.material !== secondClientMaterialB ||
+        await page.inputValue('[data-saas-product-fact-field="material"]') !== pendingMaterialC) {
+      throw new Error(`fact conflict retried automatically, overwrote version B, or discarded retained input C: ${JSON.stringify({
+        postCount: firstClientFactBodies.length,
+        conflictSettled,
+        sameServerReport: afterConflict?.report_id === factVersionB.report_id,
+        serverMaterialUnchanged: afterConflict?.report?.merchant_product_fact_packet?.merchant_confirmed_facts?.material === secondClientMaterialB,
+        pendingInputRetained: await page.inputValue('[data-saas-product-fact-field="material"]') === pendingMaterialC,
+      })}`);
+    }
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => typeof state !== "undefined" && state.saasProtectedStateReady && !state.saasLoading);
+    await waitForTimingGate(page.evaluate(() => refreshSaasState({ silent: true })), "Explicit reopen at fact version B");
+    if (await page.inputValue('[data-saas-product-fact-field="material"]') !== secondClientMaterialB ||
+        !await page.evaluate((reportId) => state.saasListingComposerDraft?.source_product_fact_report_id === reportId, factVersionB.report_id) ||
+        await page.locator('[data-saas-product-fact-version-warning]').count()) {
+      throw new Error("explicit reopen did not discard the old DOM overlay and restore real fact version B");
+    }
+    const newMaterialD = "New material D after explicit reopen";
+    await page.fill('[data-saas-product-fact-field="material"]', newMaterialD);
+    const finalSave = page.waitForResponse((response) => response.request().method() === "POST" &&
+      new URL(response.url()).pathname === `/stores/${refreshScope.storeId}/product-facts` && response.status() === 201,
+    { timeout: 20000 });
+    await page.click('[data-saas-action="save-merchant-product-facts"]');
+    const finalSavedPayload = await (await finalSave).json();
+    await page.evaluate(async () => { await state.saasListingProductFactSavePromise; });
+    const factVersionD = matchingFacts(await api("/reports?limit=24", { token }))[0];
+    if (firstClientFactBodies.length !== 2 || firstClientFactBodies[1].save_context?.expected_fact_report_id !== factVersionB.report_id ||
+        factVersionD?.report_id !== finalSavedPayload.report?.report_id || factVersionD.report_id === factVersionB.report_id ||
+        factVersionD.report.merchant_product_fact_packet.merchant_confirmed_facts.material !== newMaterialD) {
+      throw new Error("explicit reopen and merchant save did not create version D from observed version B");
+    }
+    contextCases.push("new_fact_base_retains_unsaved_input_and_original_cas_until_explicit_reopen");
+  } finally {
+    page.off("request", captureFirstClientFactPost);
+  }
   if (pageErrors.length) throw new Error(`page errors: ${JSON.stringify(pageErrors)}`);
   if (unsafeRequests.length) throw new Error(`unsafe requests triggered: ${JSON.stringify(unsafeRequests)}`);
 

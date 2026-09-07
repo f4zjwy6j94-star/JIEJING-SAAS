@@ -1158,3 +1158,373 @@ test("editing buyer copy during a fact save preserves those edits without restor
     assert.deepEqual(result.merchant_edited_fields, ["title", "selling_points", "description"]);
   });
 });
+
+async function installPendingFactEditor(page) {
+  // Exercise the real overlay and identity functions inside the existing DOM fixture.
+  // Only the surrounding page/store/HTTP boundary remains synthetic.
+  const functions = ["saasProductFactEditorScope", "saasProductFactEditorFields",
+    "captureSaasPendingProductFactEditor", "restoreSaasPendingProductFactEditor",
+    "clearSaasPendingProductFactEditor",
+    "renderProductListingCenter", "saveSaasMerchantProductFacts", "persistSaasMerchantProductFacts",
+    "saasListingAiGenerationContextKey", "saasCurrentListingProjectIdentity",
+    "saasNormalizeListingProjectIdentity", "saasIsConcreteProductLabel",
+    "saasIsInvalidMarketProductLabel", "hashString"].map(extractFunction).join("\n");
+  await page.addScriptTag({ content: `(() => {
+    const activeListingDraft = () => null;
+    const isSaasPublicMvpMode = () => true;
+    const isLegacySampleMediaDraftKey = () => false;
+    ${functions}
+    const root = document.querySelector('#product-fact-test-root');
+    const view = document.createElement('section');
+    view.id = 'view-product';
+    root.replaceWith(view); view.append(root);
+    const renderSaasProductListingCenter = () => {
+      root.innerHTML = renderSaasMerchantProductFactsModule(state.saasListingComposerDraft);
+    };
+    // Bind the original click listener to real saves whose lexical renderer is
+    // the real public wrapper, not the old fixture-wide const renderer.
+    window.saveSaasMerchantProductFacts = saveSaasMerchantProductFacts;
+    window.persistSaasMerchantProductFacts = persistSaasMerchantProductFacts;
+    window.captureSaasPendingProductFactEditor = captureSaasPendingProductFactEditor;
+    window.clearSaasPendingProductFactEditor = clearSaasPendingProductFactEditor;
+    state.saasCompany = { company_id: 'company-A' };
+    state.saasUser = { user_id: 'user-A' };
+    window.__productFactStore = { store_id: 'store-A' };
+    state.saasListingComposerDraft.listing_project_identity = {
+      key: 'project-A', source_report_id: 'source-A', candidate_id: 'candidate-A' };
+    state.saasListingComposerDraft.source_product_fact_report_id = 'base-A';
+    window.__pendingFactEditor = {
+      scope: saasProductFactEditorScope,
+      fields: () => saasProductFactEditorFields(view),
+      capture: () => captureSaasPendingProductFactEditor(view),
+      restore: (pending) => restoreSaasPendingProductFactEditor(view, pending),
+      render: renderProductListingCenter,
+    };
+    restoreSaasPendingProductFactEditor(view, null);
+  })();` });
+}
+
+test("pending fact editor keeps only same-context DOM differences across repeated redraws", async () => {
+  await withProductFactPage(async (page) => {
+    await installPendingFactEditor(page);
+    const material = page.locator('[data-saas-product-fact-field="material"]');
+    await material.fill("Steel merchant edit");
+    const result = await page.evaluate(() => {
+      const field = document.querySelector('[data-saas-product-fact-field="material"]');
+      field.setSelectionRange(2, 7);
+      const editor = window.__pendingFactEditor;
+      const before = editor.fields().find((item) => item.key === 'material');
+      const packet = state.saasListingComposerDraft.merchant_product_fact_packet;
+      packet.source_confirmed_facts.brand = 'New source brand';
+      const packetBefore = JSON.stringify(packet);
+      let writes = 0;
+      window.__productFactFetch = async () => { writes++; return {}; };
+      const edited = editor.capture().fields.map((item) => item.key);
+      editor.render(); editor.render();
+      const active = document.activeElement;
+      return { before, after: editor.fields().find((item) => item.key === 'material'), edited,
+        brand: document.querySelector('[data-saas-product-fact-field="brand"]').value,
+        focus: active.dataset.saasProductFactField, selection: [active.selectionStart, active.selectionEnd],
+        packetUnchanged: JSON.stringify(packet) === packetBefore, writes,
+        baselineValue: document.querySelector('#view-product').saasProductFactEditorBaseline.fields.find((item) => item.key === 'material').value };
+    });
+    assert.deepEqual(result.after, result.before);
+    assert.deepEqual(result.edited, ["material"]);
+    assert.equal(result.brand, "New source brand", "untouched fields must take the fresh render, not the old DOM");
+    assert.equal(result.focus, "material");
+    assert.deepEqual(result.selection, [2, 7]);
+    assert.equal(result.baselineValue, "Aluminum Alloy", "a restored edit must not become the saved baseline");
+    assert.equal(result.packetUnchanged, true);
+    assert.equal(result.writes, 0);
+  });
+});
+
+test("pending fact editor preserves empty unknown checkbox and provenance without upgrading facts", async () => {
+  await withProductFactPage(async (page) => {
+    await installPendingFactEditor(page);
+    await page.evaluate(() => {
+      state.saasListingComposerDraft.merchant_product_fact_packet.source_confirmed_facts.brand = 'Source Brand';
+      window.__pendingFactEditor.render();
+    });
+    await page.locator('[data-saas-product-fact-field="material"]').fill("");
+    await page.locator('[data-saas-product-fact-field="merchant_owned_product_confirmed"]').check();
+    await page.locator('[data-product-fact-key="package_weight_g"] [data-saas-action="confirm-product-fact-suggestion"]').click();
+    const result = await page.evaluate(() => {
+      const editor = window.__pendingFactEditor;
+      const before = editor.fields();
+      const packet = JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet);
+      editor.render(); editor.render();
+      return { before, after: editor.fields(), packetUnchanged: packet === JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet) };
+    });
+    assert.deepEqual(result.after, result.before, "all values and source/confirmation labels must remain exact");
+    const fields = Object.fromEntries(result.after.map((field) => [field.key, field]));
+    assert.equal(fields.material.value, "");
+    assert.equal(fields.material.unknown, "true");
+    assert.equal(fields.material.confirmed, "false");
+    assert.equal(fields.merchant_owned_product_confirmed.value, true);
+    assert.equal(fields.package_weight_g.confirmationDisabled, true);
+    assert.equal(fields.package_weight_g.confirmationText, "已确认");
+    assert.notEqual(fields.brand.origin, "merchant_confirmed");
+    assert.notEqual(fields.condition.confirmed, "true");
+    assert.equal(result.packetUnchanged, true);
+    await page.locator('[data-saas-product-fact-field="merchant_owned_product_confirmed"]').uncheck();
+    await page.evaluate(() => window.__pendingFactEditor.render());
+    assert.equal(await page.locator('[data-saas-product-fact-field="merchant_owned_product_confirmed"]').isChecked(), false);
+  });
+});
+
+test("pending fact editor isolates identity changes but anchors cross-base edits to their observed version", async () => {
+  await withProductFactPage(async (page) => {
+    await installPendingFactEditor(page);
+    const original = await page.evaluate(() => JSON.parse(JSON.stringify(state.saasListingComposerDraft)));
+    for (const changed of ["company", "user", "store", "key", "source", "candidate", "epoch", "empty_source", "empty_candidate", "no_draft", "no_identity"]) {
+      await page.evaluate((draft) => {
+        state.saasCompany = { company_id: 'company-A' }; state.saasUser = { user_id: 'user-A' };
+        window.__productFactStore = { store_id: 'store-A' }; saasListingAiGenerationEpoch = 10;
+        state.saasListingComposerDraft = draft;
+        renderProductListingCenter(); window.__pendingFactEditor.restore(null);
+      }, original);
+      await page.locator('[data-saas-product-fact-field="material"]').fill("Never leak this edit");
+      const result = await page.evaluate((changed) => {
+        const editor = window.__pendingFactEditor, pending = editor.capture();
+        const draft = state.saasListingComposerDraft;
+        if (changed === 'company') state.saasCompany.company_id = 'company-B';
+        if (changed === 'user') state.saasUser.user_id = 'user-B';
+        if (changed === 'store') window.__productFactStore.store_id = 'store-B';
+        if (changed === 'key') draft.listing_project_identity.key = 'project-B';
+        if (changed === 'source') draft.listing_project_identity.source_report_id = 'source-B';
+        if (changed === 'candidate') draft.listing_project_identity.candidate_id = 'candidate-B';
+        if (changed === 'epoch') saasListingAiGenerationEpoch++;
+        if (changed === 'empty_source') draft.listing_project_identity.source_report_id = '';
+        if (changed === 'empty_candidate') draft.listing_project_identity.candidate_id = '';
+        if (changed === 'no_draft') state.saasListingComposerDraft = null;
+        if (changed === 'no_identity') state.saasListingComposerDraft = {};
+        const capturedAfterChange = editor.capture();
+        document.querySelector('#product-fact-test-root').innerHTML = renderSaasMerchantProductFactsModule(draft);
+        editor.restore(pending);
+        return { capturedAfterChange, value: document.querySelector('[data-saas-product-fact-field="material"]').value };
+      }, changed);
+      assert.equal(result.capturedAfterChange, null, `${changed} must reject the previous DOM baseline`);
+      assert.equal(result.value, "Aluminum Alloy", `${changed} must not receive another scope's pending edit`);
+    }
+    for (const [oldBase, newBase, input] of [["base-A", "base-B", "Unsaved Steel"], ["base-A", "", ""], ["", "base-B", "Unsaved Resin"]]) {
+      const caseLabel = oldBase === "" ? "empty_to_version" : newBase === "" ? "version_to_empty" : "version_to_version";
+      await page.evaluate(({ draft, oldBase }) => {
+        state.saasCompany = { company_id: 'company-A' }; state.saasUser = { user_id: 'user-A' };
+        window.__productFactStore = { store_id: 'store-A' }; saasListingAiGenerationEpoch = 10;
+        state.saasListingComposerDraft = draft;
+        draft.source_product_fact_report_id = oldBase;
+        state.saasConnected = true; state.saasReports = []; state.saasProductFactSaveAttempt = null;
+        renderProductListingCenter(); window.__pendingFactEditor.restore(null);
+        window.__crossBaseWrites = [];
+        window.__crossBaseSignatures = [];
+        window.__productFactFetch = async (_path, options) => {
+          window.__crossBaseWrites.push(JSON.parse(options.body));
+          window.__crossBaseSignatures.push({ epoch: saasListingAiGenerationEpoch,
+            signature: state.saasProductFactSaveAttempt.signature });
+          const error = new Error('synthetic version conflict'); error.status = 409; throw error;
+        };
+      }, { draft: original, oldBase });
+      await page.locator('[data-saas-product-fact-field="material"]').fill(input);
+      const refreshed = await page.evaluate((newBase) => {
+        const packet = JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet);
+        state.saasListingComposerDraft.source_product_fact_report_id = newBase;
+        window.__pendingFactEditor.render(); window.__pendingFactEditor.render();
+        return { pending: window.__pendingFactEditor.capture(), writes: window.__crossBaseWrites.length,
+          packetUnchanged: packet === JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet) };
+      }, newBase);
+      assert.equal(await page.locator('[data-saas-product-fact-field="material"]').inputValue(), input);
+      assert.equal(refreshed.pending.expectedFactReportId, oldBase);
+      assert.equal(refreshed.pending.hasVersionConflict, true);
+      assert.equal(refreshed.packetUnchanged, true);
+      assert.equal(refreshed.writes, 0, "a newer cloud base must not automatically save local edits");
+      assert.equal(await page.locator('[data-saas-product-fact-version-warning]').count(), 1);
+      await page.locator('[data-saas-action="save-merchant-product-facts"]').click();
+      await page.evaluate(() => window.__productFactSavePromise);
+      const afterConflict = await page.evaluate(() => {
+        window.__pendingFactEditor.render(); window.__pendingFactEditor.render();
+        const packet = state.saasListingComposerDraft.merchant_product_fact_packet;
+        return { pending: window.__pendingFactEditor.capture(), writes: window.__crossBaseWrites.length,
+          value: document.querySelector('[data-saas-product-fact-field="material"]').value,
+          merchantMaterial: packet.merchant_confirmed_facts.material ?? null,
+          materialUnknown: packet.unknown_facts.includes('material') };
+      });
+      assert.equal(afterConflict.value, input, `${caseLabel}: local packet projection must keep the actual input`);
+      assert.equal(afterConflict.merchantMaterial, input || null, `${caseLabel}: local packet must contain C or an explicit unknown`);
+      assert.equal(afterConflict.materialUnknown, input === "");
+      assert.equal(afterConflict.pending.expectedFactReportId, oldBase, "local packet projection must not upgrade the sticky CAS anchor");
+      assert.equal(afterConflict.pending.hasVersionConflict, true);
+      assert.equal(afterConflict.writes, 1, "409 must not automatically retry");
+      assert.equal(await page.locator('[data-saas-product-fact-version-warning]').count(), 1);
+      await page.locator('[data-saas-action="save-merchant-product-facts"]').click();
+      await page.evaluate(() => window.__productFactSavePromise);
+      const sameContentRetry = await page.evaluate(() => {
+        const packets = window.__crossBaseWrites.map((body) => {
+          const packet = { ...body.merchant_product_fact_packet }; delete packet.saved_at; return packet;
+        });
+        return { count: window.__crossBaseWrites.length,
+          canonicalEqual: JSON.stringify(saasCanonicalJsonValue(packets[0])) === JSON.stringify(saasCanonicalJsonValue(packets[1])),
+          attempts: window.__crossBaseWrites.map((body) => body.save_context) };
+      });
+      assert.equal(sameContentRetry.count, 2, `${caseLabel}: only the explicit retry adds a POST`);
+      assert.equal(sameContentRetry.canonicalEqual, true, `${caseLabel}: verify identical complete content before checking action reuse`);
+      assert.equal(sameContentRetry.attempts[0].mutation_id, sameContentRetry.attempts[1].mutation_id,
+        `${caseLabel}: an explicit unchanged-content retry must reuse its action`);
+      assert.deepEqual(sameContentRetry.attempts.map((attempt) => attempt.expected_fact_report_id), [oldBase, oldBase]);
+      const refreshedAgain = await page.evaluate((packet) => {
+        // An independently refreshed server packet B must not erase the still-unsaved C overlay.
+        state.saasListingComposerDraft.merchant_product_fact_packet = packet;
+        const packetBefore = JSON.stringify(packet);
+        window.__pendingFactEditor.render(); window.__pendingFactEditor.render();
+        return { pending: window.__pendingFactEditor.capture(), writes: window.__crossBaseWrites.length,
+          packetUnchanged: packetBefore === JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet) };
+      }, original.merchant_product_fact_packet);
+      assert.equal(await page.locator('[data-saas-product-fact-field="material"]').inputValue(), input, "C must survive local packet C then server packet B redraws");
+      assert.equal(refreshedAgain.pending.expectedFactReportId, oldBase);
+      assert.equal(refreshedAgain.pending.hasVersionConflict, true);
+      assert.equal(refreshedAgain.writes, 2, `${caseLabel}: rendering server data must not automatically POST`);
+      assert.equal(refreshedAgain.packetUnchanged, true);
+      assert.equal(await page.locator('[data-saas-product-fact-version-warning]').count(), 1);
+      if (oldBase === "base-A" && newBase === "base-B") {
+        const whileHidden = await page.evaluate(() => {
+          const editor = window.__pendingFactEditor;
+          const pending = editor.capture();
+          document.querySelector('#product-fact-test-root').innerHTML = '';
+          editor.restore(pending);
+          return editor.capture();
+        });
+        assert.ok(whileHidden, "temporarily absent fact controls must retain the pending editor snapshot");
+        assert.equal(whileHidden.expectedFactReportId, oldBase, "hiding controls must not advance the CAS anchor");
+        await page.evaluate(() => window.__pendingFactEditor.render());
+        assert.equal(await page.locator('[data-saas-product-fact-field="material"]').inputValue(), input, "reopening the fact module must restore the unsaved C value");
+        assert.equal(await page.evaluate(() => window.__pendingFactEditor.capture().expectedFactReportId), oldBase);
+        assert.equal(await page.locator('[data-saas-product-fact-version-warning]').count(), 1);
+      }
+      await page.locator('[data-saas-action="save-merchant-product-facts"]').click();
+      await page.evaluate(() => window.__productFactSavePromise);
+      const { attempts, diagnostics } = await page.evaluate(({ caseLabel, input, originalMaterial }) => {
+        const packets = window.__crossBaseWrites.slice(-2).map((body) => {
+          const packet = { ...body.merchant_product_fact_packet }; delete packet.saved_at; return packet;
+        });
+        const canonical = (value) => JSON.stringify(saasCanonicalJsonValue(value));
+        const changedPaths = (left, right, prefix = '') => {
+          if (canonical(left) === canonical(right)) return [];
+          if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(left) || Array.isArray(right)) return [prefix];
+          return [...new Set([...Object.keys(left), ...Object.keys(right)])].sort().flatMap((key) =>
+            changedPaths(left[key], right[key], [prefix, /^[a-z_]{1,80}$/.test(key) ? key : '[field]'].filter(Boolean).join('.')));
+        };
+        const observed = window.__crossBaseSignatures.slice(-2);
+        const signatures = observed.map((item) => JSON.parse(item.signature));
+        return { attempts: window.__crossBaseWrites.map((body) => body.save_context), diagnostics: {
+          case: caseLabel,
+          sanitized_packet_equal_excluding_saved_at: canonical(packets[0]) === canonical(packets[1]),
+          changed_packet_paths: changedPaths(packets[0], packets[1]).slice(0, 20),
+          derived_material: packets.map((packet) => ({
+            present: Object.prototype.hasOwnProperty.call(packet.derived_listing_suggestions, 'material'),
+            matches_original: packet.derived_listing_suggestions.material === originalMaterial,
+            matches_input: packet.derived_listing_suggestions.material === input,
+            empty: packet.derived_listing_suggestions.material === '',
+          })),
+          authority_fields_equal: Object.fromEntries(['source', 'source_mode', 'vision_contract_version', 'simulation_only',
+            'fact_scope', 'buyer_copy_requires_validated_listing_generation', 'source_confirmed_facts', 'merchant_confirmed_facts']
+            .map((key) => [key, canonical(packets[0][key]) === canonical(packets[1][key])])),
+          epoch_equal: observed[0].epoch === observed[1].epoch,
+          context_equal: signatures[0][0] === signatures[1][0], expected_equal: signatures[0][1] === signatures[1][1],
+          signature_equal: observed[0].signature === observed[1].signature,
+          signature_content_matches_request: signatures.map((signature, index) => canonical(signature[2]) === canonical(packets[index])),
+        } };
+      }, { caseLabel, input, originalMaterial: original.merchant_product_fact_packet.derived_listing_suggestions.material });
+      assert.deepEqual(attempts.map((attempt) => attempt.expected_fact_report_id), [oldBase, oldBase, oldBase]);
+      assert.equal(attempts[1].mutation_id === attempts[2].mutation_id, diagnostics.sanitized_packet_equal_excluding_saved_at,
+        `${caseLabel}: action identity must follow actual payload equality; ${JSON.stringify(diagnostics)}`);
+      assert.equal(await page.locator('[data-saas-product-fact-field="material"]').inputValue(), input);
+    }
+  });
+});
+
+test("pending fact editor cannot overlay an old edit after a successful save advances its base", async () => {
+  await withProductFactPage(async (page) => {
+    await installPendingFactEditor(page);
+    await page.locator('[data-saas-product-fact-field="material"]').fill("Old pending Steel");
+    await page.evaluate(() => {
+      window.__staleFactOverlay = window.__pendingFactEditor.capture();
+      state.saasConnected = true;
+      window.__factEditorWrites = 0;
+      window.__productFactFetch = async (_path, options) => {
+        window.__factEditorWrites++;
+        const body = JSON.parse(options.body);
+        return { merchant_product_fact_packet: body.merchant_product_fact_packet,
+          listing_project_identity: body.listing_project_identity, report: { report_id: 'base-B' }, is_current: true };
+      };
+    });
+    await page.locator('[data-saas-product-fact-field="material"]').fill("New saved Resin");
+    await page.locator('[data-saas-action="save-merchant-product-facts"]').click();
+    await page.evaluate(() => window.__productFactSavePromise);
+    const result = await page.evaluate(() => {
+      const packet = JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet);
+      const view = document.querySelector('#view-product');
+      const baseline = view.saasProductFactEditorBaseline;
+      const cleared = !baseline?.pendingEditor && !(baseline?.pendingFieldKeys || []).length;
+      const generationAdvanced = view.saasProductFactEditorGeneration > window.__staleFactOverlay.generation;
+      window.__pendingFactEditor.restore(window.__staleFactOverlay);
+      return { value: document.querySelector('[data-saas-product-fact-field="material"]').value,
+        base: state.saasListingComposerDraft.source_product_fact_report_id, writes: window.__factEditorWrites,
+        cleared, generationAdvanced, baselineReport: baseline?.baseReportId,
+        packetUnchanged: packet === JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet) };
+    });
+    assert.equal(result.value, "New saved Resin");
+    assert.equal(result.base, "base-B");
+    assert.equal(result.writes, 1, "restoring the editor must never automatically POST");
+    assert.equal(result.cleared, true, "a current successful server receipt clears old pending edits, not the new baseline");
+    assert.equal(result.baselineReport, "base-B");
+    assert.equal(result.generationAdvanced, true, "clearing must reject already captured old overlays");
+    assert.equal(result.packetUnchanged, true);
+  });
+});
+
+test("pending fact editor retains same-base HTTP failures across a later server refresh", async () => {
+  for (const input of ["Unsaved same-base Steel", ""]) {
+    await withProductFactPage(async (page) => {
+      await seedValidatedAluminumListing(page);
+      await installPendingFactEditor(page);
+      assert.equal(await page.locator('[data-product-fact-key="material"] [data-saas-action="confirm-product-fact-suggestion"]').count(), 0);
+      await page.evaluate(() => {
+        window.__sameBaseServerPacket = JSON.parse(JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet));
+        state.saasConnected = true;
+        window.__sameBaseWrites = [];
+        window.__productFactFetch = async (_path, options) => {
+          window.__sameBaseWrites.push(JSON.parse(options.body));
+          const error = new Error('synthetic temporary failure'); error.status = 500; throw error;
+        };
+      });
+      await page.locator('[data-saas-product-fact-field="material"]').fill(input);
+      await page.locator('[data-saas-action="save-merchant-product-facts"]').click();
+      await page.evaluate(() => window.__productFactSavePromise);
+      const projected = await page.evaluate(() => {
+        window.__pendingFactEditor.render(); window.__pendingFactEditor.render();
+        const packet = state.saasListingComposerDraft.merchant_product_fact_packet;
+        return { value: document.querySelector('[data-saas-product-fact-field="material"]').value,
+          merchantMaterial: packet.merchant_confirmed_facts.material ?? null,
+          materialUnknown: packet.unknown_facts.includes('material'),
+          expected: window.__sameBaseWrites[0].save_context.expected_fact_report_id };
+      });
+      assert.equal(projected.value, input, "500 must keep the local C projection");
+      assert.equal(projected.merchantMaterial, input || null);
+      assert.equal(projected.materialUnknown, input === "");
+      assert.equal(projected.expected, "base-A");
+      const refreshed = await page.evaluate(() => {
+        state.saasListingComposerDraft.merchant_product_fact_packet = window.__sameBaseServerPacket;
+        window.__pendingFactEditor.render(); window.__pendingFactEditor.render();
+        const field = document.querySelector('[data-saas-product-fact-field="material"]');
+        return { value: field.value, unknown: field.dataset.productFactUnknown === 'true',
+          expected: window.__pendingFactEditor.capture()?.expectedFactReportId,
+          writes: window.__sameBaseWrites.length, base: state.saasListingComposerDraft.source_product_fact_report_id };
+      });
+      assert.equal(refreshed.value, input, "same-base server A must not erase the unsaved C after HTTP 500");
+      assert.equal(refreshed.unknown, input === "");
+      assert.equal(refreshed.expected, "base-A");
+      assert.equal(refreshed.base, "base-A");
+      assert.equal(refreshed.writes, 1, "neither failure nor server refresh may automatically POST");
+    });
+  }
+});

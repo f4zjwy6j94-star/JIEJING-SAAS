@@ -4039,6 +4039,7 @@ function prepareSaasMediaStudioForCurrentListing() {
 }
 
 function resetSaasListingProjectTransientState() {
+  if (typeof clearSaasPendingProductFactEditor === "function") clearSaasPendingProductFactEditor();
   if (typeof invalidateSaasListingCloudCheckpointContext === "function") invalidateSaasListingCloudCheckpointContext();
   if (typeof clearSaasPendingPublishIntakeSnapshot === "function") clearSaasPendingPublishIntakeSnapshot();
   invalidateSaasListingAiGenerationContext();
@@ -11139,11 +11140,123 @@ function renderSaasProductListingCenter(view) {
   );
 }
 
+function saasProductFactEditorScope() {
+  const draft = state.saasListingComposerDraft;
+  if (!draft || !saasCurrentListingProjectIdentity(draft).key) return "";
+  return JSON.stringify([
+    saasListingAiGenerationContextKey(draft), saasListingAiGenerationEpoch,
+  ]);
+}
+
+function saasProductFactEditorFields(view) {
+  return Array.from(view.querySelectorAll("[data-saas-product-fact-field]"), (field) => {
+    const wrapper = field.closest("[data-product-fact-key]");
+    const origin = wrapper?.querySelector("[data-product-fact-origin]");
+    const confirmation = wrapper?.querySelector('[data-saas-action="confirm-product-fact-suggestion"]');
+    return {
+      key: field.dataset.saasProductFactField,
+      value: field.type === "checkbox" ? field.checked : field.value,
+      confirmed: field.dataset.productFactConfirmed || "",
+      origin: field.dataset.productFactOriginState || "",
+      unknown: field.dataset.productFactUnknown || "",
+      originText: origin?.textContent || "",
+      originClass: origin?.className || "",
+      confirmationText: confirmation?.textContent || "",
+      confirmationDisabled: confirmation?.disabled === true,
+    };
+  });
+}
+
+function captureSaasPendingProductFactEditor(view) {
+  if (!view) return null;
+  const scope = saasProductFactEditorScope();
+  const baseline = view.saasProductFactEditorBaseline;
+  if (!scope || baseline?.scope !== scope) return null;
+  const currentFields = saasProductFactEditorFields(view);
+  if (!currentFields.length) {
+    const pending = baseline.pendingEditor;
+    return pending?.scope === scope && pending.generation === Number(view.saasProductFactEditorGeneration || 0)
+      ? pending : null;
+  }
+  const fields = currentFields.filter((field) => {
+    const previous = baseline.fields.find((item) => item.key === field.key);
+    return previous && (JSON.stringify(field) !== JSON.stringify(previous) ||
+      (baseline.pendingFieldKeys || []).includes(field.key));
+  });
+  const active = document.activeElement;
+  const focusedKey = view.contains(active) ? active?.dataset?.saasProductFactField || "" : "";
+  return { scope, fields, focusedKey,
+    generation: Number(view.saasProductFactEditorGeneration || 0),
+    expectedFactReportId: baseline.pendingBaseReportId,
+    hasVersionConflict: baseline.pendingBaseReportId !== baseline.baseReportId,
+    selectionStart: focusedKey ? active.selectionStart : null,
+    selectionEnd: focusedKey ? active.selectionEnd : null };
+}
+
+function restoreSaasPendingProductFactEditor(view, pending) {
+  const scope = saasProductFactEditorScope();
+  const generation = Number(view.saasProductFactEditorGeneration || 0);
+  const applies = Boolean(scope && pending?.scope === scope && pending.generation === generation);
+  const baseReportId = String(state.saasListingComposerDraft?.source_product_fact_report_id || "");
+  const pendingBaseReportId = applies && (pending.fields.length || pending.hasVersionConflict)
+    ? pending.expectedFactReportId : baseReportId;
+  // Remember the freshly rendered baseline, not the unsaved overlay. Never
+  // promote DOM edits into the saved packet, a report, or publication evidence.
+  view.saasProductFactEditorBaseline = { scope, baseReportId, pendingBaseReportId,
+    // A failed save can render its local packet before the next server read.
+    // Keep those unsaved fields even when the server version has not changed.
+    pendingFieldKeys: applies ? pending.fields.map((field) => field.key) : [],
+    pendingEditor: applies && (pending.fields.length || pending.hasVersionConflict)
+      ? { ...pending, hasVersionConflict: pendingBaseReportId !== baseReportId } : null,
+    fields: saasProductFactEditorFields(view) };
+  view.querySelector("[data-saas-product-fact-version-warning]")?.remove();
+  if (pendingBaseReportId !== baseReportId) {
+    const warning = document.createElement("p");
+    warning.dataset.saasProductFactVersionWarning = "";
+    warning.className = "saas-product-facts-simulation-note";
+    warning.setAttribute("role", "status");
+    warning.textContent = "商品资料已有更新，本页修改仍保留。请重新打开商品核对最新资料后再保存；当前修改尚未覆盖新版本。";
+    view.querySelector(".saas-product-facts-module")?.prepend(warning);
+  }
+  if (!applies) return;
+  view.querySelectorAll("[data-saas-product-fact-field]").forEach((field) => {
+    const edited = pending.fields.find((item) => item.key === field.dataset.saasProductFactField);
+    if (!edited) return;
+    if (field.type === "checkbox") field.checked = edited.value === true;
+    else field.value = edited.value;
+    for (const [key, value] of Object.entries({ productFactConfirmed: edited.confirmed,
+      productFactOriginState: edited.origin, productFactUnknown: edited.unknown })) {
+      if (value) field.dataset[key] = value;
+      else delete field.dataset[key];
+    }
+    const wrapper = field.closest("[data-product-fact-key]");
+    const origin = wrapper?.querySelector("[data-product-fact-origin]");
+    if (origin) { origin.textContent = edited.originText; origin.className = edited.originClass; }
+    const confirmation = wrapper?.querySelector('[data-saas-action="confirm-product-fact-suggestion"]');
+    if (confirmation) { confirmation.textContent = edited.confirmationText; confirmation.disabled = edited.confirmationDisabled; }
+    if (pending.focusedKey === edited.key) {
+      field.focus({ preventScroll: true });
+      if (typeof pending.selectionStart === "number" && typeof field.setSelectionRange === "function") {
+        field.setSelectionRange(pending.selectionStart, pending.selectionEnd);
+      }
+    }
+  });
+}
+
+function clearSaasPendingProductFactEditor(view = document.querySelector("#view-product")) {
+  if (!view) return;
+  view.saasProductFactEditorGeneration = Number(view.saasProductFactEditorGeneration || 0) + 1;
+  delete view.saasProductFactEditorBaseline;
+  view.querySelector("[data-saas-product-fact-version-warning]")?.remove();
+}
+
 function renderProductListingCenter() {
   const view = document.querySelector("#view-product");
   if (!view) return;
   if (isSaasPublicMvpMode()) {
+    const pendingFacts = captureSaasPendingProductFactEditor(view);
     renderSaasProductListingCenter(view);
+    restoreSaasPendingProductFactEditor(view, pendingFacts);
     return;
   }
   const draft = activeListingDraft();
@@ -33384,7 +33497,7 @@ function collectSaasMerchantProductFacts() {
   return { merchantConfirmed, unknownFacts, pendingSuggestionFacts, explicitUnknownFacts };
 }
 
-function prepareSaasProductFactSaveAttempt(draft, packet) {
+function prepareSaasProductFactSaveAttempt(draft, packet, options = {}) {
   const contextKey = saasListingAiGenerationContextKey(draft);
   const identity = saasCurrentListingProjectIdentity(draft);
   const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "");
@@ -33399,7 +33512,8 @@ function prepareSaasProductFactSaveAttempt(draft, packet) {
         reportIdentity[key] === String(identity[key] || ""));
   }).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || (a.report_id < b.report_id ? 1 : -1));
   const observedDraft = [draft, currentDraft].find((item) => typeof item?.source_product_fact_report_id === "string");
-  const expected = observedDraft ? observedDraft.source_product_fact_report_id : String(reports[0]?.report_id || "");
+  const expected = typeof options.expectedFactReportId === "string" ? options.expectedFactReportId
+    : observedDraft ? observedDraft.source_product_fact_report_id : String(reports[0]?.report_id || "");
   const safePacket = sanitizeSaasMerchantProductFactPacketSnapshot(packet);
   const content = { ...safePacket };
   delete content.saved_at;
@@ -33461,6 +33575,10 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
   if (!isCurrentRequest()) return false;
   const draft = state.saasListingComposerDraft;
   if (!draft) return false;
+  // Only this existing-project editor may supply its observed CAS baseline.
+  // New-product intake does not inherit a different form pending version.
+  const pendingEditor = typeof captureSaasPendingProductFactEditor === "function"
+    ? captureSaasPendingProductFactEditor(document.querySelector("#view-product")) : null;
   const current = saasMerchantProductFactPacket(draft);
   const collected = collectSaasMerchantProductFacts();
   const retainedSourceConfirmedFacts = { ...(current.source_confirmed_facts || {}) };
@@ -33593,7 +33711,8 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
           candidate_id: listingProject.candidate_id || "",
         }
       : null;
-    const saveAttempt = prepareSaasProductFactSaveAttempt(draft, packet);
+    const saveAttempt = prepareSaasProductFactSaveAttempt(draft, packet,
+      pendingEditor ? { expectedFactReportId: pendingEditor.expectedFactReportId } : {});
     const response = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/product-facts`, {
       method: "POST",
       saasRequestIsCurrent: isCurrentRequest,
@@ -33620,6 +33739,7 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
     }
     if (response.report?.report_id && state.saasListingComposerDraft) {
       state.saasListingComposerDraft.source_product_fact_report_id = String(response.report.report_id);
+      if (typeof clearSaasPendingProductFactEditor === "function") clearSaasPendingProductFactEditor();
     }
     if (response.task) state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
     if (response.report) state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
@@ -37665,6 +37785,9 @@ function renderSaasInactiveViewPlaceholder(viewId = "") {
   const view = document.querySelector(`#view-${viewId}`);
   if (!view) return;
   if (viewId === "cockpit") captureSaasAiCeoComposerDraft(view.querySelector("#ceoInput"));
+  if (viewId === "product" && view.saasProductFactEditorBaseline) {
+    view.saasProductFactEditorBaseline.pendingEditor = captureSaasPendingProductFactEditor(view);
+  }
   const labels = {
     cockpit: ["AI CEO", "对话入口、真实账号状态和下一步会在打开本页时读取。"],
     workflow: ["AI CEO", "岗位链路已归入 AI CEO 对话入口。"],
