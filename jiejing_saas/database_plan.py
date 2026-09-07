@@ -26,6 +26,8 @@ CRITICAL_TABLES = [
     "queue_jobs",
     "task_steps",
     "reports",
+    "listing_draft_edit_heads",
+    "listing_draft_edit_revisions",
     "confirmations",
     "external_execution_claims",
     "execution_results",
@@ -161,6 +163,11 @@ def build_database_plan(settings: SaaSSettings, repository: SaaSRepository) -> d
             {
                 "database": "postgres",
                 "path": "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql",
+                "status": "prepared_not_applied",
+            },
+            {
+                "database": "postgres",
+                "path": "jiejing_saas/migrations/005_listing_draft_edit_checkpoints_postgres.sql",
                 "status": "prepared_not_applied",
             },
         ],

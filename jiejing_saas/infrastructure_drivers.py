@@ -35,6 +35,9 @@ POSTGRES_RUNTIME_SCHEMA_RECONCILIATION_MIGRATION = (
 POSTGRES_PLATFORM_MODEL_TRIAL_RESERVATIONS_MIGRATION = (
     ROOT / "jiejing_saas" / "migrations" / "004_platform_model_trial_reservations_postgres.sql"
 )
+POSTGRES_LISTING_DRAFT_EDIT_CHECKPOINTS_MIGRATION = (
+    ROOT / "jiejing_saas" / "migrations" / "005_listing_draft_edit_checkpoints_postgres.sql"
+)
 POSTGRES_MIGRATION_ADVISORY_LOCK_KEY = -1280677561506917264
 
 
@@ -103,6 +106,27 @@ POSTGRES_CRITICAL_COLUMN_POSTCONDITIONS: tuple[_PostgresColumnPostcondition, ...
     _PostgresColumnPostcondition("platform_model_trial_reservations", "status", "text", False),
     _PostgresColumnPostcondition("platform_model_trial_reservations", "created_at", "timestamptz", False),
     _PostgresColumnPostcondition("platform_model_trial_reservations", "released_at", "timestamptz", True),
+    _PostgresColumnPostcondition("listing_draft_edit_heads", "company_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_heads", "store_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_heads", "project_key", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_heads", "source_report_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_heads", "candidate_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_heads", "revision", "int4", False),
+    _PostgresColumnPostcondition("listing_draft_edit_heads", "checkpoint_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_heads", "updated_at", "timestamptz", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "checkpoint_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "company_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "store_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "project_key", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "source_report_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "candidate_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "revision", "int4", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "mutation_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "payload_fingerprint", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "base_report_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "actor_user_id", "text", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "created_at", "timestamptz", False),
+    _PostgresColumnPostcondition("listing_draft_edit_revisions", "receipt_json", "jsonb", False),
 )
 
 
@@ -147,6 +171,22 @@ POSTGRES_CRITICAL_INDEX_POSTCONDITIONS: tuple[_PostgresIndexPostcondition, ...] 
     ),
 )
 POSTGRES_CRITICAL_CONSTRAINT_POSTCONDITIONS: tuple[_PostgresConstraintPostcondition, ...] = (
+    _PostgresConstraintPostcondition(
+        "listing_draft_edit_heads.scope_pk", "listing_draft_edit_heads", "p",
+        ("company_id", "store_id", "project_key"),
+    ),
+    _PostgresConstraintPostcondition(
+        "listing_draft_edit_revisions.checkpoint_pk", "listing_draft_edit_revisions", "p",
+        ("checkpoint_id",),
+    ),
+    _PostgresConstraintPostcondition(
+        "listing_draft_edit_revisions.scope_revision_unique", "listing_draft_edit_revisions", "u",
+        ("company_id", "store_id", "project_key", "revision"),
+    ),
+    _PostgresConstraintPostcondition(
+        "listing_draft_edit_revisions.scope_mutation_unique", "listing_draft_edit_revisions", "u",
+        ("company_id", "store_id", "project_key", "mutation_id"),
+    ),
     _PostgresConstraintPostcondition(
         "media_credit_buckets.company_fk",
         "media_credit_buckets",
@@ -246,6 +286,16 @@ POSTGRES_MIGRATION_MANIFEST: tuple[_PostgresMigrationSpec, ...] = (
             (
                 "20260901_004_platform_model_trial_reservations_postgres",
                 "jiejing-platform-model-trial-reservations-postgres-v20260901",
+            ),
+        ),
+    ),
+    _PostgresMigrationSpec(
+        path=POSTGRES_LISTING_DRAFT_EDIT_CHECKPOINTS_MIGRATION,
+        canonical_sha256="8ed85821d1d52c01cd5d13919c94d420eb9372dd0974bb2d56d7f3748c05aa1c",
+        migration_records=(
+            (
+                "20260906_005_listing_draft_edit_checkpoints_postgres",
+                "jiejing-listing-draft-edit-checkpoints-postgres-v20260906",
             ),
         ),
     ),
@@ -777,7 +827,7 @@ def _postgres_missing_critical_postconditions(
         join pg_class rel on rel.oid = con.conrelid
         join pg_namespace nsp on nsp.oid = rel.relnamespace
         where nsp.nspname = 'public'
-          and con.contype in ('f', 'u')
+          and con.contype in ('f', 'u', 'p')
           and rel.relname::text = any(%s)
         """,
         (
@@ -877,8 +927,9 @@ def _postgres_constraint_postcondition_matches(
         return False
 
     normalized = _normalize_postgres_catalog_definition(constraint_definition)
-    if postcondition.constraint_type == "u":
-        match = re.fullmatch(r"unique\s*\(([^()]*)\)", normalized)
+    if postcondition.constraint_type in {"u", "p"}:
+        label = "unique" if postcondition.constraint_type == "u" else "primary key"
+        match = re.fullmatch(rf"{label}\s*\(([^()]*)\)", normalized)
         return bool(match and _plain_postgres_identifier_list(match.group(1)) == postcondition.columns)
     if postcondition.constraint_type != "f":
         return False

@@ -94,6 +94,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("listing_draft_buyer_copy_quality", [sys.executable, "tools/test_jiejing_listing_draft_buyer_copy_quality.py"]),
     ("listing_grounding_security", [sys.executable, "tools/test_jiejing_listing_grounding_security.py"]),
     ("listing_draft_generation_api", [sys.executable, "tools/test_jiejing_listing_draft_generation_api.py"]),
+    ("listing_draft_checkpoint_api", [sys.executable, "tools/test_jiejing_listing_draft_checkpoint_api.py"]),
     ("listing_platform_trial_quota", [sys.executable, "tools/test_jiejing_listing_platform_trial_quota.py"]),
     (
         "listing_platform_trial_concurrency",
@@ -107,6 +108,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("postgres_schema_contract", [sys.executable, "tools/test_jiejing_postgres_schema_contract.py"]),
     ("listing_ai_generation_browser", ["node", "tools/codex_jiejing_listing_ai_generation_browser_smoke.js"]),
     ("listing_backend_restore_browser", ["node", "tools/test_jiejing_listing_backend_restore.js"]),
+    ("listing_cloud_checkpoint_frontend", ["node", "tools/test_jiejing_listing_cloud_checkpoint_frontend.js"]),
     ("recent_product_tasks_browser", ["node", "tools/test_jiejing_recent_product_tasks.js"]),
     ("listing_product_fact_confirmation_ui", ["node", "tools/test_jiejing_listing_product_fact_confirmation_ui.js"]),
     ("listing_concrete_product_gate", [sys.executable, "tools/test_jiejing_listing_concrete_product_gate.py"]),

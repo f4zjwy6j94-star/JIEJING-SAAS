@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -35,7 +36,7 @@ def main() -> int:
     for path in (SQLITE_DB, OUT_SQL, SUMMARY_JSON):
         path.unlink(missing_ok=True)
 
-    repo = SaaSRepository(SQLITE_DB)
+    repo = SaaSRepository(SQLITE_DB, database_engine="sqlite")
     fixture = repo.create_user_with_company(
         email="migration-rehearsal@jiejing.local",
         password="local-test-password",
@@ -244,6 +245,23 @@ def main() -> int:
         },
     )
 
+    checkpoint_connection = sqlite3.connect(SQLITE_DB)
+    try:
+        with checkpoint_connection:
+            checkpoint_connection.execute(
+                "insert into listing_draft_edit_heads values (?, ?, ?, ?, ?, ?, ?, ?)",
+                (company["company_id"], store["store_id"], "project-fixture", "source-fixture", "candidate-fixture",
+                 1, "checkpoint-fixture", "2026-09-06T00:00:00Z"),
+            )
+            checkpoint_connection.execute(
+                "insert into listing_draft_edit_revisions values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("checkpoint-fixture", company["company_id"], store["store_id"], "project-fixture", "source-fixture",
+                 "candidate-fixture", 1, "mutation-fixture", "fingerprint-fixture", "base-fixture", user["user_id"],
+                 "2026-09-06T00:00:00Z", json.dumps({"checkpoint_id": "checkpoint-fixture", "title": "Fixture's title"})),
+            )
+    finally:
+        checkpoint_connection.close()
+
     summary = generate_rehearsal(
         sqlite_path=SQLITE_DB,
         out_sql_path=OUT_SQL,
@@ -279,6 +297,14 @@ def main() -> int:
             return fail(f"expected exported rows for {table}")
     if "\"packet_json\"" not in sql or "::jsonb" not in sql:
         return fail("generated SQL should cast JSON columns to jsonb")
+    for table in ("listing_draft_edit_heads", "listing_draft_edit_revisions"):
+        if summary.get("table_counts", {}).get(table) != 1:
+            return fail(f"checkpoint storage must be included in the export contract: {table}")
+    checkpoint_insert = next((line for line in sql.splitlines() if line.startswith('insert into "listing_draft_edit_revisions"')), "")
+    if '"receipt_json"' not in checkpoint_insert or "Fixture''s title" not in checkpoint_insert or "::jsonb" not in checkpoint_insert:
+        return fail("checkpoint receipt must retain escaped contents and be cast to jsonb")
+    if "Apply every registered PostgreSQL migration" not in sql:
+        return fail("checkpoint export must require all additive PostgreSQL migrations, not only 001")
     if "on conflict do nothing" not in sql:
         return fail("generated SQL should be append-safe for repeated rehearsals")
     if not _appears_before(sql, 'insert into "companies"', 'insert into "users"'):

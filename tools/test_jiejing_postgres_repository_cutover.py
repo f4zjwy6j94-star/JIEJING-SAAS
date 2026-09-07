@@ -241,6 +241,17 @@ def main() -> int:
             return fail(f"merchant onboarding JSON must be adapted for Postgres JSONB: {onboarding_json_column}")
     if "feedback_json" not in JSON_COLUMNS:
         return fail("merchant product feedback JSON must be adapted for the Postgres JSONB column")
+    if "receipt_json" not in JSON_COLUMNS:
+        return fail("Listing checkpoint receipts must be adapted for the Postgres JSONB column")
+    checkpoint_sql, checkpoint_params = translate_sqlite_query_to_postgres(
+        "insert into listing_draft_edit_heads (company_id, store_id, project_key, revision) "
+        "values (?, ?, ?, ?) on conflict (company_id, store_id, project_key) do nothing returning revision",
+        ("company", "store", "project", 0),
+    )
+    if checkpoint_sql.count("%s") != 4 or not checkpoint_sql.endswith("do nothing returning revision"):
+        return fail("checkpoint first-writer SQL must preserve explicit conflict/returning order")
+    if checkpoint_params != ("company", "store", "project", 0):
+        return fail("checkpoint composite scope parameters changed during translation")
     feedback_insert_sql, feedback_insert_params = translate_sqlite_query_to_postgres(
         """
         insert into merchant_product_feedback (

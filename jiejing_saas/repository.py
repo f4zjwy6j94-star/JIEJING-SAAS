@@ -378,6 +378,36 @@ class SaaSRepository:
                   unique (company_id, idempotency_key_hash)
                 );
 
+                create table if not exists listing_draft_edit_heads (
+                  company_id text not null,
+                  store_id text not null,
+                  project_key text not null,
+                  source_report_id text not null,
+                  candidate_id text not null,
+                  revision integer not null check (revision >= 0),
+                  checkpoint_id text not null,
+                  updated_at text not null,
+                  primary key (company_id, store_id, project_key)
+                );
+
+                create table if not exists listing_draft_edit_revisions (
+                  checkpoint_id text not null primary key,
+                  company_id text not null,
+                  store_id text not null,
+                  project_key text not null,
+                  source_report_id text not null,
+                  candidate_id text not null,
+                  revision integer not null check (revision > 0),
+                  mutation_id text not null,
+                  payload_fingerprint text not null,
+                  base_report_id text not null,
+                  actor_user_id text not null,
+                  created_at text not null,
+                  receipt_json text not null,
+                  unique (company_id, store_id, project_key, revision),
+                  unique (company_id, store_id, project_key, mutation_id)
+                );
+
                 create table if not exists user_sessions (
                   jti text primary key,
                   user_id text not null,
@@ -1063,6 +1093,12 @@ class SaaSRepository:
                 migration_id="20260820_rotating_browser_sessions",
                 checksum="jiejing-rotating-browser-sessions-v20260820",
                 summary="Adds short access-session binding, rotating refresh generations and device-level revocation.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260906_listing_draft_edit_checkpoints",
+                checksum="jiejing-listing-draft-edit-checkpoints-v20260906",
+                summary="Adds project-scoped Listing edit heads and immutable, mutation-idempotent revisions without creating AI reports.",
             )
 
     def _initialize_postgres(self) -> None:
@@ -6267,6 +6303,16 @@ class SaaSRepository:
                 tuple(params),
             ).fetchall()
         return [self._report_row_to_dict(row) for row in rows]
+
+    def get_listing_draft_checkpoint(self, *, company_id: str, store_id: str, identity: dict[str, str]) -> dict[str, Any]:
+        from .listing_draft_checkpoint import read_checkpoint
+        return read_checkpoint(self, company_id=company_id, store_id=store_id, identity=identity)
+
+    def save_listing_draft_checkpoint(self, *, company_id: str, store_id: str, user_id: str,
+                                     project_key: str, body: dict[str, Any]) -> dict[str, Any]:
+        from .listing_draft_checkpoint import save_checkpoint
+        return save_checkpoint(self, company_id=company_id, store_id=store_id, user_id=user_id,
+                               project_key=project_key, body=body)
 
     def get_report_for_company(self, *, company_id: str, report_id: str) -> dict[str, Any] | None:
         """Return one report only when its owning task belongs to the company."""
@@ -14426,6 +14472,8 @@ class SaaSRepository:
             "platform_trial_activations",
             "platform_model_trial_reservations",
             "merchant_onboarding_states",
+            "listing_draft_edit_heads",
+            "listing_draft_edit_revisions",
             "team_members",
             "team_invitations",
             "stores",

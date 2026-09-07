@@ -1,0 +1,399 @@
+#!/usr/bin/env python3
+"""Real local HTTP contract for merchant Listing checkpoints; no external services."""
+from __future__ import annotations
+
+import copy
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+import json
+from pathlib import Path
+import socket
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+
+ROOT = Path(__file__).resolve().parents[1]
+FIELD_KEYS = ("title", "selling_points", "description", "category", "item_specifics",
+              "keywords", "price", "images", "logistics", "risk_notes")
+
+
+class CheckpointHTTPTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory(prefix="jiejing-checkpoint-")
+        cls.root = Path(cls.directory.name)
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        cls.base = f"http://127.0.0.1:{port}"
+        cls.process = subprocess.Popen(
+            [sys.executable, str(ROOT / "tools/jiejing_saas_backend_cli.py"), "serve",
+             "--db", str(cls.root / "saas.sqlite"), "--runtime-db", str(cls.root / "runtime.sqlite"),
+             "--output-root", str(cls.root), "--host", "127.0.0.1", "--port", str(port)],
+            cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env={"PYTHONUTF8": "1", "JIEJING_DATABASE_ENGINE": "sqlite", "JIEJING_DATABASE_URL": "",
+                 "TEMP": str(cls.root), "TMP": str(cls.root), "SYSTEMROOT": "C:\\Windows"},
+        )
+        deadline = time.monotonic() + 25
+        while time.monotonic() < deadline:
+            try:
+                if cls.request("/health")[0] == 200:
+                    break
+            except urllib.error.URLError:
+                time.sleep(0.1)
+        else:
+            cls.tearDownClass()
+            raise AssertionError("isolated HTTP server did not start")
+        status, registered = cls.request("/auth/register", method="POST", body={
+            "email": "checkpoint-owner@local.invalid", "password": "local-checkpoint-fixture-pass",
+            "company_name": "Checkpoint fixture"})
+        assert status == 201, "local fixture registration failed"
+        cls.token = registered["token"]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.process.terminate()
+        cls.process.wait(timeout=10)
+        cls.directory.cleanup()
+
+    @classmethod
+    def request(cls, path, *, method="GET", body=None, token=None):
+        headers = {"Content-Type": "application/json"}
+        token = getattr(cls, "token", "") if token is None else token
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(cls.base + path, method=method, headers=headers,
+                                         data=None if body is None else json.dumps(body).encode())
+        try:
+            response = urllib.request.urlopen(request, timeout=20)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            return response.status, json.loads(response.read().decode())
+
+    def setUp(self):
+        status, store = self.request("/stores", method="POST", body={
+            "platform": "ebay", "store_name": "Checkpoint " + uuid.uuid4().hex[:8], "marketplace": "EBAY_US"})
+        self.assertEqual(status, 201)
+        self.store_id = store["store"]["store_id"]
+        self.identity = {"key": "listing-project-" + uuid.uuid4().hex,
+                         "source_report_id": "", "candidate_id": ""}
+        self.path = f"/stores/{self.store_id}/listing-drafts/{self.identity['key']}/checkpoint"
+        self.query = "?" + urllib.parse.urlencode({key: self.identity[key] for key in ("source_report_id", "candidate_id")})
+        self.fact_body = {"listing_project_identity": self.identity,
+                          "merchant_product_fact_packet": {"merchant_confirmed_facts": {
+                              "product_name": "Foldable Tablet Stand", "material": "Aluminum", "condition": "NEW"}}}
+        status, facts = self.request(f"/stores/{self.store_id}/product-facts", method="POST", body=self.fact_body)
+        self.assertEqual(status, 201)
+        self.base_report_id = facts["report"]["report_id"]
+        self.body = {"contract_version": "listing_merchant_edit_v1", "listing_project_identity": self.identity,
+                     "base_report_id": self.base_report_id, "expected_revision": 0,
+                     "mutation_id": str(uuid.uuid4()), "fields": {key: "" for key in FIELD_KEYS},
+                     "merchant_edited_fields": ["title", "description"]}
+        self.body["fields"]["title"] = "My edited tablet stand"
+
+    def report_fixture(self, suffix, report_type, created_at, *, identity=None, status="saved"):
+        # Source-report fixture only: this does not invoke or claim a real model generation.
+        report_id = "report_" + self.identity["key"] + "_" + suffix
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            original = conn.execute("select * from reports where report_id = ?", (self.base_report_id,)).fetchone()
+            payload = json.loads(original["report_json"])
+            payload["listing_project_identity"] = self.identity if identity is None else identity
+            payload["artifact_type"] = report_type
+            conn.execute("""insert into reports
+                (report_id,task_id,runtime_run_id,report_type,title,status,created_at,report_json)
+                values (?,?,?,?,?,?,?,?)""", (report_id, original["task_id"], "checkpoint_source_fixture",
+                report_type, "Checkpoint source fixture", status, created_at, json.dumps(payload)))
+        return report_id
+
+    def test_save_then_read_preserves_complete_fields_without_tasks_or_reports(self):
+        before_tasks = self.request("/tasks")[1]
+        before_reports = self.request("/reports")[1]
+        status, saved = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 201, "checkpoint POST must save through the authenticated HTTP interface")
+        checkpoint = saved["checkpoint"]
+        self.assertTrue(checkpoint["checkpoint_id"].startswith("listing_edit_"))
+        self.assertEqual(checkpoint["fields"], self.body["fields"])
+        self.assertEqual(checkpoint["revision"], 1)
+        self.assertEqual(checkpoint["source"], "merchant_edit")
+        self.assertFalse(saved["model_called"] or saved["usage_consumed"] or saved["real_platform_writes_enabled"])
+        status, read = self.request(self.path + self.query)
+        self.assertEqual(status, 200)
+        self.assertEqual(read["checkpoint"], checkpoint)
+        self.assertEqual(read["current_base_report_id"], self.base_report_id)
+        self.assertFalse(read["base_changed"])
+        self.assertEqual(self.request("/tasks")[1], before_tasks)
+        self.assertEqual(self.request("/reports")[1], before_reports)
+
+    def test_browser_inputs_save_and_restore_through_real_http(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node is required for the real browser-to-HTTP integration")
+        before_tasks = self.request("/tasks")[1]
+        before_reports = self.request("/reports")[1]
+        base = self.request(self.path + self.query)[1]["current_base_report"]
+        result = subprocess.run(
+            [node, str(ROOT / "tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js")],
+            cwd=ROOT, text=True, encoding="utf-8", capture_output=True, timeout=45,
+            input=json.dumps({"api_base": self.base, "session_token": self.token,
+                              "profile": self.request("/me")[1], "store_id": self.store_id,
+                              "identity": self.identity, "base_report": base}),
+        )
+        # Never surface child output containing local session material on failure.
+        self.assertEqual(result.returncode, 0, "real browser-to-HTTP checkpoint smoke failed")
+        evidence = json.loads(result.stdout)
+        self.assertEqual(evidence["visible_controls"], 8)
+        self.assertEqual(evidence["post_count"], 1)
+        self.assertGreaterEqual(evidence["get_count"], 2)
+        self.assertEqual(evidence["restored_fields"], 10)
+        status, read = self.request(self.path + self.query)
+        self.assertEqual(status, 200)
+        self.assertEqual(read["checkpoint"]["fields"]["title"], "")
+        self.assertEqual(read["checkpoint"]["fields"]["description"], "Merchant FAL description stays exact")
+        self.assertEqual(read["current_revision"], 1)
+        self.assertEqual(self.request("/tasks")[1], before_tasks)
+        self.assertEqual(self.request("/reports")[1], before_reports)
+
+    def test_revision_cas_and_explicit_clear(self):
+        self.assertEqual(self.request(self.path, method="POST", body=self.body)[0], 201)
+        updated = copy.deepcopy(self.body)
+        updated.update(expected_revision=1, mutation_id=str(uuid.uuid4()))
+        updated["fields"]["title"] = ""
+        status, saved = self.request(self.path, method="POST", body=updated)
+        self.assertEqual(status, 201)
+        self.assertEqual(saved["checkpoint"]["revision"], 2)
+        self.assertEqual(saved["checkpoint"]["fields"]["title"], "")
+        stale = copy.deepcopy(self.body)
+        stale["mutation_id"] = str(uuid.uuid4())
+        status, conflict = self.request(self.path, method="POST", body=stale)
+        self.assertEqual(status, 409)
+        self.assertEqual(conflict["error_code"], "listing_draft_revision_conflict")
+        self.assertEqual(conflict["latest_checkpoint"], saved["checkpoint"])
+        self.assertEqual(self.request(self.path + self.query)[1]["checkpoint"], saved["checkpoint"])
+
+    def test_mutation_retry_returns_exact_original_receipt_after_later_edits(self):
+        status, original = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 201)
+        second = copy.deepcopy(self.body)
+        second.update(expected_revision=1, mutation_id=str(uuid.uuid4()))
+        second["fields"]["title"] = "Version B"
+        self.assertEqual(self.request(self.path, method="POST", body=second)[0], 201)
+        third = copy.deepcopy(self.body)
+        third.update(expected_revision=2, mutation_id=str(uuid.uuid4()))
+        status, latest = self.request(self.path, method="POST", body=third)
+        self.assertEqual(status, 201)
+        self.assertEqual(latest["checkpoint"]["revision"], 3)
+        self.assertNotEqual(latest["checkpoint"]["checkpoint_id"], original["checkpoint"]["checkpoint_id"])
+        status, replay = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 200)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(replay["checkpoint"], original["checkpoint"])
+        self.assertEqual(self.request(self.path + self.query)[1]["checkpoint"], latest["checkpoint"])
+        changed = copy.deepcopy(self.body)
+        changed["fields"]["title"] = "Cannot reuse a mutation for other content"
+        status, conflict = self.request(self.path, method="POST", body=changed)
+        self.assertEqual(status, 409)
+        self.assertEqual(conflict["error_code"], "listing_draft_mutation_conflict")
+
+    def test_new_fact_base_preserves_old_checkpoint_and_replay_but_rejects_new_stale_save(self):
+        _, original = self.request(self.path, method="POST", body=self.body)
+        changed_facts = copy.deepcopy(self.fact_body)
+        changed_facts["merchant_product_fact_packet"]["merchant_confirmed_facts"]["material"] = "Wood"
+        status, facts = self.request(f"/stores/{self.store_id}/product-facts", method="POST", body=changed_facts)
+        self.assertEqual(status, 201)
+        _, read = self.request(self.path + self.query)
+        self.assertTrue(read["base_changed"])
+        self.assertEqual(read["checkpoint"], original["checkpoint"])
+        self.assertEqual(read["current_base_report_id"], facts["report"]["report_id"])
+        self.assertEqual(read["current_base_report"], facts["report"])
+        self.assertEqual(self.request(self.path, method="POST", body=self.body)[0], 200)
+        stale = copy.deepcopy(self.body)
+        stale.update(expected_revision=1, mutation_id=str(uuid.uuid4()))
+        status, conflict = self.request(self.path, method="POST", body=stale)
+        self.assertEqual(status, 409)
+        self.assertEqual(conflict["error_code"], "listing_draft_base_conflict")
+        stale["base_report_id"] = facts["report"]["report_id"]
+        status, rebased = self.request(self.path, method="POST", body=stale)
+        self.assertEqual(status, 201, "a rejected attempt must not consume its mutation")
+        self.assertEqual(rebased["checkpoint"]["revision"], 2)
+
+    def test_invalid_or_trust_bearing_input_is_rejected_before_persistence(self):
+        bad_values = []
+        for key, value in (("model_generated", True), ("ready_for_publish", True),
+                           ("merchant_product_fact_packet", {}), ("snapshot", {})):
+            bad = copy.deepcopy(self.body)
+            bad[key] = value
+            bad_values.append(bad)
+        for revision in (True, -1, 1.5, "0"):
+            bad = copy.deepcopy(self.body)
+            bad["expected_revision"] = revision
+            bad_values.append(bad)
+        for value in (None, 12, [], "x" * 801, "\ud800", "text\u0000value"):
+            bad = copy.deepcopy(self.body)
+            bad["fields"]["title"] = value
+            bad_values.append(bad)
+        bad = copy.deepcopy(self.body)
+        del bad["fields"]["risk_notes"]
+        bad_values.append(bad)
+        bad = copy.deepcopy(self.body)
+        bad["fields"]["cost_price"] = "10"
+        bad_values.append(bad)
+        bad = copy.deepcopy(self.body)
+        del bad["listing_project_identity"]["candidate_id"]
+        bad_values.append(bad)
+        bad = copy.deepcopy(self.body)
+        bad["listing_project_identity"]["key"] = "another-project"
+        bad_values.append(bad)
+        for bad in bad_values:
+            with self.subTest(case=len(bad_values), keys=list(bad)):
+                self.assertEqual(self.request(self.path, method="POST", body=bad)[0], 400)
+        secret_shape = "ghp_" + "Z" * 30
+        bad = copy.deepcopy(self.body)
+        bad["fields"]["description"] = secret_shape
+        status, response = self.request(self.path, method="POST", body=bad)
+        self.assertEqual(status, 422)
+        self.assertNotIn(secret_shape, json.dumps(response))
+        self.assertEqual(self.request(self.path)[0], 400, "missing anchors are not blank anchors")
+        self.assertEqual(self.request(self.path + self.query + "&candidate_id=other")[0], 400)
+        self.assertEqual(self.request(self.path + self.query)[1]["current_revision"], 0)
+        self.assertEqual(self.request(self.path, method="POST", body=self.body)[0], 201)
+
+    def test_concurrent_creation_and_duplicate_delivery_use_database_serialization(self):
+        bodies = [{**self.body, "mutation_id": str(uuid.uuid4())} for _ in range(5)]
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            results = list(pool.map(lambda body: self.request(self.path, method="POST", body=body), bodies))
+        self.assertEqual(sorted(status for status, _ in results), [201, 409, 409, 409, 409])
+        duplicate = {**self.body, "expected_revision": 1, "mutation_id": str(uuid.uuid4())}
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            results = list(pool.map(lambda _: self.request(self.path, method="POST", body=duplicate), range(5)))
+        self.assertEqual(sorted(status for status, _ in results), [200, 200, 200, 200, 201])
+        self.assertEqual(len({json.dumps(value["checkpoint"], sort_keys=True) for _, value in results}), 1)
+        self.assertEqual(self.request(self.path + self.query)[1]["current_revision"], 2)
+
+    def test_auth_tenant_store_and_each_identity_anchor_are_not_wildcards(self):
+        _, saved = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(self.request(self.path + self.query, token="")[0], 401)
+        self.assertEqual(self.request(self.path, method="POST", body=self.body, token="")[0], 401)
+        status, other = self.request("/auth/register", method="POST", token="", body={
+            "email": "other-" + uuid.uuid4().hex + "@local.invalid", "password": "local-checkpoint-other-pass",
+            "company_name": "Other checkpoint company"})
+        self.assertEqual(status, 201)
+        status, response = self.request(self.path + self.query, token=other["token"])
+        self.assertEqual(status, 404)
+        self.assertNotIn(saved["checkpoint"]["checkpoint_id"], json.dumps(response))
+        self.assertEqual(self.request(self.path, method="POST", body=self.body, token=other["token"])[0], 404)
+        for key in ("source_report_id", "candidate_id"):
+            identity = {**self.identity, key: "different-anchor"}
+            query = "?" + urllib.parse.urlencode({k: identity[k] for k in ("source_report_id", "candidate_id")})
+            self.assertEqual(self.request(self.path + query)[0], 404)
+            wrong = {**self.body, "listing_project_identity": identity, "mutation_id": str(uuid.uuid4())}
+            self.assertEqual(self.request(self.path, method="POST", body=wrong)[0], 404)
+        status, store = self.request("/stores", method="POST", body={
+            "platform": "ebay", "store_name": "Other own store", "marketplace": "EBAY_US"})
+        self.assertEqual(status, 201)
+        path = self.path.replace(self.store_id, store["store"]["store_id"])
+        self.assertEqual(self.request(path + self.query)[0], 404)
+        self.assertEqual(self.request(path, method="POST", body=self.body)[0], 404)
+        self.assertEqual(self.request(self.path + self.query)[1]["checkpoint"], saved["checkpoint"])
+
+    def test_viewer_can_read_but_cannot_save(self):
+        _, saved = self.request(self.path, method="POST", body=self.body)
+        company_id = saved["checkpoint"]["company_id"]
+        # Role is fixture data at the DB boundary; requests still use real auth/permission handlers.
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+            conn.execute("update team_members set role = 'viewer' where company_id = ?", (company_id,))
+        try:
+            self.assertEqual(self.request(self.path + self.query)[0], 200)
+            self.assertEqual(self.request(self.path, method="POST", body=self.body)[0], 403)
+        finally:
+            with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+                conn.execute("update team_members set role = 'owner' where company_id = ?", (company_id,))
+
+    def test_audit_storage_failure_rolls_back_revision_head_and_mutation(self):
+        _, original = self.request(self.path, method="POST", body=self.body)
+        updated = {**self.body, "expected_revision": 1, "mutation_id": str(uuid.uuid4())}
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+            conn.execute("""create trigger checkpoint_audit_fault before insert on audit_logs
+                when NEW.action_type = 'listing.merchant_edit.saved'
+                begin select raise(ABORT, 'fixture audit unavailable'); end""")
+        try:
+            status, failure = self.request(self.path, method="POST", body=updated)
+            self.assertEqual(status, 503)
+            self.assertNotIn("fixture audit", json.dumps(failure))
+            self.assertEqual(self.request(self.path + self.query)[1]["checkpoint"], original["checkpoint"])
+        finally:
+            with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+                conn.execute("drop trigger checkpoint_audit_fault")
+        status, retried = self.request(self.path, method="POST", body=updated)
+        self.assertEqual(status, 201)
+        self.assertEqual(retried["checkpoint"]["revision"], 2)
+
+    def test_http_receipts_preserve_merchant_text_urls_and_identity_verbatim(self):
+        self.identity = {"key": self.identity["key"] + "-fal", "source_report_id": "fal-origin",
+                         "candidate_id": "fal-candidate"}
+        self.fact_body["listing_project_identity"] = self.identity
+        _, facts = self.request(f"/stores/{self.store_id}/product-facts", method="POST", body=self.fact_body)
+        self.path = f"/stores/{self.store_id}/listing-drafts/{self.identity['key']}/checkpoint"
+        self.query = "?" + urllib.parse.urlencode({key: self.identity[key] for key in ("source_report_id", "candidate_id")})
+        self.body.update(listing_project_identity=self.identity, base_report_id=facts["report"]["report_id"],
+                         mutation_id="save-fal-edit-1234")
+        self.body["fields"].update(title="FAL display stand", images="https://fal.media/files/image.jpg")
+        status, saved = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 201)
+        self.assertEqual(saved["checkpoint"]["fields"], self.body["fields"])
+        self.assertEqual(saved["checkpoint"]["mutation_id"], self.body["mutation_id"])
+        self.assertEqual(saved["checkpoint"]["listing_project_identity"], self.identity)
+        _, read = self.request(self.path + self.query)
+        self.assertEqual(read["checkpoint"], saved["checkpoint"])
+        self.assertEqual(read["current_base_report"]["report"]["listing_project_identity"], self.identity)
+        self.assertEqual(self.request(self.path, method="POST", body=self.body)[1]["checkpoint"], saved["checkpoint"])
+        stale = {**self.body, "mutation_id": "other-fal-edit-1234"}
+        status, conflict = self.request(self.path, method="POST", body=stale)
+        self.assertEqual(status, 409)
+        self.assertEqual(conflict["latest_checkpoint"], saved["checkpoint"])
+
+    def test_base_query_filters_before_ordering_and_generation_invalidates_old_checkpoint(self):
+        _, saved = self.request(self.path, method="POST", body=self.body)
+        self.report_fixture("a", "listing.package", "2100-01-01T00:00:00+00:00")
+        latest = self.report_fixture("z", "product.listing", "2100-01-01T00:00:00+00:00")
+        self.report_fixture("newer_market", "ai_ceo.market_research", "2101-01-01T00:00:00+00:00")
+        self.report_fixture("failed", "listing.package", "2102-01-01T00:00:00+00:00", status="failed")
+        self.report_fixture("other_candidate", "listing.package", "2103-01-01T00:00:00+00:00",
+                            identity={**self.identity, "candidate_id": "other"})
+        self.report_fixture("other_project", "listing.package", "2104-01-01T00:00:00+00:00",
+                            identity={**self.identity, "key": "listing-project-other"})
+        self.report_fixture("incomplete", "listing.package", "2105-01-01T00:00:00+00:00",
+                            identity={"key": self.identity["key"]})
+        status, read = self.request(self.path + self.query)
+        self.assertEqual(status, 200)
+        self.assertEqual(read["current_base_report_id"], latest)
+        self.assertTrue(read["base_changed"])
+        self.assertEqual(read["checkpoint"], saved["checkpoint"])
+        stale = {**self.body, "expected_revision": 1, "mutation_id": str(uuid.uuid4())}
+        self.assertEqual(self.request(self.path, method="POST", body=stale)[1]["error_code"], "listing_draft_base_conflict")
+
+    def test_market_fallback_requires_each_explicit_anchor(self):
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+            conn.execute("update reports set status = 'failed' where report_id = ?", (self.base_report_id,))
+        self.report_fixture("missing_anchor_market", "ai_ceo.market_research", "2101-01-01T00:00:00+00:00",
+                            identity={"key": self.identity["key"]})
+        self.assertEqual(self.request(self.path + self.query)[0], 404)
+        market = self.report_fixture("complete_market", "ai_ceo.market_research", "2100-01-01T00:00:00+00:00")
+        status, read = self.request(self.path + self.query)
+        self.assertEqual(status, 200)
+        self.assertEqual(read["status"], "empty")
+        self.assertEqual(read["current_base_report_id"], market)
+        self.body["base_report_id"] = market
+        self.assertEqual(self.request(self.path, method="POST", body=self.body)[0], 201)
+
+
+if __name__ == "__main__":
+    unittest.main()

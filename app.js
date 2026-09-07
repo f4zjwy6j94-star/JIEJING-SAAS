@@ -1648,6 +1648,7 @@ const saasInventoryLocationExecutionAttemptKeys = new Set();
 const saasInventoryLocationReconciliationAttemptKeys = new Set();
 let saasWechatZeroChargeRehearsalAttempted = false;
 let saasPendingPublishIntakeFormValues = null;
+let saasPendingPublishIntakeFormContextKey = "";
 
 const manualActionDetails = {
   ebay_account: {
@@ -4038,6 +4039,8 @@ function prepareSaasMediaStudioForCurrentListing() {
 }
 
 function resetSaasListingProjectTransientState() {
+  if (typeof invalidateSaasListingCloudCheckpointContext === "function") invalidateSaasListingCloudCheckpointContext();
+  if (typeof clearSaasPendingPublishIntakeSnapshot === "function") clearSaasPendingPublishIntakeSnapshot();
   invalidateSaasListingAiGenerationContext();
   state.saasMerchantProjectStatusRequestGeneration = Number(state.saasMerchantProjectStatusRequestGeneration || 0) + 1;
   state.saasMerchantProjectStatus = null;
@@ -7902,7 +7905,7 @@ function renderSaasFirstOrderLaunchLoopPanel(ctx = saasMerchantWorkbenchContext(
 function renderSaasPublishPreflightGuide(ctx = saasMerchantWorkbenchContext()) {
   const draft = state.saasListingComposerDraft || null;
   const fields = draft?.fields || {};
-  const hasTitle = Boolean(fields.title || draft?.title || draft?.product);
+  const hasTitle = Boolean(fields.title ?? draft?.title ?? draft?.product);
   const hasDescription = Boolean(fields.description || fields.selling_points);
   const hasPrice = Boolean(fields.price);
   const hasImageUrl = /https?:\/\//i.test(fields.images || "");
@@ -8021,18 +8024,23 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
   const draft = state.saasListingComposerDraft || (clean.trim() ? saasListingComposerDraftFromText(clean) : null);
   const fields = draft?.fields || {};
   const publishPrefill = draft?.publish_prefill && typeof draft.publish_prefill === "object" ? draft.publish_prefill : {};
+  const editedFields = new Set(typeof saasListingMerchantEditedFields === "function" ? saasListingMerchantEditedFields(draft) : []);
+  const buyerCopyEdited = editedFields.has("selling_points") || editedFields.has("description");
+  const editedBuyerCopy = [fields.selling_points, fields.description].filter(Boolean).join("\n\n");
   const accountPrefill = saasAccountScopedEbayPublishPrefillFromPacket();
   const buyerCopyRequiresMerchantFacts = ["ai_ceo_market_chat", "ai_ceo_market_report", "bulk_handoff"].includes(
     String(draft?.source_type || state.saasListingSourceMode || ""),
   );
   const buyerCopyRequiresValidatedGeneration =
     draft?.model_generated !== true &&
+    !(typeof saasListingMerchantEditHasValidatedBase === "function" && saasListingMerchantEditHasValidatedBase(draft)) &&
     (draft?.buyer_copy_requires_validated_listing_generation === true ||
       String(draft?.source_type || state.saasListingSourceMode || "") === "ai_ceo_product_vision");
   const itemSpecifics = fields.item_specifics || "";
   const itemSpecificRows = parseSaasKeyValueLines(itemSpecifics);
   const logisticsText = fields.logistics || "";
-  const evidenceText = [logisticsText, clean].filter(Boolean).join("\n");
+  const logisticsEdited = editedFields.has("logistics");
+  const evidenceText = [logisticsText, logisticsEdited ? "" : clean].filter(Boolean).join("\n");
   const categoryText = fields.category && !/待|确认|体检/.test(fields.category) ? fields.category : "";
   const priceText = String(fields.price || "");
   const priceIsRange = /(?:\d)\s*(?:-|~|–|—|to)\s*(?:\$|usd|\d)/i.test(priceText);
@@ -8043,7 +8051,7 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     itemSpecificRows.Material ||
     itemSpecificRows.material ||
     itemSpecificRows["材质"] ||
-    (fields.selling_points || fields.description || "").match(/(?:材质|material)\s*[:：]?\s*([^，。；;\n]+)/i)?.[1] ||
+    (!editedFields.has("item_specifics") && (fields.selling_points || fields.description || "").match(/(?:材质|material)\s*[:：]?\s*([^，。；;\n]+)/i)?.[1]) ||
     "";
   const itemLocation =
     evidenceText.match(/(?:^|[\n。；;])\s*(?:实际发货地|发货地|item location|ship from)\s*[:：]\s*([^，。；;\n]+)/im)?.[1] ||
@@ -8062,15 +8070,15 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
   const imageUrls = mediaWritebackUrls.length
     ? mediaWritebackUrls.join("\n")
     : (imageText.match(/https?:\/\/[^\s,，；;]+/gi) || clean.match(/https?:\/\/[^\s,，；;]+/gi) || []).join("\n");
-  const inventoryCountryCandidate = String(publishPrefill.item_location || itemLocation || "").trim().toUpperCase();
+  const inventoryCountryCandidate = String((logisticsEdited ? itemLocation : publishPrefill.item_location || itemLocation) || "").trim().toUpperCase();
   const values = {
     product: draft?.product || draft?.title || "",
     sku: publishPrefill.sku || "",
-    title: buyerCopyRequiresValidatedGeneration ? "" : String(fields.title || draft?.title || "").slice(0, 80),
-    category_id: publishPrefill.category_id || "",
-    category_leaf: publishPrefill.category_leaf || categoryText,
-    price: publishPrefill.price || priceValue,
-    currency: publishPrefill.currency || currency,
+    title: buyerCopyRequiresValidatedGeneration ? "" : String(fields.title ?? draft?.title ?? "").slice(0, 80),
+    category_id: editedFields.has("category") ? "" : publishPrefill.category_id || "",
+    category_leaf: editedFields.has("category") ? categoryText : publishPrefill.category_leaf || categoryText,
+    price: editedFields.has("price") ? priceValue : publishPrefill.price || priceValue,
+    currency: editedFields.has("price") ? currency : publishPrefill.currency || currency,
     quantity: publishPrefill.quantity || "",
     condition: publishPrefill.condition || "",
     merchant_location_key: publishPrefill.merchant_location_key || accountPrefill.merchant_location_key,
@@ -8079,12 +8087,12 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     inventory_location_city: "",
     inventory_location_state: "",
     inventory_location_country: /^[A-Z]{2}$/.test(inventoryCountryCandidate) ? inventoryCountryCandidate : "CN",
-    item_location: publishPrefill.item_location || itemLocation,
-    package_weight_g: publishPrefill.package_weight_g || packageWeightG,
-    package_length_cm: publishPrefill.package_length_cm || dimensionMatch?.[1] || "",
-    package_width_cm: publishPrefill.package_width_cm || dimensionMatch?.[2] || "",
-    package_height_cm: publishPrefill.package_height_cm || dimensionMatch?.[3] || "",
-    material: String(publishPrefill.material || material || "").trim(),
+    item_location: logisticsEdited ? itemLocation : publishPrefill.item_location || itemLocation,
+    package_weight_g: logisticsEdited ? packageWeightG : publishPrefill.package_weight_g || packageWeightG,
+    package_length_cm: (logisticsEdited ? dimensionMatch?.[1] : publishPrefill.package_length_cm || dimensionMatch?.[1]) || "",
+    package_width_cm: (logisticsEdited ? dimensionMatch?.[2] : publishPrefill.package_width_cm || dimensionMatch?.[2]) || "",
+    package_height_cm: (logisticsEdited ? dimensionMatch?.[3] : publishPrefill.package_height_cm || dimensionMatch?.[3]) || "",
+    material: String((editedFields.has("item_specifics") ? material : publishPrefill.material || material) || "").trim(),
     procurement_cost: publishPrefill.procurement_cost || "",
     shipping_cost: "",
     ebay_fee: "",
@@ -8094,18 +8102,18 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     net_profit: "",
     gross_margin_percent: "",
     item_specifics: itemSpecifics,
-    image_urls: publishPrefill.image_urls || imageUrls,
+    image_urls: editedFields.has("images") ? (String(fields.images ?? "").match(/https?:\/\/[^\s,，；;]+/gi) || []).join("\n") : publishPrefill.image_urls || imageUrls,
     description_html:
       buyerCopyRequiresValidatedGeneration
         ? ""
-        : publishPrefill.description_html ||
-          [fields.selling_points, fields.description].filter(Boolean).join("\n\n") ||
+        : buyerCopyEdited ? editedBuyerCopy : publishPrefill.description_html ||
+          editedBuyerCopy ||
           (buyerCopyRequiresMerchantFacts ? "" : clean),
     fulfillment_policy_id: publishPrefill.fulfillment_policy_id || accountPrefill.fulfillment_policy_id,
     payment_policy_id: publishPrefill.payment_policy_id || accountPrefill.payment_policy_id,
     return_policy_id: publishPrefill.return_policy_id || accountPrefill.return_policy_id,
   };
-  return { ...values, ...(saasPendingPublishIntakeFormValues || {}) };
+  return { ...values, ...(typeof currentSaasPendingPublishIntakeValues === "function" ? currentSaasPendingPublishIntakeValues() : {}) };
 }
 
 function renderSaasPublishInputField(label, name, options = {}) {
@@ -9610,6 +9618,7 @@ function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
     return "";
   }
   const fields = draft.fields || {};
+  if (typeof ensureSaasListingCloudCheckpoint === "function") ensureSaasListingCloudCheckpoint();
   return `
     <section class="saas-listing-v2-draft-editor" aria-label="Listing 草稿编辑器">
       <div class="saas-listing-v2-draft-head">
@@ -9626,7 +9635,7 @@ function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
             <span>主文案</span>
             <strong>影响点击和转化的内容</strong>
           </div>
-          ${renderSaasListingDraftField("eBay 标题", "title", fields.title || draft.title, { wide: true, placeholder: "80 字以内，避免品牌词和夸大承诺" })}
+          ${renderSaasListingDraftField("eBay 标题", "title", fields.title ?? draft.title, { wide: true, placeholder: "80 字以内，避免品牌词和夸大承诺" })}
           ${renderSaasListingDraftField("核心卖点（3–5 条）", "selling_points", fields.selling_points || "", { multiline: true, rows: 5, placeholder: "根据真实材质、尺寸、数量和用途填写；每行一个卖点", wide: true })}
           ${renderSaasListingDraftField("商品描述", "description", fields.description || "", { multiline: true, rows: 7, placeholder: "根据已确认的商品事实填写，不会把市场调研理由自动写给买家", wide: true })}
         </div>
@@ -9637,13 +9646,14 @@ function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
           </div>
           <div class="saas-listing-v2-draft-side-grid">
             ${renderSaasListingDraftField("价格 / 成本线索", "price", fields.price || "", { compact: true })}
-            ${renderSaasListingDraftField("类目建议", "category", fields.category || "待发布体检确认", { compact: true })}
+            ${renderSaasListingDraftField("类目建议", "category", fields.category ?? "待发布体检确认", { compact: true })}
             ${renderSaasListingDraftField("Item specifics", "item_specifics", fields.item_specifics || "", { multiline: true, rows: 4, compact: true })}
             ${renderSaasListingDraftField("图片 / 素材需求", "images", fields.images || "", { multiline: true, rows: 4, compact: true })}
             ${renderSaasListingDraftField("物流 / 重量 / 尺寸", "logistics", fields.logistics || "", { multiline: true, rows: 4, compact: true })}
           </div>
         </aside>
       </div>
+      <div data-saas-listing-cloud-slot>${typeof renderSaasListingCloudCheckpointStatus === "function" ? renderSaasListingCloudCheckpointStatus() : ""}</div>
     </section>
   `;
 }
@@ -9664,7 +9674,7 @@ function saasListingDraftPreflightSummary(
   const hasImageUrl = /https?:\/\//i.test(imageText) || mediaWritebackUrls.length > 0;
   const hasImageHint = /图片|主图|image|photo|jpg|png|webp|素材清单|主图候选/i.test(imageText) || Boolean(mediaWriteback);
   const imageTone = hasImageUrl ? (mediaWritebackRightsPending ? "amber" : "green") : "red";
-  const hasCoreText = hasText(fields.title || draft?.title) && hasText(fields.selling_points || fields.description);
+  const hasCoreText = hasText(fields.title ?? draft?.title) && hasText(fields.selling_points || fields.description);
   const hasCategory = hasText(fields.category) && !isTodo(fields.category);
   const hasSpecifics = hasText(fields.item_specifics) && !isTodo(fields.item_specifics);
   const hasLogistics = hasText(fields.logistics) && !isTodo(fields.logistics);
@@ -9846,7 +9856,7 @@ function saasListingEbayFieldCoverage(draft = state.saasListingComposerDraft, ct
       label: "买家文案",
       title: "标题、卖点、描述",
       fields: [
-        ["标题", hasText(fields.title || draft?.title), "补 eBay 标题，80 字以内"],
+        ["标题", hasText(fields.title ?? draft?.title), "补 eBay 标题，80 字以内"],
         ["卖点", hasText(fields.selling_points), "补 3-5 条真实卖点"],
         ["描述", hasText(fields.description), "补商品描述和限制说明"],
       ],
@@ -29795,6 +29805,7 @@ async function refreshSaasState(options = {}) {
     state.saasProtectedStateReady = true;
     state.saasProtectedStateFromCache = false;
     state.saasProtectedStateCachedAt = "";
+    if (typeof ensureSaasListingCloudCheckpoint === "function") ensureSaasListingCloudCheckpoint();
     saveSaasProtectedStateSnapshot();
     state.saasSessionExpiryHandled = false;
     state.saasSessionExpiryRedirected = false;
@@ -30731,8 +30742,27 @@ async function createSaasProductWorkflowFromBackend(options = {}) {
 
 function snapshotSaasPublishIntakeFormValues() {
   const form = document.querySelector("#saasPublishIntakeForm");
-  if (!form || typeof FormData !== "function") return saasPendingPublishIntakeFormValues || null;
+  if (!form || typeof FormData !== "function") return currentSaasPendingPublishIntakeValues();
+  saasPendingPublishIntakeFormContextKey = saasListingAiGenerationContextKey();
   return Object.fromEntries(Array.from(new FormData(form).entries(), ([key, value]) => [String(key), String(value)]));
+}
+
+function currentSaasPendingPublishIntakeValues() {
+  return saasPendingPublishIntakeFormContextKey === saasListingAiGenerationContextKey() ? saasPendingPublishIntakeFormValues || {} : {};
+}
+
+function clearSaasPendingPublishIntakeSnapshot() {
+  saasPendingPublishIntakeFormValues = null;
+  saasPendingPublishIntakeFormContextKey = "";
+}
+
+function invalidateSaasPendingPublishIntakeFields(keys = []) {
+  if (!saasPendingPublishIntakeFormValues) return;
+  const mapping = { title: ["title"], selling_points: ["description_html"], description: ["description_html"],
+    category: ["category_id", "category_leaf"], price: ["price", "currency"], images: ["image_urls"],
+    item_specifics: ["item_specifics", "material"],
+    logistics: ["item_location", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm", "inventory_location_country"] };
+  keys.forEach((key) => (mapping[key] || []).forEach((name) => { delete saasPendingPublishIntakeFormValues[name]; }));
 }
 
 function readSaasInventoryLocationInput() {
@@ -31038,6 +31068,7 @@ async function createSaasPublishConfirmationFromIntakeForm(mode = "publish") {
   const currentDraft = state.saasListingComposerDraft;
   const requiresValidatedListingGeneration =
     currentDraft?.model_generated !== true &&
+    !(typeof saasListingMerchantEditHasValidatedBase === "function" && saasListingMerchantEditHasValidatedBase(currentDraft)) &&
     (currentDraft?.buyer_copy_requires_validated_listing_generation === true ||
       String(currentDraft?.source_type || state.saasListingSourceMode || "") === "ai_ceo_product_vision");
   if (requiresValidatedListingGeneration) {
@@ -32734,7 +32765,9 @@ function setSaasListingDraftField(field = "", value = "", options = {}) {
   if (!state.saasListingComposerDraft) return false;
   const key = String(field || "").trim();
   if (!key) return false;
-  const safeValue = sanitizeSaasWorkflowFeedbackText(value || "", key === "description" || key === "selling_points" ? 1400 : 800);
+  const safeValue = saasListingEditableFieldText(value, key);
+  const changed = !Object.prototype.hasOwnProperty.call(state.saasListingComposerDraft.fields || {}, key) ||
+    String(state.saasListingComposerDraft.fields?.[key] ?? "") !== safeValue;
   state.saasListingComposerDraft.fields = {
     ...(state.saasListingComposerDraft.fields || {}),
     [key]: safeValue,
@@ -32743,13 +32776,500 @@ function setSaasListingDraftField(field = "", value = "", options = {}) {
     state.saasListingComposerDraft.merchant_edited_fields = Array.from(
       new Set([...saasListingMerchantEditedFields(state.saasListingComposerDraft), key]),
     );
+    if (changed && typeof invalidateSaasPendingPublishIntakeFields === "function") invalidateSaasPendingPublishIntakeFields([key]);
   }
   if (key === "title") {
     state.saasListingComposerDraft.title = safeValue.slice(0, 90) || state.saasListingComposerDraft.title;
     state.saasListingComposerDraft.product = state.saasListingComposerDraft.product || state.saasListingComposerDraft.title;
   }
   scheduleSaasListingDraftSnapshotSave();
+  if (changed && options?.merchantEdited === true && typeof queueSaasListingCloudCheckpoint === "function") {
+    queueSaasListingCloudCheckpoint();
+  }
   return true;
+}
+
+// Merchant edits are an independent checkpoint, never an AI report or a
+// publish permission. All durable client data below is scoped and whitelisted.
+const SAAS_LISTING_CLOUD_CONTRACT = "listing_merchant_edit_v1";
+const saasListingCloudRecords = new Map();
+let saasListingCloudEpoch = 0;
+
+function saasListingCloudContext() {
+  if (!isSaasPublicMvpMode() || !state.saasProtectedStateReady || state.saasProtectedStateFromCache || state.saasSessionExpiryHandled) return null;
+  const companyId = String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "");
+  const userId = String(state.saasIdentity?.user_id || state.saasUser?.user_id || "");
+  const storeId = String(activeSaasStore()?.store_id || "");
+  const identity = saasNormalizeListingProjectIdentity(saasCurrentListingProjectIdentity());
+  if (!companyId || !userId || !storeId || !identity) return null;
+  return { companyId, userId, storeId, identity,
+    key: JSON.stringify([companyId, userId, storeId, identity.key, identity.source_report_id, identity.candidate_id]),
+    path: `/stores/${encodeURIComponent(storeId)}/listing-drafts/${encodeURIComponent(identity.key)}/checkpoint` };
+}
+
+function saasListingCloudFields(fields = {}) {
+  return Object.fromEntries(saasListingMerchantEditableFieldKeys().map((key) => [key,
+    saasListingEditableFieldText(fields[key], key)]));
+}
+
+function saasListingEditableFieldText(value, key) {
+  const limit = ["description", "selling_points"].includes(key) ? 1400 : 800;
+  // Merchant content is data, not public UI copy. Retain the existing secret
+  // redaction rules without renaming product words, brands or URL paths.
+  const clean = String(value ?? "")
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "[model_key_redacted]")
+    .replace(/\b(AIAK|AKID|ASIA)[A-Za-z0-9]{12,}\b/g, "[cloud_key_redacted]")
+    .replace(/\b(access[_-]?token|refresh[_-]?token|api[_-]?key|password|secret)\s*[:=]\s*[^,\s;，；]+/gi, "$1=[redacted]");
+  return Array.from(clean).slice(0, limit).join("");
+}
+
+function saasListingCloudSameIdentity(a, b) {
+  return Boolean(a && b && a.key === b.key && a.source_report_id === b.source_report_id && a.candidate_id === b.candidate_id);
+}
+
+function saasListingCloudReportMatchesContext(report, context) {
+  const identity = report?.report?.listing_project_identity;
+  return Boolean(report?.status === "saved" && report.company_id === context.companyId && report.store_id === context.storeId &&
+    identity && ["key", "source_report_id", "candidate_id"].every((key) =>
+      Object.prototype.hasOwnProperty.call(identity, key) && typeof identity[key] === "string" && identity[key] === context.identity[key]));
+}
+
+function saasListingCloudBaseReport(context) {
+  const rows = (state.saasReports || []).filter((report) => saasListingCloudReportMatchesContext(report, context));
+  const primary = rows.filter((report) => ["listing.package", "product.listing", "merchant.product_facts"].includes(report.report_type));
+  return (primary.length ? primary : rows.filter((report) => report.report_type === "ai_ceo.market_research"))
+    .sort((a, b) => saasTimestampMillis(b.created_at) - saasTimestampMillis(a.created_at) || (a.report_id < b.report_id ? 1 : -1))[0] || null;
+}
+
+function restoreSaasListingCloudBase(context) {
+  if (saasListingCloudContext()?.key !== context.key) throw new Error("stale_checkpoint_context");
+  // The legacy restore entry point also serves unanchored projects. Cloud
+  // checkpoints must never let its key-only fallback borrow another candidate.
+  const reports = (state.saasReports || []).filter((report) => saasListingCloudReportMatchesContext(report, context));
+  const previousDraft = state.saasListingComposerDraft;
+  const previousSourceMode = state.saasListingSourceMode;
+  const draft = restoreSaasListingComposerDraftFromBackendReports({ reports, preferBackendLatest: true, projectId: context.identity.key });
+  if (!saasListingCloudSameIdentity(saasNormalizeListingProjectIdentity(draft?.listing_project_identity), context.identity)) {
+    state.saasListingComposerDraft = previousDraft;
+    state.saasListingSourceMode = previousSourceMode;
+    throw new Error("invalid_checkpoint_base_identity");
+  }
+  return draft;
+}
+
+function saasListingMerchantEditHasValidatedBase(draft) {
+  const context = saasListingCloudContext();
+  if (!context || draft?.buyer_copy_status !== "merchant_edited_requires_review" ||
+      !saasListingMerchantEditedFields(draft).length ||
+      !saasListingCloudSameIdentity(saasNormalizeListingProjectIdentity(draft.listing_project_identity), context.identity)) return false;
+  // A cloud checkpoint cannot attest to generation or facts. Only an already
+  // authenticated, project-scoped generation report can satisfy this existing
+  // prerequisite, and only while its fact snapshot is still exactly current.
+  const report = (state.saasReports || []).filter((item) =>
+    ["listing.package", "product.listing"].includes(item.report_type) && saasListingCloudReportMatchesContext(item, context) &&
+    item.runtime_run_id === "listing_draft_generation" &&
+    item.report?.contract_version === "listing_ai_draft_generation_v1" &&
+    item.report?.listing_handoff?.source_mode === "project_scoped_live_model" &&
+    item.report?.listing_handoff?.ready_for_listing_draft === true)
+    .sort((a, b) => saasTimestampMillis(b.created_at) - saasTimestampMillis(a.created_at) || (a.report_id < b.report_id ? 1 : -1))[0];
+  const currentPacket = draft.merchant_product_fact_packet;
+  const generatedPacket = report?.report?.merchant_product_fact_packet;
+  if (!currentPacket || !generatedPacket) return false;
+  const signature = (packet) => JSON.stringify(saasCanonicalJsonValue({
+    product_name: packet.product_name || "",
+    source_confirmed_facts: packet.source_confirmed_facts || {},
+    merchant_confirmed_facts: packet.merchant_confirmed_facts || {},
+    unknown_facts: [...(packet.unknown_facts || [])].sort(),
+    fact_conflicts: packet.fact_conflicts || [],
+    simulation_only: packet.simulation_only === true,
+  }));
+  return signature(currentPacket) === signature(generatedPacket);
+}
+
+function saasListingCloudReceipt(raw, context) {
+  if (!raw || raw.source !== "merchant_edit" || raw.company_id !== context.companyId || raw.store_id !== context.storeId ||
+      !saasListingCloudSameIdentity(raw.listing_project_identity, context.identity) ||
+      !Number.isSafeInteger(raw.revision) || raw.revision < 1 || !/^[A-Za-z0-9._:-]{1,160}$/.test(raw.checkpoint_id || "") ||
+      !/^[A-Za-z0-9._:-]{1,160}$/.test(raw.base_report_id || "") || !/^[A-Za-z0-9._:-]{8,160}$/.test(raw.mutation_id || "")) return null;
+  const keys = saasListingMerchantEditableFieldKeys();
+  if (!raw.fields || Object.keys(raw.fields).length !== keys.length || keys.some((key) => typeof raw.fields[key] !== "string")) return null;
+  const fields = saasListingCloudFields(raw.fields);
+  if (keys.some((key) => fields[key] !== raw.fields[key])) return null;
+  return { checkpoint_id: raw.checkpoint_id, revision: raw.revision, mutation_id: raw.mutation_id,
+    company_id: context.companyId, store_id: context.storeId, listing_project_identity: context.identity,
+    base_report_id: raw.base_report_id, fields, merchant_edited_fields: saasListingMerchantEditedFields(raw),
+    saved_at: String(raw.saved_at || "").slice(0, 80), source: "merchant_edit" };
+}
+
+function saasListingCloudRecord(context = saasListingCloudContext()) {
+  if (!context) return null;
+  if (!saasListingCloudRecords.has(context.key)) {
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(`jiejing_listing_cloud_v1:${context.key}`) || "null"); } catch { /* Preserve damaged storage; do not trust it. */ }
+    const valid = cached?.contract_version === SAAS_LISTING_CLOUD_CONTRACT && cached.context_key === context.key;
+    const record = { context, loaded: false, status: "loading", revision: 0, baseReportId: "", fields: null,
+      edited: [], dirty: false, seq: 0, pending: null, receipt: null, conflict: null, reviewedBase: null,
+      supersededCheckpoint: null, backups: [], timer: null, read: null, write: null };
+    if (valid) {
+      record.revision = Number.isSafeInteger(cached.revision) && cached.revision >= 0 ? cached.revision : 0;
+      record.baseReportId = /^[A-Za-z0-9._:-]{1,160}$/.test(cached.base_report_id || "") ? cached.base_report_id : "";
+      record.fields = cached.fields ? saasListingCloudFields(cached.fields) : null;
+      record.edited = saasListingMerchantEditedFields({ merchant_edited_fields: cached.merchant_edited_fields });
+      record.dirty = cached.dirty === true && Boolean(record.fields);
+      record.receipt = saasListingCloudReceipt(cached.receipt, context);
+      if (Number.isSafeInteger(cached.reviewed_base?.checkpoint_revision) && cached.reviewed_base.checkpoint_revision > 0 &&
+          /^[A-Za-z0-9._:-]{1,160}$/.test(cached.reviewed_base.current_base_report_id || "")) {
+        record.reviewedBase = { checkpoint_revision: cached.reviewed_base.checkpoint_revision,
+          current_base_report_id: cached.reviewed_base.current_base_report_id };
+      }
+      record.backups = Array.isArray(cached.backups) ? cached.backups.slice(0, 20).map((item) => ({
+        fields: saasListingCloudFields(item.fields), base_report_id: String(item.base_report_id || "").slice(0, 160),
+        saved_at: String(item.saved_at || "").slice(0, 80) })) : [];
+      const pending = cached.pending;
+      if (record.dirty && pending?.contract_version === SAAS_LISTING_CLOUD_CONTRACT &&
+          saasListingCloudSameIdentity(pending.listing_project_identity, context.identity) &&
+          Number.isSafeInteger(pending.expected_revision) && pending.expected_revision >= 0 &&
+          /^[A-Za-z0-9._:-]{8,160}$/.test(pending.mutation_id || "") &&
+          /^[A-Za-z0-9._:-]{1,160}$/.test(pending.base_report_id || "")) {
+        record.pending = { contract_version: SAAS_LISTING_CLOUD_CONTRACT, listing_project_identity: context.identity,
+          expected_revision: pending.expected_revision, mutation_id: pending.mutation_id, base_report_id: pending.base_report_id,
+          fields: saasListingCloudFields(pending.fields), merchant_edited_fields: saasListingMerchantEditedFields(pending) };
+      }
+    }
+    saasListingCloudRecords.set(context.key, record);
+  }
+  return saasListingCloudRecords.get(context.key);
+}
+
+function persistSaasListingCloudRecord(record) {
+  try {
+    localStorage.setItem(`jiejing_listing_cloud_v1:${record.context.key}`, JSON.stringify({
+      contract_version: SAAS_LISTING_CLOUD_CONTRACT, context_key: record.context.key,
+      revision: record.revision, base_report_id: record.baseReportId, fields: record.fields,
+      merchant_edited_fields: record.edited, dirty: record.dirty, pending: record.pending,
+      receipt: record.receipt, reviewed_base: record.reviewedBase, backups: record.backups }));
+    record.storageFailed = false;
+  } catch { record.storageFailed = true; }
+}
+
+function invalidateSaasListingCloudCheckpointContext() {
+  saasListingCloudEpoch += 1;
+  for (const record of saasListingCloudRecords.values()) {
+    if (record.timer) clearTimeout(record.timer);
+    record.timer = null;
+    record.loaded = false;
+  }
+}
+
+function applySaasListingCloudFields(record) {
+  if (saasListingCloudContext()?.key !== record.context.key || !record.fields || !state.saasListingComposerDraft) return;
+  const draft = state.saasListingComposerDraft;
+  draft.fields = { ...(draft.fields || {}), ...record.fields };
+  draft.merchant_edited_fields = [...record.edited];
+  invalidateSaasPendingPublishIntakeFields(record.edited);
+  draft.model_generated = false;
+  draft.buyer_copy_status = "merchant_edited_requires_review";
+  // Do not clear an existing vision/facts gate, nor invent new publish rights.
+  syncSaasListingCloudEditorFields();
+  saveSaasProtectedStateSnapshot();
+}
+
+function syncSaasListingCloudEditorFields() {
+  const fields = state.saasListingComposerDraft?.fields || {};
+  document.querySelectorAll("[data-saas-listing-draft-field]").forEach((input) => {
+    input.value = fields[input.dataset.saasListingDraftField] ?? "";
+  });
+}
+
+function renderSaasListingCloudCheckpointStatus() {
+  const record = saasListingCloudRecord();
+  if (!record) return "";
+  const fieldLabels = { title: "商品标题", selling_points: "商品卖点", description: "商品描述", category: "商品类目",
+    item_specifics: "商品属性", keywords: "搜索关键词", price: "商品价格", images: "商品图片", logistics: "物流资料", risk_notes: "风险提示" };
+  const renderFields = (fields = {}) => `<dl style="min-width:0;max-width:100%">${saasListingMerchantEditableFieldKeys().map((key) =>
+    `<dt>${escapeHtml(fieldLabels[key])}</dt><dd style="margin:0 0 0.6em;white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(fields[key] === "" ? "已清空" : fields[key] ?? "暂无内容")}</dd>`).join("")}</dl>`;
+  const messages = { loading: "正在读取云端草稿", saving: "正在保存到云端", saved: "已云端保存",
+    idle: "修改后自动保存到云端", current: "已使用最新商品资料，修改后自动保存", pending: "修改已保留，等待云端保存", error: "暂未同步，修改仍保留在本机",
+    unavailable: "先保存商品资料，才能关联云端草稿", conflict: "检测到其他更新，请核对后选择保留哪一版", forbidden: "当前账号不能保存，请检查登录状态和编辑权限" };
+  const olderBase = Boolean(record.conflict?.checkpoint && record.conflict.checkpoint.base_report_id !== record.conflict.baseReportId);
+  const details = record.conflict ? `<details style="min-width:0;max-width:100%"><summary>${olderBase ? "查看之前云端保存的编辑（基于旧商品资料）" : "查看云端内容（本机修改仍在编辑框中）"}</summary>${renderFields(record.conflict.checkpoint?.fields)}</details>
+    <button type="button" class="secondary-action" data-saas-listing-cloud-action="use-cloud">${olderBase ? "使用最新资料版本，保留本机副本" : "使用云端版本，保留本机副本"}</button>
+    <button type="button" class="secondary-action" data-saas-listing-cloud-action="keep-local">保留本机修改并重新保存</button>` : "";
+  const backups = record.backups.length ? `<details style="min-width:0;max-width:100%"><summary>查看保留的本机副本（${record.backups.length}）</summary>${record.backups.map((item, index) => `<h4>本机副本 ${index + 1}</h4>${renderFields(item.fields)}`).join("")}</details>` : "";
+  const previousCloud = !record.conflict && record.supersededCheckpoint ? `<details style="min-width:0;max-width:100%"><summary>查看之前云端保存的编辑（基于旧商品资料）</summary>${renderFields(record.supersededCheckpoint.fields)}</details>` : "";
+  return `<div class="saas-product-facts-simulation-note" role="status" aria-live="polite" data-saas-listing-cloud-status>
+    <strong>${escapeHtml(record.storageFailed ? "本机存储已满，请保持页面打开并重试云端保存" : messages[record.status] || messages.idle)}</strong>
+    <span>仅保存当前商品的编辑，不调用 AI、不扣素材点、不写入 eBay。</span>
+    ${["error", "forbidden", "unavailable"].includes(record.status) ? '<button type="button" class="secondary-action" data-saas-listing-cloud-action="retry">重试同步</button>' : ""}${details}${previousCloud}${backups}</div>`;
+}
+
+function updateSaasListingCloudStatus(record) {
+  if (saasListingCloudContext()?.key !== record?.context.key) return;
+  document.querySelectorAll("[data-saas-listing-cloud-slot]").forEach((slot) => { slot.innerHTML = renderSaasListingCloudCheckpointStatus(); });
+}
+
+function ensureSaasListingCloudCheckpoint() {
+  const record = saasListingCloudRecord();
+  if (!record || (record.read && record.readEpoch === saasListingCloudEpoch && record.readRefreshGeneration === saasStateRefreshGeneration)) return;
+  if (record.loaded && record.observedRefreshGeneration === saasStateRefreshGeneration &&
+      record.observedBaseReportId === (saasListingCloudBaseReport(record.context)?.report_id || "")) return;
+  // Rendering is read-only. A queued microtask avoids replacing an editor while it is constructed.
+  void Promise.resolve().then(() => hydrateSaasListingCloudCheckpoint());
+}
+
+async function hydrateSaasListingCloudCheckpoint(options = {}) {
+  const context = saasListingCloudContext();
+  const record = saasListingCloudRecord(context);
+  if (!record) return false;
+  if (record.read && record.readEpoch === saasListingCloudEpoch && record.readRefreshGeneration === saasStateRefreshGeneration) return record.read;
+  const requestBaseId = saasListingCloudBaseReport(context)?.report_id || "";
+  if (record.loaded && record.observedRefreshGeneration === saasStateRefreshGeneration && record.observedBaseReportId === requestBaseId && !options.force) return true;
+  const epoch = saasListingCloudEpoch;
+  const refreshGeneration = saasStateRefreshGeneration;
+  record.readEpoch = epoch;
+  record.readRefreshGeneration = refreshGeneration;
+  const scopeCurrent = () => epoch === saasListingCloudEpoch && refreshGeneration === saasStateRefreshGeneration && saasListingCloudContext()?.key === context.key;
+  const current = () => scopeCurrent() && (saasListingCloudBaseReport(context)?.report_id || "") === requestBaseId;
+  const initialSeq = record.seq;
+  record.read = (async () => {
+    try {
+      const payload = await saasFetchWithTimeout(`${context.path}?${new URLSearchParams({ source_report_id: context.identity.source_report_id, candidate_id: context.identity.candidate_id })}`,
+        { saasRequestIsCurrent: current, saasDeferUnauthorizedTermination: true }, 15000);
+      if (!current()) return false;
+      const checkpoint = payload.checkpoint ? saasListingCloudReceipt(payload.checkpoint, context) : null;
+      if (payload.checkpoint && !checkpoint) throw new Error("invalid_checkpoint_receipt");
+      if (!Number.isSafeInteger(payload.current_revision) || payload.current_revision < 0 ||
+          !/^[A-Za-z0-9._:-]{1,160}$/.test(payload.current_base_report_id || "")) throw new Error("invalid_checkpoint_head");
+      const localBaseId = saasListingCloudBaseReport(context)?.report_id || "";
+      const base = payload.current_base_report;
+      if (!saasListingCloudReportMatchesContext(base, context) || base.report_id !== payload.current_base_report_id) throw new Error("invalid_checkpoint_base");
+      state.saasReports = [base, ...(state.saasReports || []).filter((item) => item.report_id !== base.report_id)];
+      const latestBase = payload.current_base_report_id;
+      if ((saasListingCloudBaseReport(context)?.report_id || "") !== latestBase) throw new Error("superseded_checkpoint_base");
+      record.observedBaseReportId = latestBase;
+      record.observedRefreshGeneration = refreshGeneration;
+      const hasEdits = record.dirty || record.seq !== initialSeq;
+      const exactPending = checkpoint && record.pending && checkpoint.mutation_id === record.pending.mutation_id &&
+        JSON.stringify(checkpoint.fields) === JSON.stringify(record.pending.fields);
+      if (exactPending) {
+        record.revision = checkpoint.revision;
+        record.receipt = checkpoint;
+        record.pending = null;
+        if (JSON.stringify(record.fields) === JSON.stringify(checkpoint.fields)) record.dirty = false;
+      }
+      const olderBase = Boolean(checkpoint && (payload.base_changed === true || checkpoint.base_report_id !== latestBase));
+      const reviewedBase = olderBase && record.reviewedBase?.checkpoint_revision === payload.current_revision &&
+        record.reviewedBase.current_base_report_id === latestBase;
+      record.supersededCheckpoint = reviewedBase ? checkpoint : null;
+      const conflicts = (hasEdits && !exactPending && (payload.current_revision !== record.revision || (record.baseReportId && record.baseReportId !== latestBase))) ||
+        (olderBase && !reviewedBase);
+      record.loaded = true;
+      if (conflicts) {
+        if (record.dirty) applySaasListingCloudFields(record);
+        else {
+          if (localBaseId !== latestBase) restoreSaasListingCloudBase(context);
+          record.fields = saasListingCloudFields(state.saasListingComposerDraft?.fields);
+          syncSaasListingCloudEditorFields();
+        }
+        record.conflict = { checkpoint, revision: payload.current_revision, baseReportId: latestBase, baseReport: base };
+        record.status = "conflict";
+      } else {
+        record.revision = payload.current_revision;
+        record.baseReportId = latestBase;
+        record.conflict = null;
+        if (record.dirty) {
+          record.status = "pending";
+          applySaasListingCloudFields(record);
+        } else if (checkpoint && !reviewedBase) {
+          record.fields = checkpoint.fields;
+          record.edited = checkpoint.merchant_edited_fields;
+          record.receipt = checkpoint;
+          record.status = "saved";
+          applySaasListingCloudFields(record);
+        } else {
+          record.status = reviewedBase ? "current" : "idle";
+          if (localBaseId !== latestBase) {
+            restoreSaasListingCloudBase(context);
+            syncSaasListingCloudEditorFields();
+          }
+        }
+      }
+      persistSaasListingCloudRecord(record);
+      updateSaasListingCloudStatus(record);
+      return true;
+    } catch (error) {
+      if (!current()) return false;
+      record.loaded = true;
+      record.status = [401, 403].includes(error?.status) ? "forbidden" : error?.status === 404 ? "unavailable" : "error";
+      if (record.dirty) applySaasListingCloudFields(record);
+      persistSaasListingCloudRecord(record);
+      updateSaasListingCloudStatus(record);
+      return false;
+    } finally {
+      if (record.readEpoch === epoch && record.readRefreshGeneration === refreshGeneration) record.read = null;
+      if (scopeCurrent() && record.observedBaseReportId !== (saasListingCloudBaseReport(context)?.report_id || "") && !record.read) {
+        record.loaded = false;
+        if ((saasListingCloudBaseReport(context)?.report_id || "") !== requestBaseId) {
+          void Promise.resolve().then(() => hydrateSaasListingCloudCheckpoint({ force: true }));
+        }
+      }
+      if (scopeCurrent() && record.dirty && record.status === "pending" && !record.write && !record.timer) {
+        record.timer = setTimeout(() => { record.timer = null; void flushSaasListingCloudCheckpoint(); }, 1000);
+      }
+    }
+  })();
+  return record.read;
+}
+
+function queueSaasListingCloudCheckpoint() {
+  const context = saasListingCloudContext();
+  const record = saasListingCloudRecord(context);
+  if (!record || !state.saasPermissions?.includes("create_task")) return false;
+  record.fields = saasListingCloudFields(state.saasListingComposerDraft?.fields);
+  record.edited = saasListingMerchantEditedFields();
+  record.seq += 1;
+  record.dirty = true;
+  if (!record.baseReportId) record.baseReportId = saasListingCloudBaseReport(context)?.report_id || "";
+  state.saasListingComposerDraft.model_generated = false;
+  state.saasListingComposerDraft.buyer_copy_status = "merchant_edited_requires_review";
+  if (!record.conflict) record.status = "pending";
+  persistSaasListingCloudRecord(record);
+  if (record.timer) clearTimeout(record.timer);
+  record.timer = setTimeout(() => { record.timer = null; void flushSaasListingCloudCheckpoint(); }, 1000);
+  updateSaasListingCloudStatus(record);
+  return true;
+}
+
+function flushSaasListingCloudCheckpoint() {
+  const context = saasListingCloudContext();
+  const record = saasListingCloudRecord(context);
+  if (!record) return Promise.resolve(false);
+  if (record.flushing) return record.flushing;
+  record.flushing = flushSaasListingCloudCheckpointRecord(context, record).finally(() => {
+    record.flushing = null;
+    // A later edit may have used its debounce while an old visit's request was
+    // still in flight. Re-arm only the currently open scope, after single-flight
+    // is released; its pending mutation will first be reconciled/replayed.
+    if (saasListingCloudContext()?.key === context.key && record.dirty && record.status === "pending" && !record.timer) {
+      record.timer = setTimeout(() => { record.timer = null; void flushSaasListingCloudCheckpoint(); }, 1000);
+    }
+  });
+  return record.flushing;
+}
+
+async function flushSaasListingCloudCheckpointRecord(context, record) {
+  if (!record || !record.dirty || !state.saasPermissions?.includes("create_task")) return false;
+  if (record.write) return record.write;
+  if (record.timer) clearTimeout(record.timer);
+  record.timer = null;
+  const epoch = saasListingCloudEpoch;
+  const refreshGeneration = saasStateRefreshGeneration;
+  const current = () => epoch === saasListingCloudEpoch && refreshGeneration === saasStateRefreshGeneration && saasListingCloudContext()?.key === context.key;
+  if ((!record.loaded || record.observedRefreshGeneration !== refreshGeneration ||
+      record.observedBaseReportId !== (saasListingCloudBaseReport(context)?.report_id || "") ||
+      ["error", "forbidden", "unavailable"].includes(record.status)) && !(await hydrateSaasListingCloudCheckpoint({ force: true }))) return false;
+  if (!current() || !record.dirty || record.conflict || !record.baseReportId) return false;
+  if (!record.pending) {
+    record.pending = { contract_version: SAAS_LISTING_CLOUD_CONTRACT, listing_project_identity: context.identity,
+      base_report_id: record.baseReportId, expected_revision: record.revision,
+      mutation_id: globalThis.crypto?.randomUUID?.() || `edit_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      fields: { ...record.fields }, merchant_edited_fields: [...record.edited] };
+  }
+  const request = record.pending;
+  record.status = "saving";
+  persistSaasListingCloudRecord(record);
+  updateSaasListingCloudStatus(record);
+  record.write = (async () => {
+    try {
+      const payload = await saasFetchWithTimeout(context.path, { method: "POST", body: JSON.stringify(request),
+        saasRequestIsCurrent: current, saasDeferUnauthorizedTermination: true }, 15000);
+      if (!current()) return false;
+      const checkpoint = saasListingCloudReceipt(payload.checkpoint, context);
+      if (payload.status !== "saved" || !checkpoint || checkpoint.mutation_id !== request.mutation_id ||
+          checkpoint.base_report_id !== request.base_report_id || checkpoint.revision !== request.expected_revision + 1 ||
+          JSON.stringify(checkpoint.fields) !== JSON.stringify(request.fields)) throw new Error("invalid_checkpoint_receipt");
+      record.pending = null;
+      record.revision = checkpoint.revision;
+      record.receipt = checkpoint;
+      record.dirty = JSON.stringify(record.fields) !== JSON.stringify(request.fields);
+      record.status = record.dirty ? "pending" : "saved";
+      persistSaasListingCloudRecord(record);
+      updateSaasListingCloudStatus(record);
+      // A replay acknowledges an exact old mutation, not necessarily the
+      // latest head. Re-read before presenting a cross-device saved state.
+      await hydrateSaasListingCloudCheckpoint({ force: true });
+      return true;
+    } catch (error) {
+      if (!current()) return false;
+      const payload = error?.payload || {};
+      if (error?.status === 409) {
+        record.conflict = { checkpoint: saasListingCloudReceipt(payload.latest_checkpoint, context),
+          revision: Number.isSafeInteger(payload.current_revision) ? payload.current_revision : record.revision,
+          baseReportId: String(payload.current_base_report_id || record.baseReportId), baseReport: payload.current_base_report };
+        record.status = "conflict";
+      } else record.status = [401, 403].includes(error?.status) ? "forbidden" : "error";
+      persistSaasListingCloudRecord(record);
+      updateSaasListingCloudStatus(record);
+      return false;
+    } finally {
+      record.write = null;
+      if (current() && record.dirty && record.status === "pending") {
+        record.timer = setTimeout(() => { record.timer = null; void flushSaasListingCloudCheckpoint(); }, 1000);
+      }
+    }
+  })();
+  return record.write;
+}
+
+async function resolveSaasListingCloudCheckpoint(action = "retry") {
+  const record = saasListingCloudRecord();
+  if (!record) return false;
+  const key = record.context.key;
+  const seq = record.seq;
+  if (!(await hydrateSaasListingCloudCheckpoint({ force: true })) || saasListingCloudContext()?.key !== key) return false;
+  if (action === "retry") return flushSaasListingCloudCheckpoint();
+  if (!record.conflict || seq !== record.seq) return false;
+  const conflict = record.conflict;
+  if (action === "use-cloud") {
+    if (record.backups.length >= 20) {
+      record.status = "error";
+      updateSaasListingCloudStatus(record);
+      return false;
+    }
+    record.backups.push({ fields: saasListingCloudFields(record.fields), base_report_id: record.baseReportId, saved_at: new Date().toISOString() });
+    persistSaasListingCloudRecord(record);
+    if (record.storageFailed) { updateSaasListingCloudStatus(record); return false; }
+    if (conflict.checkpoint?.base_report_id === conflict.baseReportId) {
+      record.fields = conflict.checkpoint.fields;
+      record.edited = conflict.checkpoint.merchant_edited_fields;
+      record.receipt = conflict.checkpoint;
+      record.reviewedBase = null;
+      record.supersededCheckpoint = null;
+      applySaasListingCloudFields(record);
+    } else {
+      restoreSaasListingCloudBase(record.context);
+      record.fields = saasListingCloudFields(state.saasListingComposerDraft?.fields);
+      record.edited = [];
+      record.receipt = null;
+      record.reviewedBase = conflict.checkpoint ? { checkpoint_revision: conflict.revision, current_base_report_id: conflict.baseReportId } : null;
+      record.supersededCheckpoint = conflict.checkpoint;
+      syncSaasListingCloudEditorFields();
+      saveSaasProtectedStateSnapshot();
+    }
+    record.dirty = false;
+    record.status = record.receipt ? "saved" : record.supersededCheckpoint ? "current" : "idle";
+  } else if (action === "keep-local") {
+    record.dirty = true;
+    record.status = "pending";
+    record.seq += 1;
+  } else return false;
+  record.revision = conflict.revision;
+  record.baseReportId = conflict.baseReportId;
+  record.conflict = null;
+  record.pending = null;
+  persistSaasListingCloudRecord(record);
+  updateSaasListingCloudStatus(record);
+  return record.dirty ? flushSaasListingCloudCheckpoint() : true;
 }
 
 let saasListingDraftSnapshotSaveTimer = null;
@@ -33197,7 +33717,7 @@ function captureSaasListingFactsForAiGeneration(draft = state.saasListingCompose
 function saasListingCurrentDraftFieldsForAi(draft = state.saasListingComposerDraft) {
   const fields = draft?.fields && typeof draft.fields === "object" ? draft.fields : {};
   const currentFields = {
-    title: sanitizeSaasWorkflowFeedbackText(fields.title || draft?.title || "", 80),
+    title: sanitizeSaasWorkflowFeedbackText(fields.title ?? draft?.title ?? "", 80),
     selling_points: sanitizeSaasWorkflowFeedbackText(fields.selling_points || "", 2400),
     description: sanitizeSaasWorkflowFeedbackText(fields.description || "", 6000),
     category: sanitizeSaasWorkflowFeedbackText(fields.category || "", 160),
@@ -45602,6 +46122,12 @@ function bindEvents() {
       handleWorkflowFeedbackButton(workflowFeedbackButton);
       return;
     }
+    const cloudCheckpointButton = event.target.closest("[data-saas-listing-cloud-action]");
+    if (cloudCheckpointButton) {
+      event.preventDefault();
+      void resolveSaasListingCloudCheckpoint(cloudCheckpointButton.dataset.saasListingCloudAction);
+      return;
+    }
     const flowButton = event.target.closest("[data-global-flow-view]");
     if (flowButton && !flowButton.closest("#globalLoopWorkbench")) {
       event.preventDefault();
@@ -46954,6 +47480,7 @@ function init() {
   window.addEventListener("online", () => {
     const scope = syncSaasProductFeedbackViewScope();
     if (scope) void flushSaasProductFeedbackOutbox({ scope, trigger: "online" });
+    if (saasListingCloudContext()) void hydrateSaasListingCloudCheckpoint({ force: true }).then(() => flushSaasListingCloudCheckpoint());
   });
   applyStartupShellVisibility();
   renderEntryChoices();

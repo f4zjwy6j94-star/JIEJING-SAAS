@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -23,6 +24,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas import SaaSSettings  # noqa: E402
+from jiejing_saas.repository import SaaSRepository  # noqa: E402
+from jiejing_saas.database_adapter import build_database_adapter_contract  # noqa: E402
+from jiejing_saas.database_plan import build_database_plan  # noqa: E402
 from jiejing_saas.infrastructure_drivers import (  # noqa: E402
     run_postgres_live_probe,
     run_postgres_migration,
@@ -37,6 +41,9 @@ RUNTIME_RECONCILIATION_MIGRATION = (
 PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION = (
     ROOT / "jiejing_saas" / "migrations" / "004_platform_model_trial_reservations_postgres.sql"
 )
+LISTING_CHECKPOINT_MIGRATION = ROOT / "jiejing_saas" / "migrations" / "005_listing_draft_edit_checkpoints_postgres.sql"
+LISTING_CHECKPOINT_MIGRATION_ID = "20260906_005_listing_draft_edit_checkpoints_postgres"
+LISTING_CHECKPOINT_MIGRATION_CHECKSUM = "jiejing-listing-draft-edit-checkpoints-postgres-v20260906"
 INITIAL_MIGRATION_CANONICAL_SHA256 = "d76293f426d20cdcc0a2667284900c8cb91606f26e464ff1a4e1b96e409444f6"
 BUCKET_MIGRATION_ID = "20260823_002_media_credit_buckets_postgres"
 BUCKET_MIGRATION_CHECKSUM = "jiejing-media-credit-buckets-postgres-v20260823"
@@ -70,6 +77,12 @@ PLATFORM_MODEL_TRIAL_COMPANY_FK_CONTRACT_ID = "platform_model_trial_reservations
 PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID = (
     "platform_model_trial_reservations.company_period_slot_unique"
 )
+LISTING_CHECKPOINT_CONSTRAINTS = {
+    "listing_draft_edit_heads.scope_pk": ("p", "listing_draft_edit_heads", ("company_id", "store_id", "project_key")),
+    "listing_draft_edit_revisions.checkpoint_pk": ("p", "listing_draft_edit_revisions", ("checkpoint_id",)),
+    "listing_draft_edit_revisions.scope_revision_unique": ("u", "listing_draft_edit_revisions", ("company_id", "store_id", "project_key", "revision")),
+    "listing_draft_edit_revisions.scope_mutation_unique": ("u", "listing_draft_edit_revisions", ("company_id", "store_id", "project_key", "mutation_id")),
+}
 
 
 @dataclass(frozen=True)
@@ -125,6 +138,8 @@ class _FakeConstraintDefinition:
             return f"FOREIGN KEY ({columns}) REFERENCES {self.referenced_table}({referenced_columns})"
         if self.constraint_type == "u":
             return f"UNIQUE ({columns})"
+        if self.constraint_type == "p":
+            return f"PRIMARY KEY ({columns})"
         return f"UNSUPPORTED ({columns})"
 
 
@@ -166,6 +181,7 @@ def _fake_index_matches_migration_contract(
 
 def _expected_constraint_definitions() -> dict[str, _FakeConstraintDefinition]:
     return {
+        **{key: _FakeConstraintDefinition(*value) for key, value in LISTING_CHECKPOINT_CONSTRAINTS.items()},
         MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID: _FakeConstraintDefinition(
             "f",
             "media_credit_buckets",
@@ -203,6 +219,17 @@ def _expected_constraint_definitions() -> dict[str, _FakeConstraintDefinition]:
 def _expected_column_definitions() -> dict[str, dict[str, _FakeColumnDefinition]]:
     required = _FakeColumnDefinition
     return {
+        "listing_draft_edit_heads": {
+            **{key: required("text", False) for key in ("company_id", "store_id", "project_key", "source_report_id", "candidate_id", "checkpoint_id")},
+            "revision": required("integer", False),
+            "updated_at": required("timestamptz", False),
+        },
+        "listing_draft_edit_revisions": {
+            **{key: required("text", False) for key in ("checkpoint_id", "company_id", "store_id", "project_key", "source_report_id", "candidate_id", "mutation_id", "payload_fingerprint", "base_report_id", "actor_user_id")},
+            "revision": required("integer", False),
+            "created_at": required("timestamptz", False),
+            "receipt_json": required("jsonb", False),
+        },
         "media_credit_buckets": {
             "bucket_id": required("text", False),
             "company_id": required("text", False),
@@ -674,6 +701,9 @@ class _FakeCursor:
                     PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID,
                     expected_constraints[PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID],
                 )
+            for key, definition in _expected_constraint_definitions().items():
+                if key in LISTING_CHECKPOINT_CONSTRAINTS and definition.table_name in new_relations:
+                    self.state.constraints.setdefault(key, definition)
 
     def _enforce_inline_schema_postconditions(self, sql: str) -> None:
         marker_match = re.search(
@@ -742,6 +772,10 @@ class _FakeCursor:
                     PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID,
                 )
             }
+        elif migration_id == LISTING_CHECKPOINT_MIGRATION_ID:
+            required_columns = {table: expected_columns[table] for table in ("listing_draft_edit_heads", "listing_draft_edit_revisions")}
+            required_indexes = {}
+            required_constraints = {key: expected_constraints[key] for key in LISTING_CHECKPOINT_CONSTRAINTS}
         else:
             return
 
@@ -899,6 +933,8 @@ def _intended_schema_state(
     dict[str, _FakeConstraintDefinition],
 ]:
     relations, migrations = _initial_relations_and_migrations()
+    relations.update({"listing_draft_edit_heads", "listing_draft_edit_revisions"})
+    migrations[LISTING_CHECKPOINT_MIGRATION_ID] = LISTING_CHECKPOINT_MIGRATION_CHECKSUM
     relations.add("media_credit_buckets")
     migrations[BUCKET_MIGRATION_ID] = BUCKET_MIGRATION_CHECKSUM
     if include_runtime_reconciliation_marker:
@@ -950,6 +986,129 @@ def _fail_closed_guard_before_marker(sql: str) -> str:
 
 
 class PostgresSchemaContractRedLightTests(unittest.TestCase):
+    def test_sqlite_checkpoint_constraints_enforce_scope_and_operation_identity(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="jiejing-checkpoint-constraints-", ignore_cleanup_errors=True) as directory:
+            path = Path(directory) / "schema.sqlite"
+            SaaSRepository(path, database_engine="sqlite").initialize()
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    "insert into listing_draft_edit_heads values (?, ?, ?, ?, ?, ?, ?, ?)",
+                    ("company", "store", "project", "source", "candidate", 0, "", "2026-09-06T00:00:00Z"),
+                )
+                for revision, company in ((0, "company"), (-1, "other"), (0, None)):
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute(
+                            "insert into listing_draft_edit_heads values (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (company, "store", "project", "source", "candidate", revision, "", "2026-09-06T00:00:00Z"),
+                        )
+                values = {
+                    "checkpoint_id": "checkpoint-1", "company_id": "company", "store_id": "store",
+                    "project_key": "project", "source_report_id": "source", "candidate_id": "candidate",
+                    "revision": 1, "mutation_id": "mutation-1", "payload_fingerprint": "fingerprint",
+                    "base_report_id": "base", "actor_user_id": "user", "created_at": "2026-09-06T00:00:00Z",
+                    "receipt_json": "{}",
+                }
+                sql = (
+                    f"insert into listing_draft_edit_revisions ({', '.join(values)}) "
+                    f"values ({', '.join('?' for _ in values)})"
+                )
+                connection.execute(sql, tuple(values.values()))
+                for overrides in (
+                    {"checkpoint_id": "checkpoint-2", "mutation_id": "mutation-2"},
+                    {"checkpoint_id": "checkpoint-2", "revision": 2},
+                    {"revision": 2, "mutation_id": "mutation-2"},
+                    {"checkpoint_id": "checkpoint-2", "revision": 0, "mutation_id": "mutation-2"},
+                    {"checkpoint_id": None, "revision": 2, "mutation_id": "mutation-2"},
+                    {"checkpoint_id": "checkpoint-2", "revision": 2, "mutation_id": "mutation-2", "actor_user_id": None},
+                ):
+                    with self.subTest(overrides=overrides), self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute(sql, tuple((values | overrides).values()))
+                for scope_column in ("company_id", "store_id", "project_key"):
+                    connection.execute(sql, tuple((values | {
+                        "checkpoint_id": f"checkpoint-{scope_column}", scope_column: "other",
+                    }).values()))
+                self.assertEqual(connection.execute("select count(*) from listing_draft_edit_revisions").fetchone()[0], 4)
+            finally:
+                connection.close()
+
+    def test_checkpoint_migration_is_visible_in_database_contracts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="jiejing-checkpoint-plan-", ignore_cleanup_errors=True) as directory:
+            repository = SaaSRepository(Path(directory) / "schema.sqlite", database_engine="sqlite")
+            repository.initialize()
+            with _postgres_settings() as settings:
+                adapter = build_database_adapter_contract(settings)
+                plan = build_database_plan(settings, repository)
+            for contract in (adapter, plan):
+                self.assertIn(
+                    "jiejing_saas/migrations/005_listing_draft_edit_checkpoints_postgres.sql",
+                    [migration["path"] for migration in contract["migration_files"]],
+                )
+            for table in ("listing_draft_edit_heads", "listing_draft_edit_revisions"):
+                self.assertIn(table, plan["critical_tables"]["required"])
+                self.assertNotIn(table, plan["critical_tables"]["missing"])
+
+    def test_checkpoint_probe_rejects_missing_columns_and_scope_constraints(self) -> None:
+        for missing in ("receipt_json", *LISTING_CHECKPOINT_CONSTRAINTS):
+            with self.subTest(missing=missing):
+                relations, migrations, columns, indexes, constraints = _intended_schema_state()
+                if missing == "receipt_json":
+                    columns["listing_draft_edit_revisions"].remove(missing)
+                else:
+                    constraints.pop(missing)
+                state = _FakePostgresState(relations=relations, migration_checksums=migrations,
+                    relation_columns=columns, indexes=indexes, constraints=constraints)
+                with _postgres_settings() as settings, _fake_psycopg(state):
+                    result = run_postgres_live_probe(settings)
+                self.assertEqual("blocked", result.get("status"), result)
+                key = "missing_columns" if missing == "receipt_json" else "missing_constraints"
+                expected = "listing_draft_edit_revisions.receipt_json" if missing == "receipt_json" else missing
+                self.assertIn(expected, result.get("schema_contract", {}).get(key, []))
+
+    def test_005_checkpoint_upgrade_is_registered_and_replay_skips_ddl(self) -> None:
+        relations, migrations, columns, indexes, constraints = _intended_schema_state()
+        migrations.pop(LISTING_CHECKPOINT_MIGRATION_ID, None)
+        relations.difference_update({"listing_draft_edit_heads", "listing_draft_edit_revisions"})
+        state = _FakePostgresState(relations=relations, migration_checksums=migrations,
+            relation_columns=columns, indexes=indexes, constraints=constraints)
+        with _fake_psycopg(state):
+            first = run_postgres_migration(database_url=DATABASE_URL)
+            second = run_postgres_migration(database_url=DATABASE_URL)
+        self.assertEqual("ok", first.get("status"), first)
+        self.assertEqual([LISTING_CHECKPOINT_MIGRATION_ID], first.get("applied_migration_ids"))
+        self.assertEqual([], second.get("applied_migration_ids"))
+        self.assertIn(LISTING_CHECKPOINT_MIGRATION_ID, second.get("skipped_migration_ids", []))
+
+    def test_005_checkpoint_migration_preserves_scope_and_operation_uniqueness(self) -> None:
+        self.assertTrue(LISTING_CHECKPOINT_MIGRATION.is_file(), "Listing checkpoints require an additive migration")
+        sql = LISTING_CHECKPOINT_MIGRATION.read_text(encoding="utf-8")
+        self.assertRegex(sql, r"(?is)^\s*begin\s*;")
+        self.assertRegex(sql, r"(?is)commit\s*;\s*$")
+        head = _create_table_body(sql, "listing_draft_edit_heads")
+        revisions = _create_table_body(sql, "listing_draft_edit_revisions")
+        self.assertRegex(head, r"primary key\s*\(company_id, store_id, project_key\)")
+        self.assertRegex(head, r"revision integer not null check \(revision >= 0\)")
+        self.assertRegex(revisions, r"revision integer not null check \(revision > 0\)")
+        self.assertRegex(revisions, r"receipt_json jsonb not null")
+        for key in ("revision", "mutation_id"):
+            self.assertRegex(revisions, rf"unique\s*\(company_id, store_id, project_key, {key}\)")
+        self.assertNotIn("references listing_draft_edit", sql.lower(), "head reservation must not need a forward FK")
+        self.assertIn(LISTING_CHECKPOINT_MIGRATION_ID, sql)
+        self.assertIn("postgres_schema_postcondition_failed", sql)
+
+    def test_checkpoint_storage_is_initialized_without_business_records(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="jiejing-checkpoint-schema-", ignore_cleanup_errors=True) as directory:
+            path = Path(directory) / "schema.sqlite"
+            repository = SaaSRepository(path, database_engine="sqlite", database_url="")
+            repository.initialize()
+            repository.initialize()
+            counts = repository.system_counts()
+            for table in ("listing_draft_edit_heads", "listing_draft_edit_revisions"):
+                self.assertIn(table, counts, "checkpoint storage must be part of repository initialization")
+                self.assertEqual(0, counts[table])
+            self.assertEqual(0, counts["tasks"])
+            self.assertEqual(0, counts["reports"])
+
     def test_002_is_an_independent_immutable_media_credit_bucket_migration(self) -> None:
         self.assertEqual(
             INITIAL_MIGRATION_CANONICAL_SHA256,

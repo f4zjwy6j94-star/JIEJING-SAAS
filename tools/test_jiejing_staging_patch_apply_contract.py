@@ -176,6 +176,9 @@ def main() -> int:
         "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
         "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
         "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql",
+        "jiejing_saas/migrations/005_listing_draft_edit_checkpoints_postgres.sql",
+        "jiejing_saas/listing_draft_checkpoint.py",
+        "tools/test_jiejing_listing_draft_checkpoint_api.py",
         "tools/jiejing_current_state_guard.py",
         "tools/jiejing_external_launch_blocker_gate.py",
         "tools/jiejing_configure_tencent_runtime_env.py",
@@ -543,6 +546,8 @@ def main() -> int:
     if '$PATCH_DIR/tools/jiejing_runtime_env_overlap_guard.py' in text:
         return fail("patch apply must never execute a candidate runtime env guard")
     compiled_or_checked = {
+        "jiejing_saas/listing_draft_checkpoint.py": 2,
+        "tools/test_jiejing_listing_draft_checkpoint_api.py": 2,
         "jiejing_saas/product_feedback.py": 2,
         "tools/test_jiejing_product_feedback_closure.py": 2,
         "tools/test_jiejing_media_nav_and_state_restore.py": 2,
@@ -560,17 +565,25 @@ def main() -> int:
     python_compile_block = text[python_compile_start:python_compile_end]
     if ".js" in python_compile_block:
         return fail("patch apply must not pass JavaScript files to python py_compile")
-    for path in ("tools/jiejing_release_gate_evidence.py", "tools/test_jiejing_release_gate_evidence.py"):
+    for path in (
+        "tools/jiejing_release_gate_evidence.py",
+        "tools/test_jiejing_release_gate_evidence.py",
+        "jiejing_saas/listing_draft_checkpoint.py",
+        "tools/test_jiejing_listing_draft_checkpoint_api.py",
+    ):
         if path not in python_compile_block:
             return fail(f"source-bound gate evidence dependency must be syntax checked: {path}")
     if precloud_gate.count('("source_bound_release_gate_evidence", [sys.executable, "tools/test_jiejing_release_gate_evidence.py"])') != 1:
         return fail("source-bound release gate regression must execute exactly once")
+    if precloud_gate.count('("listing_draft_checkpoint_api", [sys.executable, "tools/test_jiejing_listing_draft_checkpoint_api.py"])') != 1:
+        return fail("Listing checkpoint HTTP regression must run exactly once under Python")
     node_check_start = text.index('NODE_BIN="${JIEJING_NODE_BIN:-node}"')
     node_check_end = text.index('COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"', node_check_start)
     node_check_block = text[node_check_start:node_check_end]
     for marker in (
         "tools/codex_jiejing_listing_ai_generation_browser_smoke.js",
         "tools/test_jiejing_listing_product_fact_confirmation_ui.js",
+        "tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js",
     ):
         if marker not in node_check_block:
             return fail(f"patch apply Node syntax check missing Listing workflow file: {marker}")
@@ -578,11 +591,14 @@ def main() -> int:
         "ai_ceo_history_pagination_browser": "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js",
         "listing_backend_restore_browser": "tools/test_jiejing_listing_backend_restore.js",
         "recent_product_tasks_browser": "tools/test_jiejing_recent_product_tasks.js",
+        "listing_cloud_checkpoint_frontend": "tools/test_jiejing_listing_cloud_checkpoint_frontend.js",
         "workflow_entry_feedback": "tools/test_jiejing_workflow_entry_feedback.js",
     }
     whitelist_start = text.index("FILES=(\n")
     whitelist_end = text.index("\n)", whitelist_start)
     whitelist_lines = {line.strip() for line in text[whitelist_start:whitelist_end].splitlines()}
+    if '"tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js"' not in whitelist_lines:
+        return fail("real checkpoint HTTP browser integration must ship with the Python regression")
     node_check_lines = {line.strip() for line in node_check_block.splitlines()}
     missing_workflow_wiring = []
     for check_name, script_path in workflow_browser_checks.items():

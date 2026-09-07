@@ -148,6 +148,7 @@ FILES=(
   "jiejing_saas/billing_wechat_pay_rehearsal.py"
   "jiejing_saas/ai_ceo_chat.py"
   "jiejing_saas/listing_draft_generation.py"
+  "jiejing_saas/listing_draft_checkpoint.py"
   "jiejing_saas/sensitive_text.py"
   "jiejing_saas/commercial_launch_gate.py"
   "jiejing_saas/controlled_bridges.py"
@@ -225,6 +226,7 @@ FILES=(
   "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql"
   "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql"
   "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql"
+  "jiejing_saas/migrations/005_listing_draft_edit_checkpoints_postgres.sql"
   "jiejing_runtime/execution.py"
   "jiejing_runtime/execution_preflight.py"
   "jiejing_runtime/__init__.py"
@@ -340,6 +342,7 @@ FILES=(
   "tools/test_jiejing_listing_draft_buyer_copy_quality.py"
   "tools/test_jiejing_listing_grounding_security.py"
   "tools/test_jiejing_listing_draft_generation_api.py"
+  "tools/test_jiejing_listing_draft_checkpoint_api.py"
   "tools/test_jiejing_listing_platform_trial_quota.py"
   "tools/test_jiejing_listing_platform_trial_concurrency.py"
   "tools/test_jiejing_platform_trial_reservation_lifecycle.py"
@@ -348,6 +351,8 @@ FILES=(
   "tools/codex_jiejing_listing_ai_generation_browser_smoke.js"
   "tools/codex_jiejing_homepage_maturity_browser_smoke.js"
   "tools/test_jiejing_listing_backend_restore.js"
+  "tools/test_jiejing_listing_cloud_checkpoint_frontend.js"
+  "tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js"
   "tools/test_jiejing_recent_product_tasks.js"
   "tools/test_jiejing_listing_product_fact_confirmation_ui.js"
   "tools/test_jiejing_listing_publish_prefill_truth.js"
@@ -602,6 +607,7 @@ python3 -m py_compile \
   tools/jiejing_media_controlled_acceptance.py \
   tools/jiejing_owner_media_testing.py \
   jiejing_saas/database_adapter.py \
+  jiejing_saas/listing_draft_checkpoint.py \
   jiejing_saas/account_health.py \
   jiejing_saas/merchant_onboarding.py \
   jiejing_saas/backup_plan.py \
@@ -742,6 +748,7 @@ python3 -m py_compile \
   tools/test_jiejing_listing_draft_buyer_copy_quality.py \
   tools/test_jiejing_listing_grounding_security.py \
   tools/test_jiejing_listing_draft_generation_api.py \
+  tools/test_jiejing_listing_draft_checkpoint_api.py \
   tools/test_jiejing_listing_platform_trial_quota.py \
   tools/test_jiejing_listing_platform_trial_concurrency.py \
   tools/test_jiejing_platform_trial_reservation_lifecycle.py \
@@ -869,6 +876,8 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check tools/codex_jiejing_listing_ai_generation_browser_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_homepage_maturity_browser_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_listing_backend_restore.js
+"$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_frontend.js
+"$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_recent_product_tasks.js
 "$NODE_BIN" --check tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_workflow_entry_feedback.js

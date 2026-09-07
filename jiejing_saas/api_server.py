@@ -3482,6 +3482,31 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.NOT_FOUND, "task not found")
             return
 
+        if len(parts) == 5 and parts[0] == "stores" and parts[2] == "listing-drafts" and parts[4] == "checkpoint":
+            if not self._require_permission(identity, "view_report"):
+                return
+            from .listing_draft_checkpoint import CheckpointValidationError
+            checkpoint_query = parse_qs(parsed.query, keep_blank_values=True)
+            project_identity = {"key": parts[3], **{
+                key: checkpoint_query[key][0] for key in ("source_report_id", "candidate_id") if key in checkpoint_query}}
+            try:
+                if any(len(checkpoint_query.get(key, [])) != 1 for key in ("source_report_id", "candidate_id")):
+                    raise CheckpointValidationError()
+                result = self.repository.get_listing_draft_checkpoint(
+                    company_id=identity["company_id"], store_id=parts[1], identity=project_identity)
+            except KeyError:
+                self._send_error(HTTPStatus.NOT_FOUND, "listing_draft_not_found")
+                return
+            except CheckpointValidationError as exc:
+                self._send_json({"error_code": str(exc), "secret_exposed": False}, status=HTTPStatus(exc.status))
+                return
+            except Exception:
+                self._send_json({"error_code": "listing_draft_storage_unavailable", "secret_exposed": False},
+                                status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_checkpoint_json(result)
+            return
+
         if path == "reports":
             task_id = query.get("task_id", [None])[0]
             limit = _query_limit(query, default=None, maximum=100)
@@ -9856,6 +9881,31 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if len(parts) == 5 and parts[0] == "stores" and parts[2] == "listing-drafts" and parts[4] == "checkpoint":
+            if not self._require_permission(identity, "create_task"):
+                return
+            from .listing_draft_checkpoint import CheckpointConflict, CheckpointValidationError
+            body = self._read_json_body()
+            try:
+                result = self.repository.save_listing_draft_checkpoint(
+                    company_id=identity["company_id"], store_id=parts[1], user_id=identity["user_id"],
+                    project_key=parts[3], body=body)
+            except KeyError:
+                self._send_error(HTTPStatus.NOT_FOUND, "listing_draft_not_found")
+                return
+            except CheckpointValidationError as exc:
+                self._send_json({"error_code": str(exc), "secret_exposed": False}, status=HTTPStatus(exc.status))
+                return
+            except CheckpointConflict as exc:
+                self._send_checkpoint_json(exc.payload, status=HTTPStatus.CONFLICT)
+                return
+            except Exception:
+                self._send_json({"error_code": "listing_draft_storage_unavailable", "secret_exposed": False},
+                                status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_checkpoint_json(result, status=HTTPStatus.OK if result["idempotent_replay"] else HTTPStatus.CREATED)
+            return
+
         if len(parts) == 3 and parts[0] == "stores" and parts[2] == "product-facts":
             if not self._require_permission(identity, "create_task"):
                 return
@@ -13554,7 +13604,28 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK, headers: list[tuple[str, str]] | None = None) -> None:
         merchant_safe_data = _merchant_safe_replaceable_media_provider(data)
-        body = json.dumps(merchant_safe_data, ensure_ascii=False, indent=2, default=json_default).encode("utf-8")
+        self._write_json(merchant_safe_data, status=status, headers=headers)
+
+    def _send_checkpoint_json(self, data: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
+        # Checkpoints are a validated, secret-rejected merchant-text DTO, not provider metadata.
+        # Preserve their exact immutable receipt; retain normal provider projection on source reports.
+        safe = dict(data)
+        base = data.get("current_base_report")
+        if isinstance(base, dict):
+            projected = _merchant_safe_replaceable_media_provider(base)
+            for key in ("report_id", "task_id", "company_id", "store_id"):
+                if key in base:
+                    projected[key] = base[key]
+            body = base.get("report") if isinstance(base.get("report"), dict) else {}
+            project_identity = body.get("listing_project_identity")
+            if isinstance(project_identity, dict):
+                projected["report"]["listing_project_identity"] = {
+                    key: project_identity[key] for key in ("key", "source_report_id", "candidate_id")}
+            safe["current_base_report"] = projected
+        self._write_json(safe, status=status)
+
+    def _write_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK, headers: list[tuple[str, str]] | None = None) -> None:
+        body = json.dumps(data, ensure_ascii=False, indent=2, default=json_default).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "application/json; charset=utf-8")
         self.send_header("content-length", str(len(body)))

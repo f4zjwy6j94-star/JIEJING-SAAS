@@ -85,6 +85,11 @@ def build_database_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
                 "path": "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql",
                 "status": "prepared_not_applied",
             },
+            {
+                "adapter": "postgres-managed",
+                "path": "jiejing_saas/migrations/005_listing_draft_edit_checkpoints_postgres.sql",
+                "status": "prepared_not_applied",
+            },
         ],
         "runtime_rules": {
             "frontend_never_connects_to_database": True,
