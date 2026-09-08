@@ -11251,13 +11251,47 @@ function clearSaasPendingProductFactEditor(view = document.querySelector("#view-
   view.querySelector("[data-saas-product-fact-version-warning]")?.remove();
 }
 
+function captureSaasListingEditorFocus(view) {
+  const scope = saasProductFactEditorScope();
+  const active = document.activeElement;
+  if (!view || state.view !== "product" || ["recent", "bulk"].includes(state.saasListingMode) ||
+      !scope || view.saasListingEditorFocusScope !== scope || !view.contains(active) ||
+      !active?.matches?.('input[type="text"][data-saas-listing-draft-field], textarea[data-saas-listing-draft-field]') ||
+      active.disabled || active.readOnly || !saasListingMerchantEditableFieldKeys().includes(active.dataset.saasListingDraftField)) return null;
+  return { scope, key: active.dataset.saasListingDraftField, value: active.value,
+    start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection };
+}
+
+function restoreSaasListingEditorFocus(view, pending) {
+  if (!view) return;
+  const scope = state.view === "product" && !["recent", "bulk"].includes(state.saasListingMode)
+    ? saasProductFactEditorScope() : "";
+  // This is the scope of the rendered DOM, not just the current draft. State
+  // may switch projects before an old editor is replaced.
+  view.saasListingEditorFocusScope = scope;
+  if (!scope || pending?.scope !== scope) return;
+  const active = document.activeElement;
+  if (active && active !== document.body && active.isConnected) return;
+  const field = Array.from(view.querySelectorAll('input[type="text"][data-saas-listing-draft-field], textarea[data-saas-listing-draft-field]'))
+    .find((input) => input.dataset.saasListingDraftField === pending.key);
+  if (!field || field.disabled || field.readOnly || !field.getClientRects().length || getComputedStyle(field).visibility === "hidden") return;
+  field.focus({ preventScroll: true });
+  // Focus continuity is not a value merge: a newer server value must never be
+  // overwritten by this old DOM snapshot, nor turned into a merchant edit.
+  if (field.value === pending.value && typeof pending.start === "number" && typeof pending.end === "number") {
+    field.setSelectionRange(pending.start, pending.end, pending.direction || "none");
+  }
+}
+
 function renderProductListingCenter() {
   const view = document.querySelector("#view-product");
   if (!view) return;
   if (isSaasPublicMvpMode()) {
+    const pendingFocus = captureSaasListingEditorFocus(view);
     const pendingFacts = captureSaasPendingProductFactEditor(view);
     renderSaasProductListingCenter(view);
     restoreSaasPendingProductFactEditor(view, pendingFacts);
+    restoreSaasListingEditorFocus(view, pendingFocus);
     return;
   }
   const draft = activeListingDraft();

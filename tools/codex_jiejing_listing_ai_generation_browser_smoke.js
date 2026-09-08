@@ -397,6 +397,238 @@ function generatedPayload(requestBody, storeId) {
   };
 }
 
+async function runListingFocusSmoke() {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const registered = await api("/auth/register", {
+    method: "POST",
+    body: { email: `listing-focus-${suffix}@local.invalid`, password: `Listing-focus-${suffix}`, company_name: "Local Listing Focus" },
+  });
+  const store = (await api("/stores", {
+    token: registered.token, method: "POST",
+    body: { platform: "ebay", store_name: "Local Focus Store", marketplace: "EBAY_US" },
+  })).store;
+  const browser = await chromium.launch({ channel: browserChannel, headless: true });
+  const externalRequests = [];
+  const unsafeRequests = [];
+  const pageErrors = [];
+  let heldReports = null;
+  let holdReports = false;
+  let reportsReady = null;
+  let markReportsReady = null;
+  try {
+    const context = await browser.newContext({ viewport: { width: viewportWidth, height: viewportHeight } });
+    await context.addCookies([{ name: "jiejing_saas_session", value: registered.token,
+      domain: new URL(base).hostname, path: "/", httpOnly: true, secure: new URL(base).protocol === "https:", sameSite: "Lax" }]);
+    await context.addInitScript(({ apiBase, accountKey, storeId }) => {
+      localStorage.setItem("jiejing_saas_api_base", apiBase);
+      localStorage.setItem("jiejing_saas_backend_session_hint", "1");
+      localStorage.setItem("jiejing_saas_session_hint", "1");
+      localStorage.setItem("jiejing_saas_last_account", accountKey);
+      localStorage.setItem("jiejing_saas_backend_store_id", storeId);
+      localStorage.setItem(`jiejing_saas_onboarding_done:${accountKey}`, "1");
+      window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
+    }, { apiBase: base, accountKey: String(registered.user.user_id).toLowerCase(), storeId: store.store_id });
+    await context.route("**/*", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (url.origin !== base) { externalRequests.push(url.origin); return route.abort(); }
+      if (request.method() !== "GET" && /oauth|publish|checkout|refund|media-asset-jobs|listing-drafts\/generate/i.test(url.pathname)) {
+        unsafeRequests.push(`${request.method()} ${url.pathname}`);
+        return route.abort();
+      }
+      if (holdReports && request.method() === "GET" && url.pathname === "/reports" && url.searchParams.get("limit") === "24") {
+        holdReports = false;
+        const response = await route.fetch();
+        await new Promise((resolve) => { heldReports = { route, response, resolve }; markReportsReady(); });
+        return;
+      }
+      const filePath = localStaticPath(request.url());
+      if (filePath && fs.existsSync(filePath)) return route.fulfill({ status: 200, contentType: contentTypeFor(filePath), body: fs.readFileSync(filePath) });
+      return route.continue();
+    });
+    const page = await context.newPage();
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`${base}/app.html?start=app&view=product`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => typeof state !== "undefined" && state.saasProtectedStateReady && !state.saasLoading, null, { timeout: 60000 });
+    await page.evaluate(async () => { await refreshSaasState({ silent: true }); setView("product", { listingMode: "single" }); });
+    await page.fill('[data-source-manual-field="product_name"]', "Local Focus Tablet Stand");
+    await page.fill('[data-source-manual-field="material"]', "Aluminum");
+    await page.selectOption('[data-source-manual-field="condition"]', "NEW");
+    const factsSaved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().includes("/product-facts") && response.status() === 201);
+    await page.click('[data-saas-action="save-new-product-facts"]');
+    await factsSaved;
+    await page.waitForSelector('[data-saas-listing-draft-field="title"]');
+    await page.evaluate(async () => { await refreshSaasState({ silent: true }); await saasListingCloudRecord()?.read; });
+
+    for (const field of ["title", "description"]) {
+      reportsReady = new Promise((resolve) => { markReportsReady = resolve; });
+      holdReports = true;
+      await page.evaluate(() => { window.__listingFocusRefresh = refreshSaasState({ silent: true }); });
+      await waitForTimingGate(reportsReady, `Focused ${field} refresh response`);
+      const input = page.locator(`[data-saas-listing-draft-field="${field}"]`);
+      await input.focus();
+      const before = await input.evaluate((element) => {
+        element.setSelectionRange(2, Math.min(8, element.value.length), "forward");
+        return { value: element.value, start: element.selectionStart, end: element.selectionEnd, direction: element.selectionDirection };
+      });
+      if (heldReports.response.status() !== 200) throw new Error("focus regression did not receive a real local reports response");
+      await heldReports.route.fulfill({ response: heldReports.response });
+      heldReports.resolve();
+      heldReports = null;
+      await waitForRefreshCompletion(page.evaluate(() => window.__listingFocusRefresh), `Focused ${field} refresh completion`);
+      const after = await input.evaluate((element) => ({
+        value: element.value, focused: document.activeElement === element,
+        start: element.selectionStart, end: element.selectionEnd, direction: element.selectionDirection,
+      }));
+      if (!after.focused || after.value !== before.value || after.start !== before.start || after.end !== before.end || after.direction !== before.direction) {
+        throw new Error(`background refresh must preserve same-project ${field} focus and selection: ${JSON.stringify({ before, after })}`);
+      }
+      await page.keyboard.insertText("Edited");
+      const expected = before.value.slice(0, before.start) + "Edited" + before.value.slice(before.end);
+      const received = await page.evaluate((key) => ({
+        dom: document.querySelector(`[data-saas-listing-draft-field="${key}"]`)?.value,
+        draft: state.saasListingComposerDraft?.fields?.[key], cloud: saasListingCloudRecord()?.fields?.[key],
+        edited: saasListingMerchantEditedFields().includes(key),
+      }), field);
+      if (received.dom !== expected || received.draft !== expected || received.cloud !== expected || !received.edited) {
+        throw new Error(`native ${field} input after refresh was not received by the editor and checkpoint: ${JSON.stringify(received)}`);
+      }
+    }
+    await page.evaluate(async () => { await flushSaasListingCloudCheckpoint(); });
+    const renderEffects = await page.evaluate(() => {
+      const view = document.querySelector("#view-product");
+      const input = view.querySelector('[data-saas-listing-draft-field="title"]');
+      input.focus();
+      input.setSelectionRange(1, 4);
+      const before = { title: input.value, seq: saasListingCloudRecord()?.seq };
+      const events = [];
+      const recordEvent = (event) => {
+        if (event.target.matches?.("[data-saas-listing-draft-field]")) events.push(event.type);
+      };
+      view.addEventListener("input", recordEvent);
+      view.addEventListener("change", recordEvent);
+      try {
+        renderProductListingCenter();
+        const unchanged = view.querySelector('[data-saas-listing-draft-field="title"]');
+        const sameValue = unchanged.value === before.title;
+        // A newer field value is already in application state before rendering.
+        // Focus restoration may not merge the old DOM value back into it.
+        const expected = "Newer cloud checkpoint title";
+        state.saasListingComposerDraft.fields.title = expected;
+        renderProductListingCenter();
+        const current = view.querySelector('[data-saas-listing-draft-field="title"]');
+        return { sameValue, expected, title: current.value, draft: state.saasListingComposerDraft.fields.title,
+          focused: document.activeElement === current, beforeSeq: before.seq,
+          afterSeq: saasListingCloudRecord()?.seq, events };
+      } finally {
+        view.removeEventListener("input", recordEvent);
+        view.removeEventListener("change", recordEvent);
+      }
+    });
+    if (!renderEffects.sameValue || !renderEffects.focused || renderEffects.title !== renderEffects.expected ||
+        renderEffects.draft !== renderEffects.expected || renderEffects.beforeSeq !== renderEffects.afterSeq || renderEffects.events.length) {
+      throw new Error(`same-project rendering must not restore stale values or synthesize merchant edits: ${JSON.stringify(renderEffects)}`);
+    }
+    const scopeCases = await page.evaluate(() => {
+      const baseline = JSON.parse(JSON.stringify({
+        identity: state.saasIdentity, user: state.saasUser, company: state.saasCompany,
+        stores: state.saasStores, activeStore: state.activeStore,
+        storedStoreId: storedSaasStoreId(),
+        draft: state.saasListingComposerDraft, sourceMode: state.saasListingSourceMode,
+      }));
+      const results = [];
+      for (const kind of ["user", "company", "store", "project", "source_report", "candidate", "epoch"]) {
+        invalidateSaasListingCloudCheckpointContext();
+        state.saasIdentity = { ...baseline.identity };
+        state.saasUser = { ...baseline.user };
+        state.saasCompany = { ...baseline.company };
+        state.saasStores = baseline.stores.map((store) => ({ ...store }));
+        state.activeStore = baseline.activeStore;
+        localStorage.setItem(saasStorageKeys.storeId, baseline.storedStoreId);
+        state.saasListingComposerDraft = JSON.parse(JSON.stringify(baseline.draft));
+        state.saasListingSourceMode = baseline.sourceMode;
+        renderProductListingCenter();
+        const previousInput = document.querySelector('[data-saas-listing-draft-field="title"]');
+        previousInput.focus();
+        previousInput.setSelectionRange(1, 4);
+        const beforeScope = saasProductFactEditorScope();
+        const beforeStoreId = activeSaasStore()?.store_id;
+        if (kind === "user") {
+          state.saasIdentity.user_id = "local-focus-other-user";
+          state.saasUser.user_id = "local-focus-other-user";
+        } else if (kind === "company") {
+          state.saasIdentity.company_id = "local-focus-other-company";
+          state.saasCompany.company_id = "local-focus-other-company";
+        } else if (kind === "store") {
+          state.saasStores = [{ ...state.saasStores[0], store_id: "local-focus-other-store" }];
+          state.activeStore = "local-focus-other-store";
+          localStorage.setItem(saasStorageKeys.storeId, "local-focus-other-store");
+        } else if (kind === "project") {
+          state.saasListingComposerDraft.listing_project_identity.key = "local-focus-other-project";
+          state.saasListingComposerDraft.listing_project_key = "local-focus-other-project";
+        } else if (kind === "source_report") {
+          state.saasListingComposerDraft.listing_project_identity.source_report_id = "local-focus-other-source";
+        } else if (kind === "candidate") {
+          state.saasListingComposerDraft.listing_project_identity.candidate_id = "local-focus-other-candidate";
+        } else {
+          resetSaasListingProjectTransientState();
+        }
+        const expected = `New ${kind} scope title`;
+        state.saasListingComposerDraft.fields.title = expected;
+        const scopeChanged = beforeScope !== saasProductFactEditorScope();
+        const storeChanged = kind !== "store" || beforeStoreId !== activeSaasStore()?.store_id;
+        renderProductListingCenter();
+        const currentInput = document.querySelector('[data-saas-listing-draft-field="title"]');
+        results.push({ kind, expected, title: currentInput?.value, scopeChanged, storeChanged,
+          stoleFocus: document.activeElement === currentInput, previousConnected: previousInput.isConnected });
+      }
+      invalidateSaasListingCloudCheckpointContext();
+      return results;
+    });
+    for (const result of scopeCases) {
+      if (!result.scopeChanged || !result.storeChanged || result.stoleFocus || result.previousConnected || result.title !== result.expected) {
+        throw new Error(`changed ${result.kind} scope must not transfer editor focus or restore old values: ${JSON.stringify(result)}`);
+      }
+    }
+    const inactiveCases = await page.evaluate(() => {
+      const results = [];
+      for (const kind of ["other_view", "bulk", "recent", "disabled", "readonly", "loading"]) {
+        state.view = "product";
+        state.saasListingMode = "single";
+        state.saasLoading = false;
+        renderProductListingCenter();
+        const previous = document.querySelector('[data-saas-listing-draft-field="title"]');
+        previous.focus();
+        previous.setSelectionRange(1, 4);
+        if (kind === "other_view") state.view = "connect";
+        else if (["bulk", "recent"].includes(kind)) state.saasListingMode = kind;
+        else if (kind === "disabled") previous.disabled = true;
+        else if (kind === "readonly") previous.readOnly = true;
+        else state.saasLoading = true;
+        renderProductListingCenter();
+        const current = document.querySelector('[data-saas-listing-draft-field="title"]');
+        results.push({ kind, focused: Boolean(current && document.activeElement === current),
+          editable: Boolean(current && !current.disabled && !current.readOnly), previousConnected: previous.isConnected });
+      }
+      invalidateSaasListingCloudCheckpointContext();
+      return results;
+    });
+    for (const result of inactiveCases) {
+      // Loading does not disable the Listing fields: merchants may keep typing
+      // while generation runs, and that existing behavior must remain usable.
+      const expectedFocus = result.kind === "loading";
+      if (result.focused !== expectedFocus || result.previousConnected || (expectedFocus && !result.editable)) {
+        throw new Error(`editor ${result.kind} focus did not follow actual editability: ${JSON.stringify(result)}`);
+      }
+    }
+    if (externalRequests.length || unsafeRequests.length || pageErrors.length) throw new Error(`focus smoke boundary failure: ${JSON.stringify({ externalRequests, unsafeRequests, pageErrors })}`);
+    console.log(`PASS listing_focus_refresh_title_description_${scopeCases.length}_scope_boundaries_${inactiveCases.length - 1}_inactive_boundaries_loading_editable_no_value_or_edit_side_effects`);
+  } finally {
+    heldReports?.resolve();
+    await browser.close();
+  }
+}
+
 async function runSmoke() {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const email = `codex-listing-ai-${suffix}@local.invalid`;
@@ -678,6 +910,14 @@ async function runSmoke() {
   });
   await page.fill('[data-saas-listing-draft-field="title"]', "Returned Project New Unsaved Title");
   await page.locator('[data-saas-listing-draft-field="title"]').blur();
+  const returnedInput = await page.evaluate(() => ({
+    dom: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+    draft: state.saasListingComposerDraft?.fields?.title,
+    cloud: saasListingCloudRecord()?.fields?.title,
+  }));
+  if (Object.values(returnedInput).some((value) => value !== "Returned Project New Unsaved Title")) {
+    throw new Error(`returned-project title input was not received before releasing the old response: ${JSON.stringify(returnedInput)}`);
+  }
   const returnedPayload = generatedPayload(heldGeneration.body, heldGeneration.storeId);
   returnedPayload.report.report_id = "report-before-project-leave";
   await heldGeneration.route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(returnedPayload) });
@@ -687,9 +927,8 @@ async function runSmoke() {
     title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
     staleReportPresent: (state.saasReports || []).some((item) => item.report_id === "report-before-project-leave"),
   }));
-  if (returnResult.title !== "Returned Project New Unsaved Title" || returnResult.staleReportPresent) {
-    throw new Error(`leaving and returning revived an old Listing request: ${JSON.stringify(returnResult)}`);
-  }
+  if (returnResult.staleReportPresent) throw new Error(`old Listing report entered the returned project: ${JSON.stringify(returnResult)}`);
+  if (returnResult.title !== "Returned Project New Unsaved Title") throw new Error(`received returned-project title was later overwritten: ${JSON.stringify(returnResult)}`);
   heldGeneration = null;
   await page.click('[data-saas-action="listing-generate-ai-draft"]');
   const editDeadline = Date.now() + 10000;
@@ -1245,7 +1484,7 @@ async function runSmoke() {
   }
 }
 
-async function main() {
+async function main(options = {}) {
   let ownedBackend = null;
   try {
     if (base) {
@@ -1254,7 +1493,8 @@ async function main() {
       ownedBackend = await startOwnedBackend();
       base = assertLoopbackMutationBase(ownedBackend.backendBase);
     }
-    await runSmoke();
+    await runListingFocusSmoke();
+    if (options.focusOnly !== true) await runSmoke();
   } finally {
     await stopOwnedBackend(ownedBackend);
   }

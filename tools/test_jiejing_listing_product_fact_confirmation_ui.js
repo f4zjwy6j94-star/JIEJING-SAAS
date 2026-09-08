@@ -1165,6 +1165,7 @@ async function installPendingFactEditor(page) {
   const functions = ["saasProductFactEditorScope", "saasProductFactEditorFields",
     "captureSaasPendingProductFactEditor", "restoreSaasPendingProductFactEditor",
     "clearSaasPendingProductFactEditor",
+    "captureSaasListingEditorFocus", "restoreSaasListingEditorFocus",
     "renderProductListingCenter", "saveSaasMerchantProductFacts", "persistSaasMerchantProductFacts",
     "saasListingAiGenerationContextKey", "saasCurrentListingProjectIdentity",
     "saasNormalizeListingProjectIdentity", "saasIsConcreteProductLabel",
