@@ -22,6 +22,10 @@
 
 ## 2026-09-08 下一阶段修缮（本地文案完成，维护方案已批准实现）
 
+- **当前冻结候选**：本地commit/HEAD=`79106e67386d8f82ad058b8b0bfc3326beae34f6`，tree=`5b367c9e9ae7834fc4bb1e9abe8d83236f344298`，22个owned路径；origin/最后已部署仍3cb50e2，未推送/部署。独立干净目录`C:\Users\57249\Documents\Codex\2026-09-08\jiejing-release-evidence-refresh`，直接运行新228门禁，exec session=`51484`，尚待终态。禁止同时修改该冻结目录或另起同门禁；原3用户路径在3cb→791提交间零差异且主仓库dirty继续保留。本索引为冻结后续接补记，不循环提交。
+- **791候选已停止，不可发布**：冻结后额外宿主兼容性检查发现CLI经package __init__连带导入完整后端，`python3 -S ... --check-capability`被拒绝（chunk06451b），不应要求宿主装容器依赖。为了不把已知不合格候选跑成可发布，已核验本次PID20108/子PID20012后仅停止该本地门禁进程（chunk3325e0，session51484 exit1）；无完整228报告，不记通过、不改其冻结源码。main正在仅CLI+测试修正固定路径直接加载同一stdlib模块；agent真实-S capability RED174d1c已确认。修后建立新干净候选、重新跑其完整门禁，不在791补写通过证明。
+- **宿主窄修已完成**：旧-S缺失库为cryptography；CLI现仅importlib加载固定ROOT下同源runtime_evidence.py，三模式均不需site packages，拒绝缺接口/外部symlink，合成CWD/PYTHONPATH不能替换证据模块。2a4e1c/9c9bf1 GREEN，最终20/20、10.789秒，session19754 exit0（chunk4e727b）。仅CLI+测试变化，原19测试逻辑保留；核心模块/原3用户文件未动，791冻结目录clean。将建立r2，同源新完整228尚未启动；无推送/部署。
+
 - **最新授权：用户“同意，继续”已确认免重启证据方案；本地实现与专项已完成，正在收口新同源完整门禁候选。** 具体步骤在`docs/superpowers/plans/2026-09-08-production-evidence-no-restart-implementation-plan.md`。不再重复询问该方案；正式部署尚未获本批动作确认。root负责部署衔接/集成，core与timer两个子任务并行；第三代理名不可恢复（thread limit），由root接手，不安装新组件。
 
 - **本批实现**：新增六字段`runtime_evidence.py`/snapshot CLI/专项；备份与监控按次复用完整快照，显式新模式错误不回落env且正常返回不可用。定时器保留三探针、锁、时效与env drift，改为只读挂载/双镜像能力→探针→原子快照→同容器/镜像健康；不再例行recreate。首次部署先准备root目录、双镜像capability、无网络导出现有证据，再启动候选；dry-run不创建，失败不切active，旧env/快照留给回滚。部署回执新增严格`EVIDENCE_SNAPSHOT_INITIALIZED`，新文件已进包白名单与门禁（现228项）。没有生产动作。

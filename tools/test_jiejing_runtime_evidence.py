@@ -120,6 +120,45 @@ class RuntimeEvidencePosixTests(unittest.TestCase):
                                                    "secret_exposed": False, "writes_snapshot": False})
         self.assertEqual(sorted(str(path.relative_to(self.base)) for path in self.base.rglob("*")), before)
 
+    def test_cli_three_modes_need_only_stdlib_and_use_fixed_same_source(self):
+        unrelated = self.base / "unrelated-cwd"
+        (unrelated / "jiejing_saas").mkdir(parents=True)
+        for name in ("__init__.py", "runtime_evidence.py"):
+            (unrelated / "jiejing_saas" / name).write_text('raise RuntimeError("synthetic_wrong_import")\n', encoding="utf-8")
+        module_path = ROOT / "jiejing_saas/runtime_evidence.py"
+        module_hash = hashlib.sha256(module_path.read_bytes()).hexdigest()
+        def without_site(*args):
+            process = subprocess.run([sys.executable, "-S", str(ROOT / "tools/jiejing_runtime_evidence_snapshot.py"), *args],
+                                     cwd=unrelated,
+                                     env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(unrelated)},
+                                     text=True, capture_output=True, timeout=15)
+            self.assertEqual(process.returncode, 0)
+            self.assertEqual(process.stderr, "")
+            return json.loads(process.stdout)
+        before = sorted(path.relative_to(self.base).as_posix() for path in self.base.rglob("*"))
+        self.assertEqual(without_site("--check-capability"), {"status": "capable", "contract_version": "jiejing_runtime_evidence_snapshot_v1",
+                                                           "secret_exposed": False, "writes_snapshot": False})
+        self.assertEqual(sorted(path.relative_to(self.base).as_posix() for path in self.base.rglob("*")), before)
+        target = self.base / "stdlib-snapshot"
+        self.assertEqual(without_site("--prepare-directory", "--output-dir", str(target)),
+                         {"status": "prepared", "contract_version": "jiejing_runtime_evidence_snapshot_v1",
+                          "secret_exposed": False, "writes_snapshot": False})
+        self.assertEqual((target.stat().st_uid, target.stat().st_gid, target.stat().st_mode & 0o7777), (0, 0, 0o755))
+        self.assertEqual(list(target.iterdir()), [])
+        private_source = self.write_env_fixture(evidence_at(self.now))
+        private_before = private_source.read_bytes()
+        receipt = without_site("--env-file", str(private_source), "--output-dir", str(target))
+        snapshot = target / "current.json"
+        raw = snapshot.read_bytes()
+        self.assertEqual(receipt, {"status": "verified", "contract_version": "jiejing_runtime_evidence_snapshot_v1",
+                                  "secret_exposed": False, "evidence_sha256": hashlib.sha256(raw).hexdigest()})
+        self.assertEqual(json.loads(raw), {"version": 1, "evidence": evidence_at(self.now)})
+        self.assertEqual((snapshot.stat().st_uid, snapshot.stat().st_gid, snapshot.stat().st_mode & 0o7777), (0, 0, 0o644))
+        self.assertEqual(private_source.read_bytes(), private_before)
+        with patch.dict(os.environ, {"JIEJING_RUNTIME_EVIDENCE_FILE": str(snapshot)}):
+            self.assertEqual(read_runtime_evidence()[KEYS[0]], self.now.isoformat())
+        self.assertEqual(hashlib.sha256(module_path.read_bytes()).hexdigest(), module_hash)
+
     def test_capability_rejects_image_missing_writer_even_if_reader_constant_exists(self):
         image_root = self.base / "old-image"
         (image_root / "tools").mkdir(parents=True)
@@ -136,6 +175,18 @@ class RuntimeEvidencePosixTests(unittest.TestCase):
         self.assertEqual(process.returncode, 2)
         self.assertEqual(json.loads(process.stdout)["status"], "blocked")
         self.assertEqual(process.stderr, "")
+        fixed_source = image_root / "jiejing_saas/runtime_evidence.py"
+        fixed_source.unlink()
+        for source_kind in ("missing", "external_symlink"):
+            with self.subTest(source_kind=source_kind):
+                if source_kind == "external_symlink":
+                    fixed_source.symlink_to(ROOT / "jiejing_saas/runtime_evidence.py")
+                rejected = subprocess.run([sys.executable, "-S", str(entry), "--check-capability"], cwd=ROOT,
+                                          env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(ROOT)},
+                                          text=True, capture_output=True, timeout=15)
+                self.assertEqual(rejected.returncode, 2)
+                self.assertEqual(json.loads(rejected.stdout)["status"], "blocked")
+                self.assertEqual(rejected.stderr, "")
 
     def test_prepare_directory_creates_only_leaf_and_never_repairs_untrusted_existing_mode(self):
         target = self.base / "prepared"

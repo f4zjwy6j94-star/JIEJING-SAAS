@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from pathlib import Path
-import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 CONTRACT_VERSION = "jiejing_runtime_evidence_snapshot_v1"
 
@@ -20,7 +18,16 @@ class SafeParser(argparse.ArgumentParser):
 
 
 def main() -> int:
-    from jiejing_saas import runtime_evidence
+    # Host bootstrap needs only this same-source stdlib module, not package
+    # __init__ (which imports the API server and its third-party dependencies).
+    module_path = ROOT / "jiejing_saas" / "runtime_evidence.py"
+    if module_path.resolve() != module_path:
+        raise ValueError("reader_source_unavailable")
+    spec = importlib.util.spec_from_file_location("jiejing_runtime_evidence_cli", module_path)
+    if spec is None or spec.loader is None:
+        raise ValueError("reader_source_unavailable")
+    runtime_evidence = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime_evidence)
 
     parser = SafeParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
