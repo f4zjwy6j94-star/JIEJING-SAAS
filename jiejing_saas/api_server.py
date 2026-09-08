@@ -137,6 +137,7 @@ from .model_provider_catalog import (
     build_model_provider_catalog,
     get_model_provider,
     model_secret_provider,
+    model_secret_storage_recovery_required,
     normalize_model_api_base_url,
     public_model_settings_from_secret_refs,
 )
@@ -13424,6 +13425,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "secret_exposed": False,
             }
         selected_status = str(selected.get("status") or "")
+        if model_secret_storage_recovery_required(selected):
+            return {
+                "error": "此前保存的 AI 连接目前无法从安全存储读取，需要先恢复连接。",
+                "verified": False,
+                "requires_api_key_reentry": False,
+                "can_retry_verification": False,
+                "blocked_by": ["model_secret_storage_recovery_required"],
+                "model_settings": public_model_settings_from_secret_refs(refs),
+                "secret_exposed": False,
+            }
         storage_ready = selected_status in READY_MODEL_SECRET_STATUSES or selected_status == "stored_unverified"
         if not storage_ready:
             return {

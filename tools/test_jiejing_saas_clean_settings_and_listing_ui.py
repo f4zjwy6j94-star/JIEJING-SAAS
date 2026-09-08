@@ -15,11 +15,28 @@ def require(text: str, needle: str, label: str) -> None:
         raise AssertionError(f"missing {label}: {needle}")
 
 
+def assert_model_disabled_button_style(styles: str) -> None:
+    selector = "body.saas-public-mvp #appShell .saas-model-provider-panel button:disabled"
+    matching = re.search(re.escape(selector) + r"\s*,\s*" + re.escape(selector + ":hover") + r"\s*,\s*" + re.escape(selector + ":active") + r"\s*\{([^}]+)\}", styles)
+    if not matching:
+        raise AssertionError("model Settings disabled buttons need a scoped, hover-stable visual state")
+    declarations = dict(re.findall(r"([\w-]+)\s*:\s*([^;]+);", matching.group(1)))
+    for property_name, expected in {
+        "cursor": "not-allowed", "box-shadow": "none", "transform": "none",
+        "background": "#edf0ef", "color": "#626c68", "border-color": "#d4dad7",
+    }.items():
+        if declarations.get(property_name, "").strip() != expected:
+            raise AssertionError(f"model Settings disabled button lost {property_name} state")
+    if any(name in declarations for name in ("display", "width", "height", "padding", "margin", "pointer-events")):
+        raise AssertionError("disabled styling must not change layout or bypass native button behavior")
+
+
 def main() -> None:
     app_js = APP_JS.read_text(encoding="utf-8")
     app_html = APP_HTML.read_text(encoding="utf-8")
     index_html = INDEX_HTML.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
+    assert_model_disabled_button_style(styles)
 
     require(app_js, "saasSettingsTab", "settings tab state")
     require(app_js, "function renderSaasSettingsCleanLayout", "clean settings layout")

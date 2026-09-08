@@ -36708,6 +36708,18 @@ body.saas-public-mvp .saas-model-live-actions {
   margin-top: 12px;
 }
 
+body.saas-public-mvp #appShell .saas-model-provider-panel button:disabled,
+body.saas-public-mvp #appShell .saas-model-provider-panel button:disabled:hover,
+body.saas-public-mvp #appShell .saas-model-provider-panel button:disabled:active {
+  background: #edf0ef;
+  color: #626c68;
+  border-color: #d4dad7;
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 1;
+  transform: none;
+}
+
 body.saas-public-mvp .saas-model-connection-progress {
   align-items: center;
   background: rgba(247, 251, 249, 0.94);

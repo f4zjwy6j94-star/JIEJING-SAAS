@@ -15143,19 +15143,32 @@ function recordOptionalSaasSoftTimeout(path, timeoutMs) {
 }
 
 async function optionalSaasFetchFast(path, fallback, timeoutMs = 5000, options = {}) {
-  const fallbackValue = (error) => (typeof fallback === "function" ? fallback(error) : fallback);
+  let fallbackUsed = false;
+  let fallbackResult;
+  const fallbackValue = (error) => {
+    if (!fallbackUsed) {
+      fallbackUsed = true;
+      fallbackResult = typeof fallback === "function" ? fallback(error) : fallback;
+    }
+    return fallbackResult;
+  };
+  let timer = null;
   const request = saasFetch(path, options).catch((error) => {
     if (isSaasUnrecoverableSessionError(error)) throw error;
     console.warn(`[JIEJING optional API skipped] ${path}: ${error.message}`);
     return fallbackValue(error);
   });
   const timeout = new Promise((resolve) => {
-    setTimeout(() => {
+    timer = setTimeout(() => {
       recordOptionalSaasSoftTimeout(path, timeoutMs);
       resolve(fallbackValue(new Error(`timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
   });
-  return Promise.race([request, timeout]);
+  try {
+    return await Promise.race([request, timeout]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 async function saasFetchWithTimeout(path, options = {}, timeoutMs = 45000) {
@@ -20256,6 +20269,7 @@ function saasModelBlockedReasonText(value = "") {
     model_secret_ref_not_found: "当前账号的 AI 连接记录不可用，系统会自动尝试使用最新可用配置。",
     model_secret_ref_not_ready: "当前账号的 AI 连接还在准备中。",
     model_secret_resolve_blocked: "系统暂时无法核对当前账号的 AI 连接状态。",
+    model_secret_storage_recovery_required: "此前保存的 AI 连接目前无法从安全存储读取。请联系支持检查恢复，不必立即重新填写。",
     model_secret_storage_failed: "安全保存没有完成，本次连接不会被算作已配置。",
     tencent_ssm_write_failed: "安全保存失败，本次连接没有保存成功。",
     tencent_ssm_resolve_failed: "已保存的连接信息暂时无法读取。",
@@ -28445,6 +28459,20 @@ function saasModelConnectionAttemptState() {
       latest,
     };
   }
+  if (connectionState === "storage_recovery_required") {
+    return {
+      tone: "amber",
+      state: connectionState,
+      title: "账号 AI 连接需要恢复",
+      detail: "已找到此前保存的连接记录，但目前无法从安全存储读取。请联系支持检查恢复；确认无法恢复后，再重新保存。已有资料和历史结果会保留。",
+      storageReady: false,
+      verified: false,
+      accountDefault: false,
+      canRetry: false,
+      requiresReentry: false,
+      latest,
+    };
+  }
   if (connectionState === "save_failed") {
     return {
       tone: "red",
@@ -28510,6 +28538,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
   const searchState = saasPublicSearchState();
   const mediaState = saasMediaGenerationState();
   const connectionAttempt = saasModelConnectionAttemptState();
+  const recoveryRequired = connectionAttempt.state === "storage_recovery_required";
   return `
     <section class="saas-merchant-evidence-panel saas-model-provider-panel" aria-label="AI 连接">
       <div class="saas-merchant-path-head">
@@ -28563,10 +28592,10 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
         <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelAvailable ? "disabled" : ""}>生成报告和上架资料</button>
         <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" ${state.saasLoading || !ctx.store ? "disabled" : ""}>更新经营记录</button>
       </div>
-      <details class="saas-model-config-details" ${merchantModelConfigured && connectionAttempt.state === "ready" ? "" : "open"}>
+      <details class="saas-model-config-details" ${recoveryRequired || (merchantModelConfigured && connectionAttempt.state === "ready") ? "" : "open"}>
         <summary>
-          <strong>${merchantModelConfigured ? "调整账号 AI" : "配置账号 AI"}</strong>
-          <small>${merchantModelConfigured ? "更换服务商或模型时再打开。" : "选择服务商，粘贴连接信息，然后保存并检测。"}</small>
+          <strong>${recoveryRequired ? "重新配置账号 AI" : merchantModelConfigured ? "调整账号 AI" : "配置账号 AI"}</strong>
+          <small>${recoveryRequired ? "仅在确认原连接无法恢复，或需要更换时使用。" : merchantModelConfigured ? "更换服务商或模型时再打开。" : "选择服务商，粘贴连接信息，然后保存并检测。"}</small>
         </summary>
         <div class="saas-sync-failure-box">
           <strong>连接当前账号的 AI</strong>

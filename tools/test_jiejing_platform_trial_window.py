@@ -96,7 +96,48 @@ assert(attempt.title.includes('尚无可用'), 'old saved failure is not a new s
 assert(attempt.detail.includes('上次') && !attempt.detail.includes('系统暂时'), 'old failure is not a current GET failure');
 assert.equal(attempt.accountDefault,false);
 assert.equal(attempt.requiresReentry,true);
-console.log('PASS merchant_trial_display 10 cases');
+const attemptFunction=source.slice(attemptStart,source.indexOf('\nfunction ',attemptStart+1));
+const reasonStart=source.indexOf('function saasModelBlockedReasonText(');
+const reasonContext=vm.createContext({saasIssueText:(value)=>String(value)});
+vm.runInContext(source.slice(reasonStart,source.indexOf('\nfunction ',reasonStart+1)),reasonContext);
+const recoveryReason=vm.runInContext("saasModelBlockedReasonText('model_secret_storage_recovery_required')",reasonContext);
+assert(recoveryReason.includes('恢复') && !recoveryReason.includes('model_secret_'),'recovery errors must use merchant-facing text');
+for (const [name,configured,connectionState] of [
+  ['historical_storage_recovery',false,'storage_recovery_required'],
+  ['active_connection_survives_old_storage_failure',true,'ready_with_failed_update'],
+]) {
+  const latest={created_at:'2026-07-03T00:00:00Z',status:'store_blocked',storage_recovery_required:true,
+    verification_error_code:'model_secret_resolve_blocked',requires_api_key_reentry:false};
+  const context={state:{saasModelSettings:{configured,connection_state:connectionState,latest_attempt:latest,
+      platform_trial_quota:{...base,allowed:false,trial_expired:true,blocked_by:'platform_default_model_trial_expired'}},
+      saasModelValueGate:{platform_default_model:{configured:true,enabled:true}}},
+    saasActiveModelSecretRef:()=>null,saasModelSecretRefReady:()=>false,saasModelProviderRows:()=>[],
+    escapeHtml:(value)=>String(value ?? ''),saasModelBlockedReasonText:()=>'',
+    saasImageRecognitionState:()=>({tone:'amber'}),saasPublicSearchState:()=>({tone:'amber'}),
+    saasMediaGenerationState:()=>({tone:'amber'})};
+  vm.createContext(context); vm.runInContext(functions+'\n'+attemptFunction,context);
+  const result=vm.runInContext('saasModelConnectionAttemptState()',context);
+  const html=vm.runInContext('renderSaasMerchantModelProviderPanel({store:{},hasPacket:true})',context);
+  assert.equal(result.state,connectionState,name);
+  assert.equal(result.requiresReentry,false,name);
+  assert.equal(result.canRetry,false,name);
+  assert(!html.includes('data-saas-action="verify-model-connection"'),name);
+  assert.equal(vm.runInContext('isSaasModelConfigured()',context),configured,name);
+  if (!configured) {
+    assert(result.title.includes('需要恢复'),name);
+    assert(!/上次连接未成功|未形成可用|还没有账号 AI/.test(result.detail+result.title),name);
+    assert.equal(result.storageReady,false,name);
+    assert.equal(result.verified,false,name);
+    assert.equal(result.accountDefault,false,name);
+    assert(/data-saas-action="run-model-value-rehearsal" disabled/.test(html),name);
+    assert(/<details class="saas-model-config-details"\s*>/.test(html),'recovery must not force open key reentry');
+    assert(html.includes('确认原连接无法恢复'),name);
+  } else {
+    assert.equal(result.accountDefault,true,name);
+    assert.equal(result.title,'AI 连接可用',name);
+  }
+}
+console.log('PASS merchant_trial_display 12 cases');
 """
     result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
     if result.returncode:

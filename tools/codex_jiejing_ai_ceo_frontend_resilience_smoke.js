@@ -18,6 +18,7 @@ let newProjectChatControl = null;
 const counters = { me: 0, refresh: 0, chat: 0, history: 0 };
 let lastChatBody = null;
 const chatBodies = [];
+const optionalRequestControls = new Map();
 
 function json(res, status, body) {
   res.writeHead(status, {
@@ -40,6 +41,173 @@ async function readBody(req) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+async function optionalFetchLifecycleSmoke(browser, base) {
+  const page = await browser.newPage();
+  const externalRequests = [];
+  const pageErrors = [];
+  const unhandledRejections = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.exposeFunction("reportOptionalUnhandledRejection", (reason) => unhandledRejections.push(reason));
+  await page.addInitScript(() => {
+    window.addEventListener("unhandledrejection", (event) => window.reportOptionalUnhandledRejection(String(event.reason?.message || event.reason)));
+  });
+  await page.route("**/*", (route) => {
+    if (new URL(route.request().url()).origin === base) return route.continue();
+    externalRequests.push(route.request().url());
+    return route.abort();
+  });
+  try {
+    await page.clock.install({ time: new Date("2026-09-08T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-09-08T00:00:01Z"));
+    await page.goto(`${base}/app.html?start=app&qa=public-saas&saasApiBase=${encodeURIComponent(base)}`, { waitUntil: "load" });
+    const success = await page.evaluate(async (apiBase) => {
+      state.saasApiBase = apiBase;
+      state.saasOptionalSoftTimeouts = [];
+      window.optionalFallbackCalls = 0;
+      const result = await optionalSaasFetchFast("/optional-lifecycle/success", () => {
+        window.optionalFallbackCalls += 1;
+        return { status: "unavailable" };
+      }, 5000);
+      document.getElementById("ceoChat").textContent = result.status;
+      return result;
+    }, base);
+    if (success.status !== "fixture_ready") throw new Error("optional success did not consume the real local HTTP response");
+    await page.clock.runFor(5001);
+    const afterSuccessDeadline = await page.evaluate(() => ({
+      fallbacks: window.optionalFallbackCalls,
+      timeouts: state.saasOptionalSoftTimeouts,
+      displayed: document.getElementById("ceoChat").textContent,
+    }));
+    if (afterSuccessDeadline.fallbacks !== 0 || afterSuccessDeadline.timeouts.length || afterSuccessDeadline.displayed !== "fixture_ready") {
+      throw new Error(`completed optional HTTP success must not later record a timeout or invoke fallback: ${JSON.stringify(afterSuccessDeadline)}`);
+    }
+    const failed = await page.evaluate(async () => {
+      state.saasOptionalSoftTimeouts = [];
+      window.optionalFallbackCalls = 0;
+      return optionalSaasFetchFast("/optional-lifecycle/failure", (error) => {
+        window.optionalFallbackCalls += 1;
+        return { status: "unavailable", httpStatus: error.status };
+      }, 5000);
+    });
+    await page.clock.runFor(5001);
+    const afterFailureDeadline = await page.evaluate(() => ({
+      fallbacks: window.optionalFallbackCalls,
+      timeouts: state.saasOptionalSoftTimeouts,
+    }));
+    if (failed.httpStatus !== 503 || afterFailureDeadline.fallbacks !== 1 || afterFailureDeadline.timeouts.length) {
+      throw new Error(`completed optional HTTP failure must use fallback once without a false timeout: ${JSON.stringify({ failed, afterFailureDeadline })}`);
+    }
+
+    let markReceived;
+    let releaseResponse;
+    const received = new Promise((resolve) => { markReceived = resolve; });
+    const release = new Promise((resolve) => { releaseResponse = resolve; });
+    optionalRequestControls.set("/optional-lifecycle/late-failure", { markReceived, release });
+    await page.evaluate(() => {
+      state.saasOptionalSoftTimeouts = [];
+      window.optionalFallbackCalls = 0;
+      window.optionalRequestResult = optionalSaasFetchFast("/optional-lifecycle/late-failure", (error) => {
+        window.optionalFallbackCalls += 1;
+        return { status: "unavailable", reason: error.message };
+      }, 5000);
+    });
+    await received;
+    await page.clock.runFor(5000);
+    const timedOut = await page.evaluate(async () => ({
+      result: await window.optionalRequestResult,
+      fallbacks: window.optionalFallbackCalls,
+      timeouts: state.saasOptionalSoftTimeouts,
+    }));
+    if (timedOut.result.reason !== "timed out after 5000ms" || timedOut.fallbacks !== 1 || timedOut.timeouts.length !== 1 || timedOut.timeouts[0].path !== "/optional-lifecycle/late-failure") {
+      throw new Error(`a real optional HTTP timeout must produce exactly one diagnostic and fallback: ${JSON.stringify(timedOut)}`);
+    }
+    const lateFailureLogged = page.waitForEvent("console", {
+      predicate: (message) => message.type() === "warning" && message.text().includes("[JIEJING optional API skipped] /optional-lifecycle/late-failure"),
+      timeout: 10000,
+    });
+    releaseResponse();
+    await lateFailureLogged;
+    await page.clock.runFor(5001);
+    const afterLateFailure = await page.evaluate(async () => ({
+      result: await window.optionalRequestResult,
+      fallbacks: window.optionalFallbackCalls,
+      timeouts: state.saasOptionalSoftTimeouts,
+    }));
+    if (afterLateFailure.fallbacks !== 1 || afterLateFailure.timeouts.length !== 1 || afterLateFailure.result.reason !== "timed out after 5000ms") {
+      throw new Error(`a late optional HTTP failure must not invoke fallback a second time: ${JSON.stringify(afterLateFailure)}`);
+    }
+
+    let markLateSuccessReceived;
+    let releaseLateSuccess;
+    const lateSuccessReceived = new Promise((resolve) => { markLateSuccessReceived = resolve; });
+    const lateSuccessRelease = new Promise((resolve) => { releaseLateSuccess = resolve; });
+    optionalRequestControls.set("/optional-lifecycle/late-success", { markReceived: markLateSuccessReceived, release: lateSuccessRelease });
+    await page.evaluate(() => {
+      state.saasOptionalSoftTimeouts = [];
+      window.optionalObjectFallback = { status: "unavailable", marker: "object_fallback" };
+      window.optionalRequestResult = optionalSaasFetchFast("/optional-lifecycle/late-success", window.optionalObjectFallback, 5000);
+    });
+    await lateSuccessReceived;
+    await page.clock.runFor(5000);
+    const objectFallback = await page.evaluate(async () => (await window.optionalRequestResult) === window.optionalObjectFallback);
+    if (!objectFallback) throw new Error("a real optional timeout must preserve the caller's object fallback");
+    const lateSuccessResponse = page.waitForResponse((response) => response.url() === `${base}/optional-lifecycle/late-success` && response.status() === 200);
+    releaseLateSuccess();
+    await (await lateSuccessResponse).finished();
+    await page.clock.runFor(5001);
+    const afterLateSuccess = await page.evaluate(async () => ({
+      result: await window.optionalRequestResult,
+      sameObject: (await window.optionalRequestResult) === window.optionalObjectFallback,
+      timeouts: state.saasOptionalSoftTimeouts,
+    }));
+    if (!afterLateSuccess.sameObject || afterLateSuccess.result.marker !== "object_fallback" || afterLateSuccess.timeouts.length !== 1) {
+      throw new Error(`a late optional HTTP success must not replace the settled timeout or repeat diagnostics: ${JSON.stringify(afterLateSuccess)}`);
+    }
+
+    const permission = await page.evaluate(async () => {
+      window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
+      localStorage.setItem(saasStorageKeys.sessionHint, "1");
+      state.saasSessionExpiryHandled = false;
+      state.saasOptionalSoftTimeouts = [];
+      window.optionalFallbackCalls = 0;
+      const result = await optionalSaasFetchFast("/permission-check", (error) => {
+        window.optionalFallbackCalls += 1;
+        return { status: "unavailable", httpStatus: error.status };
+      }, 5000);
+      return { result, sessionHintPresent: hasSaasPersistentSessionHint(), handled: state.saasSessionExpiryHandled };
+    });
+    await page.clock.runFor(5001);
+    const permissionAfterDeadline = await page.evaluate(() => ({ fallbacks: window.optionalFallbackCalls, timeouts: state.saasOptionalSoftTimeouts }));
+    if (permission.result.httpStatus !== 403 || !permission.sessionHintPresent || permission.handled || permissionAfterDeadline.fallbacks !== 1 || permissionAfterDeadline.timeouts.length) {
+      throw new Error(`optional permission failure must remain a fallback, not a logout or soft timeout: ${JSON.stringify({ permission, permissionAfterDeadline })}`);
+    }
+
+    const expired = await page.evaluate(async () => {
+      state.saasOptionalSoftTimeouts = [];
+      window.optionalFallbackCalls = 0;
+      try {
+        await optionalSaasFetchFast("/optional-lifecycle/expired", () => {
+          window.optionalFallbackCalls += 1;
+          return { status: "unavailable" };
+        }, 5000, { saasRequestRetriedAfterRefresh: true, saasDeferUnauthorizedTermination: true });
+        return { rejected: false };
+      } catch (error) {
+        return { rejected: true, status: error.status, code: error.code, unrecoverable: isSaasUnrecoverableSessionError(error) };
+      }
+    });
+    await page.clock.runFor(5001);
+    const expiredAfterDeadline = await page.evaluate(() => ({ fallbacks: window.optionalFallbackCalls, timeouts: state.saasOptionalSoftTimeouts }));
+    if (!expired.rejected || expired.status !== 401 || expired.code !== "saas_session_expired" || !expired.unrecoverable || expiredAfterDeadline.fallbacks !== 0 || expiredAfterDeadline.timeouts.length) {
+      throw new Error(`optional unrecoverable session failure must throw without fallback or a later timeout: ${JSON.stringify({ expired, expiredAfterDeadline })}`);
+    }
+    if (externalRequests.length || pageErrors.length || unhandledRejections.length) {
+      throw new Error(`optional lifecycle fixture must stay local and runtime-error free: ${JSON.stringify({ externalRequests, pageErrors, unhandledRejections })}`);
+    }
+  } finally {
+    await page.close();
+  }
+}
+
 async function main() {
   const appSource = testableAppSource();
   const server = http.createServer(async (req, res) => {
@@ -59,6 +227,17 @@ async function main() {
     if (url.pathname === "/app-test.js") {
       res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
       res.end(appSource);
+      return;
+    }
+    if (["success", "failure", "late-failure", "late-success", "expired"].some((name) => url.pathname === `/optional-lifecycle/${name}`)) {
+      const control = optionalRequestControls.get(url.pathname);
+      if (control) {
+        control.markReceived();
+        await control.release;
+      }
+      if (url.pathname.endsWith("success")) json(res, 200, { status: "fixture_ready", secret_exposed: false });
+      else if (url.pathname.endsWith("expired")) json(res, 401, { error: "session expired", secret_exposed: false });
+      else json(res, 503, { error: "optional_fixture_unavailable", secret_exposed: false });
       return;
     }
     if (url.pathname === "/me" && req.method === "GET") {
@@ -243,6 +422,7 @@ async function main() {
   let browser;
   try {
     browser = await chromium.launch({ headless: true, channel: browserChannel });
+    await optionalFetchLifecycleSmoke(browser, base);
     const page = await browser.newPage();
     await page.goto(`${base}/app.html?start=app&qa=public-saas&project=listing-project-resilience&saasApiBase=${encodeURIComponent(base)}`, { waitUntil: "load" });
 

@@ -105,6 +105,7 @@ CHECKS: list[tuple[str, list[str]]] = [
         [sys.executable, "tools/test_jiejing_platform_trial_reservation_lifecycle.py"],
     ),
     ("platform_trial_window", [sys.executable, "tools/test_jiejing_platform_trial_window.py"]),
+    ("model_connection_save_contract", [sys.executable, "tools/test_jiejing_model_connection_save_contract.py"]),
     ("postgres_schema_contract", [sys.executable, "tools/test_jiejing_postgres_schema_contract.py"]),
     ("listing_ai_generation_browser", ["node", "tools/codex_jiejing_listing_ai_generation_browser_smoke.js"]),
     ("listing_backend_restore_browser", ["node", "tools/test_jiejing_listing_backend_restore.js"]),
