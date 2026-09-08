@@ -13,7 +13,7 @@
 ## 精确续接点
 
 - 实际仓库：`C:\Users\57249\Documents\Codex\2026-04-29\hermes-agents\software-demo`。
-- 分支：`codex/ai-ceo-real-merchant-loop`；HEAD/origin=`3cb50e2988027b23c88e89da3e772796aad81834`，tree=`9f5282f44b17eacd3b2abb34b02049e839abfb9f`。三项界面小修复已提交推送、新完整227/227、精确CI15/15、463文件核包、dry-run及一次apply通过；后端未变，额外PG6+4只用已实跑bb证据加162文件blob等价核验，未重跑。**生产已独立核验为3cb50e2，release=`20260907T170640Z-3cb50e298802`，不得重复部署。** 所有历史失败证据保留；原3用户dirty不入候选，索引上线补记未提交、不循环提交。
+- 分支：`codex/ai-ceo-real-merchant-loop`；当前本地HEAD=`c03a809156afb957904cd3c5a31f31d8f54f5ce2`、tree=`f13f2cfbc7a28a9ea9ac6b3e03f8b4a5e9bda204`，本批未推送/部署，r3门禁见下一节。origin/已部署基线仍=`3cb50e2988027b23c88e89da3e772796aad81834`，原tree=`9f5282f44b17eacd3b2abb34b02049e839abfb9f`。此前三项界面小修复227/227、CI15/15、463文件核包/dry-run/一次apply已通过，不为本批新后端代码背书。**生产最后独立核验为3cb50e2，release=`20260907T170640Z-3cb50e298802`，不得重复部署。** 所有历史失败证据保留；原3用户dirty不入候选，索引补记不循环提交。
 - 商家生产主机当前3cb50e2，bb5315c为可回滚上一版本；active、manifest、四容器标签/镜像、API/Worker关键源码与安装单元/定时器独立核验通过。应用回滚保留005表、ledger和checkpoint数据，不做数据库逆向删除。独立ops本批未重发，未修改资金/eBay开关；现场production/beta/can_accept_real_customers与公开收费三布尔true、blocker/warning=0，全面写入false、受控draft/existing_publish=true。退款执行与账号资格未在本轮重新验收；三项用户修改完整保留。新前端字节和原商品有界UI复验通过，详见下节；不能将健康或小范围UI通过等同完整旅程通过。
 - 三个原有用户修改文件不要顺手暂存/提交：`jiejing_saas/readiness.py`、`tools/test_jiejing_phase2_response_boundary_hardening.py`、`tools/test_jiejing_platform_trial_activation_guard.py`。
 - 当前商品：平板电脑支架（折叠便携款）；项目 `listing-project-0ef70f19c079b4261e82`；报告 `report_19fcfc7b9f88f0eb`；候选 `candidate_1`。
@@ -22,7 +22,23 @@
 
 ## 2026-09-08 下一阶段修缮（本地文案完成，维护方案已批准实现）
 
-- **当前冻结候选**：本地commit/HEAD=`79106e67386d8f82ad058b8b0bfc3326beae34f6`，tree=`5b367c9e9ae7834fc4bb1e9abe8d83236f344298`，22个owned路径；origin/最后已部署仍3cb50e2，未推送/部署。独立干净目录`C:\Users\57249\Documents\Codex\2026-09-08\jiejing-release-evidence-refresh`，直接运行新228门禁，exec session=`51484`，尚待终态。禁止同时修改该冻结目录或另起同门禁；原3用户路径在3cb→791提交间零差异且主仓库dirty继续保留。本索引为冻结后续接补记，不循环提交。
+- **测试预算窄修RED→GREEN已完成，待新候选完整门禁。** 只改`tools/codex_jiejing_listing_ai_generation_browser_smoke.js`：真实本地audit响应一次延迟到10.5秒，原200/body被页面消费；RED旧10秒等待失败（session16299，49.423秒，回执SHA=`966a3f2ed02df882f912c108330d8ad628bfa77d95351c7f81bc5c4a20954425`）；仅新增完整refresh completion 60秒helper并替换5调用，三个真正到达闸门仍原10秒，GREEN21/21（session65351，79.447秒，回执SHA=`6dcd7a1cd596b00bbfea667cedb684b77742e97f8002f6206b849f76607d5ce3`）。两回执在task `output/evidence-maintenance-diagnosis-20260908/refresh-budget-{red,green}-attempt1/receipt.json`。原64失败断言与21场景保留，逆向移除新增部分后原文件逐字一致；新testSHA=`3cb6063949cd7553633fd1af9f7e37c6c227a497346593bdd7cda223f5d99086`。backend/app均原r3/c03，临时进程/DB清理与source稳定通过；未改产品/3用户dirty/冻结候选。此补证不能覆盖r3失败，下一步仅提交测试+本索引并建立新r4，先runtime预检再完整228，未生产部署。
+
+- **227/228后单次有界观察已完成，正在只修测试等待分类。** task `output/evidence-maintenance-diagnosis-20260908/refresh-observation-attempt1/observation.json` SHA=`bac1388e03fc51c8017fdf9926d51abc2de47f4a7a2118c69868d4597199d6e0`；session44235 exit0，原smoke21场景通过，但原失败不可覆盖。原断言/10秒/全部代码可逆保留，c03源码未动；完整baseline约7.97秒，上一reload尾部与新/me重叠约2.57秒。没有资料save挂住证据，也未重现原失败精确时长。确定存在测试合同错配：完整刷新等待10秒，但内部单项audit软期限12秒。下一窄修仅smoke：真实audit响应10.5秒RED→整次completion单独有界等待GREEN；真正3个到达闸门保持10秒，5个整次完成调用分离，不修改产品app或扩大平台权限。观察原Node/Python子进程已退出、临时backend目录已清理，截图留在隔离tmp；未生产/模型/FAL/资金/eBay动作。
+
+- **后续独立诊断线索，未混入本批修复**：`optionalSaasFetchFast`的旧soft-timeout定时器在请求已成功后仍会记录timeout（app15145附近静态确认）；因此不能用该数组证明本次真实超时。是否影响商家显示尚未验，不能提前称生产故障或已修好；完成本批发布准备后再作单独最小回归，避免把本次测试预算修正写成刷新性能全部达标。
+
+- **r3完整终态227/228，不可发布。** session85408 exit1（chunke6551a），run=`116eec00676e4790b07d1dd04928fb67`，UTC02:53:51.771596→03:22:15.745658，1703.97秒，source before/after同c03 clean。报告SHA=`7734e174fb9978021f18726b353c21819dfa62d029431c4bf027f0b5b2cdfe62`。唯一FAIL `listing_ai_generation_browser`，47.21秒，`Refresh regression baseline did not reach the controlled timing gate`（smoke188）。此label实际是885–888等待资料保存+完整refresh，真正reports hold尚未安装；不能宣称商品编辑丢失或直接归为fixture。CI15/15不替代失败；不打包/dry-run/apply、不改冻结源/覆盖报告。按diagnose做单次时序观察，区分save待结束、10秒外层与内部10/12秒请求、重叠refresh；不先放宽超时。新核包/dry-run捕获器只离线准备未使用。
+
+- **c03已普通推送，精确CI通过，生产未动。** origin现=`c03a809156afb957904cd3c5a31f31d8f54f5ce2`；push无force（chunk26e034），只触发普通CI、不触发部署。GitHub run=`34183079302`、job=`101925927758`，15/15步骤success；r3 `output/jiejing-production-deploy/exact-sha-ci.json` SHA=`556f829fdcd69f4bf306858bac6823cf473dc826e7b830351c1e7bd72eec4a34`。唯一228门禁仍session85408/PID19712运行，未出完整报告；不把CI替代门禁。新捕获器/核包工具仅在task输出目录准备，沿c03/228/468与新增snapshot布尔合同；旧3cb捕获器不改、不直接复用旧PG全后端等价桥。待完整门禁通过后核包/dry-run，正式apply仍需本批动作确认。
+
+- **唯一当前门禁运行：r3已完成环境预检并正式启动。** runtime receipt=`r3/output/evidence-refresh-runtime-preflight.json` SHA=`438250ba1a6bc309d31c647b3a282f8254e1330db678bc740f231b319dc0e922`，465公开依赖全SHA匹配、228唯一check/206Python AST、39JS/165 require均可解析、Chrome/Edge仅data页检查0外部页面请求且已关闭；source before=after clean c03。新`run_full_gate.py`在独立审查后增加拒整个已有gate输出目录，只调用原gate.main，不能重放覆盖；使用OS白名单env。exec session=`85408`，主PID19712，本机10:53:51开始，**仍在运行，尚无完整228结果**。之前51484/1363均已停止，不要poll/重启旧session；r3源码不可变、不另起门禁。
+
+- **验证环境补正，源码仍c03**：root漏给r2复制既有Playwright缓存，`output/codex-playwright-deps/node_modules/playwright-core`不存在，relative require不能运行；这是验证准备错误，不是产品缺陷，已向用户说明。仅停止本轮主PID22856及已核验子进程（chunk0ea506，session1363 exit1），无完整门禁报告、不记通过。新干净r3=`C:\Users\57249\Documents\Codex\2026-09-08\jiejing-release-evidence-refresh-r3`，同c03/tree，不修改源码；复用原465文件公开依赖缓存并先做完整runtime preflight，禁止再裸跑未准备候选。新task wrapper在`output/evidence-maintenance-diagnosis-20260908`，不会更改CHECKS/_run_check/结果；没有下载依赖或生产动作。原791/r2保留失败过程，不复写为成功。
+
+- **已停止的r2历史**：同c03/tree的`C:\Users\57249\Documents\Codex\2026-09-08\jiejing-release-evidence-refresh-r2`，CLI窄修独立审查0新阻断、原19方法AST/全部断言保留、最终20专项通过。228于本机10:37启动的session1363/PID22856已因上述依赖遗漏停止，未完成，不得重启或覆盖其过程。
+
+- **已停止的791历史**：commit=`79106e67386d8f82ad058b8b0bfc3326beae34f6`，tree=`5b367c9e9ae7834fc4bb1e9abe8d83236f344298`，22个owned路径，未推送/部署；目录`C:\Users\57249\Documents\Codex\2026-09-08\jiejing-release-evidence-refresh`。session51484已停止，未完成，不可发布；原3用户路径在3cb→791提交间零差异且主仓库dirty继续保留。原目录不修改、不覆盖为通过证据。
 - **791候选已停止，不可发布**：冻结后额外宿主兼容性检查发现CLI经package __init__连带导入完整后端，`python3 -S ... --check-capability`被拒绝（chunk06451b），不应要求宿主装容器依赖。为了不把已知不合格候选跑成可发布，已核验本次PID20108/子PID20012后仅停止该本地门禁进程（chunk3325e0，session51484 exit1）；无完整228报告，不记通过、不改其冻结源码。main正在仅CLI+测试修正固定路径直接加载同一stdlib模块；agent真实-S capability RED174d1c已确认。修后建立新干净候选、重新跑其完整门禁，不在791补写通过证明。
 - **宿主窄修已完成**：旧-S缺失库为cryptography；CLI现仅importlib加载固定ROOT下同源runtime_evidence.py，三模式均不需site packages，拒绝缺接口/外部symlink，合成CWD/PYTHONPATH不能替换证据模块。2a4e1c/9c9bf1 GREEN，最终20/20、10.789秒，session19754 exit0（chunk4e727b）。仅CLI+测试变化，原19测试逻辑保留；核心模块/原3用户文件未动，791冻结目录clean。将建立r2，同源新完整228尚未启动；无推送/部署。
 

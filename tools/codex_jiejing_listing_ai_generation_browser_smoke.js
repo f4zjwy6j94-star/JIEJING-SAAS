@@ -190,6 +190,97 @@ async function waitForTimingGate(promise, label) {
   } finally { clearTimeout(timer); }
 }
 
+async function waitForRefreshCompletion(promise, label) {
+  let timer;
+  try {
+    // Full refresh includes sequential core/extended reads and a project read;
+    // an optional endpoint alone has a 12-second budget. This is not the
+    // 10-second deadline for arriving at an intentionally held response gate.
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} did not complete the full refresh`)), 60000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+async function verifySlowOptionalAuditRefresh(page, refresh) {
+  const auditUrl = `${base}/audit-logs?limit=80`;
+  const evidence = { hits: 0, elapsed_ms: null, original_status: null, response_consumed: false, handler_settled: false, cleanup_completed: false };
+  let expectedAuditLogs;
+  let delayTimer;
+  let releaseDelay;
+  let handler = Promise.resolve();
+  let handlerError;
+  const delayAudit = (route) => {
+    if (route.request().method() !== "GET" || evidence.hits) return route.continue();
+    evidence.hits += 1;
+    const requestedAt = performance.now();
+    handler = (async () => {
+      try {
+        const response = await route.fetch({ timeout: 15000 });
+        evidence.original_status = response.status();
+        expectedAuditLogs = (await response.json()).audit_logs;
+        await new Promise((resolve) => {
+          releaseDelay = resolve;
+          delayTimer = setTimeout(resolve, Math.max(0, 10500 - (performance.now() - requestedAt)));
+        });
+        await route.fulfill({ response });
+        evidence.elapsed_ms = Math.round(performance.now() - requestedAt);
+      } catch (error) {
+        handlerError = error;
+        await route.abort().catch(() => {});
+      } finally {
+        evidence.handler_settled = true;
+      }
+    })();
+    return handler;
+  };
+  await page.route(auditUrl, delayAudit);
+  let refreshPromise;
+  let failure;
+  try {
+    refreshPromise = refresh();
+    await waitForRefreshCompletion(refreshPromise, "Refresh regression baseline");
+  } catch (error) {
+    failure = error;
+  } finally {
+    let cleanupTimer;
+    try {
+      // A timed-out wait does not cancel the real refresh. Let this one bounded
+      // fixture response and its consumer finish before removing the route.
+      await Promise.race([
+        Promise.all([handler, Promise.resolve(refreshPromise).catch(() => {})]),
+        new Promise((_, reject) => { cleanupTimer = setTimeout(() => reject(new Error("audit refresh fixture cleanup timed out")), 60000); }),
+      ]);
+      evidence.cleanup_completed = true;
+    } catch (error) {
+      failure ||= error;
+    } finally {
+      releaseDelay?.();
+      clearTimeout(delayTimer);
+      clearTimeout(cleanupTimer);
+      await page.unroute(auditUrl, delayAudit);
+    }
+  }
+  if (Array.isArray(expectedAuditLogs)) {
+    evidence.response_consumed = await page.evaluate((expected) => {
+      const consumed = state.saasAuditLogs !== window.__listingSlowAuditPriorArray &&
+        JSON.stringify(state.saasAuditLogs) === expected;
+      delete window.__listingSlowAuditPriorArray;
+      return consumed;
+    }, JSON.stringify(expectedAuditLogs));
+  }
+  if (!failure && (handlerError || evidence.hits !== 1 || evidence.original_status !== 200 ||
+      evidence.elapsed_ms < 10000 || evidence.elapsed_ms >= 12000 || !evidence.response_consumed ||
+      !evidence.handler_settled || !evidence.cleanup_completed)) {
+    failure = new Error("slow optional audit response was not consumed within its existing 12-second contract");
+  }
+  if (failure) {
+    failure.audit_refresh_timing = evidence;
+    throw failure;
+  }
+  return evidence;
+}
+
 function localStaticPath(requestUrl) {
   const url = new URL(requestUrl);
   const pathname = decodeURIComponent(url.pathname.replace(/^\/+/, "")) || "index.html";
@@ -882,10 +973,11 @@ async function runSmoke() {
   // A refresh exposes the editor after core data, before its second-stage
   // reports GET completes. Hold a real local response, not a fabricated fact
   // packet, and wait for the actual refresh promise rather than a sleep.
-  await waitForTimingGate(page.evaluate(async () => {
+  const auditRefreshTiming = await verifySlowOptionalAuditRefresh(page, () => page.evaluate(async () => {
     await state.saasListingProductFactSavePromise;
+    window.__listingSlowAuditPriorArray = state.saasAuditLogs;
     await refreshSaasState({ silent: true });
-  }), "Refresh regression baseline");
+  }));
   const refreshScope = await page.evaluate(() => ({
     companyId: state.saasIdentity?.company_id,
     userId: state.saasIdentity?.user_id,
@@ -950,7 +1042,7 @@ async function runSmoke() {
         field.dataset.productFactOriginState || "", field.dataset.productFactUnknown || "",
       ]));
     releaseReports();
-    await waitForTimingGate(page.evaluate(() => window.__listingRefreshRegressionPromise), "Second-stage refresh completion");
+    await waitForRefreshCompletion(page.evaluate(() => window.__listingRefreshRegressionPromise), "Second-stage refresh completion");
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     const afterRefresh = await page.evaluate(() => ({
       companyId: state.saasIdentity?.company_id, userId: state.saasIdentity?.user_id,
@@ -1032,7 +1124,7 @@ async function runSmoke() {
   };
   page.on("request", captureFirstClientFactPost);
   try {
-    await waitForTimingGate(page.evaluate(() => refreshSaasState({ silent: true })), "Refresh to fact version B");
+    await waitForRefreshCompletion(page.evaluate(() => refreshSaasState({ silent: true })), "Refresh to fact version B");
     if (await page.inputValue('[data-saas-product-fact-field="material"]') !== pendingMaterialC) {
       throw new Error("new fact version discarded the first client's unsaved material C");
     }
@@ -1090,7 +1182,7 @@ async function runSmoke() {
     }
     // Exercise real completion boundaries after the 409; no automatic retry or
     // fabricated timer delay is needed to finish a read-only refresh.
-    await waitForTimingGate(page.evaluate(() => refreshSaasState({ silent: true })), "Refresh after fact CAS conflict");
+    await waitForRefreshCompletion(page.evaluate(() => refreshSaasState({ silent: true })), "Refresh after fact CAS conflict");
     const afterConflict = matchingFacts(await api("/reports?limit=24", { token }))[0];
     const conflictSettled = await page.evaluate(() =>
       state.saasListingProductFactSaveRequest == null && state.saasListingProductFactSavePromise == null);
@@ -1107,7 +1199,7 @@ async function runSmoke() {
     }
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => typeof state !== "undefined" && state.saasProtectedStateReady && !state.saasLoading);
-    await waitForTimingGate(page.evaluate(() => refreshSaasState({ silent: true })), "Explicit reopen at fact version B");
+    await waitForRefreshCompletion(page.evaluate(() => refreshSaasState({ silent: true })), "Explicit reopen at fact version B");
     if (await page.inputValue('[data-saas-product-fact-field="material"]') !== secondClientMaterialB ||
         !await page.evaluate((reportId) => state.saasListingComposerDraft?.source_product_fact_report_id === reportId, factVersionB.report_id) ||
         await page.locator('[data-saas-product-fact-version-warning]').count()) {
@@ -1144,6 +1236,7 @@ async function runSmoke() {
     no_real_platform_writes_triggered: true,
     no_charge_or_refund_triggered: true,
     context_guard_cases: contextCases,
+    audit_refresh_timing: auditRefreshTiming,
     failure_screenshot_path: failureScreenshotPath,
     screenshot_path: screenshotPath,
   }, null, 2));
