@@ -25,6 +25,29 @@ def main() -> int:
     media_points = section(app, "function renderSaasMerchantMediaCreditsPanel", "\nfunction saasDomesticBillingDateLabel")
     payment = section(app, "function renderSaasMerchantDomesticPaymentPanel", "\nfunction renderSaasMerchantBillingEntitlementPathPanel")
     pricing = section(app, "function renderSaasMerchantPricingModelPanel", "\nfunction renderSaasCeoCockpitStatusStrip")
+    legacy_glance = section(app, "function saasSettingsOneGlanceRows", "\nfunction renderSaasSettingsOneGlanceStrip")
+    for label, scope in [("pricing panel", pricing), ("unmounted legacy overview", legacy_glance)]:
+        assert "图片生成使用素材点；视频点数计价尚未开放。" in scope, f"{label} must distinguish priced images from unpriced video"
+        assert "图片和视频使用素材点" not in scope, f"{label} must not promise video point billing"
+    summary_header = section(billing_summary, '<div class="saas-settings-card-head">', '<div class="saas-merchant-billing-plain-grid">')
+    summary_rows = section(billing_summary, "  const rows = [", "\n  return `")
+    for marker in [
+        "7 天内最多 20 次平台 AI 调用",
+        "不赠送生图素材点",
+        "付费套餐已包含素材点",
+        "不延长平台 AI 试用",
+        "自接模型费用由商家另付",
+    ]:
+        assert marker in summary_header, f"billing overview header must explain independent entitlements: {marker}"
+    for marker in [
+        "免费体验不赠送生图素材点",
+        "付费套餐不延长平台 AI 试用",
+        'label: "自接文本模型"',
+        "不消耗试用次数或素材点",
+        "直接承担模型费用",
+    ]:
+        assert marker in summary_rows, f"billing overview rows must agree with the header: {marker}"
+    assert "文本模型由商家自带" not in summary_header, "billing overview must not hide the available platform AI trial"
     merchant_copy = "\n".join((
         public_plan_catalog,
         billing_summary,

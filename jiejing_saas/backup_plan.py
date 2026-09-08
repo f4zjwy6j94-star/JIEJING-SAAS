@@ -15,6 +15,7 @@ from typing import Any
 
 from .config import SaaSSettings
 from .repository import SaaSRepository
+from .runtime_evidence import RuntimeEvidenceError, read_runtime_evidence
 
 
 BACKUP_PROBE_MAX_AGE_HOURS = 36.0
@@ -25,7 +26,15 @@ EVIDENCE_MAX_FUTURE_SKEW_MINUTES = 5.0
 def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     counts = repository.system_counts()
     database_managed = settings.database_engine == "postgres" and settings.database_adapter == "postgres-managed"
-    cos_target = _cos_backup_target_status(require_fresh_probe=settings.is_production_like)
+    evidence_unavailable = False
+    try:
+        evidence = read_runtime_evidence()
+    except RuntimeEvidenceError:
+        evidence, evidence_unavailable = {}, True
+    cos_target = _cos_backup_target_status(require_fresh_probe=settings.is_production_like, runtime_evidence=evidence)
+    if evidence_unavailable:
+        cos_target["target_ready"] = False
+        cos_target["blocked_by"].append("runtime_evidence_unavailable")
     policy_configured = _env_bool("JIEJING_BACKUP_POLICY_CONFIGURED")
     restore_drill_at = os.environ.get("JIEJING_RESTORE_DRILL_LAST_AT", "").strip()
     restore_drill_max_age_days = _env_bounded_float(
@@ -274,13 +283,14 @@ def _evidence_id_sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _cos_backup_target_status(*, require_fresh_probe: bool = False) -> dict[str, Any]:
+def _cos_backup_target_status(*, require_fresh_probe: bool = False, runtime_evidence: dict[str, str] | None = None) -> dict[str, Any]:
+    evidence = read_runtime_evidence() if runtime_evidence is None else runtime_evidence
     enabled = _env_bool("JIEJING_COS_BACKUP_ENABLED")
     provider = (os.environ.get("JIEJING_BACKUP_STORAGE_PROVIDER") or ("cos" if enabled else "unconfigured")).strip().lower()
     region = os.environ.get("JIEJING_COS_REGION") or os.environ.get("JIEJING_TENCENT_REGION") or "ap-guangzhou"
     bucket = os.environ.get("JIEJING_COS_BUCKET", "").strip()
     prefix = (os.environ.get("JIEJING_COS_PREFIX") or "jiejing/staging/backups").strip().strip("/")
-    probe_at = os.environ.get("JIEJING_COS_BACKUP_LAST_SUCCESS_AT", "").strip()
+    probe_at = evidence.get("JIEJING_COS_BACKUP_LAST_SUCCESS_AT", "").strip()
     probe_max_age_hours = _env_bounded_float(
         "JIEJING_BACKUP_PROBE_MAX_AGE_HOURS", BACKUP_PROBE_MAX_AGE_HOURS, minimum=1.0, maximum=168.0
     )

@@ -29,6 +29,17 @@ def function_scope(source: str, name: str) -> str:
     return source[start:end]
 
 
+def assert_public_service_message_boundary(app_js: str) -> None:
+    public_service = function_scope(app_js, "renderSaasServiceCenter")
+    require(
+        public_service,
+        "连接店铺后可查看官方订单；买家消息暂未接入，当前可整理回复草稿并由你审核。",
+        "honest order access and buyer-message capability boundary",
+    )
+    if "连接店铺后自动接收订单与买家消息" in public_service:
+        raise AssertionError("connecting a store must not promise unavailable buyer-message ingestion")
+
+
 def main() -> None:
     app_js = APP_JS.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
@@ -110,11 +121,11 @@ def main() -> None:
         "没有接入官方消息时保持空状态",
         "确认事项",
         "当前没有待处理内容",
-        "不造假",
-        "没有真实消息就保持安静",
-        "只引用已知事实",
-        "承诺停住",
-        "退款、补偿、重发、地址修改、明确到货日和敏感承诺进决策中心",
+        "没有真实订单时不显示虚构买家或虚构物流。",
+        "没有官方消息、确认草稿或发送证据时，这里不显示虚构会话。",
+        "只引用商品档案、订单状态和你保存的商家规则；不能把 AI 猜测说成事实。",
+        "涉及钱、重发、地址修改、明确到货日和敏感承诺，直接停到确认中心。",
+        "退款、补偿、重发、地址修改、明确到货日和敏感承诺会进入确认中心。",
         "当前重点",
         "连接 eBay 店铺",
     ]:
@@ -122,6 +133,8 @@ def main() -> None:
 
     if "待回复、催单、售前问题优先整理" in service_scope:
         raise AssertionError("orders must not be presented as buyer messages")
+
+    assert_public_service_message_boundary(app_js)
 
     for marker in [
         "5 项设置，集中管理",

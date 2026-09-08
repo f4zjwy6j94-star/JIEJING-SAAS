@@ -36,6 +36,11 @@ ALLOWED_SCOPE = "public_staging_patch_whitelist_v1"
 ATOMIC_FRONTEND_FILES = ("index.html", "app.html", "app.js", "styles.css")
 PRODUCTION_REMOTE_APPLY_TIMEOUT_SECONDS = 3600
 PHASE3_REQUIRED_BUNDLE_FILES = {
+    "jiejing_saas/runtime_evidence.py",
+    "tools/jiejing_runtime_evidence_snapshot.py",
+    "tools/test_jiejing_runtime_evidence.py",
+    "docs/superpowers/specs/2026-09-08-production-evidence-no-restart-design.md",
+    "docs/superpowers/plans/2026-09-08-production-evidence-no-restart-implementation-plan.md",
     "deploy/jiejing-production-evidence-auto-refresh.sh",
     "deploy/systemd/jiejing-production-evidence-refresh.service",
     "deploy/systemd/jiejing-production-evidence-refresh.timer",
@@ -49,6 +54,7 @@ REMOTE_BOOLEAN_CONTRACT = {
     "PRIVATE_ENV_NORMALIZATION_REQUIRED": "private_env_normalization_required",
     "PRIVATE_ENV_NORMALIZATION_PLANNED": "private_env_normalization_planned",
     "PRIVATE_ENV_NORMALIZATION_APPLIED": "private_env_normalization_applied",
+    "EVIDENCE_SNAPSHOT_INITIALIZED": "evidence_snapshot_initialized",
 }
 
 
@@ -226,6 +232,8 @@ def parse_remote_stdout_contract(output: str, mode: str, expected_source_sha: st
         raise ValueError("candidate_persistence_mismatch")
     if observed["active_switched"] is not expected_persistence:
         raise ValueError("active_switch_mismatch")
+    if observed["evidence_snapshot_initialized"] is not expected_persistence:
+        raise ValueError("evidence_snapshot_initialization_mismatch")
     if observed["private_env_normalization_planned"] is not observed["private_env_normalization_required"]:
         raise ValueError("normalization_plan_mismatch")
     expected_applied = mode == "apply" and observed["private_env_normalization_required"]

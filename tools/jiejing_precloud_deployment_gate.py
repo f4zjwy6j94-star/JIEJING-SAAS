@@ -249,6 +249,7 @@ CHECKS: list[tuple[str, list[str]]] = [
         "production_evidence_auto_refresh_guardrails",
         [sys.executable, "tools/test_jiejing_production_evidence_auto_refresh_guardrails.py"],
     ),
+    ("runtime_evidence_snapshot", [sys.executable, "tools/test_jiejing_runtime_evidence.py"]),
     ("controlled_media_proof_workflow", [sys.executable, "tools/test_jiejing_controlled_media_proof_workflow.py"]),
     ("github_runner_doctor_guardrails", [sys.executable, "tools/test_jiejing_github_runner_doctor_guardrails.py"]),
     ("github_runner_maintenance_guardrails", [sys.executable, "tools/test_jiejing_github_runner_maintenance_guardrails.py"]),

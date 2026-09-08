@@ -38208,12 +38208,12 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
     {
       label: "软件套餐",
       title: `${currentPlanLabel} · ${currentPlanPrice}`,
-      detail: "有店铺含 1,000 素材点，多店铺含 3,000 素材点；套餐点用完后再加购。",
+      detail: "免费体验不赠送生图素材点；有店铺含 1,000 素材点，多店铺含 3,000 素材点；套餐点用完后再加购，付费套餐不延长平台 AI 试用。",
       tone: "green",
     },
     {
-      label: "商家自带模型",
-      title: "不消耗素材点",
+      label: "自接文本模型",
+      title: "不消耗试用次数或素材点",
       detail: "DeepSeek、OpenAI 等文本模型由商家账号连接并直接承担模型费用，切换店铺无需重复配置。",
       tone: "green",
     },
@@ -38236,7 +38236,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
         <div>
           <span>订阅和用量总览</span>
           <strong>套餐权益、商家模型、素材点和平台成本清楚可查</strong>
-          <p>套餐已包含素材点；用完后才需要加购。固定加购为 1,000 点 / ¥10、5,000 点 / ¥50、10,000 点 / ¥100。文本模型由商家自带，电商平台经营成本仍由商家在对应平台结算。</p>
+          <p>免费体验：7 天内最多 20 次平台 AI 调用，不赠送生图素材点。付费套餐已包含素材点；用完后才需要加购，不延长平台 AI 试用。固定加购为 1,000 点 / ¥10、5,000 点 / ¥50、10,000 点 / ¥100。自接模型费用由商家另付，电商平台经营成本仍由商家在对应平台结算。</p>
         </div>
         <em>${escapeHtml(stageLabel)}</em>
       </div>
@@ -39206,7 +39206,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
         <div>
           <span>计费模型</span>
           <strong>软件套餐、商家模型、素材点和平台成本互不混账</strong>
-          <p>商家只需要分清四件事：免费体验有 7 天和 20 次捷境托管 AI；付费套餐是 30 天软件使用权；图片和视频使用素材点；电商平台、物流、广告和退款仍由商家在对应平台结算。</p>
+          <p>商家只需要分清四件事：免费体验有 7 天和 20 次捷境托管 AI；付费套餐是 30 天软件使用权；图片生成使用素材点；视频点数计价尚未开放。电商平台、物流、广告和退款仍由商家在对应平台结算。</p>
         </div>
         <em>${escapeHtml(billingModeLabel)}</em>
       </div>
@@ -42320,7 +42320,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
   const serviceTraceRecords = saasServiceTraceRecords();
   const hasOfficialBuyerMessages = serviceTraceRecords.some((item) => item.stateKey === "buyer_message");
   const serviceNextAction = !ctx.connection
-    ? "连接店铺后自动接收订单与买家消息"
+    ? "连接店铺后可查看官方订单；买家消息暂未接入，当前可整理回复草稿并由你审核。"
     : hasOfficialOrders
       ? "先处理订单履约；买家消息需等待官方消息来源"
       : "当前没有待处理订单";
@@ -44120,7 +44120,7 @@ function saasSettingsOneGlanceRows(activeTabId = "account") {
     billing: [
       ["当前阶段", domesticBilling.online ? "微信扫码付款可用" : "试用模式，不自动扣费", domesticBilling.online ? "单次购买 30 天，到账后自动开通；不会自动续费。" : "在线付款开放前不会生成付款二维码。"],
       ["软件套餐", "¥0 / ¥99 / ¥199", "公开方案仅按免费体验、有店铺和多店铺选择；付费套餐单次购买 30 天。"],
-      ["AI 与素材", "账号 AI / 素材点", "账号 AI 由商家自行连接；图片和视频使用素材点，失败任务返还预占点数。"],
+      ["AI 与素材", "账号 AI / 素材点", "账号 AI 由商家自行连接；图片生成使用素材点；视频点数计价尚未开放。失败任务返还预占点数。"],
     ],
   };
   return rowsByTab[activeTabId] || rowsByTab.general;

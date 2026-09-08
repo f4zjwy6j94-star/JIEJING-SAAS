@@ -6,6 +6,8 @@ ACTIVE_LINK="$PRODUCTION_ROOT/app"
 RELEASE_ROOT="$PRODUCTION_ROOT/releases"
 COMPOSE_NAME="docker-compose.production-pilot.yml"
 LOCK_FILE="/run/lock/jiejing-production-maintenance.lock"
+EVIDENCE_DIRECTORY="$PRODUCTION_ROOT/runtime-evidence"
+EVIDENCE_MOUNT="/run/jiejing-production-evidence"
 PUBLIC_BASE_URL="https://app.jiejing.shop"
 PUBLIC_READINESS_MAX_ATTEMPTS=60
 PUBLIC_READINESS_RETRY_SECONDS=2
@@ -1060,85 +1062,124 @@ run_cls_probe() {
   printf '%s\n' "CLS_PROBE_STATUS=verified"
 }
 
-recreate_api() {
-  if ! approved_image_reference_matches "$runtime_api_image_ref" "$runtime_api_image_id"; then
-    LAST_BLOCKER="api_image_reference_drift"
-    return 2
-  fi
-  if ! docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-saas \
-    >/dev/null 2>&1; then
-    LAST_BLOCKER="api_recreate_failed"
-    return 2
-  fi
+runtime_evidence_json_verified() {
+  python3 -c '
+import json, re, sys
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result: raise ValueError("duplicate")
+        result[key] = value
+    return result
+try:
+    value = json.load(sys.stdin, object_pairs_hook=unique)
+    common = isinstance(value, dict) and value.get("contract_version") == "jiejing_runtime_evidence_snapshot_v1" and value.get("secret_exposed") is False
+    if sys.argv[1] == "capability":
+        valid = common and set(value) == {"status", "contract_version", "secret_exposed", "writes_snapshot"} and value.get("status") == "capable" and value.get("writes_snapshot") is False
+    else:
+        valid = common and set(value) == {"status", "contract_version", "secret_exposed", "evidence_sha256"} and value.get("status") == "verified" and isinstance(value.get("evidence_sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", value["evidence_sha256"])
+    sys.exit(0 if valid else 2)
+except (ValueError, TypeError, KeyError):
+    sys.exit(2)
+' "$1"
 }
 
-verify_recreated_api() {
-  local new_api_container_id new_api_image_id
-  if ! wait_for_api_health; then
-    LAST_BLOCKER="api_health_failed"
-    return 2
-  fi
-  new_api_container_id="$(docker compose "${COMPOSE_ARGS[@]}" ps -q jiejing-saas 2>/dev/null || true)"
-  new_api_image_id="$(docker inspect --format '{{.Image}}' "$new_api_container_id" 2>/dev/null || true)"
-  if ! [[ "$new_api_container_id" != "$approved_api_container_id" ]] \
-    || ! [[ "$new_api_image_id" == "$runtime_api_image_id" ]]; then
-    LAST_BLOCKER="api_identity_mismatch"
-    return 2
-  fi
+trusted_runtime_evidence_directory() {
+  local ancestor="$EVIDENCE_DIRECTORY"
+  [[ "$EVIDENCE_DIRECTORY" == "$PRODUCTION_ROOT/runtime-evidence" ]] || return 1
+  [[ -d "$EVIDENCE_DIRECTORY" && ! -L "$EVIDENCE_DIRECTORY" ]] || return 1
+  [[ "$(readlink -f -- "$EVIDENCE_DIRECTORY" 2>/dev/null || true)" == "$EVIDENCE_DIRECTORY" ]] || return 1
+  while :; do
+    trusted_private_directory "$ancestor" || return 1
+    [[ "$ancestor" != / ]] || break
+    ancestor="$(dirname -- "$ancestor")"
+  done
+  [[ "$(stat -c '%U:%G %a' -- "$EVIDENCE_DIRECTORY" 2>/dev/null || true)" == "root:root 755" ]]
 }
 
-recreate_worker() {
-  if ! approved_image_reference_matches "$runtime_worker_image_ref" "$runtime_worker_image_id"; then
-    LAST_BLOCKER="worker_image_reference_drift"
-    return 2
-  fi
-  if ! docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-worker \
-    >/dev/null 2>&1; then
-    LAST_BLOCKER="worker_recreate_failed"
-    return 2
-  fi
+runtime_evidence_mount_verified() {
+  local container="$1" selected_env
+  # Select only this public path; never collect or print the container environment.
+  selected_env="$(docker inspect --format '{{range .Config.Env}}{{if eq (index (split . "=") 0) "JIEJING_RUNTIME_EVIDENCE_FILE"}}{{println .}}{{end}}{{end}}' "$container" 2>/dev/null)" || return 1
+  [[ "$selected_env" == "JIEJING_RUNTIME_EVIDENCE_FILE=$EVIDENCE_MOUNT/current.json" ]] || return 1
+  docker inspect --format '{{json .Mounts}}' "$container" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    mounts = json.load(sys.stdin)
+    target, source = sys.argv[1:]
+    if not isinstance(mounts, list) or not all(isinstance(item, dict) for item in mounts): raise ValueError()
+    selected = [item for item in mounts if item.get("Destination") == target]
+    valid = len(selected) == 1 and selected[0].get("Type") == "bind" and selected[0].get("Source") == source and selected[0].get("RW") is False
+    valid = valid and not any(str(item.get("Destination", "")).startswith(target + "/") for item in mounts)
+    sys.exit(0 if valid else 2)
+except (ValueError, TypeError):
+    sys.exit(2)
+' "$EVIDENCE_MOUNT" "$EVIDENCE_DIRECTORY" >/dev/null 2>&1
 }
 
-verify_recreated_worker() {
-  local new_worker_container_id new_worker_image_id
-  if ! wait_for_worker_health; then
-    LAST_BLOCKER="worker_health_failed"
-    return 2
-  fi
-  new_worker_container_id="$(docker compose "${COMPOSE_ARGS[@]}" ps -q jiejing-worker 2>/dev/null || true)"
-  new_worker_image_id="$(docker inspect --format '{{.Image}}' "$new_worker_container_id" 2>/dev/null || true)"
-  if ! [[ "$new_worker_container_id" != "$approved_worker_container_id" ]] \
-    || ! [[ "$new_worker_image_id" == "$runtime_worker_image_id" ]]; then
-    LAST_BLOCKER="worker_identity_mismatch"
-    return 2
-  fi
+verify_runtime_evidence_support() {
+  local image capability
+  trusted_runtime_evidence_directory || { LAST_BLOCKER="runtime_evidence_directory_untrusted"; return 2; }
+  runtime_evidence_mount_verified "$approved_api_container_id" \
+    && runtime_evidence_mount_verified "$approved_worker_container_id" \
+    || { LAST_BLOCKER="runtime_evidence_mount_untrusted"; return 2; }
+  for image in "$runtime_api_image_id" "$runtime_worker_image_id"; do
+    capability="$(docker run --rm --network none -w /app "$image" python \
+      tools/jiejing_runtime_evidence_snapshot.py --check-capability 2>/dev/null)" \
+      || { LAST_BLOCKER="runtime_evidence_capability_missing"; return 2; }
+    if ! runtime_evidence_json_verified capability <<<"$capability" >/dev/null 2>&1; then
+      unset capability
+      LAST_BLOCKER="runtime_evidence_capability_missing"
+      return 2
+    fi
+    unset capability
+  done
 }
 
-reload_api_then_worker() {
-  if ! recreate_api; then
-    LAST_BLOCKER="${LAST_BLOCKER:-api_recreate_failed}"
+publish_runtime_evidence_snapshot() {
+  local snapshot_output env_digest_after
+  trusted_runtime_evidence_directory || { LAST_BLOCKER="runtime_evidence_directory_untrusted"; return 2; }
+  trusted_private_file "$APP_ENV" || { LAST_BLOCKER="private_env_permissions_untrusted"; return 2; }
+  env_digest_after="$(evidence_excluded_env_digest "$APP_ENV")" \
+    || { LAST_BLOCKER="private_env_digest_failed"; return 2; }
+  [[ "$env_digest_after" == "$env_digest_before" ]] \
+    || { LAST_BLOCKER="environment_drift_detected"; return 2; }
+  snapshot_output="$(docker run --rm --network none \
+    --mount "type=bind,src=$private_dir,dst=/private,readonly" \
+    --mount "type=bind,src=$EVIDENCE_DIRECTORY,dst=/runtime-evidence" \
+    -w /app "$runtime_api_image_id" python tools/jiejing_runtime_evidence_snapshot.py \
+    --env-file /private/jiejing-saas.production.env --output-dir /runtime-evidence 2>/dev/null)" \
+    || { LAST_BLOCKER="runtime_evidence_snapshot_failed"; return 2; }
+  if ! runtime_evidence_json_verified snapshot <<<"$snapshot_output" >/dev/null 2>&1; then
+    unset snapshot_output
+    LAST_BLOCKER="runtime_evidence_snapshot_contract_rejected"
     return 2
   fi
-  if ! verify_recreated_api; then
-    LAST_BLOCKER="${LAST_BLOCKER:-api_health_failed}"
-    return 2
-  fi
-  printf '%s\n' "API_RELOAD_STATUS=ready"
-  if ! recreate_worker; then
-    LAST_BLOCKER="${LAST_BLOCKER:-worker_recreate_failed}"
-    return 2
-  fi
-  if ! verify_recreated_worker; then
-    LAST_BLOCKER="${LAST_BLOCKER:-worker_health_failed}"
-    return 2
-  fi
-  printf '%s\n' "WORKER_RELOAD_STATUS=ready"
+  unset snapshot_output
+  printf '%s\n' "RUNTIME_EVIDENCE_SNAPSHOT_STATUS=verified"
+}
+
+verify_unchanged_runtime() {
+  local before_api="$approved_api_container_id" before_worker="$approved_worker_container_id"
+  local before_api_image="$runtime_api_image_id" before_worker_image="$runtime_worker_image_id"
+  # Recapture all labels, image refs and operational health without any lifecycle action.
+  capture_and_validate_runtime_images || return $?
+  [[ "$approved_api_container_id" == "$before_api" && "$runtime_api_image_id" == "$before_api_image" ]] \
+    || { LAST_BLOCKER="api_identity_mismatch"; return 2; }
+  [[ "$approved_worker_container_id" == "$before_worker" && "$runtime_worker_image_id" == "$before_worker_image" ]] \
+    || { LAST_BLOCKER="worker_identity_mismatch"; return 2; }
+  runtime_evidence_mount_verified "$approved_api_container_id" \
+    && runtime_evidence_mount_verified "$approved_worker_container_id" \
+    || { LAST_BLOCKER="runtime_evidence_mount_untrusted"; return 2; }
+  printf '%s\n' "API_RUNTIME_STATUS=unchanged" "WORKER_RUNTIME_STATUS=unchanged"
 }
 
 run_refresh_phases() {
+  verify_runtime_evidence_support || return $?
   run_cos_probe || return $?
   run_cls_probe || return $?
-  reload_api_then_worker || return $?
+  publish_runtime_evidence_snapshot || return $?
+  verify_unchanged_runtime || return $?
 }
 
 main() {
@@ -1199,7 +1240,7 @@ export JIEJING_PRODUCTION_PRIVATE_DIR="$private_dir"
 COMPOSE_ARGS=(--project-name deploy --env-file "$COMPOSE_ENV" -f "$runtime_compose")
 LAST_BLOCKER=""
 
-docker run --rm -w /app "$runtime_api_image_id" python -c \
+docker run --rm --network none -w /app "$runtime_api_image_id" python -c \
   "from pathlib import Path; import sys; sys.exit(0 if Path('tools/jiejing_configure_tencent_runtime_env.py').is_file() else 2)" \
   >/dev/null 2>&1 || fail_closed "runtime_probe_tool_missing"
 printf '%s\n' "LIVE_RELEASE_GUARD_STATUS=ready"
@@ -1207,6 +1248,7 @@ printf '%s\n' "LIVE_RELEASE_GUARD_STATUS=ready"
 run_refresh_phases || fail_closed "${LAST_BLOCKER:-refresh_phase_failed}"
 
 wait_for_public_readiness || fail_closed "public_readiness_contract_failed"
+verify_unchanged_runtime || fail_closed "${LAST_BLOCKER:-runtime_identity_changed}"
 printf '%s\n' "READINESS_STATUS=verified"
 printf '%s\n' "JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success"
 }

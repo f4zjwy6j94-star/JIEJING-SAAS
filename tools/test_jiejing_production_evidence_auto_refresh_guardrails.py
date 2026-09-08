@@ -25,6 +25,61 @@ def fail(message: str) -> int:
     return 1
 
 
+def run_no_restart_fixture(bash: str) -> subprocess.CompletedProcess[bytes]:
+    """Exercise the sourced refresh flow; only Docker/cloud boundaries are fake."""
+    fixture = textwrap.dedent(r'''
+        set -euo pipefail
+        source deploy/jiejing-production-evidence-auto-refresh.sh
+        fixture_root="$(mktemp -d)"
+        trap 'test -n "$fixture_root" && rm -r -- "$fixture_root"' EXIT
+        events="$fixture_root/events"
+        runtime_api_image_id="sha256:$(printf 'a%.0s' {1..64})"
+        runtime_worker_image_id="sha256:$(printf 'b%.0s' {1..64})"
+        approved_api_container_id=api-old
+        approved_worker_container_id=worker-old
+        private_dir="$fixture_root/private"
+        APP_ENV="$private_dir/jiejing-saas.production.env"
+        mkdir -p "$private_dir"
+        touch "$APP_ENV"
+        env_digest_before=digest
+        failure=""
+        verify_runtime_evidence_support() { printf '%s\n' support >>"$events"; [[ "$failure" != support ]]; }
+        run_cos_probe() { printf '%s\n' cos >>"$events"; [[ "$failure" != cos ]]; }
+        run_cls_probe() { printf '%s\n' cls >>"$events"; [[ "$failure" != cls ]]; }
+        publish_runtime_evidence_snapshot() { printf '%s\n' snapshot >>"$events"; [[ "$failure" != snapshot ]]; }
+        verify_unchanged_runtime() { printf '%s\n' identity >>"$events"; [[ "$failure" != identity ]]; }
+        reload_api_then_worker() { printf '%s\n' forbidden_recreate >>"$events"; }
+        docker() { printf '%s\n' forbidden_docker >>"$events"; return 91; }
+        for failure in support cos cls snapshot identity ''; do
+          : >"$events"
+          set +e
+          run_refresh_phases
+          result=$?
+          set -e
+          case "$failure" in
+            support) expected=support ;;
+            cos) expected=$'support\ncos' ;;
+            cls) expected=$'support\ncos\ncls' ;;
+            snapshot) expected=$'support\ncos\ncls\nsnapshot' ;;
+            *) expected=$'support\ncos\ncls\nsnapshot\nidentity' ;;
+          esac
+          [[ "$(<"$events")" == "$expected" ]] || { printf 'FLOW_MISMATCH stage=%s actual=%s\n' "$failure" "$(<"$events")"; exit 92; }
+          if [[ -z "$failure" ]]; then [[ "$result" == 0 ]]; else [[ "$result" != 0 ]]; fi
+        done
+        printf '%s\n' NO_RESTART_FLOW_PASS
+    ''')
+    return subprocess.run([bash, "-s"], cwd=ROOT, input=fixture.encode("utf-8"),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+
+
+def run_snapshot_json_fixture(bash: str, mode: str, serialized: str) -> subprocess.CompletedProcess[bytes]:
+    fixture = ("set -euo pipefail\nsource deploy/jiejing-production-evidence-auto-refresh.sh\n"
+               f"runtime_evidence_json_verified {shlex.quote(mode)} <<'SNAPSHOT_FIXTURE'\n"
+               + serialized + "\nSNAPSHOT_FIXTURE\n")
+    return subprocess.run([bash, "-s"], cwd=ROOT, input=fixture.encode("utf-8"),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+
+
 def run_executable_fixture(bash: str) -> subprocess.CompletedProcess[bytes]:
     fixture = textwrap.dedent(
         r'''
@@ -69,24 +124,27 @@ def run_executable_fixture(bash: str) -> subprocess.CompletedProcess[bytes]:
         [[ "$json_rc" -ne 0 ]]
 
         events=""
-        recreate_api() { return 1; }
-        verify_recreated_api() { return 0; }
-        recreate_worker() { events="${events}worker"; return 0; }
-        verify_recreated_worker() { return 0; }
+        capture_and_validate_runtime_images() { return 1; }
+        approved_api_container_id=api
+        approved_worker_container_id=worker
+        runtime_api_image_id=api-image
+        runtime_worker_image_id=worker-image
+        runtime_evidence_mount_verified() { events="${events}mount"; return 0; }
         set +e
-        reload_api_then_worker
+        verify_unchanged_runtime
         reload_rc=$?
         set -e
         [[ "$reload_rc" -ne 0 && -z "$events" ]]
 
         events=""
+        verify_runtime_evidence_support() { return 0; }
         run_cos_probe() {
           printf '{invalid-json' | json_contract_verified cos
         }
         run_cls_probe() {
           events="${events}cls"
         }
-        reload_api_then_worker() {
+        publish_runtime_evidence_snapshot() {
           events="${events}reload"
         }
         set +e
@@ -100,7 +158,7 @@ def run_executable_fixture(bash: str) -> subprocess.CompletedProcess[bytes]:
         run_cls_probe() {
           printf '{invalid-json' | json_contract_verified cls
         }
-        reload_api_then_worker() {
+        publish_runtime_evidence_snapshot() {
           events="${events}reload"
         }
         set +e
@@ -408,6 +466,10 @@ def run_runtime_image_fixture(
 
             fixture_root="$(mktemp -d)"
             trap 'test -n "$fixture_root" && rm -r -- "$fixture_root"' EXIT
+            PRODUCTION_ROOT="$fixture_root"
+            EVIDENCE_DIRECTORY="$fixture_root/runtime-evidence"
+            mkdir -p "$EVIDENCE_DIRECTORY"
+            chmod 755 "$fixture_root" "$EVIDENCE_DIRECTORY"
             active_app="$fixture_root/releases/release-a/app"
             runtime_compose="$active_app/deploy/docker-compose.production-pilot.yml"
             environment_file="$fixture_root/private/production-compose.env"
@@ -434,7 +496,24 @@ def run_runtime_image_fixture(
             drift_worker_environment=0
             unhealthy_api=0
             stopped_worker=0
+            bad_mount=0
+            bad_reader_env=0
+            incapable_image=0
+            snapshot_failure=0
+            bad_snapshot_json=0
+            bad_directory_owner=0
+            drift_digest=0
+            probe_failure=""
             deep_health_payload='{{}}'
+
+            stat() {{
+              local actual
+              actual="$(command stat "$@")" || return $?
+              # The isolated /tmp parent stands in for production's root-owned /opt.
+              if [[ "${{@: -1}}" == /tmp ]]; then actual="root:root 755"; fi
+              if [[ "$bad_directory_owner" == 1 ]]; then printf '%s\n' "untrusted:untrusted ${{actual##* }}"; return; fi
+              printf '%s\n' "root:root ${{actual##* }}"
+            }}
 
             curl() {{
               printf '%s\n' "$deep_health_payload"
@@ -477,15 +556,30 @@ def run_runtime_image_fixture(
                 if [[ "$swap_captured_images" == 1 ]]; then
                   if [[ "$service" == jiejing-saas ]]; then image="$worker_image"; else image="$api_image"; fi
                 fi
-                if [[ "$service" == jiejing-saas && "$container" == api-new && "$swap_recreated_api" == 1 ]]; then
+                if [[ "$service" == jiejing-saas && "$swap_recreated_api" == 1 ]]; then
                   image="$worker_image"
                 fi
                 if [[ "$service" == jiejing-worker \
-                  && "$container" == worker-new \
                   && "$swap_recreated_worker" == 1 ]]; then
                   image="$api_image"
                 fi
                 case "$format" in
+                  '{{{{json .Mounts}}}}')
+                    case "$bad_mount" in
+                      1) printf '%s\n' '[]' ;;
+                      2) printf '[{{"Type":"bind","Source":"%s","Destination":"/run/jiejing-production-evidence","RW":true}}]\n' "$EVIDENCE_DIRECTORY" ;;
+                      3) printf '%s\n' '[{{"Type":"bind","Source":"/wrong","Destination":"/run/jiejing-production-evidence","RW":false}}]' ;;
+                      4) printf '[{{"Type":"bind","Source":"%s","Destination":"/run/jiejing-production-evidence/current.json","RW":false}}]\n' "$EVIDENCE_DIRECTORY" ;;
+                      5) printf '[{{"Type":"bind","Source":"%s","Destination":"/run/jiejing-production-evidence","RW":0}}]\n' "$EVIDENCE_DIRECTORY" ;;
+                      6) printf '[{{"Type":"bind","Source":"%s","Destination":"/run/jiejing-production-evidence","RW":false}},{{"Destination":"/run/jiejing-production-evidence/current.json"}}]\n' "$EVIDENCE_DIRECTORY" ;;
+                      *) printf '[{{"Type":"bind","Source":"%s","Destination":"/run/jiejing-production-evidence","RW":false}}]\n' "$EVIDENCE_DIRECTORY" ;;
+                    esac
+                    ;;
+                  *Config.Env*)
+                    if [[ "$bad_reader_env" == 1 ]]; then printf '%s\n' wrong; else
+                      printf '%s\n' JIEJING_RUNTIME_EVIDENCE_FILE=/run/jiejing-production-evidence/current.json
+                    fi
+                    ;;
                   *compose.project\"*)
                     if [[ "$service" == jiejing-saas && "$drift_api_label" == 1 ]]; then
                       printf '%s\n' other
@@ -570,7 +664,25 @@ def run_runtime_image_fixture(
                 fi
               fi
               if [[ "${{1:-}}" == run ]]; then
+                if [[ "$*" == *--check-capability* ]]; then
+                  [[ "$*" == *'--network none'* && "$*" != *--mount* ]]
+                  if [[ "$incapable_image" == 1 || ( "$incapable_image" == 2 && " $* " == *" $worker_image "* ) ]]; then return 4; fi
+                  printf '%s\n' '{{"status":"capable","contract_version":"jiejing_runtime_evidence_snapshot_v1","secret_exposed":false,"writes_snapshot":false}}'
+                  return 0
+                fi
+                if [[ "$*" == *tools/jiejing_runtime_evidence_snapshot.py* ]]; then
+                  [[ "$*" == *'--network none'* && " $* " == *" $api_image "* ]]
+                  [[ "$*" == *"src=$private_dir,dst=/private,readonly"* ]]
+                  [[ "$*" == *"src=$EVIDENCE_DIRECTORY,dst=/runtime-evidence"* ]]
+                  printf '%s\n' snapshot >>"$fixture_root/side-effects"
+                  [[ "$snapshot_failure" == 0 ]] || return 5
+                  if [[ "$bad_snapshot_json" == 1 ]]; then printf '%s\n' '{{}}'; else
+                    printf '{{"status":"verified","contract_version":"jiejing_runtime_evidence_snapshot_v1","secret_exposed":false,"evidence_sha256":"%s"}}\n' "$(printf 'a%.0s' {{1..64}})"
+                  fi
+                  return 0
+                fi
                 printf '%s\n' probe >>"$fixture_root/side-effects"
+                if [[ -n "$probe_failure" && "$*" == *"--verify-$probe_failure --apply"* ]]; then return 6; fi
                 if [[ " $* " == *" $api_image "* ]]; then
                   printf '%s\n' api >>"$fixture_root/probe-images"
                 elif [[ " $* " == *" $worker_image "* ]]; then
@@ -590,7 +702,7 @@ def run_runtime_image_fixture(
             env_digest_before=digest
             json_contract_verified() {{ return 0; }}
             trusted_private_file() {{ return 0; }}
-            evidence_excluded_env_digest() {{ printf '%s\n' digest; }}
+            evidence_excluded_env_digest() {{ if [[ "$drift_digest" == 1 ]]; then printf '%s\n' drifted; else printf '%s\n' digest; fi; }}
             COMPOSE_ARGS=()
             wait_for_api_health() {{ return 0; }}
             wait_for_worker_health() {{ return 0; }}
@@ -627,13 +739,15 @@ def run_runtime_image_fixture(
             [[ "$runtime_api_image_id" == "$api_image" ]]
             [[ "$runtime_worker_image_id" == "$worker_image" ]]
             [[ "$runtime_api_image_id" != "$runtime_worker_image_id" ]]
+            verify_runtime_evidence_support
+            publish_runtime_evidence_snapshot
+            verify_unchanged_runtime
+            [[ "$api_container" == api-old && "$worker_container" == worker-old ]]
             run_cos_probe
             run_cls_probe
             [[ "$(<"$fixture_root/probe-images")" == $'api\napi\napi' ]]
-            recreate_api
-            verify_recreated_api
-            recreate_worker
-            verify_recreated_worker
+            verify_unchanged_runtime
+            ! grep -q '^compose-up:' "$fixture_root/side-effects"
 
             assert_capture_fails() {{
               set +e
@@ -684,21 +798,99 @@ def run_runtime_image_fixture(
 
             capture_and_validate_runtime_images
             COMPOSE_ARGS=()
-            recreate_api
             swap_recreated_api=1
             set +e
-            verify_recreated_api >/dev/null 2>&1
+            (verify_unchanged_runtime) >/dev/null 2>&1
             swapped_api_rc=$?
             set -e
             [[ "$swapped_api_rc" -ne 0 ]]
             swap_recreated_api=0
-            recreate_worker
             swap_recreated_worker=1
             set +e
-            verify_recreated_worker >/dev/null 2>&1
+            (verify_unchanged_runtime) >/dev/null 2>&1
             swapped_worker_rc=$?
             set -e
             [[ "$swapped_worker_rc" -ne 0 ]]
+            swap_recreated_worker=0
+
+            # The expected baseline is never replaced by a newly healthy process/image.
+            for identity_case in api_id worker_id api_image worker_image; do
+              set +e
+              (
+                case "$identity_case" in
+                  api_id) api_container=api-new ;;
+                  worker_id) worker_container=worker-new ;;
+                  api_image) api_image="sha256:$(printf 'c%.0s' {{1..64}})" ;;
+                  worker_image) worker_image="sha256:$(printf 'd%.0s' {{1..64}})" ;;
+                esac
+                verify_unchanged_runtime
+              ) >/dev/null 2>&1
+              identity_rc=$?
+              set -e
+              [[ "$identity_rc" != 0 ]] || {{ printf 'MISSED_IDENTITY_DRIFT=%s\n' "$identity_case"; exit 90; }}
+            done
+
+            for bad_mount in 1 2 3 4 5 6; do
+              : >"$fixture_root/side-effects"
+              if run_refresh_phases >/dev/null 2>&1; then exit 81; fi
+              [[ "$LAST_BLOCKER" == runtime_evidence_mount_untrusted && ! -s "$fixture_root/side-effects" ]]
+            done
+            bad_mount=0
+            for incapable_image in 1 2; do
+              if run_refresh_phases >/dev/null 2>&1; then exit 82; fi
+              [[ "$LAST_BLOCKER" == runtime_evidence_capability_missing && ! -s "$fixture_root/side-effects" ]]
+            done
+            incapable_image=0
+            bad_reader_env=1
+            if run_refresh_phases >/dev/null 2>&1; then exit 83; fi
+            [[ "$LAST_BLOCKER" == runtime_evidence_mount_untrusted && ! -s "$fixture_root/side-effects" ]]
+            bad_reader_env=0
+            bad_directory_owner=1
+            if run_refresh_phases >/dev/null 2>&1; then exit 84; fi
+            [[ "$LAST_BLOCKER" == runtime_evidence_directory_untrusted && ! -s "$fixture_root/side-effects" ]]
+            bad_directory_owner=0
+            chmod 777 "$EVIDENCE_DIRECTORY"
+            if run_refresh_phases >/dev/null 2>&1; then exit 85; fi
+            [[ "$LAST_BLOCKER" == runtime_evidence_directory_untrusted && ! -s "$fixture_root/side-effects" ]]
+            chmod 755 "$EVIDENCE_DIRECTORY"
+            chmod 777 "$PRODUCTION_ROOT"
+            if run_refresh_phases >/dev/null 2>&1; then exit 85; fi
+            [[ "$LAST_BLOCKER" == runtime_evidence_directory_untrusted && ! -s "$fixture_root/side-effects" ]]
+            chmod 755 "$PRODUCTION_ROOT"
+            mv "$EVIDENCE_DIRECTORY" "$fixture_root/evidence-real"
+            ln -s "$fixture_root/evidence-real" "$EVIDENCE_DIRECTORY"
+            if run_refresh_phases >/dev/null 2>&1; then exit 85; fi
+            [[ "$LAST_BLOCKER" == runtime_evidence_directory_untrusted && ! -s "$fixture_root/side-effects" ]]
+            rm "$EVIDENCE_DIRECTORY"
+            mv "$fixture_root/evidence-real" "$EVIDENCE_DIRECTORY"
+
+            for probe_failure in cos-backup-probe provider-alarms provider-cls-probe; do
+              : >"$fixture_root/side-effects"
+              if run_refresh_phases >/dev/null 2>&1; then exit 86; fi
+              ! grep -q '^snapshot$\|^compose-up:' "$fixture_root/side-effects"
+              case "$probe_failure" in
+                cos-backup-probe) [[ "$LAST_BLOCKER" == cos_probe_failed ]] ;;
+                provider-alarms) [[ "$LAST_BLOCKER" == provider_alarm_readback_failed ]] ;;
+                provider-cls-probe) [[ "$LAST_BLOCKER" == cls_probe_failed ]] ;;
+              esac
+            done
+            probe_failure=""
+
+            snapshot_failure=1
+            if run_refresh_phases >/dev/null 2>&1; then exit 86; fi
+            [[ "$LAST_BLOCKER" == runtime_evidence_snapshot_failed ]]
+            snapshot_failure=0
+            bad_snapshot_json=1
+            if publish_runtime_evidence_snapshot >/dev/null 2>&1; then exit 87; fi
+            [[ "$LAST_BLOCKER" == runtime_evidence_snapshot_contract_rejected ]]
+            bad_snapshot_json=0
+            : >"$fixture_root/side-effects"
+            drift_digest=1
+            if publish_runtime_evidence_snapshot >/dev/null 2>&1; then exit 88; fi
+            [[ "$LAST_BLOCKER" == environment_drift_detected && ! -s "$fixture_root/side-effects" ]]
+            if run_refresh_phases >/dev/null 2>&1; then exit 89; fi
+            [[ "$LAST_BLOCKER" == environment_drift_detected && "$(<"$fixture_root/side-effects")" == probe ]]
+            drift_digest=0
             printf '%s\n' RUNTIME_IMAGE_FIXTURE_PASS
             '''
         )
@@ -827,14 +1019,18 @@ def main() -> int:
         'payload.get("notification_test_sent") is False',
         'CLS_PROBE_STATUS=verified',
         'COMPOSE_ARGS=(--project-name deploy --env-file "$COMPOSE_ENV" -f "$runtime_compose")',
-        'docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-saas',
-        '[[ "$new_api_container_id" != "$approved_api_container_id" ]]',
-        '[[ "$new_api_image_id" == "$runtime_api_image_id" ]]',
-        'API_RELOAD_STATUS=ready',
-        'docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-worker',
-        '[[ "$new_worker_container_id" != "$approved_worker_container_id" ]]',
-        '[[ "$new_worker_image_id" == "$runtime_worker_image_id" ]]',
-        'WORKER_RELOAD_STATUS=ready',
+        'EVIDENCE_DIRECTORY="$PRODUCTION_ROOT/runtime-evidence"',
+        'EVIDENCE_MOUNT="/run/jiejing-production-evidence"',
+        'tools/jiejing_runtime_evidence_snapshot.py --check-capability',
+        '"$runtime_api_image_id" python tools/jiejing_runtime_evidence_snapshot.py',
+        'src=$private_dir,dst=/private,readonly',
+        'src=$EVIDENCE_DIRECTORY,dst=/runtime-evidence',
+        '"$approved_api_container_id" == "$before_api"',
+        '"$runtime_api_image_id" == "$before_api_image"',
+        '"$approved_worker_container_id" == "$before_worker"',
+        '"$runtime_worker_image_id" == "$before_worker_image"',
+        'API_RUNTIME_STATUS=unchanged',
+        'WORKER_RUNTIME_STATUS=unchanged',
         'PUBLIC_BASE_URL="https://app.jiejing.shop"',
         '"$PUBLIC_BASE_URL/health"',
         '"$PUBLIC_BASE_URL/health/deep"',
@@ -892,12 +1088,13 @@ def main() -> int:
         "cls_probe_failed",
         "cls_probe_contract_rejected",
         "environment_drift_detected",
-        "api_recreate_failed",
         "api_identity_mismatch",
-        "api_health_failed",
-        "worker_recreate_failed",
         "worker_identity_mismatch",
-        "worker_health_failed",
+        "runtime_evidence_directory_untrusted",
+        "runtime_evidence_mount_untrusted",
+        "runtime_evidence_capability_missing",
+        "runtime_evidence_snapshot_failed",
+        "runtime_evidence_snapshot_contract_rejected",
         "public_readiness_contract_failed",
     )
     missing_failures = [item for item in failure_markers if item not in script]
@@ -908,14 +1105,21 @@ def main() -> int:
         script.index("run_refresh_phases() {") : script.index("\n}\n\nmain()", script.index("run_refresh_phases() {"))
     ]
     if not (
-        refresh_flow.index("run_cos_probe")
+        refresh_flow.index("verify_runtime_evidence_support")
+        < refresh_flow.index("run_cos_probe")
         < refresh_flow.index("run_cls_probe")
-        < refresh_flow.index("reload_api_then_worker")
+        < refresh_flow.index("publish_runtime_evidence_snapshot")
+        < refresh_flow.index("verify_unchanged_runtime")
     ):
-        return fail("COS, CLS and reload phases must be strictly ordered")
+        return fail("capability, COS, CLS, snapshot and identity phases must be strictly ordered")
+    main_flow = script[script.index("main() {"):]
+    if not ("verify_unchanged_runtime ||" in main_flow
+            and main_flow.index("wait_for_public_readiness ||") < main_flow.index("verify_unchanged_runtime ||")
+            < main_flow.index("JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success")):
+        return fail("same-runtime identity must be rechecked after public readiness and before success")
     cls_flow = script[
         script.index("run_cls_probe() {") : script.index(
-            "\n}\n\nrecreate_api", script.index("run_cls_probe() {")
+            "\n}\n\nruntime_evidence_json_verified", script.index("run_cls_probe() {")
         )
     ]
     if not (
@@ -923,25 +1127,14 @@ def main() -> int:
         < cls_flow.index("--verify-provider-cls-probe --apply")
     ):
         return fail("live provider alarm readback must precede the synthetic CLS probe")
-    reload_flow = script[
-        script.index("reload_api_then_worker() {") : script.index(
-            "\n}\n\nrun_refresh_phases", script.index("reload_api_then_worker() {")
-        )
-    ]
-    if not (
-        reload_flow.index("recreate_api")
-        < reload_flow.index("verify_recreated_api")
-        < reload_flow.index("API_RELOAD_STATUS=ready")
-        < reload_flow.index("recreate_worker")
-        < reload_flow.index("verify_recreated_worker")
-        < reload_flow.index("WORKER_RELOAD_STATUS=ready")
-    ):
-        return fail("API health must short-circuit before Worker reload")
-
     forbidden_script = (
         "docker compose down",
         "docker volume rm",
         "docker compose restart",
+        "--force-recreate",
+        "docker restart",
+        "docker stop",
+        "docker kill",
         "rm -rf",
         "set -x",
         "printenv",
@@ -970,8 +1163,8 @@ def main() -> int:
         return fail("captured provider output must fail closed on invalid JSON without being logged")
     if 'echo "$cos_output"' in script or 'echo "$cls_output"' in script:
         return fail("raw provider output must never be emitted")
-    if script.count('-w /app "$runtime_api_image_id" python') != 4:
-        return fail("COS, alarm, CLS and probe-tool checks must use the captured API image")
+    if script.count('-w /app "$runtime_api_image_id" python') != 5:
+        return fail("COS, alarm, CLS, snapshot and probe-tool checks must use the captured API image")
     if '-w /app "$runtime_worker_image_id" python' in script:
         return fail("provider probe tooling must not depend on the Worker image")
 
@@ -986,6 +1179,28 @@ def main() -> int:
         )
         if syntax.returncode != 0:
             return fail("production evidence refresh shell syntax must be valid")
+        no_restart = run_no_restart_fixture(bash)
+        if no_restart.returncode != 0 or b"NO_RESTART_FLOW_PASS" not in no_restart.stdout:
+            return fail("no-restart flow must enforce support and partial-failure boundaries")
+        for mode, valid in (
+            ("capability", {"status": "capable", "contract_version": "jiejing_runtime_evidence_snapshot_v1", "writes_snapshot": False, "secret_exposed": False}),
+            ("snapshot", {"status": "verified", "contract_version": "jiejing_runtime_evidence_snapshot_v1", "evidence_sha256": "a" * 64, "secret_exposed": False}),
+        ):
+            if run_snapshot_json_fixture(bash, mode, json.dumps(valid)).returncode != 0:
+                return fail("exact runtime evidence receipt must pass: " + mode)
+            invalid_packets = [
+                {**valid, "secret_exposed": 0}, {**valid, "secret_exposed": "false"},
+                {**valid, "extra": "SYNTHETIC_VALUE_MUST_NOT_BE_PRINTED"},
+                {**valid, "contract_version": "old"}, {**valid, "status": "blocked"},
+                {key: value for key, value in valid.items() if key != "secret_exposed"},
+            ]
+            invalid_packets.append({**valid, **({"writes_snapshot": 0} if mode == "capability" else {"evidence_sha256": "not-a-hash"})})
+            serialized_invalid = [json.dumps(packet) for packet in invalid_packets]
+            serialized_invalid += ['{"status":"duplicate",' + json.dumps(valid)[1:], '{invalid']
+            for serialized in serialized_invalid:
+                rejected = run_snapshot_json_fixture(bash, mode, serialized)
+                if rejected.returncode == 0 or rejected.stdout:
+                    return fail("runtime evidence receipt must reject malformed/untrusted output silently: " + mode)
         fixture = run_executable_fixture(bash)
         if fixture.returncode != 0:
             fixture_error = fixture.stderr.decode("utf-8", errors="replace").splitlines()
@@ -1479,12 +1694,12 @@ def main() -> int:
         if b"RUNTIME_IMAGE_FIXTURE_PASS" not in runtime_fixture.stdout:
             return fail("production evidence refresh dual-image fixture did not reach completion")
         for identity_check in (
-            '    || ! [[ "$new_api_image_id" == "$runtime_api_image_id" ]]; then',
-            '    || ! [[ "$new_worker_image_id" == "$runtime_worker_image_id" ]]; then',
+            '"$approved_api_container_id" == "$before_api" && "$runtime_api_image_id" == "$before_api_image"',
+            '"$approved_worker_container_id" == "$before_worker" && "$runtime_worker_image_id" == "$before_worker_image"',
         ):
             if script.count(identity_check) != 1:
-                return fail("recreated service image check must be unique: " + identity_check.strip())
-            mutated_script = script.replace(identity_check, "    || false; then", 1)
+                return fail("unchanged service identity check must be unique: " + identity_check.strip())
+            mutated_script = script.replace(identity_check, "1 == 1", 1)
             mutation_fixture = run_runtime_image_fixture(bash, mutated_script)
             if mutation_fixture.returncode == 0:
                 return fail("dual-image fixture did not detect deleted image check: " + identity_check.strip())

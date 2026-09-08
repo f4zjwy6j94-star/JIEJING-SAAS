@@ -36,6 +36,11 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 PHASE3_BUNDLE_FILES = {
+    "jiejing_saas/runtime_evidence.py",
+    "tools/jiejing_runtime_evidence_snapshot.py",
+    "tools/test_jiejing_runtime_evidence.py",
+    "docs/superpowers/specs/2026-09-08-production-evidence-no-restart-design.md",
+    "docs/superpowers/plans/2026-09-08-production-evidence-no-restart-implementation-plan.md",
     "deploy/jiejing-production-evidence-auto-refresh.sh",
     "deploy/systemd/jiejing-production-evidence-refresh.service",
     "deploy/systemd/jiejing-production-evidence-refresh.timer",
@@ -799,6 +804,7 @@ def validate_remote_stdout_contract() -> list[str]:
             "PRIVATE_ENV_NORMALIZATION_REQUIRED=1",
             "PRIVATE_ENV_NORMALIZATION_PLANNED=1",
             "PRIVATE_ENV_NORMALIZATION_APPLIED=0",
+            "EVIDENCE_SNAPSHOT_INITIALIZED=0",
         ]
     )
     try:
@@ -811,6 +817,7 @@ def validate_remote_stdout_contract() -> list[str]:
         "private_env_normalization_required": True,
         "private_env_normalization_planned": True,
         "private_env_normalization_applied": False,
+        "evidence_snapshot_initialized": False,
     }
     if parsed != expected:
         failures.append(f"dry-run stdout contract parsed incorrectly:{parsed}")
@@ -834,6 +841,7 @@ def validate_remote_stdout_contract() -> list[str]:
         .replace("CANDIDATE_RELEASE_PERSISTED=0", "CANDIDATE_RELEASE_PERSISTED=1")
         .replace("ACTIVE_SWITCHED=0", "ACTIVE_SWITCHED=1")
         .replace("PRIVATE_ENV_NORMALIZATION_APPLIED=0", "PRIVATE_ENV_NORMALIZATION_APPLIED=1")
+        .replace("EVIDENCE_SNAPSHOT_INITIALIZED=0", "EVIDENCE_SNAPSHOT_INITIALIZED=1")
     )
     try:
         parsed_apply = module.parse_remote_stdout_contract(apply_output, "apply", source_sha)
@@ -844,6 +852,7 @@ def validate_remote_stdout_contract() -> list[str]:
             parsed_apply["candidate_release_persisted"]
             and parsed_apply["active_switched"]
             and parsed_apply["private_env_normalization_applied"]
+            and parsed_apply.get("evidence_snapshot_initialized") is True
         ):
             failures.append(f"apply stdout contract parsed incorrectly:{parsed_apply}")
     try:
@@ -866,6 +875,16 @@ def validate_remote_stdout_contract() -> list[str]:
         pass
     else:
         failures.append("apply stdout contract with conflicting dry-run receipt was accepted")
+    for broken in (
+        apply_output.replace("EVIDENCE_SNAPSHOT_INITIALIZED=1", ""),
+        apply_output.replace("EVIDENCE_SNAPSHOT_INITIALIZED=1", "EVIDENCE_SNAPSHOT_INITIALIZED=0"),
+        apply_output + "\nEVIDENCE_SNAPSHOT_INITIALIZED=1",
+    ):
+        try:
+            module.parse_remote_stdout_contract(broken, "apply", source_sha)
+        except ValueError:
+            continue
+        failures.append("apply without one successful snapshot initialization was accepted")
     return failures
 
 
@@ -1913,6 +1932,108 @@ def validate_missing_bash_fails_whole_test() -> list[str]:
     return []
 
 
+def validate_runtime_evidence_bootstrap() -> list[str]:
+    """The first candidate must have a verified snapshot before it starts."""
+    apply = read(APPLY)
+    compose = read(COMPOSE)
+    failures: list[str] = []
+    if 'current_stage="initialize_runtime_evidence_snapshot"' not in apply:
+        return ["candidate startup has no runtime evidence initialization"]
+    init = apply.index('current_stage="initialize_runtime_evidence_snapshot"')
+    if not apply.index('if [[ "$DRY_RUN" == "1" ]]') < init < apply.index('current_stage="start_candidate_api"'):
+        failures.append("snapshot initialization must be after dry-run exit and before API start")
+    if compose.count('JIEJING_RUNTIME_EVIDENCE_FILE: "/run/jiejing-production-evidence/current.json"') != 2:
+        failures.append("both API and Worker must select the fixed runtime evidence file")
+    if compose.count('/opt/jiejing-production/runtime-evidence:/run/jiejing-production-evidence:ro') != 2:
+        failures.append("both services must mount the evidence directory read-only")
+    block = apply[apply.index("runtime_evidence_result_verified() {"):apply.index("\nverify_runtime_labels_and_health() {")]
+    good = {"status": "prepared", "contract_version": "jiejing_runtime_evidence_snapshot_v1", "writes_snapshot": False, "secret_exposed": False}
+    fixtures = [
+        (json.dumps(good), True),
+        ('{"status":"blocked",' + json.dumps(good)[1:], False),
+        (json.dumps({**good, "secret_exposed": "false"}), False),
+        (json.dumps({**good, "writes_snapshot": 0}), False),
+        (json.dumps({**good, "unexpected": True}), False),
+        ("{invalid", False),
+    ]
+    import shlex
+    bash = require_bash_contract()
+    for payload, expected in fixtures:
+        completed = subprocess.run([bash, "-s"], input=(block + "\nprintf '%s' " + shlex.quote(payload) + " | runtime_evidence_result_verified prepared\n").encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        if (completed.returncode == 0) != expected:
+            failures.append("runtime evidence bootstrap JSON contract accepted invalid or rejected valid result")
+    # Execute the real bootstrap. Only the process boundaries are replaced:
+    # no Docker daemon, private env, provider, or production path is accessed.
+    bootstrap_fixture = r'''
+set -euo pipefail
+exec 3>&1
+candidate_app=/candidate
+private_dir=/private-source
+candidate_api_image_id=sha256:fixture-api
+candidate_worker_image_id=sha256:fixture-worker
+python3() {
+  if [[ "$1" == /candidate/tools/jiejing_runtime_evidence_snapshot.py ]]; then
+    [[ "$*" == '/candidate/tools/jiejing_runtime_evidence_snapshot.py --prepare-directory --output-dir /opt/jiejing-production/runtime-evidence' ]] || return 91
+    echo PREPARE >&3
+    [[ "$TEST_CASE" != prepare_exit ]] || return 7
+    if [[ "$TEST_CASE" == prepare_invalid ]]; then echo '{}'; return 0; fi
+    echo '{"status":"prepared","contract_version":"jiejing_runtime_evidence_snapshot_v1","writes_snapshot":false,"secret_exposed":false}'
+  else
+    command python3 "$@"
+  fi
+}
+docker() {
+  case "$*" in
+    'run --rm --network none -w /app sha256:fixture-api python tools/jiejing_runtime_evidence_snapshot.py --check-capability')
+      echo API_CAPABILITY >&3
+      [[ "$TEST_CASE" != api_exit ]] || return 8
+      if [[ "$TEST_CASE" == api_invalid ]]; then echo '{}'; return 0; fi
+      echo '{"status":"capable","contract_version":"jiejing_runtime_evidence_snapshot_v1","writes_snapshot":false,"secret_exposed":false}'
+      ;;
+    'run --rm --network none -w /app sha256:fixture-worker python tools/jiejing_runtime_evidence_snapshot.py --check-capability')
+      echo WORKER_CAPABILITY >&3
+      [[ "$TEST_CASE" != worker_exit ]] || return 9
+      if [[ "$TEST_CASE" == worker_invalid ]]; then echo '{}'; return 0; fi
+      echo '{"status":"capable","contract_version":"jiejing_runtime_evidence_snapshot_v1","writes_snapshot":false,"secret_exposed":false}'
+      ;;
+    'run --rm --network none --mount type=bind,src=/private-source,dst=/private,readonly --mount type=bind,src=/opt/jiejing-production/runtime-evidence,dst=/runtime-evidence -w /app sha256:fixture-api python tools/jiejing_runtime_evidence_snapshot.py --env-file /private/jiejing-saas.production.env --output-dir /runtime-evidence')
+      echo SNAPSHOT >&3
+      [[ "$TEST_CASE" != snapshot_exit ]] || return 10
+      case "$TEST_CASE" in
+        snapshot_invalid) echo '{}';;
+        snapshot_extra) echo '{"status":"verified","contract_version":"jiejing_runtime_evidence_snapshot_v1","secret_exposed":false,"evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":1}';;
+        snapshot_bad_hash) echo '{"status":"verified","contract_version":"jiejing_runtime_evidence_snapshot_v1","secret_exposed":false,"evidence_sha256":"bad"}';;
+        snapshot_duplicate) echo '{"status":"blocked","status":"verified","contract_version":"jiejing_runtime_evidence_snapshot_v1","secret_exposed":false,"evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}';;
+        snapshot_nonbool) echo '{"status":"verified","contract_version":"jiejing_runtime_evidence_snapshot_v1","secret_exposed":0,"evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}';;
+        *) echo '{"status":"verified","contract_version":"jiejing_runtime_evidence_snapshot_v1","secret_exposed":false,"evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}';;
+      esac
+      ;;
+    *) echo UNEXPECTED_DOCKER_ARGUMENTS >&3; return 92;;
+  esac
+}
+initialize_runtime_evidence_snapshot
+echo CANDIDATE_MAY_START
+'''
+    phases = ["PREPARE", "API_CAPABILITY", "WORKER_CAPABILITY", "SNAPSHOT"]
+    bootstrap_cases = {
+        "success": 4, "prepare_exit": 1, "prepare_invalid": 1,
+        "api_exit": 2, "api_invalid": 2,
+        "worker_exit": 3, "worker_invalid": 3,
+        "snapshot_exit": 4, "snapshot_invalid": 4, "snapshot_extra": 4,
+        "snapshot_bad_hash": 4, "snapshot_duplicate": 4, "snapshot_nonbool": 4,
+    }
+    for case, phase_count in bootstrap_cases.items():
+        script = block + "\nTEST_CASE=" + shlex.quote(case) + "\n" + bootstrap_fixture
+        completed = subprocess.run([bash, "-s"], input=script.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        output = completed.stdout.decode("utf-8", errors="replace").splitlines()
+        expected = phases[:phase_count]
+        if case == "success":
+            expected += ["EVIDENCE_SNAPSHOT_INITIALIZED=1", "CANDIDATE_MAY_START"]
+        if output != expected or (completed.returncode == 0) != (case == "success"):
+            failures.append(f"runtime evidence bootstrap ordering/failure boundary failed:{case}")
+    return failures
+
+
 def main(
     bash_resolver=shutil.which,
     *,
@@ -1926,6 +2047,9 @@ def main(
         prerequisite_failures = validate_missing_bash_fails_whole_test()
         if prerequisite_failures:
             return fail("; ".join(prerequisite_failures))
+    evidence_failures = validate_runtime_evidence_bootstrap()
+    if evidence_failures:
+        return fail("; ".join(evidence_failures))
     try:
         client = read(CLIENT)
         apply = read(APPLY)

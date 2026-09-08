@@ -523,6 +523,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   printf 'PREVIOUS_RELEASE=%s\n' "$previous_release"
   printf '%s\n' "ACTIVE_SWITCHED=0"
   printf '%s\n' "PRIVATE_ENV_NORMALIZATION_APPLIED=0"
+  printf '%s\n' "EVIDENCE_SNAPSHOT_INITIALIZED=0"
   exit 0
 fi
 
@@ -727,6 +728,56 @@ capture_candidate_runtime_images() {
   [[ "$candidate_worker_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
   docker image inspect "$candidate_api_image_id" >/dev/null 2>&1 || return 1
   docker image inspect "$candidate_worker_image_id" >/dev/null 2>&1 || return 1
+}
+
+runtime_evidence_result_verified() {
+  python3 -c '
+import json, re, sys
+def unique_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate_key")
+        result[key] = value
+    return result
+try:
+    data = json.load(sys.stdin, object_pairs_hook=unique_pairs)
+except (ValueError, OSError, UnicodeError):
+    raise SystemExit(1)
+mode = sys.argv[1]
+base = isinstance(data, dict) and data.get("contract_version") == "jiejing_runtime_evidence_snapshot_v1" and data.get("secret_exposed") is False
+if mode in {"prepared", "capable"}:
+    valid = base and set(data) == {"status", "contract_version", "writes_snapshot", "secret_exposed"} and data.get("status") == mode and data.get("writes_snapshot") is False
+else:
+    valid = base and set(data) == {"status", "contract_version", "evidence_sha256", "secret_exposed"} and data.get("status") == "verified" and isinstance(data.get("evidence_sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", data["evidence_sha256"]) is not None
+raise SystemExit(0 if valid else 1)
+' "$1"
+}
+
+initialize_runtime_evidence_snapshot() {
+  local evidence_result image
+  local evidence_directory="/opt/jiejing-production/runtime-evidence"
+  # Preparation validates existing paths; it never chmods an untrusted target.
+  evidence_result="$(python3 "$candidate_app/tools/jiejing_runtime_evidence_snapshot.py" \
+    --prepare-directory --output-dir "$evidence_directory" 2>/dev/null)" || return 1
+  runtime_evidence_result_verified prepared <<<"$evidence_result" || return 1
+  unset evidence_result
+  for image in "$candidate_api_image_id" "$candidate_worker_image_id"; do
+    evidence_result="$(docker run --rm --network none -w /app "$image" \
+      python tools/jiejing_runtime_evidence_snapshot.py --check-capability 2>/dev/null)" || return 1
+    runtime_evidence_result_verified capable <<<"$evidence_result" || return 1
+    unset evidence_result
+  done
+  # Only the exact candidate image exports already-recorded evidence. No probe,
+  # live provider, environment rewrite, or deployment-time success timestamp.
+  evidence_result="$(docker run --rm --network none \
+    --mount "type=bind,src=$private_dir,dst=/private,readonly" \
+    --mount "type=bind,src=$evidence_directory,dst=/runtime-evidence" \
+    -w /app "$candidate_api_image_id" python tools/jiejing_runtime_evidence_snapshot.py \
+    --env-file /private/jiejing-saas.production.env --output-dir /runtime-evidence 2>/dev/null)" || return 1
+  runtime_evidence_result_verified verified <<<"$evidence_result" || return 1
+  unset evidence_result
+  printf '%s\n' "EVIDENCE_SNAPSHOT_INITIALIZED=1"
 }
 
 verify_runtime_labels_and_health() {
@@ -1137,6 +1188,8 @@ mutation_started=1
 build_candidate_images_with_retry
 current_stage="capture_candidate_runtime_images"
 capture_candidate_runtime_images
+current_stage="initialize_runtime_evidence_snapshot"
+initialize_runtime_evidence_snapshot
 current_stage="start_candidate_api"
 "${candidate_compose[@]}" up -d --no-deps jiejing-saas
 wait_container_healthy deploy-jiejing-saas-1 60

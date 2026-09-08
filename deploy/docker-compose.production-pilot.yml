@@ -36,9 +36,11 @@ services:
       JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}/billing/domestic/wechat-pay/refund-notify"
       JIEJING_TURNSTILE_ALLOWED_HOSTNAMES: "${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_VAULT_TOKEN_FILE: "/run/secrets/jiejing-vault-token"
+      JIEJING_RUNTIME_EVIDENCE_FILE: "/run/jiejing-production-evidence/current.json"
     volumes:
       - jiejing_production_data:/data
       - jiejing_production_media:/var/lib/jiejing/media-assets
+      - /opt/jiejing-production/runtime-evidence:/run/jiejing-production-evidence:ro
       - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     networks:
       - jiejing_app
@@ -82,9 +84,11 @@ services:
       JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}/billing/domestic/wechat-pay/refund-notify"
       JIEJING_TURNSTILE_ALLOWED_HOSTNAMES: "${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_VAULT_TOKEN_FILE: "/run/secrets/jiejing-vault-token"
+      JIEJING_RUNTIME_EVIDENCE_FILE: "/run/jiejing-production-evidence/current.json"
     volumes:
       - jiejing_production_data:/data
       - jiejing_production_media:/var/lib/jiejing/media-assets
+      - /opt/jiejing-production/runtime-evidence:/run/jiejing-production-evidence:ro
       - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     networks:
       - jiejing_app

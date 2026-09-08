@@ -74,7 +74,15 @@ python tools/jiejing_production_deploy.py `
 
 维护锁释放后，部署手工启动一次 oneshot，并以本次 `InvocationID` 对应 journal 中的 `JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success`、service `Result=success`、`ExecMainStatus=0` 为真实成功条件。随后才启动 timer，并确认 enabled、active 且 `NextElapseUSecRealtime` 有值。
 
-oneshot 会分别捕获当前 SaaS API 与 Worker 的实际 image ID；两个 ID 可以不同，但必须各自为可检查的 `sha256`，且各自的 image reference、Compose project/service/config/workdir/environment-file label 和运行状态都与 active release 精确一致。COS、CLS 和探针工具存在性检查明确只运行在已验证的 API 镜像中；后续强制重建 API 只能恢复原 API ID，重建 Worker 只能恢复原 Worker ID，任一缺失、漂移或交叉交换都会 fail-closed。
+oneshot 会分别捕获当前 SaaS API 与 Worker 的实际 image ID；两个 ID 可以不同，但必须各自为可检查的 `sha256`，且各自的 image reference、Compose project/service/config/workdir/environment-file label 和运行状态都与 active release 精确一致。COS、CLS 和探针工具存在性检查明确只运行在已验证的 API 镜像中。证据快照版本不再例行重建 API/Worker：探针前校验双镜像协议和固定只读目录挂载，全部探针成功后导出六项证据；刷新后及公共健康等待后均要求原容器 ID、原镜像及挂载未变，任一缺失、漂移或交叉交换都会 fail-closed。
+
+## 证据快照首次迁移与日常刷新（2026-09-08）
+
+候选构建并取得精确 API/Worker 镜像后，必须先验证或创建 `/opt/jiejing-production/runtime-evidence`（`root:root 0755`），校验双镜像协议，再以候选 API 镜像、无网络、私有目录只读挂载生成 `current.json`（`root:root 0644`）。只有固定脱敏回执校验通过才输出 `EVIDENCE_SNAPSHOT_INITIALIZED=1` 并启动候选服务；它只是导出已有真实证据，不执行探针、不更新成功时间。dry-run 对应标记为 `0`，不创建证据目录或快照。现有目录权限不可信时停止，不自动修复覆盖。
+
+API/Worker 将整个目录只读挂到 `/run/jiejing-production-evidence`，使用固定 `JIEJING_RUNTIME_EVIDENCE_FILE`；不能改成单文件挂载，否则原子替换后会仍读到旧 inode。备份与监控每次构造从完整快照读取；显式配置后文件缺失、损坏、字段不符或权限不可信均视为证据不可用，不回落进程旧 env。旧镜像没有配置该选择器时继续使用旧 env，便于回滚。
+
+日常保留原探针、锁、时效与环境漂移保护，探针成功写回原 env 后才原子发布六项非秘密快照。env 与快照不是双文件事务：中途失败保留真实已取得的 env 证据，不伪造整轮成功；rename 前失败保留旧快照，rename 后目录 fsync 失败可能已可见完整新文件，但仍不报告成功或保证掉电持久性。应用回滚保留 env、快照、数据库与恢复材料，不删除或倒退真实证据。此方案减少日常维护重启，不承诺代码发布零停机或所有历史502已解决。
 
 安装后必须确认 service 与 timer 的实际属性都严格返回单行 `DropInPaths=`；缺少该属性或返回任何路径都会 fail-closed，拒绝来自 `/etc`、`/run` 或 `/usr/lib` 的旧 drop-in 覆盖固定 `ExecStart` 与沙箱合同。生产 apply 的 SSH 客户端超时预算固定为 `3600` 秒，以覆盖最长 20 分钟 oneshot、应用健康等待与镜像构建余量。
 
