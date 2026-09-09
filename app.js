@@ -16780,6 +16780,12 @@ function hydrateSaasProtectedStateFromCache() {
       snapshot = { ...snapshot, listing_composer_draft: null, listing_source_mode: "" };
       localStorage.setItem(saasProtectedSnapshotStorageKey(), JSON.stringify(snapshot));
     }
+    const requestedProjectId = saasMerchantProjectRouteId();
+    if (requestedProjectId && saasCurrentListingProjectIdentity(state.saasListingComposerDraft)?.key !== requestedProjectId) {
+      // Keep another project's detached draft and pending checkpoint, but never
+      // let its cached active editor replace an explicitly requested URL.
+      state.saasListingComposerDraft = null;
+    }
     state.saasListingSourceMode = publicRuntimeText(snapshot.listing_source_mode || state.saasListingSourceMode || "").slice(0, 80);
     state.activeMediaDraft = publicRuntimeText(snapshot.active_media_draft || state.activeMediaDraft || "").slice(0, 160);
     state.mediaTaskEntry = snapshot.media_task_entry === "single" ? "single" : state.mediaTaskEntry || "project";
@@ -30151,10 +30157,18 @@ async function refreshSaasState(options = {}) {
       }).map((entry) => [entry.project_id, entry]),
     );
     pruneSaasDetachedListingProjectDraftsAgainstBackend();
-    restoreSaasListingComposerDraftFromBackendReports({
-      preferBackendLatest: restoredCachedState,
-      restoreDetachedDraft: restoredCachedState,
-    });
+    const activeListingCloudRecord = saasListingCloudRecord();
+    const listingRouteProjectId = saasMerchantProjectRouteId();
+    const hasUnsettledListingEdits = activeListingCloudRecord &&
+      (!listingRouteProjectId || activeListingCloudRecord.context.identity.key === listingRouteProjectId) && (activeListingCloudRecord.dirty ||
+      activeListingCloudRecord.pending || activeListingCloudRecord.conflict || activeListingCloudRecord.write);
+    if (!hasUnsettledListingEdits) {
+      restoreSaasListingComposerDraftFromBackendReports({
+        preferBackendLatest: restoredCachedState,
+        restoreDetachedDraft: restoredCachedState,
+      });
+    }
+    restoreSaasFreshListingCloudProjection();
     restoreSaasExpiredListingGeneration(me, stores.stores);
     const liveConfirmations = confirmations.confirmations || [];
     await verifySaasUnpublishedDraftSaveConfirmations(liveConfirmations);
@@ -33355,6 +33369,23 @@ function applySaasListingCloudFields(record) {
   // Do not clear an existing vision/facts gate, nor invent new publish rights.
   syncSaasListingCloudEditorFields();
   saveSaasProtectedStateSnapshot();
+}
+
+function restoreSaasFreshListingCloudProjection() {
+  const record = saasListingCloudRecord();
+  const baseId = record && saasListingCloudBaseReport(record.context)?.report_id;
+  if (!record || !record.loaded || record.observedRefreshGeneration !== saasStateRefreshGeneration ||
+      record.observedBaseReportId !== baseId || record.baseReportId !== baseId ||
+      record.status !== "saved" || record.dirty || record.pending || record.conflict || record.read || record.write) return false;
+  const receipt = saasListingCloudReceipt(record.receipt, record.context);
+  if (!receipt || receipt.revision !== record.revision || receipt.base_report_id !== baseId ||
+      JSON.stringify(receipt.fields) !== JSON.stringify(record.fields) ||
+      JSON.stringify(receipt.merchant_edited_fields) !== JSON.stringify(record.edited)) return false;
+  // Core loading can read this authenticated checkpoint before extended reports
+  // rebuild the draft. Restore only that current receipt, never generated copy
+  // whose separate checkpoint adoption is still pending.
+  applySaasListingCloudFields(record);
+  return true;
 }
 
 function syncSaasListingCloudEditorFields() {

@@ -43,12 +43,22 @@ const rewriteReport = { ...originalReport, report_id: "rewrite-generated-report"
       buyer_copy_rewrite: { contract_version: "listing_buyer_copy_rewrite_v1", previous_fields: previousFields, fields: nextFields,
         expected_base_report_id: "rewrite-original-report", expected_checkpoint_revision: 1,
         previous_merchant_edited_fields: ["title", "selling_points", "description", "price"], merchant_edited_fields: ["price"] } } } } };
-let server, browser, base, head, currentBase, requests, unexpected, generationHandler, generationStatusHandler, checkpointHandler, supersededIds;
-function reset() { head = null; currentBase = originalReport; requests = []; unexpected = []; generationHandler = null; generationStatusHandler = null; checkpointHandler = null; supersededIds = []; }
+let server, browser, base, head, currentBase, requests, unexpected, generationHandler, generationStatusHandler, checkpointHandler, supersededIds, refreshFixture;
+function reset() { head = null; currentBase = originalReport; requests = []; unexpected = []; generationHandler = null; generationStatusHandler = null; checkpointHandler = null; supersededIds = []; refreshFixture = null; }
 function json(res, status, body) { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body)); }
 function checkpoint(fields, revision, mutation, reportId = currentBase.report_id) { return { checkpoint_id: `rewrite-edit-${revision}`, revision,
   mutation_id: mutation, company_id: companyId, store_id: storeId, listing_project_identity: identity, base_report_id: reportId,
   fields: { ...fields }, merchant_edited_fields: ["price"], saved_at: "2026-09-09T03:00:00Z", source: "merchant_edit" }; }
+function reloadRewriteReport() {
+  const report = structuredClone(rewriteReport);
+  report.report.listing_handoff.listing_fields.buyer_copy_rewrite.expected_checkpoint_revision = 7;
+  return report;
+}
+function reloadPreviousCheckpoint() {
+  const saved = checkpoint(previousFields, 7, "previous-copy-before-reload");
+  saved.merchant_edited_fields = [...copyKeys, "price"];
+  return saved;
+}
 function deferred() { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; }
 function unregisteredResult(operationId) { return { contract_version: "listing_generation_operation_v1", operation_id: operationId,
   task_id: "unregistered-task", company_id: companyId, user_id: userId, store_id: storeId, listing_project_identity: identity,
@@ -78,6 +88,24 @@ before(async () => {
       const [file, type] = staticAssets[url.pathname]; res.writeHead(200, { "content-type": type }); return res.end(fs.readFileSync(path.join(root, file)));
     }
     if (req.method === "GET" && url.pathname === `/stores/${storeId}/merchant-project-status`) return json(res, 200, { merchant_project_status: null });
+    if (req.method === "GET" && refreshFixture?.otherCheckpoint?.path === url.pathname) return json(res, 200, refreshFixture.otherCheckpoint.body);
+    if (refreshFixture && ![checkpointPath, generationPath, generationStatusPath].includes(url.pathname)) {
+      requests.push({ method: req.method, path: url.pathname });
+      if (req.method !== "GET" && !(req.method === "POST" && url.pathname === "/ai-ceo/chat-history/sync")) {
+        unexpected.push(`${req.method} ${url.pathname}`); return json(res, 404, {});
+      }
+      if (url.pathname === "/billing/plans") await refreshFixture.extendedHold.promise;
+      let body = {};
+      if (url.pathname === "/me") body = { identity: { company_id: companyId, user_id: userId, role: "owner" },
+        user: { user_id: userId, email: "rewrite@example.invalid" }, company: { company_id: companyId } };
+      if (url.pathname === "/permissions/me") body = { permissions: ["view_report", "create_task"], roles: ["owner"] };
+      if (url.pathname === "/stores") body = { stores: [{ store_id: storeId, company_id: companyId, platform: "ebay", marketplace: "EBAY_US" }] };
+      if (url.pathname === "/connections") body = { connections: [{ connection_id: "rewrite-connection", store_id: storeId, platform: "ebay", status: "authorized" }] };
+      if (url.pathname === "/reports") body = { reports: refreshFixture.reports || [currentBase] };
+      if (url.pathname === "/health") body = { status: "ok" };
+      if (url.pathname.startsWith("/ai-ceo/chat-history")) body = { ai_ceo_chat_history: { scope: "account", cross_store: true, turns: [] } };
+      return json(res, 200, body);
+    }
     if (![checkpointPath, generationPath, generationStatusPath].includes(url.pathname)) { unexpected.push(`${req.method} ${url.pathname}`); return json(res, 404, {}); }
     let raw = ""; for await (const chunk of req) raw += chunk;
     const request = { method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), body: raw ? JSON.parse(raw) : null };
@@ -1408,6 +1436,234 @@ test("late generation and adoption responses cannot change a different company, 
       assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
     } finally { release.resolve(); await first.context.close(); }
   }
+});
+
+test("a full reload keeps an adopted cloud rewrite after late extended account refresh", async () => {
+  reset(); head = reloadPreviousCheckpoint();
+  const first = await device();
+  const hold = deferred();
+  let refreshing;
+  try {
+    assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), previousFields.title);
+    currentBase = reloadRewriteReport(); head = checkpoint(nextFields, 8, "adopted-rewrite-before-reload");
+    refreshFixture = { extendedHold: hold }; requests = [];
+    await first.page.reload();
+    refreshing = first.page.evaluate(async (base) => {
+      window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasDemoBootstrapEnabled = false; state.saasApiBase = base; state.view = "product";
+      bindEvents(); await refreshSaasState({ silent: true });
+    }, base);
+    try {
+      await first.page.waitForFunction((title) => document.querySelector('[data-saas-listing-draft-field="title"]')?.value === title &&
+        document.querySelector('[data-saas-listing-cloud-status]')?.textContent.includes("已云端保存"), nextFields.title, { timeout: 5000 });
+    } catch (error) {
+      console.log(JSON.stringify({ reloadFixture: await first.page.evaluate(() => ({ view: state.view, ready: state.saasProtectedStateReady,
+        cached: state.saasProtectedStateFromCache, error: state.saasError, title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+        status: document.querySelector('[data-saas-listing-cloud-status]')?.textContent })), requests, errors: first.errors }));
+      throw error;
+    }
+    hold.resolve(); await refreshing;
+    for (const key of copyKeys) assert.equal(await first.page.locator(`[data-saas-listing-draft-field="${key}"]`).inputValue(), nextFields[key], key);
+    assert.deepEqual(await first.page.evaluate(() => saasListingCloudFields(state.saasListingComposerDraft.fields)), nextFields);
+    assert.deepEqual(await first.page.evaluate(() => {
+      const packet = state.saasListingComposerDraft.merchant_product_fact_packet;
+      return { facts: packet.merchant_confirmed_facts, simulation: packet.simulation_only, vision: packet.vision_contract_version || "" };
+    }), { facts: factPacket.merchant_confirmed_facts, simulation: true, vision: "" });
+    assert.match(await first.page.locator('[data-saas-listing-cloud-status]').innerText(), /已云端保存/);
+    await first.page.getByText("查看重写前文案", { exact: true }).click();
+    assert.match(await first.page.locator('[data-saas-listing-copy-history]').innerText(), /商家原来的中文商品介绍/);
+    assert.equal(requests.filter((request) => request.path === generationPath && request.method === "POST").length, 0);
+    assert.equal(requests.filter((request) => request.path === checkpointPath && request.method === "POST").length, 0);
+    assert.equal(requests.filter((request) => request.path === checkpointPath && request.method === "GET").length, 1,
+      "late report rendering reuses its authenticated receipt without another read");
+    assert.equal(head.revision, 8);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { hold.resolve(); if (refreshing) await refreshing.catch(() => {}); await first.context.close(); }
+});
+
+test("a checkpoint arriving after extended account refresh still restores the adopted rewrite", async () => {
+  reset(); head = reloadPreviousCheckpoint();
+  const first = await device();
+  const heldRead = deferred(), releaseRead = deferred(), extended = deferred();
+  let refreshing;
+  try {
+    currentBase = reloadRewriteReport(); head = checkpoint(nextFields, 8, "adopted-rewrite-before-reload");
+    checkpointHandler = async (request) => {
+      if (request.method === "GET") { heldRead.resolve(); await releaseRead.promise; }
+      return false;
+    };
+    refreshFixture = { extendedHold: extended }; requests = []; extended.resolve();
+    await first.page.reload();
+    refreshing = first.page.evaluate(async (base) => {
+      window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasDemoBootstrapEnabled = false; state.saasApiBase = base; state.view = "product";
+      bindEvents(); await refreshSaasState({ silent: true });
+    }, base);
+    await heldRead.promise; await refreshing;
+    assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), previousFields.title,
+      "a generated report alone is not checkpoint adoption proof");
+    releaseRead.resolve();
+    await first.page.waitForFunction((title) => document.querySelector('[data-saas-listing-draft-field="title"]')?.value === title &&
+      document.querySelector('[data-saas-listing-cloud-status]')?.textContent.includes("已云端保存"), nextFields.title);
+    for (const key of copyKeys) assert.equal(await first.page.locator(`[data-saas-listing-draft-field="${key}"]`).inputValue(), nextFields[key], key);
+    assert.deepEqual(await first.page.evaluate(() => saasListingCloudFields(state.saasListingComposerDraft.fields)), nextFields);
+    assert.equal(requests.filter((request) => request.path === generationPath || request.method === "POST" && request.path === checkpointPath).length, 0);
+    assert.equal(head.revision, 8);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { releaseRead.resolve(); extended.resolve(); if (refreshing) await refreshing.catch(() => {}); await first.context.close(); }
+});
+
+test("editing an adopted rewrite during extended refresh keeps the merchant's unsaved text", async () => {
+  reset(); head = reloadPreviousCheckpoint();
+  const first = await device();
+  const hold = deferred(); let refreshing;
+  try {
+    currentBase = reloadRewriteReport(); head = checkpoint(nextFields, 8, "adopted-rewrite-before-reload");
+    refreshFixture = { extendedHold: hold }; requests = [];
+    await first.page.reload();
+    refreshing = first.page.evaluate(async (base) => {
+      window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasDemoBootstrapEnabled = false; state.saasApiBase = base; state.view = "product";
+      bindEvents(); await refreshSaasState({ silent: true });
+    }, base);
+    await first.page.waitForFunction((title) => document.querySelector('[data-saas-listing-draft-field="title"]')?.value === title &&
+      document.querySelector('[data-saas-listing-cloud-status]')?.textContent.includes("已云端保存"), nextFields.title);
+    await first.page.locator('[data-saas-listing-draft-field="title"]').fill("Merchant editing during account loading");
+    hold.resolve(); await refreshing;
+    assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Merchant editing during account loading");
+    assert.equal(requests.filter((request) => request.path === generationPath).length, 0);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { hold.resolve(); if (refreshing) await refreshing.catch(() => {}); await first.context.close(); }
+});
+
+test("newer facts arriving during merchant editing retain local copy and expose a checkpoint conflict", async () => {
+  reset(); head = reloadPreviousCheckpoint();
+  const first = await device();
+  const hold = deferred(); let refreshing;
+  const newerFacts = { ...originalReport, report_id: "newer-facts-report", report_type: "merchant.product_facts",
+    created_at: "2026-09-09T04:00:00Z", runtime_run_id: "merchant_product_facts",
+    report: { listing_project_identity: identity, merchant_product_fact_packet: { ...factPacket,
+      merchant_confirmed_facts: { ...factPacket.merchant_confirmed_facts, material: "Steel" } } } };
+  try {
+    currentBase = reloadRewriteReport(); head = checkpoint(nextFields, 8, "adopted-rewrite-before-reload");
+    refreshFixture = { extendedHold: hold, reports: [newerFacts, currentBase] }; requests = [];
+    await first.page.reload();
+    refreshing = first.page.evaluate(async (base) => {
+      window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasDemoBootstrapEnabled = false; state.saasApiBase = base; state.view = "product";
+      bindEvents(); await refreshSaasState({ silent: true });
+    }, base);
+    await first.page.waitForFunction((title) => document.querySelector('[data-saas-listing-draft-field="title"]')?.value === title &&
+      document.querySelector('[data-saas-listing-cloud-status]')?.textContent.includes("已云端保存"), nextFields.title);
+    await first.page.locator('[data-saas-listing-draft-field="title"]').fill("Local title awaiting fact review");
+    currentBase = newerFacts; hold.resolve(); await refreshing;
+    await first.page.waitForFunction(() => document.querySelector('[data-saas-listing-cloud-status]')?.textContent.includes("检测到其他更新"));
+    assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Local title awaiting fact review");
+    assert.doesNotMatch(await first.page.locator('[data-saas-listing-cloud-status]').innerText(), /已云端保存/);
+    assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.model_generated), false);
+    assert.equal(requests.filter((request) => request.path === generationPath || request.path === checkpointPath && request.method === "POST").length, 0);
+    assert.equal(head.revision, 8);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { hold.resolve(); if (refreshing) await refreshing.catch(() => {}); await first.context.close(); }
+});
+
+test("fresh receipt projection rejects stale, unsettled, mismatched and cross-scope proof", async () => {
+  reset(); currentBase = reloadRewriteReport(); head = checkpoint(nextFields, 8, "adopted-rewrite-before-reload");
+  const first = await device(currentBase);
+  try {
+    const outcomes = await first.page.evaluate(({ previousFields }) => {
+      const draft = structuredClone(state.saasListingComposerDraft), reports = state.saasReports;
+      const identity = { ...state.saasIdentity }, company = { ...state.saasCompany }, user = { ...state.saasUser };
+      const stores = state.saasStores, original = saasListingCloudRecord(), generation = saasStateRefreshGeneration;
+      const baseline = { ...original, fields: { ...original.fields }, receipt: structuredClone(original.receipt), edited: [...original.edited] };
+      const cases = ["not-loaded", "old-refresh", "observed-base", "record-base", "status", "dirty", "pending", "conflict", "read", "write",
+        "receipt-missing", "receipt-revision", "receipt-base", "receipt-fields", "receipt-marks", "record-fields", "record-marks",
+        "cached-auth", "expired-auth", "company", "user", "store", "project", "source", "candidate"];
+      return cases.map((kind) => {
+        state.saasIdentity = { ...identity }; state.saasCompany = { ...company }; state.saasUser = { ...user }; state.saasStores = stores;
+        state.saasReports = reports; state.saasProtectedStateReady = true; state.saasProtectedStateFromCache = false; state.saasSessionExpiryHandled = false;
+        state.saasListingComposerDraft = { ...structuredClone(draft), fields: { ...previousFields } };
+        const record = { ...baseline, fields: { ...baseline.fields }, receipt: structuredClone(baseline.receipt), edited: [...baseline.edited] };
+        saasListingCloudRecords.clear(); saasListingCloudRecords.set(record.context.key, record);
+        document.querySelector("#view-product").innerHTML = renderSaasListingDraftEditor();
+        if (kind === "not-loaded") record.loaded = false;
+        if (kind === "old-refresh") record.observedRefreshGeneration = generation - 1;
+        if (kind === "observed-base") record.observedBaseReportId = "other-report";
+        if (kind === "record-base") record.baseReportId = "other-report";
+        if (kind === "status") record.status = "error";
+        if (kind === "dirty") record.dirty = true;
+        if (kind === "pending") record.pending = { mutation_id: "unresolved-mutation" };
+        if (kind === "conflict") record.conflict = { revision: 9 };
+        if (kind === "read") record.read = Promise.resolve(false);
+        if (kind === "write") record.write = Promise.resolve(false);
+        if (kind === "receipt-missing") record.receipt = null;
+        if (kind === "receipt-revision") record.receipt.revision += 1;
+        if (kind === "receipt-base") record.receipt.base_report_id = "other-report";
+        if (kind === "receipt-fields") record.receipt.fields.title = "Untrusted receipt title";
+        if (kind === "receipt-marks") record.receipt.merchant_edited_fields = [];
+        if (kind === "record-fields") record.fields.title = "Unacknowledged local title";
+        if (kind === "record-marks") record.edited = [];
+        if (kind === "cached-auth") state.saasProtectedStateFromCache = true;
+        if (kind === "expired-auth") state.saasSessionExpiryHandled = true;
+        if (kind === "company") state.saasIdentity.company_id = "other-company";
+        if (kind === "user") state.saasIdentity.user_id = "other-user";
+        if (kind === "store") state.saasStores = [{ ...stores[0], store_id: "other-store" }];
+        if (kind === "project") state.saasListingComposerDraft.listing_project_identity.key = "other-project";
+        if (kind === "source") state.saasListingComposerDraft.listing_project_identity.source_report_id = "other-source";
+        if (kind === "candidate") state.saasListingComposerDraft.listing_project_identity.candidate_id = "other-candidate";
+        const applied = restoreSaasFreshListingCloudProjection();
+        return { kind, applied, title: document.querySelector('[data-saas-listing-draft-field="title"]').value,
+          fields: saasListingCloudFields(state.saasListingComposerDraft.fields) };
+      });
+    }, { previousFields });
+    for (const result of outcomes) {
+      assert.equal(result.applied, false, result.kind);
+      assert.equal(result.title, previousFields.title, result.kind);
+      assert.deepEqual(result.fields, previousFields, result.kind);
+    }
+    assert.equal(requests.filter((request) => request.path === generationPath || request.path === checkpointPath && request.method === "POST").length, 0);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("a new project URL does not retain another project's unresolved draft after full refresh", async () => {
+  reset(); head = reloadPreviousCheckpoint();
+  const first = await device();
+  const hold = deferred(); let refreshing;
+  const otherIdentity = { key: "another-product", source_report_id: "another-source", candidate_id: "another-candidate" };
+  const otherReport = { ...structuredClone(originalReport), report_id: "another-listing-report" };
+  otherReport.report.listing_project_identity = otherIdentity;
+  otherReport.report.listing_handoff.listing_fields.title = "Another Project Laptop Stand";
+  try {
+    await first.page.locator('[data-saas-listing-draft-field="title"]').fill("Unsaved title belonging only to first project");
+    await first.page.evaluate((identity) => {
+      state.activeMediaDraft = identity.key;
+      state.saasMerchantProjectStatus = { snapshot_version: "merchant_project_status_v1",
+        project: { project_id: identity.key, listing_project_identity: identity } };
+      saveSaasProtectedStateSnapshot();
+    }, identity);
+    refreshFixture = { extendedHold: hold, reports: [otherReport, originalReport], otherCheckpoint: {
+      path: `/stores/${storeId}/listing-drafts/${otherIdentity.key}/checkpoint`,
+      body: { contract_version: "listing_merchant_edit_v1", status: "empty", checkpoint: null, current_revision: 0,
+        current_base_report_id: otherReport.report_id, current_base_report: otherReport, base_changed: false,
+        superseded_rewrite_report_ids: [], model_called: false, usage_consumed: false,
+        real_platform_writes_enabled: false, secret_exposed: false },
+    } }; requests = []; hold.resolve();
+    await first.page.goto(`${base}/app.html?start=app&qa=public-saas&view=product&project=${otherIdentity.key}`);
+    refreshing = first.page.evaluate(async (base) => {
+      window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasDemoBootstrapEnabled = false; state.saasApiBase = base; state.view = "product";
+      bindEvents(); await refreshSaasState({ silent: true });
+    }, base);
+    await refreshing;
+    assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Another Project Laptop Stand");
+    assert.equal(new URL(first.page.url()).searchParams.get("project"), otherIdentity.key);
+    const retained = await first.page.evaluate(({ companyId, userId, storeId, identity }) => {
+      const key = JSON.stringify([companyId, userId, storeId, identity.key, identity.source_report_id, identity.candidate_id]);
+      const saved = JSON.parse(localStorage.getItem(`jiejing_listing_cloud_v1:${key}`));
+      return { title: saved.fields.title, dirty: saved.dirty, project: saasCurrentListingProjectIdentity().key,
+        detachedTitle: state.saasDetachedListingProjectDrafts[identity.key]?.draft.fields.title };
+    }, { companyId, userId, storeId, identity });
+    assert.deepEqual(retained, { title: "Unsaved title belonging only to first project", dirty: true, project: otherIdentity.key,
+      detachedTitle: "Unsaved title belonging only to first project" });
+    assert.equal(requests.filter((request) => request.path === generationPath || request.path === checkpointPath && request.method === "POST").length, 0);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { hold.resolve(); if (refreshing) await refreshing.catch(() => {}); await first.context.close(); }
 });
 
 test("a fresh report restore keeps old copy before checkpoint adoption and history wraps on a tablet", async () => {
