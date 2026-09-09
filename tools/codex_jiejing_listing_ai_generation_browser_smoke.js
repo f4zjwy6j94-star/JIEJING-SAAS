@@ -415,6 +415,10 @@ async function runListingFocusSmoke() {
   let holdReports = false;
   let reportsReady = null;
   let markReportsReady = null;
+  let heldInitialFacts = null;
+  let resolveInitialFacts;
+  let initialFactPosts = 0;
+  const initialFactsReady = new Promise((resolve) => { resolveInitialFacts = resolve; });
   try {
     const context = await browser.newContext({ viewport: { width: viewportWidth, height: viewportHeight } });
     await context.addCookies([{ name: "jiejing_saas_session", value: registered.token,
@@ -436,6 +440,18 @@ async function runListingFocusSmoke() {
         unsafeRequests.push(`${request.method()} ${url.pathname}`);
         return route.abort();
       }
+      if (request.method() === "POST" && url.pathname === `/stores/${store.store_id}/product-facts`) {
+        initialFactPosts += 1;
+        if (!heldInitialFacts) {
+          const response = await route.fetch();
+          const payload = await response.json();
+          await new Promise((resolve) => {
+            heldInitialFacts = { route, response, resolve, reportId: payload.report?.report_id };
+            resolveInitialFacts();
+          });
+          return;
+        }
+      }
       if (holdReports && request.method() === "GET" && url.pathname === "/reports" && url.searchParams.get("limit") === "24") {
         holdReports = false;
         const response = await route.fetch();
@@ -456,7 +472,41 @@ async function runListingFocusSmoke() {
     await page.selectOption('[data-source-manual-field="condition"]', "NEW");
     const factsSaved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().includes("/product-facts") && response.status() === 201);
     await page.click('[data-saas-action="save-new-product-facts"]');
+    await waitForTimingGate(initialFactsReady, "manual save before same-project refresh");
+    const beforeSaveRefresh = await page.evaluate(() => {
+      window.__initialManualSave = state.saasListingProductFactSavePromise;
+      return { context: saasListingAiGenerationContextKey(), epoch: saasListingAiGenerationEpoch,
+        refresh: saasStateRefreshGeneration };
+    });
+    await waitForRefreshCompletion(page.evaluate(() => refreshSaasState({ silent: true })), "same-project refresh during manual save");
+    const observedRefreshedBase = await page.evaluate(() => ({
+      context: saasListingAiGenerationContextKey(), epoch: saasListingAiGenerationEpoch,
+      refresh: saasStateRefreshGeneration, reportId: state.saasListingComposerDraft?.source_product_fact_report_id,
+    }));
+    if (heldInitialFacts.response.status() !== 201 || initialFactPosts !== 1 ||
+        beforeSaveRefresh.context !== observedRefreshedBase.context || beforeSaveRefresh.epoch !== observedRefreshedBase.epoch ||
+        observedRefreshedBase.refresh <= beforeSaveRefresh.refresh || observedRefreshedBase.reportId !== heldInitialFacts.reportId) {
+      throw new Error("manual-save refresh regression did not reach its real same-project saved-base boundary");
+    }
+    await heldInitialFacts.route.fulfill({ response: heldInitialFacts.response });
+    heldInitialFacts.resolve();
     await factsSaved;
+    const afterSaveRefresh = await page.evaluate(async () => ({
+      result: await window.__initialManualSave,
+      reportId: state.saasListingComposerDraft?.source_product_fact_report_id,
+      requestPresent: !!state.saasListingProductFactSaveRequest, promisePresent: !!state.saasListingProductFactSavePromise,
+      status: state.saasListingProductFactSaveStatus, loading: state.saasLoading,
+      saveText: document.querySelector('[data-saas-action="save-merchant-product-facts"]')?.textContent,
+      actionDisabled: [...document.querySelectorAll('[data-saas-action="listing-generate-ai-draft"], [data-saas-action="listing-rewrite-buyer-copy"], [data-saas-action="save-merchant-product-facts"]')].some(button => button.disabled),
+      factDisabled: [...document.querySelectorAll('.saas-product-facts-module [data-saas-product-fact-field]')].some(field => field.disabled),
+    }));
+    if (afterSaveRefresh.result !== false || afterSaveRefresh.reportId !== observedRefreshedBase.reportId ||
+        afterSaveRefresh.requestPresent || afterSaveRefresh.promisePresent || afterSaveRefresh.status !== "local_only" ||
+        afterSaveRefresh.loading || afterSaveRefresh.saveText !== "保存已确认资料" ||
+        afterSaveRefresh.actionDisabled || afterSaveRefresh.factDisabled || initialFactPosts !== 1) {
+      throw new Error(`same-project refresh left settled manual-save controls busy or applied its stale response: ${JSON.stringify(afterSaveRefresh)}`);
+    }
+    console.log("PASS manual_save_refresh_releases_only_owned_busy_state_without_applying_stale_response");
     await page.waitForSelector('[data-saas-listing-draft-field="title"]');
     await page.evaluate(async () => { await refreshSaasState({ silent: true }); await saasListingCloudRecord()?.read; });
 
@@ -625,6 +675,7 @@ async function runListingFocusSmoke() {
     console.log(`PASS listing_focus_refresh_title_description_${scopeCases.length}_scope_boundaries_${inactiveCases.length - 1}_inactive_boundaries_loading_editable_no_value_or_edit_side_effects`);
   } finally {
     heldReports?.resolve();
+    heldInitialFacts?.resolve();
     await browser.close();
   }
 }
@@ -654,6 +705,15 @@ async function runSmoke() {
   ).store;
 
   let capturedGenerationBody = null;
+  let manualSaveOverlap = false;
+  let heldManualSaveReports = null;
+  let heldManualSaveFacts = null;
+  let manualSaveReportsClaimed = false;
+  let manualSaveFactsClaimed = false;
+  let resolveManualSaveReports;
+  let resolveManualSaveFacts;
+  const manualSaveReports = new Promise((resolve) => { resolveManualSaveReports = resolve; });
+  const manualSaveFacts = new Promise((resolve) => { resolveManualSaveFacts = resolve; });
   let holdGeneration = false;
   let heldGeneration = null;
   let generationRequestCount = 0;
@@ -680,6 +740,30 @@ async function runSmoke() {
   ]);
   await context.route(`${base}/**`, async (route) => {
     const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    // Keep the real server results. Let the store-switch background refresh
+    // render while the new product save is in flight, then let the merchant
+    // type before its response arrives. Waiting for HTTP alone is not waiting
+    // for the save handler, and this legitimate editing window must stay usable.
+    if (manualSaveOverlap && !manualSaveReportsClaimed && request.method() === "GET" && pathname === "/reports") {
+      manualSaveReportsClaimed = true;
+      const response = await route.fetch();
+      await new Promise((resolve) => {
+        heldManualSaveReports = { route, response, resolve };
+        resolveManualSaveReports(heldManualSaveReports);
+      });
+      return;
+    }
+    if (manualSaveOverlap && !manualSaveFactsClaimed && request.method() === "POST" &&
+        pathname === `/stores/${otherStore.store_id}/product-facts`) {
+      manualSaveFactsClaimed = true;
+      const response = await route.fetch();
+      await new Promise((resolve) => {
+        heldManualSaveFacts = { route, response, resolve };
+        resolveManualSaveFacts(heldManualSaveFacts);
+      });
+      return;
+    }
     // Exercise a real checkpoint response arriving during generation. This
     // previously mistook the checkpoint's missing-to-empty field normalization
     // for new merchant edits and left the generated package unapplied.
@@ -852,6 +936,7 @@ async function runSmoke() {
   if (!heldGeneration) throw new Error("generation request was not held for context-switch regression");
   // The compact workbench hides this legacy selector; dispatch its native
   // change event to exercise the real switch handler, then assert visible UI.
+  manualSaveOverlap = true;
   await page.selectOption("#storeSwitch", `saas:${otherStore.store_id}`, { force: true });
   await page.waitForFunction(
     (storeId) => activeSaasStore()?.store_id === storeId && state.saasLoading === false,
@@ -867,7 +952,36 @@ async function runSmoke() {
     { timeout: 20000 },
   );
   await page.click('[data-saas-action="save-new-product-facts"]');
+  const delayedManualFacts = await waitForTimingGate(manualSaveFacts, "new product fact save");
+  const delayedManualReports = await waitForTimingGate(manualSaveReports, "store-switch reports refresh");
+  await delayedManualReports.route.fulfill({ response: delayedManualReports.response });
+  delayedManualReports.resolve();
+  await page.waitForFunction(() => state.saasListingProductFactSaveStatus === "saving" &&
+    document.querySelector('[data-saas-listing-draft-field="title"]') &&
+    document.querySelector('[data-saas-action="listing-generate-ai-draft"]')?.disabled,
+    null, { timeout: 15000 });
+  await page.fill('[data-saas-listing-draft-field="title"]', "Other Store Unsaved Tablet Title");
+  await page.evaluate(() => { window.__manualSaveTitleNode = document.activeElement; });
+  await delayedManualFacts.route.fulfill({ response: delayedManualFacts.response });
+  delayedManualFacts.resolve();
+  manualSaveOverlap = false;
   await otherFactsSaved;
+  await page.evaluate(async () => { await state.saasListingProductFactSavePromise; });
+  const manualSaveResult = await page.evaluate(() => ({
+    title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+    focusPreserved: document.activeElement === window.__manualSaveTitleNode && window.__manualSaveTitleNode?.isConnected,
+    status: state.saasListingProductFactSaveStatus,
+    generateDisabled: document.querySelector('[data-saas-action="listing-generate-ai-draft"]')?.disabled,
+    saveDisabled: document.querySelector('[data-saas-action="save-merchant-product-facts"]')?.disabled,
+    rewriteDisabled: document.querySelector('[data-saas-action="listing-rewrite-buyer-copy"]')?.disabled,
+    factControlDisabled: [...document.querySelectorAll('.saas-product-facts-module [data-saas-product-fact-field], .saas-product-facts-module [data-saas-action="mark-product-fact-unknown"], .saas-product-facts-module [data-saas-action="confirm-product-fact-suggestion"]')].some(control => control.disabled),
+    saveText: document.querySelector('[data-saas-action="save-merchant-product-facts"]')?.textContent,
+  }));
+  if (manualSaveResult.title !== "Other Store Unsaved Tablet Title" || !manualSaveResult.focusPreserved ||
+      manualSaveResult.status !== "saved" || manualSaveResult.generateDisabled || manualSaveResult.saveDisabled ||
+      manualSaveResult.rewriteDisabled || manualSaveResult.factControlDisabled || manualSaveResult.saveText !== "保存已确认资料") {
+    throw new Error(`completed new-product save did not preserve typing and release its controls: ${JSON.stringify(manualSaveResult)}`);
+  }
   await page.waitForSelector('[data-saas-listing-draft-field="title"]', { timeout: 20000 });
   await page.fill('[data-saas-listing-draft-field="title"]', "Other Store Unsaved Tablet Title");
   await page.locator('[data-saas-listing-draft-field="title"]').blur();
@@ -965,7 +1079,7 @@ async function runSmoke() {
   await heldGeneration.route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(generatedPayload(heldGeneration.body, heldGeneration.storeId)) });
   heldGeneration.resolve();
   await page.waitForFunction(() => state.saasLoading === false);
-  const contextCases = ["checkpoint_normalization_during_generation", "store_switch", "project_leave_return", "edits_during_generation", "duplicate_inflight"];
+  const contextCases = ["checkpoint_normalization_during_generation", "store_switch", "project_leave_return", "edits_during_generation", "duplicate_inflight", "manual_save_background_refresh_preserves_input_and_releases_controls"];
   await page.evaluate(() => {
     stopSaasAiCeoCrossDeviceSync();
     window.__listingContextFixture = structuredClone({
@@ -1480,6 +1594,8 @@ async function runSmoke() {
     screenshot_path: screenshotPath,
   }, null, 2));
   } finally {
+    heldManualSaveReports?.resolve();
+    heldManualSaveFacts?.resolve();
     if (browser) await browser.close();
   }
 }

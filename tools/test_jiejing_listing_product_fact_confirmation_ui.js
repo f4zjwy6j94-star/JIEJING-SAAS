@@ -125,6 +125,7 @@ async function withManualSourcePage(run) {
       const renderSourceIntakePanel = () => {};
       const renderProductListingCenter = () => {};
       const scheduleSaasListingDraftSnapshotSave = () => {};
+      ${source.slice(source.indexOf("function escapeHtml(value) {"), source.indexOf("const jiejingTrustedHtmlBlockedPattern ="))}
       ${generationContextHelpers}
       ${functions}
       const originalManualSave = persistSaasManualSourceFacts;
@@ -299,6 +300,7 @@ for (const status of [201, 500, 401]) {
   test(`new source save ignores late ${status} while B is still saving`, async () => {
     await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
       await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+      await page.evaluate(() => document.querySelector("main").insertAdjacentHTML("beforeend", renderSaasMerchantProductFactsModule()));
       await fill("Fixture Tablet Stand B"); await click(); await waitRequests(2);
       pending[0].reply(status); await page.evaluate(() => window.__savePromises[0]);
       assert.deepEqual(await page.evaluate(() => ({ product: state.saasListingComposerDraft.product,
@@ -306,6 +308,8 @@ for (const status of [201, 500, 401]) {
         reports: state.saasReports.length, toasts: window.__toasts.length,
         pending: Boolean(state.saasListingProductFactSaveRequest) })),
       { product: "Fixture Tablet Stand B", status: "saving", unauthorized: 0, reports: 0, toasts: 0, pending: true });
+      assert.equal(await page.locator('[data-saas-action="listing-generate-ai-draft"]').isDisabled(), true);
+      assert.equal(await page.locator('[data-saas-action="save-merchant-product-facts"]').textContent(), "保存中…");
       pending[1].reply(); await page.evaluate(() => window.__savePromises[1]);
       assert.equal(await page.evaluate(() => state.saasListingProductFactSaveStatus), "saved");
     });
@@ -356,6 +360,7 @@ for (const scope of ["company", "user", "store", "refresh", "visit"]) {
     for (const status of [201, 401]) {
       await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
         await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+        await page.evaluate(() => document.querySelector("main").insertAdjacentHTML("beforeend", renderSaasMerchantProductFactsModule()));
         await page.evaluate((scope) => {
           if (scope === "company") state.saasIdentity.company_id = "fixture-company-B";
           if (scope === "user") state.saasIdentity.user_id = "fixture-user-B";
@@ -368,8 +373,13 @@ for (const scope of ["company", "user", "store", "refresh", "visit"]) {
         pending[0].reply(status); await page.evaluate(() => window.__savePromises[0]);
         assert.deepEqual(await page.evaluate(() => ({ reports: state.saasReports.length, tasks: state.saasTasks.length,
           snapshots: window.__snapshots.length, unauthorized: window.__unauthorized, toasts: window.__toasts.length,
-          title: state.saasListingComposerDraft.fields.title, status: state.saasListingProductFactSaveStatus })),
-        { reports: 0, tasks: 0, snapshots: 0, unauthorized: 0, toasts: 0, title: "Current scope copy", status: "idle" });
+          title: state.saasListingComposerDraft.fields.title, status: state.saasListingProductFactSaveStatus,
+          requestPresent: !!state.saasListingProductFactSaveRequest, promisePresent: !!state.saasListingProductFactSavePromise,
+          generateDisabled: document.querySelector('[data-saas-action="listing-generate-ai-draft"]').disabled,
+          saveText: document.querySelector('[data-saas-action="save-merchant-product-facts"]').textContent })),
+        { reports: 0, tasks: 0, snapshots: 0, unauthorized: 0, toasts: 0, title: "Current scope copy", status: "idle",
+          requestPresent: false, promisePresent: false, generateDisabled: scope !== "refresh",
+          saveText: scope === "refresh" ? "保存已确认资料" : "保存中…" });
       });
     }
   });
@@ -386,6 +396,53 @@ test("new source save preserves unsaved manual input and still handles a current
       assert.equal(await page.evaluate(() => state.saasListingProductFactSaveRequest), null);
       assert.equal(await page.evaluate(() => state.saasListingProductFactSavePromise), null);
     });
+  }
+});
+
+test("new source save outcomes release only their rendered locks and preserve copy provenance and other busy work", async () => {
+  for (const status of [201, 500]) for (const otherBusy of [false, true]) {
+  await withManualSourcePage(async ({ page, pending, fill, click, waitRequests }) => {
+    await fill("Fixture Tablet Stand A"); await click(); await waitRequests(1);
+    await page.evaluate(() => {
+      state.saasListingComposerDraft.merchant_product_fact_packet.derived_listing_suggestions.brand = "Unconfirmed fixture brand";
+      document.querySelector("main").insertAdjacentHTML("beforeend", renderSaasMerchantProductFactsModule() +
+        '<input data-saas-listing-draft-field="title" />');
+      window.__factValuesAndOrigins = () => [...document.querySelectorAll('[data-saas-product-fact-field]')].map(field => ({
+        key: field.dataset.saasProductFactField, value: field.value, checked: field.checked,
+        origin: field.dataset.productFactOriginState, confirmed: field.dataset.productFactConfirmed,
+        unknown: field.dataset.productFactUnknown,
+      }));
+    });
+    assert.equal(await page.locator('[data-saas-product-fact-field="material"]').isDisabled(), true);
+    assert.ok(await page.locator('.saas-product-facts-module input[type="checkbox"]').count());
+    assert.ok(await page.locator('.saas-product-facts-module textarea').count());
+    assert.ok(await page.locator('[data-saas-action="confirm-product-fact-suggestion"]').count());
+    const factFieldsBefore = await page.evaluate(() => window.__factValuesAndOrigins());
+    await page.locator('[data-saas-listing-draft-field="title"]').fill("Copy typed during save");
+    await page.evaluate((busy) => {
+      window.__typedCopyNode = document.activeElement; document.activeElement.setSelectionRange(2, 7);
+      state.saasLoading = busy;
+      state.saasListingAiGenerationStatus = busy ? "running" : "idle";
+    }, otherBusy);
+    pending[0].reply(status); await page.evaluate(() => window.__savePromises[0]);
+    const result = await page.evaluate(() => ({
+      status: state.saasListingProductFactSaveStatus,
+      factControlDisabled: [...document.querySelectorAll('.saas-product-facts-module [data-saas-product-fact-field], .saas-product-facts-module [data-saas-action="mark-product-fact-unknown"], .saas-product-facts-module [data-saas-action="confirm-product-fact-suggestion"]')].some(control => control.disabled),
+      generateDisabled: document.querySelector('[data-saas-action="listing-generate-ai-draft"]').disabled,
+      generateText: document.querySelector('[data-saas-action="listing-generate-ai-draft"]').textContent,
+      saveDisabled: document.querySelector('[data-saas-action="save-merchant-product-facts"]').disabled,
+      saveText: document.querySelector('[data-saas-action="save-merchant-product-facts"]').textContent,
+      title: document.querySelector('[data-saas-listing-draft-field="title"]').value,
+      sameFocusedNode: document.activeElement === window.__typedCopyNode && window.__typedCopyNode.isConnected,
+      selection: [document.activeElement.selectionStart, document.activeElement.selectionEnd],
+    }));
+    assert.deepEqual(result, { status: status === 201 ? "saved" : "local_only", factControlDisabled: false,
+      generateDisabled: otherBusy, generateText: otherBusy ? "AI 正在生成…" : "AI 生成 Listing 草稿",
+      saveDisabled: otherBusy, saveText: "保存已确认资料", title: "Copy typed during save",
+      sameFocusedNode: true, selection: [2, 7] });
+    assert.deepEqual(await page.evaluate(() => window.__factValuesAndOrigins()), factFieldsBefore);
+    assert.equal(pending.length, 1, "settling the save must not send another request");
+  });
   }
 });
 

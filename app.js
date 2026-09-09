@@ -34293,9 +34293,19 @@ function saasListingAiGenerationHasNewEdits(snapshot) {
 }
 
 function releaseSaasListingAiGenerationButtons() {
+  // Match the fact renderer's save-only lock without changing values or
+  // provenance, and without blocking fact edits for unrelated AI work.
+  document.querySelectorAll('.saas-product-facts-module [data-saas-product-fact-field], .saas-product-facts-module [data-saas-action="confirm-product-fact-suggestion"], .saas-product-facts-module [data-saas-action="mark-product-fact-unknown"]').forEach((control) => {
+    control.disabled = state.saasListingProductFactSaveStatus === "saving";
+  });
   document.querySelectorAll('[data-saas-action="listing-generate-ai-draft"], [data-saas-action="listing-rewrite-buyer-copy"], [data-saas-action="save-merchant-product-facts"]').forEach((button) => {
     button.disabled = state.saasLoading || state.saasListingProductFactSaveStatus === "saving";
-    if (button.dataset.saasAction === "listing-generate-ai-draft") button.textContent = "AI 生成 Listing 草稿";
+    if (button.dataset.saasAction === "listing-generate-ai-draft") {
+      button.textContent = state.saasListingAiGenerationStatus === "running" ? "AI 正在生成…" : "AI 生成 Listing 草稿";
+    }
+    if (button.dataset.saasAction === "save-merchant-product-facts") {
+      button.textContent = state.saasListingProductFactSaveStatus === "saving" ? "保存中…" : "保存已确认资料";
+    }
   });
 }
 
@@ -43257,8 +43267,14 @@ async function persistSaasManualSourceFacts(facts = {}) {
     }
   })().finally(() => {
     if (state.saasListingProductFactSaveRequest !== request) return;
+    const sameVisit = request.epoch === saasListingAiGenerationEpoch && request.contextKey === saasListingAiGenerationContextKey();
     state.saasListingProductFactSaveRequest = null;
     state.saasListingProductFactSavePromise = null;
+    if (!sameVisit) return;
+    // Refresh may supersede this response without changing the project visit.
+    // Retire only its own busy state, not the refreshed data or another task.
+    if (state.saasListingProductFactSaveStatus === "saving") state.saasListingProductFactSaveStatus = "local_only";
+    releaseSaasListingAiGenerationButtons();
   });
   request.promise = pending;
   state.saasListingProductFactSavePromise = pending;
