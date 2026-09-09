@@ -15970,7 +15970,7 @@ function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
     source_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.source_confirmed_facts),
     merchant_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.merchant_confirmed_facts),
     derived_listing_suggestions: sanitizeSaasMerchantProductFactValues(packet.derived_listing_suggestions),
-    listing_copy: !productVisionRequiresValidatedListing && packet.listing_copy && typeof packet.listing_copy === "object"
+    listing_copy: !productVisionRequiresValidatedListing && packet.listing_copy && typeof packet.listing_copy === "object" && Object.keys(packet.listing_copy).length > 0
       ? {
           title: sanitizeSaasWorkflowFeedbackText(packet.listing_copy.title || "", 80),
           selling_points: Array.isArray(packet.listing_copy.selling_points)
@@ -16187,6 +16187,8 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
           operation: saasListingGenerationOperation(draft.ai_generation_feedback.operation),
           result_report_id: /^[A-Za-z0-9._:-]{1,160}$/.test(draft.ai_generation_feedback.result_report_id || "") ? draft.ai_generation_feedback.result_report_id : null,
           input_signature: /^[a-f0-9]{64}$/.test(draft.ai_generation_feedback.input_signature || "") ? draft.ai_generation_feedback.input_signature : null,
+          request_signature: draft.ai_generation_feedback.request_signature == null ? null
+            : /^[a-f0-9]{64}$/.test(draft.ai_generation_feedback.request_signature) ? draft.ai_generation_feedback.request_signature : "invalid",
         }
       : null,
     publish_prefill: sanitizeSaasListingPublishPrefillSnapshot(draft.publish_prefill),
@@ -34263,6 +34265,7 @@ function renderSaasListingAiGenerationFeedback(draft = state.saasListingComposer
     <strong>${["generation_uncertain", "running"].includes(feedback.status) ? "生成结果尚未确认" : feedback.status === "generated_unapplied" ? "新文案已生成，待核对采用结果" : "AI 草稿未生成"}</strong><span>${escapeHtml(message)}</span>
     <span>${protectedResult ? "请先核对本次结果与云端版本，不要重复生成。尚未写入 eBay。" : `现有文案未被替换，尚未写入 eBay。处理原因后，可以再次点击“${retryLabel}”。`}</span>
     ${protectedResult && operation ? `<button type="button" class="ghost-button" data-saas-action="listing-check-generation-result" ${feedback.checking ? "disabled" : ""}>${feedback.checking ? "正在核对…" : "核对本次结果"}</button>` : ""}
+    ${protectedResult && operation && feedback.resume_available === true ? `<p>继续前会再次核对同一次操作和原稿，不另建任务。</p><button type="button" class="secondary-action" data-saas-action="listing-resume-generation" ${feedback.checking ? "disabled" : ""}>继续本次生成</button>` : ""}
     ${protectedResult && !feedback.operation ? `<p>这次历史操作没有编号，请明确选择要核对的失败记录；证据不足时不会解除保护。</p>${legacyTasks.map((task) => `<div><span>${escapeHtml(saasWorkflowProductLabel(task) || draft.product || "当前商品")} · ${escapeHtml(saasTimestampLabel(task.created_at || task.updated_at || ""))}</span><button type="button" class="ghost-button" data-saas-action="listing-check-legacy-generation-result" data-task-id="${escapeHtml(task.task_id)}" ${feedback.checking ? "disabled" : ""}>核对此次失败</button></div>`).join("")}` : ""}
   </div>`;
 }
@@ -34339,7 +34342,57 @@ function saasListingGenerationOperationContextKey(operation) {
     operation.listing_project_identity.key, operation.listing_project_identity.source_report_id, operation.listing_project_identity.candidate_id]);
 }
 
+function saasListingGenerationJsonClone(value, ancestors = new Set()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (!value || typeof value !== "object" || ancestors.has(value) || Object.getOwnPropertySymbols(value).length ||
+      (!Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) throw new Error("listing_generation_non_json_input");
+  ancestors.add(value);
+  const cloned = Array.isArray(value)
+    ? Array.from(value, (item) => saasListingGenerationJsonClone(item, ancestors))
+    : Object.fromEntries(Object.keys(value).sort().map((key) => [key, saasListingGenerationJsonClone(value[key], ancestors)]));
+  ancestors.delete(value);
+  return cloned;
+}
+
+function saasListingGenerationWireRequest(operation, draft = state.saasListingComposerDraft, packet = draft?.merchant_product_fact_packet) {
+  if (!saasListingGenerationOperation(operation)) throw new Error("listing_generation_operation_identity_invalid");
+  const rewrite = operation.generation_mode === "rewrite_buyer_copy";
+  const allEdited = draft?.merchant_edited_fields ?? [];
+  if (!Array.isArray(allEdited) || new Set(allEdited).size !== allEdited.length ||
+      allEdited.some((key) => !saasListingMerchantEditableFieldKeys().includes(key))) throw new Error("listing_generation_edit_marks_invalid");
+  const request = saasListingGenerationJsonClone({ operation_id: operation.operation_id,
+    listing_project_identity: operation.listing_project_identity,
+    // Exclude only UI metadata; unknown and sensitive facts still reach the backend guard.
+    merchant_product_fact_packet: Object.fromEntries(Object.entries(packet || {}).filter(([key]) => !["listing_copy", "saved_at"].includes(key))),
+    current_draft_fields: saasListingCurrentDraftFieldsForAi(draft, rewrite ? "rewrite_buyer_copy" : ""),
+    ...(rewrite ? { generation_mode: "rewrite_buyer_copy", expected_base_report_id: operation.expected_base_report_id,
+      expected_checkpoint_revision: operation.expected_checkpoint_revision } : {}) });
+  // Default wire intentionally sends only six copy fields. Its proof also binds
+  // all ten edit marks, including price/images/logistics/risk notes off that wire.
+  return { body: JSON.stringify(request), signatureInput: JSON.stringify(saasListingGenerationJsonClone({ operation, request,
+    merchant_edited_fields: [...allEdited].sort() })) };
+}
+
+function saasListingGenerationNotFoundMatches(result, operation) {
+  return Boolean(saasListingGenerationOperation(operation) && result?.contract_version === "listing_generation_operation_v1" &&
+    ["operation_id", "company_id", "store_id", "user_id"].every((key) => result[key] === operation[key]) &&
+    ["key", "source_report_id", "candidate_id"].every((key) => Object.hasOwn(result.listing_project_identity || {}, key) && result.listing_project_identity[key] === operation.listing_project_identity[key]) &&
+    result.status === "not_found" && result.can_retry === false && result.report === null && result.failure_code === "" &&
+    typeof result.task_id === "string" && /^[A-Za-z0-9._:-]{1,160}$/.test(result.task_id) && typeof result.message === "string" &&
+    ["generation_mode", "expected_base_report_id", "expected_checkpoint_revision", "report_save_attempted", "model_called", "usage_consumed"].every((key) => Object.hasOwn(result, key) && result[key] === null) &&
+    result.real_platform_writes_enabled === false && result.secret_exposed === false);
+}
+
+function readSaasListingGenerationResult(operation, isCurrent) {
+  const query = new URLSearchParams({ operation_id: operation.operation_id, source_report_id: operation.listing_project_identity.source_report_id,
+    candidate_id: operation.listing_project_identity.candidate_id });
+  return saasFetch(`/stores/${encodeURIComponent(operation.store_id)}/listing-drafts/${encodeURIComponent(operation.listing_project_identity.key)}/generation-status?${query}`,
+    { saasRequestIsCurrent: isCurrent, saasDeferUnauthorizedTermination: true });
+}
+
 function saasListingGenerationResultMatches(result, operation) {
+  if (saasListingGenerationNotFoundMatches(result, operation)) return true;
   if (operation?.legacy_task_id) {
     return result?.contract_version === "listing_generation_legacy_recovery_v1" && result.task_id === operation.legacy_task_id &&
       ["company_id", "store_id", "user_id", "expected_base_report_id", "expected_checkpoint_revision"].every((key) => result[key] === operation[key]) &&
@@ -34366,6 +34419,16 @@ async function applySaasListingGenerationResult(result, operation, isCurrent, ed
   const contextKey = saasListingAiGenerationContextKey();
   const baseline = operation.generation_mode === "rewrite_buyer_copy"
     ? { baseReportId: operation.expected_base_report_id, revision: operation.expected_checkpoint_revision } : null;
+  if (saasListingGenerationNotFoundMatches(result, operation)) {
+    setSaasListingAiGenerationFeedback("generation_uncertain", "尚未登记本次生成。继续时会再次核对，并沿用原编号；当前文案未被替换。", contextKey, baseline);
+    const feedback = state.saasListingComposerDraft.ai_generation_feedback;
+    // This is an ephemeral observation, never a cached grant to send requests.
+    feedback.resume_available = /^[a-f0-9]{64}$/.test(feedback.input_signature || "") &&
+      (/^[a-f0-9]{64}$/.test(feedback.request_signature || "") ||
+        (operation.generation_mode === "rewrite_buyer_copy" && feedback.request_signature == null));
+    if (!feedback.resume_available) feedback.message = "暂时无法安全继续本次生成，现有文案已保留；可继续核对本次结果。";
+    return false;
+  }
   if (((result.status === "failed_before_report" && result.report_save_attempted === false) ||
       (operation.legacy_task_id && result.status === "legacy_failed_before_report" && result.proof_kind === "immutable_failed_usage_ledger")) && result.can_retry === true && result.report === null && result.task_id) {
     setSaasListingAiGenerationFeedback("failed", result.message || result.merchant_message || "本次文案未通过检查；旧稿已保留，可以主动重新生成。", contextKey, baseline);
@@ -34402,14 +34465,34 @@ async function applySaasListingGenerationResult(result, operation, isCurrent, ed
     if (!rewrite || rewrite.expected_base_report_id !== baseline.baseReportId || rewrite.expected_checkpoint_revision !== baseline.revision) {
       throw new Error("listing_generation_rewrite_source_mismatch");
     }
+    // Compare with the persisted pre-request snapshot, not the backend-normalized
+    // packet: the local snapshot also contains UI-only metadata.
+    const signature = state.saasListingComposerDraft.ai_generation_feedback?.input_signature;
+    const unchanged = /^[a-f0-9]{64}$/.test(signature || "") && signature === await saasSha256Hex(editSnapshot.draft);
+    if (!isCurrent()) return false;
     const record = saasListingCloudRecord();
     const draft = state.saasListingComposerDraft;
     const fieldsUnchanged = JSON.stringify(saasListingCloudFields(draft.fields)) === JSON.stringify(rewrite.previous_fields);
-    const factsUnchanged = JSON.stringify(saasCanonicalJsonValue(draft.merchant_product_fact_packet || {})) ===
-      JSON.stringify(saasCanonicalJsonValue(report.report.merchant_product_fact_packet || {}));
     const pendingFacts = captureSaasPendingProductFactEditor(document.querySelector("#view-product"));
-    const canAdopt = !saasListingAiGenerationHasNewEdits(editSnapshot) && fieldsUnchanged && factsUnchanged && !pendingFacts?.fields?.length && !pendingFacts?.hasVersionConflict &&
-      record?.revision === baseline.revision && record.baseReportId === baseline.baseReportId && !record.conflict &&
+    const conflict = record?.conflict;
+    const conflictReceipt = conflict && saasListingCloudReceipt(conflict.checkpoint, context);
+    // A saved rewrite N can be the fresh report head while its own unchanged
+    // source checkpoint is still A/R. Only that exact pending adoption may use
+    // the original CAS; do not clear or generalize other cloud conflicts.
+    const ownPendingTransition = record?.loaded === true && record.status === "conflict" && !record.storageFailed && !record.read &&
+      record.context?.key === context.key && record.observedRefreshGeneration === saasStateRefreshGeneration &&
+      saasListingCloudBaseReport(context)?.report_id === report.report_id &&
+      record.observedBaseReportId === report.report_id && conflict?.baseReportId === report.report_id &&
+      conflict.revision === baseline.revision && conflictReceipt?.base_report_id === baseline.baseReportId &&
+      conflictReceipt.revision === baseline.revision &&
+      JSON.stringify(conflictReceipt.fields) === JSON.stringify(rewrite.previous_fields) &&
+      JSON.stringify([...conflictReceipt.merchant_edited_fields].sort()) === JSON.stringify([...rewrite.previous_merchant_edited_fields].sort()) &&
+      conflict.baseReport?.report_id === report.report_id && conflict.baseReport.task_id === result.task_id &&
+      conflict.baseReport.user_id === operation.user_id && saasListingCloudReportMatchesContext(conflict.baseReport, context) &&
+      JSON.stringify(saasCanonicalJsonValue(conflict.baseReport.report)) === JSON.stringify(saasCanonicalJsonValue(report.report)) &&
+      Boolean(saasListingBuyerCopyRewriteFromReport(conflict.baseReport));
+    const canAdopt = !saasListingAiGenerationHasNewEdits(editSnapshot) && fieldsUnchanged && unchanged && !pendingFacts?.fields?.length && !pendingFacts?.hasVersionConflict &&
+      record?.revision === baseline.revision && record.baseReportId === baseline.baseReportId && (!record.conflict || ownPendingTransition) &&
       JSON.stringify([...saasListingMerchantEditedFields()].sort()) === JSON.stringify([...rewrite.previous_merchant_edited_fields].sort());
     const adopted = canAdopt && await saveSaasListingBuyerCopyRewriteCheckpoint(report, rewrite, { ...baseline, seq: record.seq }, isCurrent, editSnapshot);
     if (!isCurrent()) return false;
@@ -34444,10 +34527,7 @@ async function checkSaasListingGenerationResult() {
   feedback.checking = true;
   updateSaasListingGenerationFeedbackSlots();
   try {
-    const query = new URLSearchParams({ operation_id: operation.operation_id, source_report_id: operation.listing_project_identity.source_report_id,
-      candidate_id: operation.listing_project_identity.candidate_id });
-    const result = await saasFetch(`/stores/${encodeURIComponent(operation.store_id)}/listing-drafts/${encodeURIComponent(operation.listing_project_identity.key)}/generation-status?${query}`,
-      { saasRequestIsCurrent: isCurrent, saasDeferUnauthorizedTermination: true });
+    const result = await readSaasListingGenerationResult(operation, isCurrent);
     if (!isCurrent()) return false;
     return await applySaasListingGenerationResult(result, operation, isCurrent, editSnapshot);
   } catch (_error) {
@@ -34459,6 +34539,86 @@ async function checkSaasListingGenerationResult() {
       saveSaasProtectedStateSnapshot();
       updateSaasListingGenerationFeedbackSlots();
     }
+  }
+}
+
+async function resumeSaasListingGeneration() {
+  if (!requireSaasProtectedSessionForAction()) return false;
+  const feedback = state.saasListingComposerDraft?.ai_generation_feedback;
+  const operation = saasListingGenerationOperation(feedback?.operation);
+  const contextKey = saasListingAiGenerationContextKey();
+  if (!operation || feedback.context_key !== contextKey || feedback.resume_available !== true || feedback.checking ||
+      saasListingGenerationOperationContextKey(operation) !== contextKey || saasListingAiGenerationInFlight.has(contextKey)) return false;
+  const request = { contextKey, epoch: saasListingAiGenerationEpoch, refreshGeneration: saasStateRefreshGeneration };
+  saasListingAiGenerationInFlight.set(contextKey, request);
+  const originalInputSignature = feedback.input_signature, originalRequestSignature = feedback.request_signature;
+  const descriptor = JSON.stringify(operation);
+  const current = () => request.epoch === saasListingAiGenerationEpoch && request.refreshGeneration === saasStateRefreshGeneration &&
+    contextKey === saasListingAiGenerationContextKey() &&
+    JSON.stringify(saasListingGenerationOperation(state.saasListingComposerDraft?.ai_generation_feedback?.operation)) === descriptor &&
+    state.saasListingComposerDraft?.ai_generation_feedback?.input_signature === originalInputSignature &&
+    state.saasListingComposerDraft?.ai_generation_feedback?.request_signature === originalRequestSignature;
+  const snapshot = saasListingAiGenerationEditSnapshot();
+  feedback.checking = true; feedback.resume_available = false; updateSaasListingGenerationFeedbackSlots();
+  try {
+    const wire = saasListingGenerationWireRequest(operation);
+    const unchanged = () => current() && !saasListingAiGenerationHasNewEdits(snapshot) &&
+      saasListingGenerationWireRequest(operation).signatureInput === wire.signatureInput;
+    const result = await readSaasListingGenerationResult(operation, current);
+    if (!current()) return false;
+    if (!saasListingGenerationNotFoundMatches(result, operation)) return await applySaasListingGenerationResult(result, operation, current, snapshot);
+    if (!unchanged()) throw new Error("listing_resume_input_changed");
+    const inputSignature = await saasSha256Hex(snapshot.draft);
+    if (!unchanged() || !/^[a-f0-9]{64}$/.test(originalInputSignature || "") || inputSignature !== originalInputSignature) throw new Error("listing_resume_input_unproven");
+    const requestSignature = await saasSha256Hex(wire.signatureInput);
+    const legacyRewriteProof = operation.generation_mode === "rewrite_buyer_copy" && originalRequestSignature == null;
+    if (!unchanged() || (!legacyRewriteProof && (!/^[a-f0-9]{64}$/.test(originalRequestSignature || "") || requestSignature !== originalRequestSignature))) throw new Error("listing_resume_request_unproven");
+    const localSource = saasListingCloudRecord(), context = saasListingCloudContext();
+    const clean = (record) => record?.loaded === true && !record.dirty && !record.pending && !record.conflict && !record.read && !record.write && !record.storageFailed;
+    if (!clean(localSource) || !context) throw new Error("listing_resume_source_unavailable");
+    const sourceSnapshot = { revision: localSource.revision, base: localSource.baseReportId, seq: localSource.seq };
+    // Verification only: hydration would absorb newer fields/revisions and can
+    // queue writes. This read must not mutate reports, checkpoints, or the draft.
+    const remote = await saasFetchWithTimeout(`${context.path}?${new URLSearchParams({ source_report_id: context.identity.source_report_id, candidate_id: context.identity.candidate_id })}`,
+      { saasRequestIsCurrent: current, saasDeferUnauthorizedTermination: true }, 15000);
+    if (!unchanged()) return false;
+    const record = saasListingCloudRecord();
+    const rawMarks = remote?.checkpoint?.merchant_edited_fields;
+    const allowedMarks = saasListingMerchantEditableFieldKeys();
+    if (remote?.contract_version !== SAAS_LISTING_CLOUD_CONTRACT || remote.status !== "saved" || remote.base_changed !== false ||
+        !Number.isSafeInteger(remote.current_revision) || remote.current_revision < 1 ||
+        !["model_called", "usage_consumed", "real_platform_writes_enabled", "secret_exposed"].every((key) => remote[key] === false) ||
+        !Array.isArray(rawMarks) || new Set(rawMarks).size !== rawMarks.length || rawMarks.some((key) => !allowedMarks.includes(key))) throw new Error("listing_resume_checkpoint_invalid");
+    const receipt = saasListingCloudReceipt(remote.checkpoint, context);
+    const pendingFacts = captureSaasPendingProductFactEditor(document.querySelector("#view-product"));
+    if (!clean(record) || record.revision !== sourceSnapshot.revision || record.baseReportId !== sourceSnapshot.base || record.seq !== sourceSnapshot.seq ||
+        pendingFacts?.fields?.length || pendingFacts?.hasVersionConflict ||
+        (operation.generation_mode === "rewrite_buyer_copy" && (record.revision !== operation.expected_checkpoint_revision ||
+          record.baseReportId !== operation.expected_base_report_id || remote.current_revision !== operation.expected_checkpoint_revision ||
+          remote.current_base_report_id !== operation.expected_base_report_id)) ||
+        remote.current_base_report?.report_id !== remote.current_base_report_id || !saasListingCloudReportMatchesContext(remote.current_base_report, context) ||
+        receipt?.revision !== remote.current_revision || receipt.base_report_id !== remote.current_base_report_id ||
+        JSON.stringify(receipt.fields) !== JSON.stringify(saasListingCloudFields(state.saasListingComposerDraft.fields)) ||
+        JSON.stringify([...receipt.merchant_edited_fields].sort()) !== JSON.stringify([...saasListingMerchantEditedFields()].sort())) throw new Error("listing_resume_source_unproven");
+    try {
+      await saasFetch(`/stores/${encodeURIComponent(operation.store_id)}/listing-drafts/generate`, { method: "POST", body: wire.body,
+        saasRequestIsCurrent: current, saasDeferUnauthorizedTermination: true });
+    } catch (error) {
+      if (error?.status === 401) throw error;
+      // A transport/quality failure does not prove the task is absent. Read the
+      // exact operation once; never resubmit here or infer an outcome from HTTP.
+    }
+    if (!current()) return false;
+    const saved = await readSaasListingGenerationResult(operation, current);
+    if (!current()) return false;
+    return await applySaasListingGenerationResult(saved, operation, current, snapshot);
+  } catch (_error) {
+    if (current()) setSaasListingAiGenerationFeedback("generation_uncertain", "本次续接尚未确认，或原稿与云端版本已变化；现有输入已保留，请先核对本次结果。", contextKey);
+    return false;
+  } finally {
+    if (saasListingAiGenerationInFlight.get(contextKey) === request) saasListingAiGenerationInFlight.delete(contextKey);
+    feedback.checking = false;
+    if (current()) { saveSaasProtectedStateSnapshot(); updateSaasListingGenerationFeedbackSlots(); }
   }
 }
 
@@ -34521,6 +34681,7 @@ function setSaasListingAiGenerationFeedback(status, message, contextKey, rewrite
     operation: saasListingGenerationOperation(previous?.operation),
     result_report_id: previous?.result_report_id || null,
     input_signature: previous?.input_signature || null,
+    request_signature: previous?.request_signature ?? null,
   };
 }
 
@@ -34650,7 +34811,7 @@ async function generateSaasListingDraftFromCurrentProject(options = {}) {
     return false;
   }
   const packet = rewriteBuyerCopy
-    ? JSON.parse(JSON.stringify(draft.merchant_product_fact_packet || {}))
+    ? (draft.merchant_product_fact_packet || {})
     : captureSaasListingFactsForAiGeneration(draft);
   const listingProjectIdentity = {
     key: identity.key,
@@ -34704,11 +34865,38 @@ async function generateSaasListingDraftFromCurrentProject(options = {}) {
     if (!operation) throw new Error("listing_generation_operation_identity_invalid");
     setSaasListingAiGenerationFeedback("running", "本次生成已开始；请核对同一次结果，不要重复生成。", generationRequest.contextKey, rewriteBaseline);
     state.saasListingComposerDraft.ai_generation_feedback.operation = operation;
-    state.saasListingComposerDraft.ai_generation_feedback.input_signature = await saasSha256Hex(editSnapshot.draft);
-    if (!isCurrentGeneration()) return false;
+    const originalFeedback = state.saasListingComposerDraft.ai_generation_feedback;
+    const originalRequestSignature = originalFeedback.request_signature;
+    const sameUnsentOperation = () => isCurrentGeneration() &&
+      JSON.stringify(saasListingGenerationOperation(state.saasListingComposerDraft?.ai_generation_feedback?.operation)) === JSON.stringify(operation);
+    const stopUnsent = () => {
+      // No POST has started: do not leave an unregistered request in "running".
+      // A different visit's feedback must never be touched by this completion.
+      const message = "生成前的输入或页面已变化，现有编辑已保留。本次未调用 AI，请核对后重新生成。";
+      originalFeedback.status = "blocked"; originalFeedback.message = message;
+      if (sameUnsentOperation()) {
+        preservePendingEdits = true; state.saasListingAiGenerationStatus = "blocked";
+        setSaasListingAiGenerationFeedback("blocked", message, generationRequest.contextKey, rewriteBaseline);
+      }
+      return false;
+    };
+    const currentUnsent = () => sameUnsentOperation() && generationRequest.refreshGeneration === saasStateRefreshGeneration &&
+      !saasListingAiGenerationHasNewEdits(editSnapshot);
+    const frozenRequest = saasListingGenerationWireRequest(operation, state.saasListingComposerDraft, packet);
+    const inputSignature = await saasSha256Hex(editSnapshot.draft);
+    if (!currentUnsent()) return stopUnsent();
+    state.saasListingComposerDraft.ai_generation_feedback.input_signature = inputSignature;
+    const requestSignature = await saasSha256Hex(frozenRequest.signatureInput);
+    if (!currentUnsent() || state.saasListingComposerDraft.ai_generation_feedback.input_signature !== inputSignature ||
+        state.saasListingComposerDraft.ai_generation_feedback.request_signature !== originalRequestSignature ||
+        saasListingGenerationWireRequest(operation).signatureInput !== frozenRequest.signatureInput) return stopUnsent();
+    state.saasListingComposerDraft.ai_generation_feedback.request_signature = requestSignature;
     saveSaasProtectedStateSnapshot();
-    const savedOperation = readSaasProtectedStateSnapshotFromStorage()?.listing_composer_draft?.ai_generation_feedback?.operation;
-    if (JSON.stringify(saasListingGenerationOperation(savedOperation)) !== JSON.stringify(operation)) {
+    const savedFeedback = readSaasProtectedStateSnapshotFromStorage()?.listing_composer_draft?.ai_generation_feedback;
+    if (!currentUnsent() || JSON.stringify(saasListingGenerationOperation(savedFeedback?.operation)) !== JSON.stringify(operation) ||
+        savedFeedback?.request_signature !== requestSignature || !/^[a-f0-9]{64}$/.test(requestSignature) ||
+        savedFeedback?.input_signature !== inputSignature || state.saasListingComposerDraft.ai_generation_feedback.input_signature !== inputSignature ||
+        state.saasListingComposerDraft.ai_generation_feedback.request_signature !== requestSignature) {
       setSaasListingAiGenerationFeedback("blocked", "本机无法保留本次操作编号；请释放浏览器存储后重试。本次未调用 AI，当前文案未替换。", generationRequest.contextKey, rewriteBaseline);
       state.saasListingAiGenerationStatus = "blocked";
       preservePendingEdits = true;
@@ -34719,14 +34907,7 @@ async function generateSaasListingDraftFromCurrentProject(options = {}) {
       method: "POST",
       saasRequestIsCurrent: isCurrentGeneration,
       saasDeferUnauthorizedTermination: true,
-      body: JSON.stringify({
-        operation_id: operation.operation_id,
-        listing_project_identity: listingProjectIdentity,
-        merchant_product_fact_packet: packet,
-        current_draft_fields: saasListingCurrentDraftFieldsForAi(state.saasListingComposerDraft, rewriteBuyerCopy ? "rewrite_buyer_copy" : ""),
-        ...(rewriteBuyerCopy ? { generation_mode: "rewrite_buyer_copy", expected_base_report_id: rewriteBaseline.baseReportId,
-          expected_checkpoint_revision: rewriteBaseline.revision } : {}),
-      }),
+      body: frozenRequest.body,
     });
     // The backend keeps the original project artifact. A late response must
     // not copy it into a different company, store, project, or browser cache.
@@ -36228,6 +36409,7 @@ function handleSaasAction(button) {
     "listing-generate-ai-draft",
     "listing-rewrite-buyer-copy",
     "listing-check-generation-result",
+    "listing-resume-generation",
     "listing-check-legacy-generation-result",
     "listing-restore-buyer-copy",
     "listing-start-backend-workflow",
@@ -36278,6 +36460,10 @@ function handleSaasAction(button) {
   }
   if (action === "listing-check-generation-result") {
     checkSaasListingGenerationResult();
+    return;
+  }
+  if (action === "listing-resume-generation") {
+    resumeSaasListingGeneration();
     return;
   }
   if (action === "listing-check-legacy-generation-result") {

@@ -9,6 +9,7 @@ const net = require("net");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
+const { isDeepStrictEqual } = require("node:util");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
 const {
   assertSafeMutationBase,
@@ -799,11 +800,12 @@ async function runSmoke() {
           current_base_report: recovery.report, base_changed: Boolean(recovery.head && recovery.head.base_report_id !== recovery.report.report_id) }) });
       }
       const body = JSON.parse(request.postData() || "{}");
-      if (JSON.stringify(body.listing_project_identity) !== JSON.stringify(recovery.identity)) throw new Error("checkpoint fixture identity mismatch");
+      // JSON object key order is not identity; keep values, types and full key sets strict.
+      if (!isDeepStrictEqual(body.listing_project_identity, recovery.identity)) throw new Error("checkpoint fixture identity mismatch");
       recoveredCheckpointPosts += 1;
       const replay = recovery.posts.get(body.mutation_id);
       if (replay) {
-        if (JSON.stringify(replay.body) !== JSON.stringify(body)) throw new Error("checkpoint mutation was reused for different edits");
+        if (!isDeepStrictEqual(replay.body, body)) throw new Error("checkpoint mutation was reused for different edits");
         return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ status: "saved", checkpoint: replay.receipt }) });
       }
       if (!recovery.initialized || body.expected_revision !== (recovery.head?.revision || 0) || body.base_report_id !== recovery.report.report_id) {

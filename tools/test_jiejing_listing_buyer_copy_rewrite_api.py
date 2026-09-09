@@ -260,11 +260,83 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
                 self.assertEqual(status, 409)
                 self.assertEqual(conflict["status"], "conflict")
                 self.assertIs(conflict["can_retry"], False)
+                changed_marks = {**request, "current_draft_fields": {**request["current_draft_fields"],
+                    "merchant_edited_fields": [key for key in self.edited if key != "price"]}}
+                self.assertEqual({key: changed_marks["current_draft_fields"][key] for key in FIELD_KEYS}, self.fields)
+                self.assertNotEqual(changed_marks["current_draft_fields"]["merchant_edited_fields"], self.edited)
+                status, marks_conflict = self.request(self.path, method="POST", body=changed_marks)
+                self.assertEqual(status, 409)
+                self.assertEqual(marks_conflict["status"], "conflict")
+                self.assertEqual(marks_conflict["failure_code"], "listing_generation_operation_conflict")
+                self.assertIs(marks_conflict["can_retry"], False)
                 self.assertEqual(len(self.calls()), 1)
                 self.assertEqual(self.quota(), quota)
             finally:
                 (self.root / "provider-release").touch()
             self.assertEqual(first.result(timeout=20)[0], 201)
+
+    def test_not_found_then_resume_claim_prevents_late_original_post_from_executing_again(self):
+        import threading
+
+        request = {**self.body, "operation_id": str(uuid.uuid4())}
+        status_path = f"/stores/{self.store_id}/listing-drafts/{self.identity['key']}/generation-status?" + urllib.parse.urlencode({
+            "operation_id": request["operation_id"], "source_report_id": self.identity["source_report_id"],
+            "candidate_id": self.identity["candidate_id"]})
+        original_ready, release_original = threading.Event(), threading.Event()
+        quota_before = self.quota()
+        (self.root / "provider-control.json").write_text(json.dumps({"hold": True}), encoding="utf-8")
+
+        def delayed_original_post():
+            # Delay only delivery of the frozen client request, not API claim/storage.
+            original_ready.set()
+            if not release_original.wait(timeout=10):
+                raise TimeoutError("late original request was not released")
+            return self.request(self.path, method="POST", body=request)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            original = pool.submit(delayed_original_post)
+            try:
+                self.assertTrue(original_ready.wait(timeout=5))
+                status, missing = self.request(status_path)
+                self.assertEqual(status, 200)
+                self.assertEqual(missing["operation_id"], request["operation_id"])
+                self.assertEqual(missing["status"], "not_found")
+                self.assertIs(missing["report"], None)
+                self.assertIs(missing["can_retry"], False)
+                self.assertEqual(self.calls(), [])
+                self.assertEqual(self.quota(), quota_before)
+
+                resumed = pool.submit(self.request, self.path, method="POST", body=copy.deepcopy(request))
+                deadline = time.monotonic() + 10
+                while not (self.root / "provider-entered").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue((self.root / "provider-entered").exists())
+                quota_pending = self.quota()
+                release_original.set()
+                status, replay = original.result(timeout=10)
+                self.assertEqual(status, 200)
+                self.assertEqual(replay["status"], "running")
+                self.assertEqual(replay["operation_id"], request["operation_id"])
+                self.assertEqual(replay["task_id"], missing["task_id"])
+                self.assertIs(replay["can_retry"], False)
+                self.assertEqual(len(self.calls()), 1)
+                self.assertEqual(self.quota(), quota_pending)
+            finally:
+                release_original.set()
+                (self.root / "provider-release").touch()
+            status, generated = resumed.result(timeout=20)
+            self.assertEqual(status, 201)
+            self.assertEqual(generated["report"]["task_id"], missing["task_id"])
+
+        quota_completed = self.quota()
+        self.assertEqual(quota_completed["used"], quota_before["used"] + 1)
+        status, observed = self.request(status_path)
+        self.assertEqual(status, 200)
+        self.assertEqual(observed["status"], "report_saved")
+        self.assertEqual(observed["task_id"], missing["task_id"])
+        self.assertEqual(observed["report"]["report_id"], generated["report"]["report_id"])
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(self.quota(), quota_completed)
 
     def test_operation_is_claimed_before_source_precheck_can_race_a_replay(self):
         request = {**self.body, "operation_id": str(uuid.uuid4())}
@@ -413,6 +485,12 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         stored_report = next(item for item in self.request("/reports")[1]["reports"] if item["report_id"] == report["report_id"])
         self.assertEqual(report.get("company_id"), stored_report["company_id"])
         self.assertEqual(report.get("store_id"), stored_report["store_id"])
+        checkpoint_base = self.request(self.checkpoint_path + self.checkpoint_query)[1]["current_base_report"]
+        self.assertEqual(checkpoint_base["report_id"], report["report_id"])
+        self.assertEqual(checkpoint_base["task_id"], report["task_id"])
+        generation_task = next(item for item in self.request("/tasks")[1]["tasks"] if item["task_id"] == report["task_id"])
+        self.assertEqual(generation_task["user_id"], self.request("/me")[1]["identity"]["user_id"])
+        self.assertEqual(checkpoint_base.get("user_id"), generation_task["user_id"], "checkpoint projection retains the actual task author")
         contract = report["report"]["listing_handoff"]["listing_fields"]["buyer_copy_rewrite"]
         self.assertEqual(contract["previous_fields"], self.fields)
         status, saved = self.request(self.checkpoint_path, method="POST", body={**self.checkpoint_body,
@@ -697,7 +775,8 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"], continued["checkpoint"])
         self.assertEqual(len(self.calls()), 1)
 
-    def test_real_browser_rewrites_saves_and_reloads_via_http(self):
+    def run_real_browser(self, wire_case=None, lose_generation_response=False, reload_before_check=False,
+                         unregistered_first_response=False, legacy_request_signature=False):
         node = shutil.which("node")
         self.assertIsNotNone(node, "the configured Node runtime is required for local browser integration")
         base_report = self.request(self.checkpoint_path + self.checkpoint_query)[1]["current_base_report"]
@@ -705,7 +784,10 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             cwd=ROOT, text=True, encoding="utf-8", capture_output=True, timeout=60,
             input=json.dumps({"api_base": self.base, "session_token": self.token,
                 "profile": self.request("/me")[1], "store_id": self.store_id, "identity": self.identity,
-                "base_report": base_report, "fields": self.fields, "merchant_edited_fields": self.edited}),
+                "base_report": base_report, "fields": self.fields, "merchant_edited_fields": self.edited,
+                "wire_case": wire_case, "lose_generation_response": lose_generation_response,
+                "reload_before_check": reload_before_check, "unregistered_first_response": unregistered_first_response,
+                "legacy_request_signature": legacy_request_signature}),
             env={"SYSTEMROOT": "C:\\Windows", "PROGRAMFILES": "C:\\Program Files", "TEMP": str(self.root), "TMP": str(self.root),
                  "PATH": str(Path(node).parent)})
         # Never echo child output that could contain the local fixture session.
@@ -713,7 +795,10 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             if line.startswith("buyer_copy_rewrite_http_browser_smoke_failed")
             and all(character.isalnum() or character == "_" for character in line)), "no_safe_failure_location")
         self.assertEqual(result.returncode, 0, "real browser -> HTTP rewrite integration failed: " + safe_failure)
-        evidence = json.loads(result.stdout)
+        return json.loads(result.stdout)
+
+    def test_real_browser_rewrites_saves_and_reloads_via_http(self):
+        evidence = self.run_real_browser()
         self.assertEqual(evidence["generation_posts"], 1)
         self.assertEqual(evidence["checkpoint_posts"], 2, "one explicit original flush and one new-copy adoption")
         self.assertTrue(evidence["refreshed"])
@@ -723,6 +808,88 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertNotEqual(current["checkpoint"]["fields"]["title"], self.fields["title"])
         self.assertEqual(current["checkpoint"]["fields"]["price"], self.fields["price"])
         self.assertEqual(len(self.calls()), 1)
+
+    def assert_real_browser_default_generation(self, resume=False):
+        copy_fields = {key: value for key, value in LocalModelBoundary().output.items()
+                       if key in {"title", "selling_points", "description"}}
+        self.fields.update({**copy_fields, "selling_points": "\n".join(copy_fields["selling_points"])})
+        status, _ = self.request(self.checkpoint_path, method="POST", body={
+            "contract_version": "listing_merchant_edit_v1", "listing_project_identity": self.identity,
+            "base_report_id": self.body["expected_base_report_id"], "expected_revision": 1,
+            "mutation_id": str(uuid.uuid4()), "fields": self.fields, "merchant_edited_fields": self.edited})
+        self.assertEqual(status, 201)
+        (self.root / "provider-control.json").write_text(json.dumps({"output": copy_fields}), encoding="utf-8")
+        evidence = self.run_real_browser("default", unregistered_first_response=resume)
+        self.assertEqual(evidence["status"], 201)
+        self.assertEqual(evidence["generation_posts"], 2 if resume else 1)
+        self.assertTrue(evidence["ui_metadata_retained_at_send"])
+        self.assertEqual(evidence["external_requests"], 0)
+        self.assertEqual(len(self.calls()), 1)
+        return evidence
+
+    def test_real_browser_default_generation_uses_the_same_wire_fact_contract(self):
+        self.assert_real_browser_default_generation()
+
+    def test_real_browser_signed_default_resumes_after_reload_without_changing_wire_or_creating_checkpoint(self):
+        evidence = self.assert_real_browser_default_generation(resume=True)
+        self.assertTrue(evidence["persisted_signature_reloaded"])
+        self.assertEqual(evidence["checkpoint_posts"], 0)
+        self.assertEqual(evidence["generation_status_gets"], 3)
+        self.assertEqual(self.quota()["used"], 1)
+
+    def assert_browser_wire_rejected(self, kind):
+        before_tasks = self.request("/tasks")[1]
+        evidence = self.run_real_browser(kind)
+        self.assertEqual(evidence["status"], 400)
+        self.assertEqual(evidence["generation_posts"], 1)
+        self.assertTrue(evidence["ui_metadata_retained_at_send"])
+        self.assertEqual(evidence["external_requests"], 0)
+        self.assertEqual(self.request("/tasks")[1], before_tasks)
+        self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"]["fields"], self.fields)
+        self.assertEqual(self.calls(), [])
+
+    def test_real_browser_wire_unknown_packet_key_remains_rejected_before_model(self):
+        self.assert_browser_wire_rejected("unknown")
+
+    def test_real_browser_wire_sensitive_fact_remains_rejected_before_model(self):
+        self.assert_browser_wire_rejected("sensitive")
+
+    def test_real_browser_lost_rewrite_response_recovers_exact_result_with_original_revision(self):
+        evidence = self.run_real_browser(lose_generation_response=True)
+        self.assertEqual(evidence["generation_posts"], 1)
+        self.assertEqual(evidence["generation_status_gets"], 1)
+        self.assertEqual(evidence["checkpoint_posts"], 2)
+        self.assertTrue(evidence["refreshed"])
+        self.assertEqual(evidence["external_requests"], 0)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_real_browser_lost_rewrite_response_reloads_original_signature_before_result_check(self):
+        evidence = self.run_real_browser(lose_generation_response=True, reload_before_check=True)
+        self.assertTrue(evidence["persisted_signature_reloaded"])
+        self.assertEqual(evidence["generation_posts"], 1)
+        self.assertEqual(evidence["generation_status_gets"], 1)
+        self.assertEqual(evidence["checkpoint_posts"], 2)
+        self.assertTrue(evidence["refreshed"])
+        self.assertEqual(evidence["external_requests"], 0)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_real_browser_continues_unregistered_generation_with_original_operation_once(self):
+        evidence = self.run_real_browser(unregistered_first_response=True)
+        self.assertEqual(evidence["generation_posts"], 2)
+        self.assertEqual(evidence["generation_status_gets"], 3)
+        self.assertEqual(evidence["checkpoint_posts"], 2, "continue must not flush or rebase the original source")
+        self.assertTrue(evidence["refreshed"])
+        self.assertEqual(evidence["external_requests"], 0)
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(self.quota()["used"], 1)
+
+    def test_real_browser_legacy_unregistered_rewrite_uses_original_input_and_exact_checkpoint_proof(self):
+        evidence = self.run_real_browser(unregistered_first_response=True, legacy_request_signature=True)
+        self.assertEqual(evidence["generation_posts"], 2)
+        self.assertEqual(evidence["checkpoint_posts"], 2)
+        self.assertTrue(evidence["legacy_request_signature_remains_absent"])
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(self.quota()["used"], 1)
 
 
 if __name__ == "__main__":

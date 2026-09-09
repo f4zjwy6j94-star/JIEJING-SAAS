@@ -115,7 +115,7 @@ def _base_candidate(repository, conn, company_id, store_id, identity, excluded_i
     parameters = (company_id, store_id, *(identity[key] for key in IDENTITY_KEYS))
     parameters += tuple(excluded_ids)
     row = conn.execute(
-        f"""select r.*, t.company_id, t.store_id from reports r
+        f"""select r.*, t.company_id, t.store_id, t.user_id from reports r
         join tasks t on t.task_id = r.task_id
         where t.company_id = ? and t.store_id = ? and r.status = 'saved'
           and r.report_type in ('listing.package','product.listing','merchant.product_facts','ai_ceo.market_research')

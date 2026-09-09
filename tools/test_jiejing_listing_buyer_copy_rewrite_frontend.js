@@ -50,6 +50,11 @@ function checkpoint(fields, revision, mutation, reportId = currentBase.report_id
   mutation_id: mutation, company_id: companyId, store_id: storeId, listing_project_identity: identity, base_report_id: reportId,
   fields: { ...fields }, merchant_edited_fields: ["price"], saved_at: "2026-09-09T03:00:00Z", source: "merchant_edit" }; }
 function deferred() { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; }
+function unregisteredResult(operationId) { return { contract_version: "listing_generation_operation_v1", operation_id: operationId,
+  task_id: "unregistered-task", company_id: companyId, user_id: userId, store_id: storeId, listing_project_identity: identity,
+  generation_mode: null, expected_base_report_id: null, expected_checkpoint_revision: null, status: "not_found", can_retry: false,
+  report: null, failure_code: "", message: "尚未登记", model_called: null, usage_consumed: null, report_save_attempted: null,
+  real_platform_writes_enabled: false, secret_exposed: false }; }
 before(async () => {
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
   const boot = /exposeLocalJiejingTestHooks\(\);\r?\ninit\(\);\r?\nrunLocalJiejingQaScenarioFromUrl\(\);\s*$/;
@@ -87,7 +92,9 @@ before(async () => {
       return json(res, 201, { status: "completed", report: rewriteReport, listing_project_identity: identity, missing_fields: [] });
     }
     if (checkpointHandler && await checkpointHandler(request, res)) return;
-    if (req.method === "GET") return json(res, 200, { status: head ? "saved" : "empty", checkpoint: head,
+    if (req.method === "GET") return json(res, 200, { contract_version: "listing_merchant_edit_v1",
+      model_called: false, usage_consumed: false, real_platform_writes_enabled: false, secret_exposed: false,
+      status: head ? "saved" : "empty", checkpoint: head,
       current_revision: head?.revision || 0, current_base_report_id: currentBase.report_id, current_base_report: currentBase,
       base_changed: Boolean(head && head.base_report_id !== currentBase.report_id), superseded_rewrite_report_ids: supersededIds });
     if (request.body.expected_revision !== (head?.revision || 0) || request.body.base_report_id !== currentBase.report_id) {
@@ -137,6 +144,281 @@ async function device(report = originalReport, options = {}) {
   await page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
   return { page, context, errors };
 }
+
+test("editing while the first request is being signed keeps the edit and ends as unsent so an explicit request remains possible", async () => {
+  reset(); generationHandler = async (_request, res) => { json(res, 503, sourceUnavailableFailure); return true; };
+  const first = await device();
+  try {
+    await first.page.evaluate(() => {
+      const digest = crypto.subtle.digest.bind(crypto.subtle);
+      let held = false;
+      crypto.subtle.digest = async (...args) => {
+        const result = await digest(...args);
+        if (!held) { held = true; window.__firstHashEntered = true; await new Promise((resolve) => { window.__releaseFirstHash = resolve; }); }
+        return result;
+      };
+    });
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    await first.page.waitForFunction(() => window.__firstHashEntered === true);
+    const unsentId = await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.operation.operation_id);
+    await first.page.locator('[data-saas-listing-draft-field="description"]').fill("Merchant changes while signing");
+    await first.page.evaluate(() => window.__releaseFirstHash());
+    await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+    assert.equal(requests.filter((request) => request.path === generationPath).length, 0);
+    assert.equal(await first.page.locator('[data-saas-listing-draft-field="description"]').inputValue(), "Merchant changes while signing");
+    assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.status), "blocked");
+    assert.match(await first.page.locator("[data-saas-listing-ai-feedback]").innerText(), /未调用 AI/);
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+    assert.equal(requests.filter((request) => request.path === generationPath).length, 1);
+    assert.notEqual(requests.find((request) => request.path === generationPath).body.operation_id, unsentId);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.page.evaluate(() => window.__releaseFirstHash?.()); await first.context.close(); }
+});
+
+test("continuing an unregistered request reads a changed checkpoint without absorbing or overwriting it", async () => {
+  reset();
+  generationHandler = async (_request, res) => { json(res, 400, { status: "blocked", failure_code: "listing_generation_operation_invalid",
+    model_called: false, usage_consumed: false, report: null }); return true; };
+  generationStatusHandler = async (request, res) => { json(res, 200, { contract_version: "listing_generation_operation_v1",
+    operation_id: request.query.operation_id, task_id: "unregistered-operation-task", company_id: companyId, user_id: userId, store_id: storeId,
+    listing_project_identity: identity, generation_mode: null, expected_base_report_id: null, expected_checkpoint_revision: null,
+    status: "not_found", can_retry: false, report: null, failure_code: "", message: "尚未找到本次生成。",
+    model_called: null, usage_consumed: null, report_save_attempted: null, real_platform_writes_enabled: false, secret_exposed: false }); return true; };
+  const first = await device();
+  try {
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generation_uncertain");
+    await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.resume_available === true);
+    const before = await first.page.evaluate(() => ({ fields: state.saasListingComposerDraft.fields,
+      record: { revision: saasListingCloudRecord().revision, base: saasListingCloudRecord().baseReportId, seq: saasListingCloudRecord().seq },
+      reports: state.saasReports.map((report) => report.report_id) }));
+    head = { ...head, revision: 2, fields: { ...head.fields, title: "Other device newer title" } };
+    await first.page.getByRole("button", { name: "继续本次生成", exact: true }).click();
+    await first.page.waitForFunction(() => !state.saasListingComposerDraft.ai_generation_feedback?.checking);
+    assert.deepEqual(await first.page.evaluate(() => ({ fields: state.saasListingComposerDraft.fields,
+      record: { revision: saasListingCloudRecord().revision, base: saasListingCloudRecord().baseReportId, seq: saasListingCloudRecord().seq },
+      reports: state.saasReports.map((report) => report.report_id) })), before);
+    assert.equal(requests.filter((request) => request.path === generationPath).length, 1);
+    assert.equal(requests.filter((request) => request.path === checkpointPath && request.method === "POST").length, 1);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("continuation is single flight and rechecks editing, scope, descriptor, and signatures across awaits", async () => {
+  for (const kind of ["double-click", "edit-get", "edit-hash", "scope-hash", "descriptor-get", "signature-get", "refresh-get", "running", "failed"]) {
+    reset(); const entered = deferred(), released = deferred();
+    generationHandler = async (_request, res) => { json(res, requests.filter((r) => r.path === generationPath).length === 1 ? 400 : kind === "failed" ? 422 : 201, {}); return true; };
+    generationStatusHandler = async (request, res) => {
+      const count = requests.filter((r) => r.path === generationStatusPath).length;
+      if (count === 2) { entered.resolve(); await released.promise; }
+      const submitted = requests.find((r) => r.path === generationPath).body;
+      const result = unregisteredResult(request.query.operation_id);
+      if ((kind === "running" && count === 2) || count === 3) Object.assign(result, {
+        generation_mode: "rewrite_buyer_copy", expected_base_report_id: submitted.expected_base_report_id,
+        expected_checkpoint_revision: submitted.expected_checkpoint_revision, report_save_attempted: false,
+        status: kind === "failed" ? "failed_before_report" : "running", can_retry: kind === "failed",
+        model_called: true, usage_consumed: true, failure_code: kind === "failed" ? "listing_model_output_ungrounded_material" : "",
+      });
+      json(res, 200, result); return true;
+    };
+    const first = await device();
+    try {
+      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+      await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+      const wire = requests.find((r) => r.path === generationPath).body;
+      await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+      await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.resume_available === true);
+      if (kind.endsWith("hash")) await first.page.evaluate(() => {
+        const digest = crypto.subtle.digest.bind(crypto.subtle); let held = false;
+        crypto.subtle.digest = async (...args) => { const value = await digest(...args);
+          if (!held) { held = true; window.__resumeHashEntered = true; await new Promise((resolve) => { window.__resumeHashRelease = resolve; }); } return value; };
+      });
+      const button = first.page.getByRole("button", { name: "继续本次生成", exact: true });
+      if (kind === "double-click") { const box = await button.boundingBox(); await first.page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2); }
+      else await button.click();
+      await entered.promise;
+      assert.equal(requests.filter((r) => r.path === generationStatusPath).length, 2, "one action-time read, including double click");
+      if (kind === "edit-get") await first.page.locator('[data-saas-listing-draft-field="description"]').fill("Edited during result read");
+      if (kind === "descriptor-get") await first.page.evaluate(() => { state.saasListingComposerDraft.ai_generation_feedback.operation.expected_checkpoint_revision += 1; });
+      if (kind === "signature-get") await first.page.evaluate(() => { state.saasListingComposerDraft.ai_generation_feedback.request_signature = "e".repeat(64); });
+      if (kind === "refresh-get") await first.page.evaluate(() => { saasStateRefreshGeneration += 1; });
+      released.resolve();
+      if (kind.endsWith("hash")) {
+        await first.page.waitForFunction(() => window.__resumeHashEntered);
+        if (kind === "edit-hash") await first.page.locator('[data-saas-listing-draft-field="description"]').fill("Edited during request hash");
+        else await first.page.evaluate(() => {
+          state.saasListingComposerDraft.listing_project_identity = { key: "other-project", source_report_id: "other-source", candidate_id: "other" };
+          state.saasListingComposerDraft.ai_generation_feedback = null;
+        });
+        await first.page.evaluate(() => window.__resumeHashRelease());
+      }
+      await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+      const sends = requests.filter((r) => r.path === generationPath);
+      assert.equal(sends.length, ["double-click", "failed"].includes(kind) ? 2 : 1, kind);
+      if (sends.length === 2) assert.deepEqual(sends[1].body, wire);
+      if (kind === "failed") assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.status), "failed");
+      if (kind === "scope-hash") assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback), null);
+      if (kind.startsWith("edit")) assert.equal(await first.page.locator('[data-saas-listing-draft-field="description"]').inputValue(), kind === "edit-get" ? "Edited during result read" : "Edited during request hash");
+      assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { released.resolve(); await first.page.evaluate(() => window.__resumeHashRelease?.()); await first.context.close(); }
+  }
+});
+
+test("a damaged request signature remains damaged across actual reload instead of becoming legacy permission", async () => {
+  reset(); generationHandler = async (_request, res) => { json(res, 400, {}); return true; };
+  generationStatusHandler = async (request, res) => { json(res, 200, unregisteredResult(request.query.operation_id)); return true; };
+  const first = await device();
+  try {
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+    await first.page.evaluate(() => { state.saasListingComposerDraft.ai_generation_feedback.request_signature = "damaged-original-proof"; saveSaasProtectedStateSnapshot(); });
+    await first.page.reload();
+    assert.equal(await first.page.evaluate((base) => {
+      window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasApiBase = base;
+      const restored = hydrateSaasProtectedStateFromCache();
+      state.saasProtectedStateReady = true; state.saasProtectedStateFromCache = false; state.view = "product";
+      bindEvents(); renderProductListingCenter(); return restored;
+    }, base), true);
+    assert.notEqual(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.request_signature), null);
+    await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+    await first.page.waitForFunction(() => !state.saasListingComposerDraft.ai_generation_feedback.checking);
+    assert.equal(await first.page.getByRole("button", { name: "继续本次生成", exact: true }).count(), 0);
+    assert.match(await first.page.locator("[data-saas-listing-ai-feedback]").innerText(), /暂时无法安全继续/);
+    assert.equal(requests.filter((request) => request.path === generationPath).length, 1);
+    assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("legacy default without an original request signature stays protected with an accurate merchant message", async () => {
+  reset(); generationHandler = async (_request, res) => { json(res, 400, {}); return true; };
+  generationStatusHandler = async (request, res) => { json(res, 200, unregisteredResult(request.query.operation_id)); return true; };
+  const first = await device();
+  try {
+    await first.page.evaluate(() => renderProductListingCenter());
+    await first.page.getByRole("button", { name: "AI 生成 Listing 草稿", exact: true }).click();
+    await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+    await first.page.evaluate(() => { delete state.saasListingComposerDraft.ai_generation_feedback.request_signature; saveSaasProtectedStateSnapshot(); });
+    await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+    await first.page.waitForFunction(() => !state.saasListingComposerDraft.ai_generation_feedback.checking);
+    assert.equal(await first.page.getByRole("button", { name: "继续本次生成", exact: true }).count(), 0);
+    assert.match(await first.page.locator("[data-saas-listing-ai-feedback]").innerText(), /暂时无法安全继续/);
+    assert.equal(requests.filter((request) => request.path === generationPath).length, 1);
+    assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.request_signature), null);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("the explicit continuation feedback fits desktop and tablet with the real stylesheet", async () => {
+  const output = fs.mkdtempSync(path.join(os.tmpdir(), "jiejing-original-operation-ui-"));
+  for (const width of [1440, 768]) {
+    reset(); generationHandler = async (_request, res) => { json(res, 400, {}); return true; };
+    generationStatusHandler = async (request, res) => { json(res, 200, unregisteredResult(request.query.operation_id)); return true; };
+    const first = await device(originalReport, { visual: true, width });
+    try {
+      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+      await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+      await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+      await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.resume_available === true);
+      const button = first.page.getByRole("button", { name: "继续本次生成", exact: true });
+      await button.scrollIntoViewIfNeeded();
+      assert.equal(await button.isVisible(), true);
+      assert.equal(await first.page.locator("[data-saas-listing-ai-feedback]").evaluate((node) => node.scrollWidth <= node.clientWidth + 1), true);
+      assert.equal(requests.filter((request) => request.path === generationPath).length, 1);
+      const screenshot = path.join(output, `continue-operation-${width}.png`);
+      await first.page.locator("[data-saas-listing-ai-feedback]").screenshot({ path: screenshot });
+      console.log(JSON.stringify({ continuation_ui_evidence: { width, screenshot, stylesheet: "styles.css", app_inline_guards_retained: true } }));
+      assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { await first.context.close(); }
+  }
+});
+
+test("signed default cannot continue when only a non-wire price edit mark changes", async () => {
+  reset(); head = checkpoint(previousFields, 1, "original-mutation"); head.merchant_edited_fields = [...copyKeys];
+  generationHandler = async (_request, res) => { json(res, 400, {}); return true; };
+  generationStatusHandler = async (request, res) => { json(res, 200, { contract_version: "listing_generation_operation_v1",
+    operation_id: request.query.operation_id, task_id: "unregistered-task", company_id: companyId, user_id: userId, store_id: storeId,
+    listing_project_identity: identity, generation_mode: null, expected_base_report_id: null, expected_checkpoint_revision: null,
+    status: "not_found", can_retry: false, report: null, failure_code: "", message: "尚未登记",
+    model_called: null, usage_consumed: null, report_save_attempted: null, real_platform_writes_enabled: false, secret_exposed: false }); return true; };
+  const first = await device();
+  try {
+    await first.page.evaluate(() => renderProductListingCenter());
+    await first.page.getByRole("button", { name: "AI 生成 Listing 草稿", exact: true }).click();
+    await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+    const before = await first.page.evaluate(() => saasListingAiGenerationEditSnapshot().draft);
+    await first.page.locator('[data-saas-listing-draft-field="price"]').fill(previousFields.price);
+    assert.equal(await first.page.evaluate(() => saasListingAiGenerationEditSnapshot().draft), before, "only the edit mark changes");
+    assert.deepEqual(requests.find((request) => request.path === generationPath).body.current_draft_fields.merchant_edited_fields, copyKeys);
+    assert.ok(await first.page.evaluate(() => saasListingMerchantEditedFields().includes("price")));
+    head = { ...head, revision: 2, merchant_edited_fields: [...copyKeys, "price"] };
+    await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.resume_available === true);
+    await first.page.getByRole("button", { name: "继续本次生成", exact: true }).click();
+    await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+    assert.equal(requests.filter((request) => request.path === generationPath).length, 1);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("resume rejects incomplete raw checkpoint evidence even when normalized empty marks look equal", async () => {
+  for (const kind of ["missing-marks", "invalid-marks", "duplicate-marks", "wrong-contract", "string-revision", "string-safety"]) {
+    reset(); generationHandler = async (_request, res) => { json(res, 400, {}); return true; };
+    generationStatusHandler = async (request, res) => { json(res, 200, { contract_version: "listing_generation_operation_v1",
+      operation_id: request.query.operation_id, task_id: "unregistered-task", company_id: companyId, user_id: userId, store_id: storeId,
+      listing_project_identity: identity, generation_mode: null, expected_base_report_id: null, expected_checkpoint_revision: null,
+      status: "not_found", can_retry: false, report: null, failure_code: "", message: "尚未登记",
+      model_called: null, usage_consumed: null, report_save_attempted: null, real_platform_writes_enabled: false, secret_exposed: false }); return true; };
+    const first = await device();
+    try {
+      await first.page.evaluate(() => { state.saasListingComposerDraft.merchant_edited_fields = []; });
+      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+      await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+      await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+      await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback.resume_available === true);
+      checkpointHandler = async (request, res) => {
+        if (request.method !== "GET") return false;
+        const payload = { contract_version: "listing_merchant_edit_v1", status: "saved", checkpoint: structuredClone(head),
+          current_revision: head.revision, current_base_report_id: currentBase.report_id, current_base_report: currentBase, base_changed: false,
+          model_called: false, usage_consumed: false, real_platform_writes_enabled: false, secret_exposed: false };
+        if (kind === "missing-marks") delete payload.checkpoint.merchant_edited_fields;
+        if (kind === "invalid-marks") payload.checkpoint.merchant_edited_fields = ["not-an-editable-field"];
+        if (kind === "duplicate-marks") payload.checkpoint.merchant_edited_fields = ["title", "title"];
+        if (kind === "wrong-contract") payload.contract_version = "other_contract";
+        if (kind === "string-revision") payload.current_revision = String(head.revision);
+        if (kind === "string-safety") payload.model_called = "false";
+        json(res, 200, payload); return true;
+      };
+      await first.page.getByRole("button", { name: "继续本次生成", exact: true }).click();
+      await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
+      assert.equal(requests.filter((request) => request.path === generationPath).length, 1, kind);
+      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+      assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { await first.context.close(); }
+  }
+});
+
+test("fact snapshot copy metadata is idempotent across persistence without losing real copy or vision restrictions", async () => {
+  reset(); const first = await device();
+  try {
+    const actualCopy = { title: "Merchant source title", selling_points: ["Foldable", "For desktop use"], description: "Merchant source description." };
+    const samples = await first.page.evaluate(({ packet, copy }) => [
+      { ...packet }, { ...packet, listing_copy: {} }, { ...packet, listing_copy: copy },
+      { ...packet, source: "backend_product_vision_extraction", listing_copy: copy },
+    ].map((input) => {
+      const once = sanitizeSaasMerchantProductFactPacketSnapshot(input);
+      return { once, twice: sanitizeSaasMerchantProductFactPacketSnapshot(once) };
+    }), { packet: factPacket, copy: actualCopy });
+    for (const [index, sample] of samples.entries()) assert.deepEqual(sample.once, sample.twice, `snapshot sample ${index}`);
+    assert.deepEqual(samples[0].once.listing_copy, {}); assert.deepEqual(samples[1].once.listing_copy, {});
+    assert.deepEqual(samples[2].once.listing_copy, actualCopy);
+    assert.deepEqual(samples[3].once.listing_copy, {});
+    assert.equal(samples[3].once.buyer_copy_requires_validated_listing_generation, true);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
 
 test("unknown generation keeps an operation identity and explicit result check reads one exact operation without another model call", async () => {
   reset();
@@ -198,6 +480,133 @@ test("result check adopts the exact saved rewrite through the original revision 
     assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback), null);
     assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
   } finally { await first.context.close(); }
+});
+
+test("saved rewrite recovery requires its original signature and preserves changes before or during hashing", async () => {
+  for (const kind of ["missing", "malformed", "different", "facts", "copy", "prefill", "hash-edit", "hash-scope"]) {
+    reset();
+    generationHandler = async (_request, res) => {
+      currentBase = rewriteReport;
+      res.writeHead(200, { "content-type": "application/json" }); res.end('{"status":'); return true;
+    };
+    generationStatusHandler = async (request, res) => {
+      json(res, 200, { contract_version: "listing_generation_operation_v1", operation_id: request.query.operation_id,
+        company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: identity,
+        generation_mode: "rewrite_buyer_copy", expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+        task_id: "rewrite-task", status: "report_saved", report_save_attempted: true, can_retry: false,
+        model_called: true, usage_consumed: true, report: { ...rewriteReport, user_id: userId }, failure_code: null,
+        message: "本次文案已保存。", real_platform_writes_enabled: false, secret_exposed: false }); return true;
+    };
+    const first = await device();
+    try {
+      await first.page.evaluate(() => {
+        const draft = state.saasListingComposerDraft;
+        draft.merchant_product_fact_packet = sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet);
+      });
+      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+      await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generation_uncertain");
+      const originalSignature = await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.input_signature);
+      assert.match(originalSignature, /^[a-f0-9]{64}$/);
+      if (kind === "copy") await first.page.locator('[data-saas-listing-draft-field="title"]').fill("Merchant copy after generation");
+      await first.page.evaluate((kind) => {
+        const draft = state.saasListingComposerDraft;
+        if (kind === "missing") delete draft.ai_generation_feedback.input_signature;
+        if (kind === "malformed") draft.ai_generation_feedback.input_signature = "invalid-signature";
+        if (kind === "different") draft.ai_generation_feedback.input_signature = "f".repeat(64);
+        if (kind === "facts") draft.merchant_product_fact_packet.merchant_confirmed_facts.material = "Wood";
+        if (kind === "prefill") draft.publish_prefill.quantity = "8";
+        if (kind.startsWith("hash-")) {
+          const nativeDigest = crypto.subtle.digest.bind(crypto.subtle);
+          crypto.subtle.digest = async (...args) => {
+            const result = await nativeDigest(...args); // Preserve the real hash; delay only its acknowledgement.
+            window.__rewriteHashEntered = true;
+            await new Promise((resolve) => { window.__releaseRewriteHash = resolve; });
+            return result;
+          };
+        }
+      }, kind);
+      await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+      if (kind.startsWith("hash-")) {
+        await first.page.waitForFunction(() => window.__rewriteHashEntered === true);
+        if (kind === "hash-edit") await first.page.locator('[data-saas-listing-draft-field="description"]').fill("Merchant edit during hash");
+        else await first.page.evaluate(() => {
+          state.saasListingComposerDraft.listing_project_identity = { key: "other-project", source_report_id: "other-source", candidate_id: "other" };
+          state.saasListingComposerDraft.ai_generation_feedback = null;
+        });
+        await first.page.evaluate(() => { window.__releaseRewriteHash(); });
+      }
+      if (kind !== "hash-scope") await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generated_unapplied");
+      // Await the actual action, not just its HTTP headers or an arbitrary delay.
+      await first.page.waitForFunction(() => !state.saasListingComposerDraft.ai_generation_feedback?.checking);
+      const observed = await first.page.evaluate(() => ({ fields: state.saasListingComposerDraft.fields,
+        packet: state.saasListingComposerDraft.merchant_product_fact_packet, prefill: state.saasListingComposerDraft.publish_prefill,
+        feedback: state.saasListingComposerDraft.ai_generation_feedback, reports: state.saasReports.map((report) => report.report_id) }));
+      assert.deepEqual(observed.fields, { ...previousFields,
+        ...(kind === "copy" ? { title: "Merchant copy after generation" } : {}),
+        ...(kind === "hash-edit" ? { description: "Merchant edit during hash" } : {}) }, kind);
+      if (kind === "facts") assert.equal(observed.packet.merchant_confirmed_facts.material, "Wood");
+      assert.equal(observed.prefill.quantity, kind === "prefill" ? "8" : "7");
+      if (kind === "hash-scope") { assert.equal(observed.feedback, null); assert.ok(!observed.reports.includes(rewriteReport.report_id)); }
+      else if (["missing", "malformed"].includes(kind)) assert.doesNotMatch(observed.feedback.input_signature || "", /^[a-f0-9]{64}$/, "invalid or absent proof must never be replaced with a fresh signature");
+      else assert.equal(observed.feedback.input_signature, kind === "different" ? "f".repeat(64) : originalSignature);
+      assert.equal(requests.filter((r) => r.path === generationPath).length, 1, kind);
+      assert.equal(requests.filter((r) => r.path === generationStatusPath).length, 1, kind);
+      assert.equal(requests.filter((r) => r.path === checkpointPath && r.method === "POST" && r.body.base_report_id === rewriteReport.report_id).length, 0, kind);
+      assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { await first.context.close(); }
+  }
+});
+
+test("only the fresh own rewrite waiting on its original checkpoint may pass a cloud transition conflict", async () => {
+  for (const kind of ["valid", "other-head", "revision", "fields", "marks", "stale-refresh", "new-edit", "cas-conflict"]) {
+    reset(); const saved = { ...rewriteReport, user_id: userId };
+    generationHandler = async (_request, res) => {
+      currentBase = saved; res.writeHead(200, { "content-type": "application/json" }); res.end('{"status":'); return true;
+    };
+    generationStatusHandler = async (request, res) => {
+      json(res, 200, { contract_version: "listing_generation_operation_v1", operation_id: request.query.operation_id,
+        company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: identity,
+        generation_mode: "rewrite_buyer_copy", expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+        task_id: "rewrite-task", status: "report_saved", report_save_attempted: true, can_retry: false,
+        model_called: true, usage_consumed: true, report: saved, failure_code: null,
+        message: "本次文案已保存。", real_platform_writes_enabled: false, secret_exposed: false }); return true;
+    };
+    const first = await device();
+    try {
+      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+      await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generation_uncertain");
+      if (kind === "other-head") currentBase = { ...saved, report_id: "another-new-head", created_at: "2026-09-09T04:00:00Z" };
+      if (kind === "revision") head.revision = 2;
+      if (kind === "fields") head.fields = { ...head.fields, description: "Another checkpoint copy" };
+      if (kind === "marks") head.merchant_edited_fields = ["title"];
+      // This is a real HTTP read through the product hydration path, not a
+      // manufactured record.conflict or a direct call to the adoption helper.
+      assert.equal(await first.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true })), true);
+      assert.equal(await first.page.evaluate(() => saasListingCloudRecord().status), "conflict", kind);
+      if (kind === "stale-refresh") await first.page.evaluate(() => { saasStateRefreshGeneration += 1; });
+      if (kind === "new-edit") await first.page.locator('[data-saas-listing-draft-field="title"]').fill("Merchant input after cloud read");
+      if (kind === "cas-conflict") checkpointHandler = async (request, res) => {
+        if (request.method !== "POST" || request.body.base_report_id !== saved.report_id) return false;
+        assert.equal(request.body.expected_revision, 1);
+        head = checkpoint({ ...previousFields, description: "Another window won the CAS" }, 2, "outside-mutation-02", originalReport.report_id);
+        currentBase = { ...originalReport, report_id: "new-facts-after-read", created_at: "2026-09-09T04:00:00Z" };
+        json(res, 409, { status: "conflict", current_revision: 2, latest_checkpoint: head,
+          current_base_report_id: currentBase.report_id, current_base_report: currentBase }); return true;
+      };
+      await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+      await first.page.waitForFunction((adopt) => adopt ? state.saasListingComposerDraft.ai_generation_feedback === null
+        : state.saasListingComposerDraft.ai_generation_feedback?.status === "generated_unapplied", kind === "valid");
+      const adoptions = requests.filter((r) => r.path === checkpointPath && r.method === "POST" && r.body.base_report_id === saved.report_id);
+      assert.equal(adoptions.length, ["valid", "cas-conflict"].includes(kind) ? 1 : 0, kind);
+      if (adoptions.length) assert.equal(adoptions[0].body.expected_revision, 1, "always use the original revision, never absorb the read's revision");
+      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), kind === "valid" ? nextFields
+        : { ...previousFields, ...(kind === "new-edit" ? { title: "Merchant input after cloud read" } : {}) }, kind);
+      assert.equal(await first.page.evaluate(() => Boolean(saasListingCloudRecord().conflict)), kind !== "valid", kind);
+      assert.equal(requests.filter((r) => r.path === generationPath).length, 1, kind);
+      assert.equal(requests.filter((r) => r.path === generationStatusPath).length, 1, kind);
+      assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { await first.context.close(); }
+  }
 });
 
 test("a real reload retains a running operation and result checking preserves edits made before or during the GET", async () => {
@@ -607,7 +1016,7 @@ test("a failed generation in Recent returns to the same protected draft instead 
   } finally { await first.context.close(); }
 });
 
-test("a generation POST replay DTO and an explicit legacy saved result reuse the same validated adoption path", async () => {
+test("a generation POST replay uses its original proof while a legacy saved result without that proof preserves current copy", async () => {
   for (const kind of ["post-dto", "legacy-saved"]) {
     reset();
     const saved = { ...rewriteReport, user_id: userId };
@@ -636,9 +1045,19 @@ test("a generation POST replay DTO and an explicit legacy saved result reuse the
         }, { companyId, userId, storeId, identity });
         await first.page.getByRole("button", { name: "核对此次失败", exact: true }).click();
       }
-      await first.page.waitForFunction((title) => state.saasListingComposerDraft.fields.title === title, nextFields.title, { timeout: 3000 });
-      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), nextFields);
-      assert.equal(head.revision, 2); assert.equal(head.base_report_id, saved.report_id);
+      if (kind === "post-dto") {
+        await first.page.waitForFunction((title) => state.saasListingComposerDraft.fields.title === title, nextFields.title, { timeout: 3000 });
+        assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), nextFields);
+        assert.equal(head.revision, 2); assert.equal(head.base_report_id, saved.report_id);
+      } else {
+        await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generated_unapplied");
+        assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+        assert.equal(head.revision, 1); assert.equal(head.base_report_id, originalReport.report_id);
+        assert.equal(requests.filter((r) => r.path === checkpointPath && r.method === "POST").length, 0);
+        assert.ok(await first.page.evaluate((id) => state.saasReports.some((report) => report.report_id === id), saved.report_id));
+        assert.equal(await first.page.getByText("查看重写前文案", { exact: true }).count(), 1);
+        assert.doesNotMatch(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.input_signature || ""), /^[a-f0-9]{64}$/, "never invent original proof for a legacy result");
+      }
       assert.equal(requests.filter((r) => r.path === generationPath).length, kind === "post-dto" ? 1 : 0);
       assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
     } finally { await first.context.close(); }

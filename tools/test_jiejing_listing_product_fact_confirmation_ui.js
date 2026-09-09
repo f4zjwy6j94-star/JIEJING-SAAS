@@ -14,18 +14,28 @@ const browserChannel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
 const manualSourceBrowserRuns = [];
 
 function extractFunction(name) {
+  return extractFunctionFromText(name, source);
+}
+
+function extractFunctionFromText(name, text) {
   const asyncMarker = `async function ${name}(`;
   const marker = `function ${name}(`;
-  const asyncStart = source.indexOf(asyncMarker);
-  const start = asyncStart >= 0 ? asyncStart : source.indexOf(marker);
+  const asyncStart = text.indexOf(asyncMarker);
+  const start = asyncStart >= 0 ? asyncStart : text.indexOf(marker);
   assert.notEqual(start, -1, `${name} must exist in app.js`);
-  const bodyStart = source.indexOf(") {", start) + 2;
+  const bodyStart = text.indexOf(") {", start) + 2;
   assert.ok(bodyStart > start, `${name} function body must exist in app.js`);
   let depth = 0;
   let quote = "";
   let escaped = false;
-  for (let index = bodyStart; index < source.length; index += 1) {
-    const char = source[index];
+  let comment = "";
+  for (let index = bodyStart; index < text.length; index += 1) {
+    const char = text[index], next = text[index + 1];
+    if (comment) {
+      if (comment === "line" && (char === "\n" || char === "\r")) comment = "";
+      else if (comment === "block" && char === "*" && next === "/") { comment = ""; index += 1; }
+      continue;
+    }
     if (escaped) {
       escaped = false;
       continue;
@@ -35,6 +45,11 @@ function extractFunction(name) {
       else if (char === quote) quote = "";
       continue;
     }
+    if (char === "/" && (next === "/" || next === "*")) {
+      comment = next === "/" ? "line" : "block";
+      index += 1;
+      continue;
+    }
     if (char === '"' || char === "'" || char === "`") {
       quote = char;
       continue;
@@ -42,11 +57,24 @@ function extractFunction(name) {
     if (char === "{") depth += 1;
     if (char === "}") {
       depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1);
+      if (depth === 0) return text.slice(start, index + 1);
     }
   }
   throw new Error(`unterminated ${name} function`);
 }
+
+test("function extraction ignores comment punctuation without treating string URLs as comments", () => {
+  const fixture = [
+    "async function fixture() {",
+    "  // A visit's unfinished quote and } do not end or extend the function.",
+    "  /* An unmatched brace { and quote ' are comment data. */",
+    '  const url = "https://example.invalid/a/*literal*/";',
+    "  return { url };",
+    "}",
+  ].join("\n");
+  assert.equal(extractFunctionFromText("fixture", fixture + "\nfunction later() { return 1; }"), fixture);
+  assert.doesNotThrow(() => new Function(extractFunctionFromText("fixture", fixture)));
+});
 
 function extractOptionalFunction(name) {
   return source.includes(`function ${name}(`) ? extractFunction(name) : "";
