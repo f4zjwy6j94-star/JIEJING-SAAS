@@ -60,6 +60,29 @@ class ReleaseGateEvidenceTest(unittest.TestCase):
         self.assertEqual(evidence.get("expected_check_keys"), ["fixture_pass"])
         self.assertEqual(evidence.get("results"), [{"key": "fixture_pass", "pass": True, "returncode": 0}])
 
+    def test_listing_rewrite_api_has_a_bounded_browser_integration_budget(self):
+        command = [sys.executable, "tools/test_jiejing_listing_buyer_copy_rewrite_api.py"]
+        cases = (("listing_buyer_copy_rewrite_api", 300), ("browser_fixture", 300),
+                 ("fixture_pass", 180), ("listing_buyer_copy_rewrite_api_extra", 180),
+                 ("listing_buyer_copy_rewrite", 180))
+        for key, expected in cases:
+            with self.subTest(key=key), patch.object(self.gate.subprocess, "run",
+                    return_value=subprocess.CompletedProcess(command, 0, "PASS", "")) as run:
+                result = self.gate._run_check(key, command)
+                self.assertEqual(run.call_args.kwargs["timeout"], expected)
+                self.assertEqual(run.call_count, 1)
+                self.assertIs(result["pass"], True)
+
+    def test_listing_rewrite_api_timeout_still_fails_without_retry(self):
+        command = [sys.executable, "tools/test_jiejing_listing_buyer_copy_rewrite_api.py"]
+        with patch.object(self.gate.subprocess, "run",
+                side_effect=subprocess.TimeoutExpired(command, 300)) as run:
+            result = self.gate._run_check("listing_buyer_copy_rewrite_api", command)
+        self.assertEqual(run.call_count, 1)
+        self.assertIs(result["pass"], False)
+        self.assertEqual(result["returncode"], 124)
+        self.assertEqual(result["error"], "timeout")
+
     def test_dirty_checks_are_diagnostic_only(self):
         (self.root / "source.txt").write_text("not committed\n", encoding="utf-8")
         code, report = self.run_gate()

@@ -381,7 +381,8 @@ def _run_check(key: str, command: list[str]) -> dict[str, Any]:
                 encoding="utf-8",
                 errors="replace",
                 capture_output=True,
-                timeout=300 if key.startswith("browser_") else 180,
+                # This API suite also exercises full browser recovery journeys.
+                timeout=300 if key.startswith("browser_") or key == "listing_buyer_copy_rewrite_api" else 180,
                 check=False,
             )
             combined_output = f"{completed.stdout}\n{completed.stderr}"
