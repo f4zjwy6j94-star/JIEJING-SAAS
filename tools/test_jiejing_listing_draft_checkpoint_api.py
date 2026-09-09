@@ -493,7 +493,15 @@ class CheckpointHTTPTests(unittest.TestCase):
         self.assertTrue(read["base_changed"])
         self.assertEqual(read["checkpoint"], original["checkpoint"])
         self.assertEqual(read["current_base_report_id"], facts["report"]["report_id"])
-        self.assertEqual(read["current_base_report"], facts["report"])
+        status, profile = self.request("/me")
+        self.assertEqual(status, 200)
+        owner_id = profile["identity"]["user_id"]
+        self.assertEqual(owner_id, profile["user"]["user_id"])
+        self.assertEqual(facts["task"]["user_id"], owner_id)
+        self.assertEqual(read["current_base_report"]["user_id"], owner_id)
+        # Checkpoint reads include the authenticated task author. Preserve the
+        # complete fact-report contract as well; do not discard any DTO fields.
+        self.assertEqual(read["current_base_report"], {"user_id": owner_id, **facts["report"]})
         self.assertEqual(self.request(self.path, method="POST", body=self.body)[0], 200)
         stale = copy.deepcopy(self.body)
         stale.update(expected_revision=1, mutation_id=str(uuid.uuid4()))
