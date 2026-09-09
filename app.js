@@ -34473,15 +34473,36 @@ function reconcileSaasListingRewriteFeedback(record) {
   const feedback = draft?.ai_generation_feedback;
   const source = saasListingRewriteFeedbackSource(feedback?.rewrite_source);
   if (feedback?.operation && !feedback.result_report_id) return false;
-  if (!source || !["generated_unapplied", "generation_uncertain"].includes(feedback?.status) ||
+  if (!["generated_unapplied", "generation_uncertain"].includes(feedback?.status) ||
       feedback.context_key !== saasListingAiGenerationContextKey() || saasListingCloudContext()?.key !== record.context.key ||
       record.dirty || record.pending || record.conflict || !record.loaded || ["error", "forbidden"].includes(record.status)) return false;
-  const resolved = (state.saasReports || []).some((report) => {
+  const resolved = source ? (state.saasReports || []).some((report) => {
     const rewrite = saasListingBuyerCopyRewriteFromReport(report, draft);
     if (feedback.operation && report.report_id !== feedback.result_report_id) return false;
     if (!rewrite || rewrite.expected_base_report_id !== source.base_report_id || rewrite.expected_checkpoint_revision !== source.revision) return false;
     return record.supersededRewriteReportIds.has(report.report_id) || record.receipt?.base_report_id === report.report_id;
-  });
+  }) : (() => {
+    // A saved default-generation report is not permission to replace newer edits.
+    // Finish reconciliation only after the existing cloud CAS/readback confirms
+    // those merchant edits against that exact report as the current base.
+    const operation = saasListingGenerationOperation(feedback.operation);
+    const reportId = feedback.result_report_id;
+    const receipt = record.receipt;
+    if (!operation || operation.generation_mode !== "preserve_merchant_edits" ||
+        saasListingGenerationOperationContextKey(operation) !== feedback.context_key ||
+        feedback.status !== "generated_unapplied" || !reportId || record.status !== "saved" || record.storageFailed ||
+        record.observedRefreshGeneration !== saasStateRefreshGeneration || record.observedBaseReportId !== reportId ||
+        record.baseReportId !== reportId || receipt?.base_report_id !== reportId || receipt.revision !== record.revision ||
+        JSON.stringify(saasListingCloudFields(receipt.fields)) !== JSON.stringify(saasListingCloudFields(record.fields)) ||
+        JSON.stringify(saasListingCloudFields(record.fields)) !== JSON.stringify(saasListingCloudFields(draft.fields)) ||
+        JSON.stringify([...(receipt.merchant_edited_fields || [])].sort()) !== JSON.stringify([...(record.edited || [])].sort()) ||
+        JSON.stringify([...(record.edited || [])].sort()) !== JSON.stringify([...saasListingMerchantEditedFields(draft)].sort())) return false;
+    return (state.saasReports || []).some((report) => report.report_id === reportId &&
+      saasListingCloudReportMatchesContext(report, record.context) && report.report_type === "listing.package" &&
+      report.runtime_run_id === "listing_draft_generation" && report.report?.contract_version === "listing_ai_draft_generation_v1" &&
+      report.report?.listing_handoff?.source_mode === "project_scoped_live_model" &&
+      report.report?.listing_handoff?.ready_for_listing_draft === true && !saasListingBuyerCopyRewriteFromReport(report, draft));
+  })();
   if (!resolved) return false;
   draft.ai_generation_feedback = null;
   saveSaasProtectedStateSnapshot();

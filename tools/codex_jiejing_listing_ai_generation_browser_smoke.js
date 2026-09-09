@@ -717,6 +717,30 @@ async function runSmoke() {
   let holdGeneration = false;
   let heldGeneration = null;
   let generationRequestCount = 0;
+  // These two mocked model successes need the same durable-result boundary as
+  // a real service. Keep this explicitly an HTTP route fixture, not DB proof.
+  const recoveredOperations = new Map();
+  const recoveredCheckpoints = new Map();
+  let resultReadCount = 0;
+  let recoveredCheckpointPosts = 0;
+  const installRecoveredResult = (body, report, requestStoreId) => {
+    const identity = body.listing_project_identity;
+    const reportId = report.report_id;
+    const taskId = `task-${body.operation_id}`;
+    const saved = { ...report, task_id: taskId, company_id: store.company_id, store_id: requestStoreId,
+      user_id: user.user_id, created_at: new Date().toISOString() };
+    const checkpointPath = `/stores/${requestStoreId}/listing-drafts/${identity.key}/checkpoint`;
+    const previous = recoveredCheckpoints.get(checkpointPath);
+    recoveredCheckpoints.set(checkpointPath, { identity, report: saved, head: previous?.head || null,
+      initialized: previous?.initialized || false, posts: previous?.posts || new Map() });
+    recoveredOperations.set(body.operation_id, { contract_version: "listing_generation_operation_v1",
+      operation_id: body.operation_id, company_id: store.company_id, store_id: requestStoreId, user_id: user.user_id,
+      listing_project_identity: identity, generation_mode: "preserve_merchant_edits", expected_base_report_id: null,
+      expected_checkpoint_revision: null, task_id: taskId, status: "report_saved", report_save_attempted: true,
+      can_retry: false, model_called: true, usage_consumed: true, report: saved, failure_code: null,
+      message: "本次草稿已保存。", real_platform_writes_enabled: false, secret_exposed: false });
+    return reportId;
+  };
   let initialCloudReadHeld = false;
   let resolveInitialCloudRead;
   const initialCloudRead = new Promise((resolve) => { resolveInitialCloudRead = resolve; });
@@ -740,7 +764,60 @@ async function runSmoke() {
   ]);
   await context.route(`${base}/**`, async (route) => {
     const request = route.request();
-    const pathname = new URL(request.url()).pathname;
+    const requestUrl = new URL(request.url());
+    const pathname = requestUrl.pathname;
+    const operationResult = recoveredOperations.get(requestUrl.searchParams.get("operation_id"));
+    if (request.method() === "GET" && operationResult && pathname === `/stores/${operationResult.store_id}/listing-drafts/${operationResult.listing_project_identity.key}/generation-status`) {
+      if (["source_report_id", "candidate_id"].some((key) => requestUrl.searchParams.get(key) !== operationResult.listing_project_identity[key])) {
+        throw new Error("result-check fixture received a different project identity");
+      }
+      resultReadCount += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(operationResult) });
+    }
+    const recovery = recoveredCheckpoints.get(pathname);
+    if (recovery && ["GET", "POST"].includes(request.method())) {
+      if (request.method() === "GET") {
+        if (["source_report_id", "candidate_id"].some((key) => requestUrl.searchParams.get(key) !== recovery.identity[key])) {
+          throw new Error("checkpoint fixture received a different project identity");
+        }
+        let actualResponse;
+        try { actualResponse = await route.fetch(); }
+        catch (error) {
+          if (/disposed|closed/i.test(String(error?.message || ""))) return;
+          throw new Error("checkpoint recovery fixture could not read its owned backend");
+        }
+        const actual = await actualResponse.json();
+        if (!actualResponse.ok()) return route.fulfill({ response: actualResponse });
+        // Later original cases create real fact versions. Their newer base
+        // supersedes this temporary model-response fixture normally.
+        if (Date.parse(actual.current_base_report?.created_at || "") > Date.parse(recovery.report.created_at)) {
+          recoveredCheckpoints.delete(pathname); return route.fulfill({ response: actualResponse });
+        }
+        if (!recovery.initialized) { recovery.head = actual.checkpoint; recovery.initialized = true; }
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: recovery.head ? "saved" : "empty",
+          checkpoint: recovery.head, current_revision: recovery.head?.revision || 0, current_base_report_id: recovery.report.report_id,
+          current_base_report: recovery.report, base_changed: Boolean(recovery.head && recovery.head.base_report_id !== recovery.report.report_id) }) });
+      }
+      const body = JSON.parse(request.postData() || "{}");
+      if (JSON.stringify(body.listing_project_identity) !== JSON.stringify(recovery.identity)) throw new Error("checkpoint fixture identity mismatch");
+      recoveredCheckpointPosts += 1;
+      const replay = recovery.posts.get(body.mutation_id);
+      if (replay) {
+        if (JSON.stringify(replay.body) !== JSON.stringify(body)) throw new Error("checkpoint mutation was reused for different edits");
+        return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ status: "saved", checkpoint: replay.receipt }) });
+      }
+      if (!recovery.initialized || body.expected_revision !== (recovery.head?.revision || 0) || body.base_report_id !== recovery.report.report_id) {
+        return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ status: "conflict",
+          current_revision: recovery.head?.revision || 0, latest_checkpoint: recovery.head, current_base_report_id: recovery.report.report_id,
+          current_base_report: recovery.report }) });
+      }
+      recovery.head = { checkpoint_id: `edit-${body.mutation_id}`, revision: body.expected_revision + 1, mutation_id: body.mutation_id,
+        company_id: store.company_id, store_id: recovery.report.store_id, listing_project_identity: recovery.identity,
+        base_report_id: recovery.report.report_id, fields: body.fields, merchant_edited_fields: body.merchant_edited_fields,
+        saved_at: new Date().toISOString(), source: "merchant_edit" };
+      recovery.posts.set(body.mutation_id, { body, receipt: recovery.head });
+      return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ status: "saved", checkpoint: recovery.head }) });
+    }
     // Keep the real server results. Let the store-switch background refresh
     // render while the new product save is in flight, then let the merchant
     // type before its response arrives. Waiting for HTTP alone is not waiting
@@ -1043,6 +1120,26 @@ async function runSmoke() {
   }));
   if (returnResult.staleReportPresent) throw new Error(`old Listing report entered the returned project: ${JSON.stringify(returnResult)}`);
   if (returnResult.title !== "Returned Project New Unsaved Title") throw new Error(`received returned-project title was later overwritten: ${JSON.stringify(returnResult)}`);
+  const recoverSavedResult = async (body, report, requestStoreId, expectedTitle) => {
+    const beforePosts = generationRequestCount;
+    const beforeReads = resultReadCount;
+    installRecoveredResult(body, report, requestStoreId);
+    await page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+    await page.waitForFunction((id) => state.saasListingComposerDraft.ai_generation_feedback?.status === "generated_unapplied" &&
+      state.saasListingComposerDraft.ai_generation_feedback.result_report_id === id, report.report_id);
+    await page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).waitFor({ state: "visible", timeout: 10000 });
+    await page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).click();
+    await page.waitForFunction((id) => {
+      const record = saasListingCloudRecord();
+      return record?.status === "saved" && !record.dirty && !record.pending && !record.conflict &&
+        record.receipt?.base_report_id === id && state.saasListingComposerDraft.ai_generation_feedback === null;
+    }, report.report_id, { timeout: 10000 });
+    if (generationRequestCount !== beforePosts || resultReadCount !== beforeReads + 1 ||
+        await page.inputValue('[data-saas-listing-draft-field="title"]') !== expectedTitle) {
+      throw new Error("explicit saved-result check repeated generation or replaced merchant edits");
+    }
+  };
+  await recoverSavedResult(heldGeneration.body, returnedPayload.report, heldGeneration.storeId, "Returned Project New Unsaved Title");
   heldGeneration = null;
   await page.click('[data-saas-action="listing-generate-ai-draft"]');
   const editDeadline = Date.now() + 10000;
@@ -1064,6 +1161,10 @@ async function runSmoke() {
   }));
   if (editResult.title !== "Merchant Typed While AI Was Running" || editResult.material !== "Updated material awaiting save" || editResult.generating || editResult.buttonDisabled || !editResult.reportRetained) {
     throw new Error(`generation discarded new edits or left the editor busy: ${JSON.stringify(editResult)}`);
+  }
+  await recoverSavedResult(heldGeneration.body, editedPayload.report, heldGeneration.storeId, "Merchant Typed While AI Was Running");
+  if (await page.inputValue('[data-saas-product-fact-field="material"]') !== "Updated material awaiting save") {
+    throw new Error("saved-result review changed pending merchant fact input");
   }
   heldGeneration = null;
   const requestCountBeforeDuplicate = generationRequestCount;
@@ -1115,7 +1216,9 @@ async function runSmoke() {
   };
   const finishHeldRequest = async (held, outcome, marker) => {
     const payload = outcome === "success" ? generatedPayload(held.body, held.storeId)
-      : outcome === "blocked" ? { status: "blocked", missing_fields: ["material"], merchant_message: "Old context blocked" }
+      : outcome === "blocked" ? { status: "blocked", missing_fields: ["material"],
+        blocked_by: ["listing_core_fact_missing:material"], listing_project_identity: held.body.listing_project_identity,
+        model_called: false, usage_consumed: false, report: null, real_platform_writes_enabled: false, secret_exposed: false }
         : { error: "fixture_model_unavailable", merchant_message: "Old context failure" };
     if (payload.report) payload.report.report_id = marker;
     if (payload.task) payload.task.task_id = marker;
@@ -1268,7 +1371,11 @@ async function runSmoke() {
   }
   if (await generationFeedback.count()) throw new Error("retry retained the previous generation error while running");
   const expiredMessage = "捷境托管 AI 试用已到期；请在设置查看套餐或已有模型连接。";
-  await rejectedGeneration.route.fulfill({ status: 402, contentType: "application/json", body: JSON.stringify({ error: "platform_trial_expired", merchant_message: expiredMessage }) });
+  await rejectedGeneration.route.fulfill({ status: 402, contentType: "application/json", body: JSON.stringify({ status: "blocked",
+    merchant_message: expiredMessage, blocked_by: ["platform_default_model_trial_expired"],
+    listing_project_identity: rejectedGeneration.body.listing_project_identity, model_resolution: { status: "resolved" },
+    platform_trial_quota: { allowed: false }, model_called: false, usage_consumed: false, report: null,
+    real_platform_writes_enabled: false, secret_exposed: false }) });
   rejectedGeneration.resolve();
   await page.waitForFunction(() => !state.saasLoading);
   await page.waitForTimeout(2900); // The transient action toast has expired.
@@ -1588,6 +1695,8 @@ async function runSmoke() {
     viewport_width: layout.viewport_width,
     no_real_platform_writes_triggered: true,
     no_charge_or_refund_triggered: true,
+    mocked_operation_result_gets: resultReadCount,
+    mocked_operation_checkpoint_posts: recoveredCheckpointPosts,
     context_guard_cases: contextCases,
     audit_refresh_timing: auditRefreshTiming,
     failure_screenshot_path: failureScreenshotPath,

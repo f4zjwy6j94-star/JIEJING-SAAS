@@ -165,10 +165,19 @@ class LegacyRecoveryTests(unittest.TestCase):
                 self.generate()
         reports = self.repository.list_reports(company_id=self.company_id, task_id=caught.exception.task_id)
         self.assertEqual(len(reports), 1)
+        task_before = self.repository.get_task(company_id=self.company_id, task_id=caught.exception.task_id)
+        checkpoint_before = self.repository.get_listing_draft_checkpoint(company_id=self.company_id,
+            store_id=self.store_id, identity=self.identity)
         recovered = self.read(caught.exception.task_id)
         self.assertEqual(recovered["status"], "report_saved")
         self.assertIs(recovered["can_retry"], False)
-        self.assertEqual(recovered["report"], reports[0])
+        # Scoped recovery includes the task author; generic report listing does not.
+        self.assertEqual(task_before["user_id"], self.user_id)
+        self.assertEqual(recovered["report"], {**reports[0], "user_id": self.user_id})
+        self.assertEqual(self.repository.get_task(company_id=self.company_id, task_id=caught.exception.task_id), task_before)
+        self.assertEqual(self.repository.list_reports(company_id=self.company_id, task_id=caught.exception.task_id), reports)
+        self.assertEqual(self.repository.get_listing_draft_checkpoint(company_id=self.company_id,
+            store_id=self.store_id, identity=self.identity), checkpoint_before)
         self.assertEqual(self.model.calls, 1)
 
     def test_another_same_project_failed_save_remains_uncertain(self):

@@ -253,8 +253,11 @@ test("a real reload retains a running operation and result checking preserves ed
 
 test("only a complete 422 quality rejection permits a new explicit operation; malformed client errors and success bodies remain protected", async () => {
   for (const kind of ["known", "attempted", "missing", "other-code", "bare409", "bare422", "bare200"]) {
-    reset();
+    reset(); const secondEntered = deferred(), releaseSecond = deferred();
     generationHandler = async (_request, res) => {
+      if (kind === "known" && requests.filter((r) => r.path === generationPath).length === 2) {
+        secondEntered.resolve(); await releaseSecond.promise;
+      }
       const body = { status: "failed", report_save_attempted: false, report: null, task_id: "quality-rejected-task",
         failure_code: "listing_model_output_ungrounded_material", merchant_message: "本次文案未通过材质检查。",
         model_called: true, usage_consumed: true, model_usage: { request_count: 1 }, real_platform_writes_enabled: false, secret_exposed: false };
@@ -269,15 +272,25 @@ test("only a complete 422 quality rejection permits a new explicit operation; ma
       await first.page.waitForFunction(() => !state.saasLoading);
       assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.status), kind === "known" ? "failed" : "generation_uncertain", kind);
       const firstOp = requests.find((r) => r.path === generationPath).body.operation_id;
-      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
       if (kind === "known") {
+        await first.page.evaluate(() => renderProductListingCenter());
+        await first.page.getByRole("button", { name: "AI 生成 Listing 草稿", exact: true }).click(); await secondEntered.promise;
+        const running = await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback);
+        assert.equal(running.operation.generation_mode, "preserve_merchant_edits");
+        assert.equal(running.rewrite_source, null, "a new default operation must not inherit the previous failed rewrite source");
+        assert.equal(running.result_report_id, null, "a new operation must not inherit a previous result");
+        assert.equal(await first.page.evaluate((id) => Object.values(localStorage).some((value) => value.includes(id)), running.operation.operation_id), true);
+        releaseSecond.resolve();
         await first.page.waitForFunction(() => !state.saasLoading);
         assert.equal(requests.filter((r) => r.path === generationPath).length, 2);
         assert.notEqual(requests.filter((r) => r.path === generationPath)[1].body.operation_id, firstOp);
-      } else assert.equal(requests.filter((r) => r.path === generationPath).length, 1, kind);
-      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+      } else {
+        await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+        assert.equal(requests.filter((r) => r.path === generationPath).length, 1, kind);
+      }
+      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), kind === "known" ? { ...previousFields, cost_price: "" } : previousFields);
       assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
-    } finally { await first.context.close(); }
+    } finally { releaseSecond.resolve(); await first.context.close(); }
   }
 });
 
@@ -374,9 +387,17 @@ test("default generation also recovers its exact saved report with null rewrite 
 
 test("a known default generation success with newer merchant edits shows the saved report instead of remaining running", async () => {
   reset(); const entered = deferred(), release = deferred();
-  const saved = { ...originalReport, report_id: "known-default-result", user_id: userId };
+  const saved = { ...originalReport, report_id: "known-default-result", user_id: userId, created_at: "2026-09-09T04:00:00Z" };
   generationHandler = async (_request, res) => { entered.resolve(); await release.promise; currentBase = saved;
     json(res, 201, { status: "completed", report: saved, listing_project_identity: identity, missing_fields: [] }); return true; };
+  generationStatusHandler = async (request, res) => {
+    json(res, 200, { contract_version: "listing_generation_operation_v1", operation_id: request.query.operation_id,
+      company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: identity,
+      generation_mode: "preserve_merchant_edits", expected_base_report_id: null, expected_checkpoint_revision: null,
+      task_id: saved.task_id, status: "report_saved", report_save_attempted: true, can_retry: false,
+      model_called: true, usage_consumed: true, report: saved, failure_code: null,
+      message: "本次草稿已保存。", real_platform_writes_enabled: false, secret_exposed: false }); return true;
+  };
   const first = await device();
   try {
     await first.page.evaluate(() => renderProductListingCenter());
@@ -389,8 +410,79 @@ test("a known default generation success with newer merchant edits shows the sav
     assert.equal(result.feedback.status, "generated_unapplied"); assert.equal(result.feedback.result_report_id, saved.report_id);
     assert.ok(result.reports.includes(saved.report_id)); assert.equal(requests.filter((r) => r.path === generationPath).length, 1);
     assert.match(await first.page.locator("[data-saas-listing-ai-feedback]").innerText(), /已生成/);
+    await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generated_unapplied");
+    assert.equal(requests.filter((r) => r.path === generationStatusPath).length, 1);
+    assert.equal(requests.find((r) => r.path === generationStatusPath).query.operation_id, result.feedback.operation.operation_id);
+    await first.page.locator('[data-saas-listing-draft-field="title"]').blur();
+    await first.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).waitFor({ state: "visible", timeout: 5000 });
+    assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.status), "generated_unapplied");
+    await first.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).click();
+    await first.page.waitForFunction((reportId) => {
+      const record = saasListingCloudRecord();
+      return record?.loaded && !record.dirty && !record.pending && !record.conflict && !record.write && !record.read &&
+        record.receipt?.base_report_id === reportId && record.status === "saved";
+    }, saved.report_id, { timeout: 5000 });
+    assert.equal(head.base_report_id, saved.report_id);
+    assert.equal(head.fields.title, "Merchant title typed during generation");
+    assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), head.fields.title);
+    assert.equal(requests.filter((r) => r.path === generationPath).length, 1, "normal cloud conflict recovery must not repeat generation");
+    assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback), null,
+      "a confirmed cloud save on the exact generated base must finish default-mode result review without replacing merchant edits");
     assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
   } finally { release.resolve(); await first.context.close(); }
+});
+
+test("default saved results stay protected without a fresh matching cloud receipt or while merchant edits are still pending", async () => {
+  for (const kind of ["use-cloud-with-old-receipt", "foreign-current-base", "edit-during-save"]) {
+    reset(); const generated = deferred(), release = deferred(), saving = deferred(), releaseSave = deferred();
+    const saved = { ...originalReport, report_id: "negative-default-result", user_id: userId, created_at: "2026-09-09T04:00:00Z" };
+    head = checkpoint(previousFields, 1, "original-saved-edit", originalReport.report_id);
+    generationHandler = async (_request, res) => { generated.resolve(); await release.promise; currentBase = saved;
+      json(res, 201, { status: "completed", report: saved, listing_project_identity: identity, missing_fields: [] }); return true; };
+    const first = await device();
+    try {
+      await first.page.evaluate(() => renderProductListingCenter());
+      await first.page.getByRole("button", { name: "AI 生成 Listing 草稿", exact: true }).click(); await generated.promise;
+      await first.page.locator('[data-saas-listing-draft-field="title"]').fill("Merchant changed title before saved result");
+      release.resolve(); await first.page.waitForFunction(() => state.saasListingAiGenerationStatus === "completed" && !state.saasLoading);
+      assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback?.status), "generated_unapplied", kind);
+      await first.page.locator('[data-saas-listing-draft-field="title"]').blur();
+      const keep = first.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true });
+      await keep.waitFor({ state: "visible", timeout: 5000 });
+      if (kind === "use-cloud-with-old-receipt") {
+        await first.page.locator('[data-saas-listing-cloud-action="use-cloud"]').click();
+        await first.page.waitForFunction(() => saasListingCloudRecord()?.status === "current");
+        assert.equal(await first.page.evaluate(() => saasListingCloudRecord().receipt), null);
+        assert.equal(head.base_report_id, originalReport.report_id, "selecting a base is not a saved N receipt");
+      } else if (kind === "foreign-current-base") {
+        checkpointHandler = async (request, res) => {
+          if (request.method !== "GET") return false;
+          json(res, 200, { status: "saved", checkpoint: head, current_revision: head.revision,
+            current_base_report_id: saved.report_id, current_base_report: { ...saved, company_id: "different-company" }, base_changed: true }); return true;
+        };
+        await keep.click(); await first.page.waitForFunction(() => saasListingCloudRecord()?.status === "error");
+        assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Merchant changed title before saved result");
+      } else {
+        checkpointHandler = async (request) => {
+          if (request.method !== "POST" || request.body.base_report_id !== saved.report_id) return false;
+          saving.resolve(); await releaseSave.promise; return false;
+        };
+        await keep.click(); await saving.promise;
+        await first.page.locator('[data-saas-listing-draft-field="title"]').fill("Newer title typed during cloud save");
+        const accepted = first.page.waitForResponse((response) => response.request().method() === "POST" &&
+          new URL(response.url()).pathname === checkpointPath && response.status() === 201);
+        releaseSave.resolve(); await accepted;
+        await first.page.waitForFunction(() => saasListingCloudRecord()?.dirty && !saasListingCloudRecord()?.write);
+        assert.equal(head.fields.title, "Merchant changed title before saved result");
+        assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Newer title typed during cloud save");
+      }
+      assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback?.status), "generated_unapplied", kind);
+      await first.page.getByRole("button", { name: "AI 生成 Listing 草稿", exact: true }).click();
+      assert.equal(requests.filter((r) => r.path === generationPath).length, 1, kind);
+      assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { release.resolve(); releaseSave.resolve(); await first.context.close(); }
+  }
 });
 
 test("complete pre-model blocked responses preserve the reason and allow action only after fixing it, unlike incomplete blocked bodies", async () => {
