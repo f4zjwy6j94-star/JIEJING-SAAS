@@ -611,6 +611,40 @@ def main() -> int:
             missing_workflow_wiring.append(f"exactly one precloud check: {check_name}")
     if missing_workflow_wiring:
         return fail("workflow browser regressions must ship and run: " + "; ".join(missing_workflow_wiring))
+    rewrite_python_checks = {
+        "listing_buyer_copy_rewrite": "tools/test_jiejing_listing_buyer_copy_rewrite.py",
+        "listing_buyer_copy_rewrite_api": "tools/test_jiejing_listing_buyer_copy_rewrite_api.py",
+    }
+    rewrite_frontend = "tools/test_jiejing_listing_buyer_copy_rewrite_frontend.js"
+    rewrite_http = "tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js"
+    rewrite_spec = "docs/superpowers/specs/2026-09-09-listing-buyer-copy-rewrite-design.md"
+    rewrite_whitelist = [rewrite_spec, *rewrite_python_checks.values(), rewrite_frontend, rewrite_http]
+    whitelist_entries = [line.strip() for line in text[whitelist_start:whitelist_end].splitlines()]
+    node_check_entries = [line.strip() for line in node_check_block.splitlines()]
+    missing_rewrite_wiring = []
+    for script_path in rewrite_whitelist:
+        if whitelist_entries.count(f'"{script_path}"') != 1:
+            missing_rewrite_wiring.append(f"exactly one bundle entry: {script_path}")
+        if not (ROOT / script_path).is_file():
+            missing_rewrite_wiring.append(f"missing source dependency: {script_path}")
+    for check_name, script_path in rewrite_python_checks.items():
+        if python_compile_block.split().count(script_path) != 1:
+            missing_rewrite_wiring.append(f"exactly one Python syntax check: {script_path}")
+        gate_entry = f'("{check_name}", [sys.executable, "{script_path}"])'
+        if precloud_gate.count(gate_entry) != 1 or precloud_gate.count(script_path) != 1:
+            missing_rewrite_wiring.append(f"exactly one precloud check: {check_name}")
+    for script_path in (rewrite_frontend, rewrite_http):
+        if node_check_entries.count(f'"$NODE_BIN" --check {script_path}') != 1:
+            missing_rewrite_wiring.append(f"exactly one Node syntax check: {script_path}")
+    rewrite_frontend_gate = f'("listing_buyer_copy_rewrite_frontend", ["node", "--test", "{rewrite_frontend}"])'
+    if precloud_gate.count(rewrite_frontend_gate) != 1 or precloud_gate.count(rewrite_frontend) != 1:
+        missing_rewrite_wiring.append("exactly one node --test precloud check: listing_buyer_copy_rewrite_frontend")
+    # This child receives its owned HTTP fixture via stdin from the Python test.
+    # It must ship and syntax-check, but must not run again without that fixture.
+    if rewrite_http in precloud_gate:
+        missing_rewrite_wiring.append("HTTP browser child must run only through the Python API regression")
+    if missing_rewrite_wiring:
+        return fail("buyer-copy rewrite regressions must ship and run: " + "; ".join(missing_rewrite_wiring))
     for marker in [
         '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',

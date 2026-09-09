@@ -123,6 +123,9 @@ from .merchant_onboarding import (
 from .ip_risk_screening import build_ip_logo_brand_screening
 from .json_safe import json_default
 from .listing_draft_generation import (
+    listing_draft_generation_request_failure,
+    listing_draft_rewrite_source,
+    is_listing_buyer_copy_rewrite_contract,
     ListingDraftGenerationError,
     generate_listing_draft,
     listing_draft_core_missing_fields,
@@ -1236,7 +1239,10 @@ def _merchant_safe_replaceable_media_provider(value: Any, *, _inside_asset_manif
             key = str(raw_key)
             lower_key = key.lower()
             child_inside_manifest = _inside_asset_manifest or lower_key == "asset_manifest"
-            if child_inside_manifest and lower_key in {"url", "url_or_file_path"}:
+            if key == "buyer_copy_rewrite" and is_listing_buyer_copy_rewrite_contract(raw_value):
+                # Validated merchant text and URLs are immutable snapshots, not driver labels.
+                safe[key] = dict(raw_value)
+            elif child_inside_manifest and lower_key in {"url", "url_or_file_path"}:
                 safe[key] = raw_value if _is_safe_public_media_asset_url(raw_value) else ""
             elif lower_key in {"media_provider", "preferred_media_provider", "source_provider_or_upload"}:
                 safe[key] = "jiejing_media_router"
@@ -9980,8 +9986,42 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
+            generation_mode = body.get("generation_mode", "preserve_merchant_edits")
+            request_failure = listing_draft_generation_request_failure(
+                body.get("current_draft_fields"), generation_mode=generation_mode,
+            )
+            if request_failure:
+                self._send_json({
+                    "status": "blocked", "blocked_by": [request_failure], "failure_code": request_failure,
+                    "merchant_message": "重写请求不完整，请保留现有草稿并刷新后重试；本次未调用模型。",
+                    "model_called": False, "usage_consumed": False, "report": None,
+                    "real_platform_writes_enabled": False, "secret_exposed": False,
+                }, status=HTTPStatus.UNPROCESSABLE_ENTITY if request_failure.endswith("sensitive_text") else HTTPStatus.BAD_REQUEST)
+                return
+            if generation_mode == "rewrite_buyer_copy":
+                try:
+                    rewrite_source = listing_draft_rewrite_source(
+                        repository=self.repository, company_id=identity["company_id"], store_id=store_id,
+                        listing_project_identity=body.get("listing_project_identity"),
+                        current_draft_fields=body["current_draft_fields"],
+                        expected_base_report_id=body.get("expected_base_report_id"),
+                        expected_checkpoint_revision=body.get("expected_checkpoint_revision"),
+                        merchant_product_fact_packet=body.get("merchant_product_fact_packet"),
+                    )
+                    source_failure = rewrite_source["failure_code"]
+                except Exception:
+                    source_failure = "listing_rewrite_source_unavailable"
+                if source_failure:
+                    self._send_json({
+                        "status": "blocked", "failure_code": source_failure, "blocked_by": [source_failure],
+                        "merchant_message": "原稿或商品资料已变化，或云端保存暂不可用；请核对后再重写。现有文案未被替换。",
+                        "model_called": False, "usage_consumed": False, "report": None,
+                        "real_platform_writes_enabled": False, "secret_exposed": False,
+                    }, status=HTTPStatus.SERVICE_UNAVAILABLE if source_failure.endswith("unavailable") else
+                       HTTPStatus.BAD_REQUEST if source_failure.endswith("invalid") else HTTPStatus.CONFLICT)
+                    return
             packet = normalize_merchant_product_fact_packet(
-                body.get("merchant_product_fact_packet"),
+                rewrite_source["packet"] if generation_mode == "rewrite_buyer_copy" else body.get("merchant_product_fact_packet"),
                 source="authenticated_merchant_request",
             )
             listing_project_identity = normalize_listing_project_identity(body.get("listing_project_identity"))
@@ -10020,7 +10060,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     }
                 )
                 return
-            merchant_copy_failure = listing_draft_merchant_copy_failure(
+            merchant_copy_failure = "" if generation_mode == "rewrite_buyer_copy" else listing_draft_merchant_copy_failure(
                 body.get("current_draft_fields"),
                 marketplace=str(store.get("marketplace") or "EBAY_US"),
                 merchant_product_fact_packet=packet,
@@ -10175,6 +10215,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     model_client=model_resolution["model_client"],
                     model_resolution=safe_model_resolution,
                     packet_record=packet_record,
+                    generation_mode=generation_mode,
+                    expected_base_report_id=body.get("expected_base_report_id"),
+                    expected_checkpoint_revision=body.get("expected_checkpoint_revision"),
                 )
             except ListingDraftGenerationError as exc:
                 trial_settlement = self._settle_platform_model_trial_reservation(
@@ -10191,7 +10234,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "status": "failed",
                         "failure_code": exc.failure_code,
                         "merchant_message": (
-                            "AI 返回的文案没有通过语言或事实检查，系统已自动纠正一次但仍未通过；"
+                            "保存结果尚未确认，请先核对当前商品记录，不要重复生成；尚未写入 eBay。"
+                            if exc.report_save_attempted
+                            else "AI 返回的文案没有通过语言或事实检查，系统已自动纠正一次但仍未通过；"
                             "本次没有保存 Listing，也没有写入 eBay。商品资料已保留。"
                             if exc.failure_code.startswith("listing_model_output_")
                             else "商家编辑与 AI 草稿合并后没有通过语言或事实检查；本次没有保存 Listing，也没有写入 eBay。"
@@ -10206,6 +10251,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "model_called": exc.model_called,
                         "usage_consumed": exc.usage_consumed,
                         "model_usage": exc.model_usage,
+                        "report_save_attempted": exc.report_save_attempted,
                         "report": None,
                         "real_platform_writes_enabled": False,
                         "secret_exposed": False,

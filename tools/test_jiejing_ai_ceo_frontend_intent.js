@@ -104,7 +104,8 @@ assert(
 const reportDraftSource = extractFunction("saasListingDraftFromReport");
 assert(
   reportDraftSource.includes("const importedDraft = {") &&
-    reportDraftSource.includes("return applySaasMerchantProductFactPacketToDraft(importedDraft, handoffFields.merchant_product_fact_packet);"),
+    reportDraftSource.includes("const projected = applySaasMerchantProductFactPacketToDraft(importedDraft, handoffFields.merchant_product_fact_packet);") &&
+    reportDraftSource.includes("return projected;"),
   "an AI CEO report import must merge the authenticated merchant fact packet into the Listing draft",
 );
 const chatDraftSource = extractFunction("saasListingDraftFromAiCeoMarketTurn");

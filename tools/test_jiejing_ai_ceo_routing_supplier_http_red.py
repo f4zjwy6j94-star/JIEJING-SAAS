@@ -84,6 +84,15 @@ def run_node_json(script: str) -> dict[str, Any]:
     return json.loads(output[-1])
 
 
+def listing_restore_fixture_source() -> str:
+    """Include the real supersession guard and its empty local checkpoint cache."""
+    return "\n".join((
+        "const saasListingCloudRecords = new Map();",
+        function_body(APP_JS, "saasListingRewriteReportIsSuperseded"),
+        function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports"),
+    ))
+
+
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -674,9 +683,17 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
     def test_ai_ceo_report_import_creates_a_structured_listing_project_identity(self) -> None:
         import_function = function_body(APP_JS, "saasListingDraftFromReport")
         normalize_identity = function_body(APP_JS, "saasNormalizeListingProjectIdentity")
+        rewrite_dependencies = "\n".join(function_body(APP_JS, name) for name in (
+            "saasListingRewriteReportIsSuperseded", "saasListingBuyerCopyRewriteFromReport",
+            "saasListingCloudReportMatchesContext", "saasListingCloudSameIdentity",
+            "saasListingMerchantEditableFieldKeys", "saasListingEditableFieldText", "saasListingCloudFields",
+        ))
         result = run_node_json(
             "\n".join(
                 [
+                    "const state = { saasCompany: { company_id: 'company-a' }, saasIdentity: { user_id: 'user-a' }, saasStores: [{ store_id: 'store-a' }] };",
+                    "const activeSaasStore = () => state.saasStores[0];",
+                    "const saasListingCloudRecords = new Map();",
                     "const saasAiCeoMarketReportCanStartBlockedListingDraft = () => true;",
                     "const saasAiCeoListingHandoffFieldsFromReport = () => ({",
                     "  selected_product_candidate: { candidate_id: 'candidate-a', name: 'Same Name Incense Burner', reasons: ['grounded'] },",
@@ -701,6 +718,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const saasCurrentListingProjectIdentity = (draft) => ({ key: `project-${draft.source_report_id}-${draft.selected_product_candidate.candidate_id}`, source_report_id: draft.source_report_id, source_id: draft.source_report_id, candidate_id: draft.selected_product_candidate.candidate_id });",
                     "const publicRuntimeText = (value = '') => String(value || '');",
                     normalize_identity,
+                    rewrite_dependencies,
                     import_function,
                     "const draft = saasListingDraftFromReport({ report_id: 'report-a', report_type: 'ai_ceo.market_research', report: {} }, 'ai_ceo_market_report');",
                     "console.log(JSON.stringify(draft));",
@@ -1124,7 +1142,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertEqual("candidate-a", result.get("identityA", {}).get("candidate_id"))
 
     def test_exact_project_restore_rejects_same_name_facts_and_does_not_revive_unknowns(self) -> None:
-        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        restore_listing = listing_restore_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1169,7 +1187,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertNotIn("PARTIAL-", json.dumps(packet, ensure_ascii=False))
 
     def test_exact_project_restore_keeps_vision_suggestions_that_still_await_confirmation(self) -> None:
-        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        restore_listing = listing_restore_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1199,7 +1217,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertNotIn("material", packet.get("merchant_confirmed_facts") or {})
 
     def test_exact_project_restore_honors_a_newer_explicitly_cleared_vision_suggestion(self) -> None:
-        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        restore_listing = listing_restore_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1232,7 +1250,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertIn("material", packet.get("unknown_facts") or [])
 
     def test_manual_structured_restore_rejects_incoming_extra_identity_fields(self) -> None:
-        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        restore_listing = listing_restore_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1267,7 +1285,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertNotIn("EXTRA-CANDIDATE", serialized)
 
     def test_ambiguous_same_name_legacy_fact_reports_do_not_restore(self) -> None:
-        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        restore_listing = listing_restore_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1370,7 +1388,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertRegex(save_context.get("mutation_id", ""), r"^[A-Za-z0-9._:-]{8,160}$")
 
     def test_completed_vision_report_recovers_into_the_matching_existing_listing(self) -> None:
-        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        restore_listing = listing_restore_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1417,7 +1435,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertEqual("backend_product_fact_restore", result.get("sourceMode"))
 
     def test_identity_bearing_vision_fact_report_restores_without_a_listing_report(self) -> None:
-        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        restore_listing = listing_restore_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1468,8 +1486,8 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
     def test_saved_authenticated_fact_only_project_restores_without_inventing_a_listing(self) -> None:
         dependencies = [function_body(APP_JS, name) for name in (
             "saasNormalizeListingProjectIdentity", "saasListingProjectIdentityFromReport",
-            "saasCanonicalJsonValue", "restoreSaasListingComposerDraftFromBackendReports",
-        )]
+            "saasCanonicalJsonValue",
+        )] + [listing_restore_fixture_source()]
         result = run_node_json("\n".join([
             "const identity = { key: 'manual-facts-only', source_report_id: '', candidate_id: '' };",
             "const packet = { source: 'authenticated_merchant_request', product_name: 'Foldable Tablet Stand',",

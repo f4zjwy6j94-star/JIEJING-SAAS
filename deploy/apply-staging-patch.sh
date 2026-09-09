@@ -40,6 +40,7 @@ FILES=(
   "tools/test_jiejing_runtime_evidence.py"
   "docs/superpowers/specs/2026-09-08-production-evidence-no-restart-design.md"
   "docs/superpowers/specs/2026-09-08-personal-model-connection-recovery-design.md"
+  "docs/superpowers/specs/2026-09-09-listing-buyer-copy-rewrite-design.md"
   "docs/superpowers/plans/2026-09-08-production-evidence-no-restart-implementation-plan.md"
   "deploy/systemd/jiejing-production-evidence-refresh.service"
   "deploy/systemd/jiejing-production-evidence-refresh.timer"
@@ -345,6 +346,8 @@ FILES=(
   "tools/test_jiejing_ai_ceo_open_domain_turn_plan.py"
   "tools/test_jiejing_ai_ceo_product_image_intake.py"
   "tools/test_jiejing_listing_draft_generation.py"
+  "tools/test_jiejing_listing_buyer_copy_rewrite.py"
+  "tools/test_jiejing_listing_buyer_copy_rewrite_api.py"
   "tools/test_jiejing_listing_draft_buyer_copy_quality.py"
   "tools/test_jiejing_listing_grounding_security.py"
   "tools/test_jiejing_listing_draft_generation_api.py"
@@ -360,6 +363,8 @@ FILES=(
   "tools/test_jiejing_listing_backend_restore.js"
   "tools/test_jiejing_listing_cloud_checkpoint_frontend.js"
   "tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js"
+  "tools/test_jiejing_listing_buyer_copy_rewrite_frontend.js"
+  "tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js"
   "tools/test_jiejing_recent_product_tasks.js"
   "tools/test_jiejing_listing_product_fact_confirmation_ui.js"
   "tools/test_jiejing_listing_publish_prefill_truth.js"
@@ -752,6 +757,8 @@ python3 -m py_compile \
   tools/test_jiejing_saas_clean_settings_and_listing_ui.py \
   tools/test_jiejing_ai_ceo_open_domain_turn_plan.py \
   tools/test_jiejing_listing_draft_generation.py \
+  tools/test_jiejing_listing_buyer_copy_rewrite.py \
+  tools/test_jiejing_listing_buyer_copy_rewrite_api.py \
   tools/test_jiejing_listing_draft_buyer_copy_quality.py \
   tools/test_jiejing_listing_grounding_security.py \
   tools/test_jiejing_listing_draft_generation_api.py \
@@ -885,6 +892,8 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check tools/test_jiejing_listing_backend_restore.js
 "$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_frontend.js
 "$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js
+"$NODE_BIN" --check tools/test_jiejing_listing_buyer_copy_rewrite_frontend.js
+"$NODE_BIN" --check tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_recent_product_tasks.js
 "$NODE_BIN" --check tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_workflow_entry_feedback.js

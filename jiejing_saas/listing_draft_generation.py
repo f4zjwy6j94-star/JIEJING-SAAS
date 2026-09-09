@@ -7,19 +7,25 @@ import re
 from typing import Any
 
 from .operations_metering import MeteredModelClient, model_cost_measurement
+from .listing_draft_checkpoint import (
+    FIELD_KEYS as LISTING_EDIT_FIELD_KEYS, CheckpointValidationError, normalize_identity,
+)
 from .platform_data_packet_handoff import build_runtime_handoff_from_platform_packet
 from .repository import (
     SaaSRepository,
     normalize_listing_project_identity,
     normalize_merchant_product_fact_packet,
+    _redact_secret_like,
 )
-from .sensitive_text import contains_secret_like_text
+from .sensitive_text import contains_secret_like_data, contains_secret_like_text
 
 
 LISTING_DRAFT_GENERATION_CONTRACT_VERSION = "listing_ai_draft_generation_v1"
 LISTING_DRAFT_CORE_FACT_KEYS = ("product_name", "condition", "material")
 LISTING_BUYER_COPY_MIN_POINTS = 3
 LISTING_BUYER_COPY_MAX_POINTS = 5
+LISTING_BUYER_COPY_REWRITE_CONTRACT = "listing_buyer_copy_rewrite_v1"
+LISTING_BUYER_COPY_FIELDS = frozenset({"title", "selling_points", "description"})
 _CURRENT_DRAFT_FIELD_KEYS = frozenset(
     {"title", "selling_points", "description", "category", "item_specifics", "keywords", "merchant_edited_fields"}
 )
@@ -147,12 +153,16 @@ class ListingDraftGenerationError(RuntimeError):
         model_called: bool,
         usage_consumed: bool,
         model_usage: dict[str, int],
+        report_save_attempted: bool = True,
     ) -> None:
         super().__init__(failure_code)
         self.failure_code = str(failure_code or "listing_model_generation_failed")[:120]
         self.task_id = str(task_id or "")[:160]
         self.model_called = model_called is True
         self.usage_consumed = usage_consumed is True
+        # Older callers and malformed values stay conservative. Only the
+        # generation function's explicit False proves storage never started.
+        self.report_save_attempted = report_save_attempted is not False
         self.model_usage = {
             key: max(0, int(model_usage.get(key) or 0))
             for key in ("request_count", "input_tokens", "output_tokens", "total_tokens")
@@ -162,6 +172,109 @@ class ListingDraftGenerationError(RuntimeError):
 def listing_draft_core_missing_fields(packet: dict[str, Any]) -> list[str]:
     facts = _effective_listing_facts(packet)
     return [key for key in LISTING_DRAFT_CORE_FACT_KEYS if not str(facts.get(key) or packet.get(key) or "").strip()]
+
+
+def listing_draft_generation_request_failure(current_draft_fields: Any, *, generation_mode: Any) -> str:
+    """Validate explicit generation authority before resolving or charging a model."""
+    if not isinstance(generation_mode, str) or generation_mode not in ("preserve_merchant_edits", "rewrite_buyer_copy"):
+        return "listing_generation_mode_invalid"
+    if generation_mode == "rewrite_buyer_copy":
+        if not isinstance(current_draft_fields, dict) or set(current_draft_fields) != {
+            *LISTING_EDIT_FIELD_KEYS, "merchant_edited_fields"
+        }:
+            return "listing_rewrite_snapshot_invalid"
+        for key in LISTING_EDIT_FIELD_KEYS:
+            value = current_draft_fields[key]
+            if not isinstance(value, str) or len(value) > (1400 if key in ("description", "selling_points") else 800):
+                return "listing_rewrite_snapshot_invalid"
+            if "\x00" in value:
+                return "listing_rewrite_snapshot_invalid"
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError:
+                return "listing_rewrite_snapshot_invalid"
+        edited = current_draft_fields["merchant_edited_fields"]
+        if not isinstance(edited, list) or len(edited) > len(LISTING_EDIT_FIELD_KEYS) or any(
+            not isinstance(key, str) or key not in LISTING_EDIT_FIELD_KEYS for key in edited
+        ):
+            return "listing_rewrite_snapshot_invalid"
+        if contains_secret_like_data(current_draft_fields) or _redact_secret_like(current_draft_fields) != current_draft_fields:
+            return "listing_rewrite_snapshot_sensitive_text"
+    return ""
+
+
+def is_listing_buyer_copy_rewrite_contract(value: Any) -> bool:
+    """Only this bounded merchant-text DTO may bypass provider-label projection."""
+    if not isinstance(value, dict) or set(value) != {
+        "contract_version", "expected_base_report_id", "expected_checkpoint_revision", "previous_fields", "fields",
+        "previous_merchant_edited_fields", "merchant_edited_fields",
+    } or value["contract_version"] != LISTING_BUYER_COPY_REWRITE_CONTRACT:
+        return False
+    if (not isinstance(value["expected_base_report_id"], str)
+        or not re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", value["expected_base_report_id"])
+        or type(value["expected_checkpoint_revision"]) is not int
+        or not 0 <= value["expected_checkpoint_revision"] < 2147483647):
+        return False
+    for fields_key, edited_key in (("previous_fields", "previous_merchant_edited_fields"),
+                                   ("fields", "merchant_edited_fields")):
+        fields, edited = value[fields_key], value[edited_key]
+        if not isinstance(fields, dict) or set(fields) != set(LISTING_EDIT_FIELD_KEYS) or listing_draft_generation_request_failure(
+            {**fields, "merchant_edited_fields": edited}, generation_mode="rewrite_buyer_copy"
+        ):
+            return False
+        if len(edited) != len(set(edited)):
+            return False
+    if contains_secret_like_data(value) or _redact_secret_like(value) != value:
+        return False
+    return (all(value["fields"][key] == value["previous_fields"][key]
+                for key in LISTING_EDIT_FIELD_KEYS if key not in LISTING_BUYER_COPY_FIELDS)
+            and set(value["merchant_edited_fields"]) == set(value["previous_merchant_edited_fields"]) - LISTING_BUYER_COPY_FIELDS)
+
+
+def _generation_request_blocked(failure_code: str, identity: dict[str, str]) -> dict[str, Any]:
+    return {"status": "blocked", "blocked_by": [failure_code], "failure_code": failure_code,
+            "merchant_message": "重写请求不完整或已失效，请保留现有草稿并刷新后重试；本次未调用模型。",
+            "missing_fields": [], "model_called": False, "usage_consumed": False, "report": None,
+            "listing_project_identity": identity, "real_platform_writes_enabled": False, "secret_exposed": False}
+
+
+def listing_draft_rewrite_source(
+    *, repository: SaaSRepository, company_id: str, store_id: str, listing_project_identity: Any,
+    current_draft_fields: dict[str, Any], expected_base_report_id: Any, expected_checkpoint_revision: Any,
+    merchant_product_fact_packet: Any,
+) -> dict[str, Any]:
+    """Bind the copied editor snapshot to a saved, fully scoped source before model use."""
+    if (not isinstance(expected_base_report_id, str)
+        or not re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", expected_base_report_id)
+        or isinstance(expected_checkpoint_revision, bool) or not isinstance(expected_checkpoint_revision, int)
+        or not 0 <= expected_checkpoint_revision < 2147483647):
+        return {"failure_code": "listing_rewrite_source_invalid"}
+    try:
+        identity = normalize_identity(listing_project_identity)
+        view = repository.get_listing_draft_checkpoint(company_id=company_id, store_id=store_id, identity=identity)
+    except CheckpointValidationError:
+        return {"failure_code": "listing_rewrite_source_invalid"}
+    except KeyError:
+        return {"failure_code": "listing_rewrite_source_conflict"}
+    checkpoint = view.get("checkpoint") or {}
+    if (view.get("current_base_report_id") != expected_base_report_id
+        or view.get("current_revision") != expected_checkpoint_revision
+        or checkpoint.get("base_report_id") != expected_base_report_id
+        or checkpoint.get("fields") != {key: current_draft_fields[key] for key in LISTING_EDIT_FIELD_KEYS}
+        or checkpoint.get("merchant_edited_fields") != sorted(set(current_draft_fields["merchant_edited_fields"]))):
+        return {"failure_code": "listing_rewrite_source_conflict"}
+    saved_packet = (view["current_base_report"].get("report") or {}).get("merchant_product_fact_packet")
+    if not isinstance(saved_packet, dict):
+        return {"failure_code": "listing_rewrite_source_facts_conflict"}
+    normalized_saved = normalize_merchant_product_fact_packet(saved_packet, source="authenticated_merchant_request")
+    submitted_packet = normalize_merchant_product_fact_packet(merchant_product_fact_packet, source="authenticated_merchant_request")
+    fact_keys = ("merchant_confirmed_facts", "derived_listing_suggestions", "simulation_only", "source_records",
+                 "field_evidence", "fact_conflicts", "buyer_copy_requires_validated_listing_generation",
+                 "vision_contract_version", "source_mode", "sensitive_text_detected")
+    if any(normalized_saved[key] != submitted_packet[key] for key in fact_keys):
+        return {"failure_code": "listing_rewrite_source_facts_conflict"}
+    # The editor snapshot is never authority for facts or publication flags.
+    return {"failure_code": "", "base_report": view["current_base_report"], "packet": normalized_saved}
 
 
 def listing_draft_merchant_copy_failure(
@@ -201,10 +314,26 @@ def generate_listing_draft(
     model_client: Any,
     model_resolution: dict[str, Any] | None = None,
     packet_record: dict[str, Any] | None = None,
+    generation_mode: str = "preserve_merchant_edits",
+    expected_base_report_id: str | None = None,
+    expected_checkpoint_revision: int | None = None,
 ) -> dict[str, Any]:
     """Generate and persist one Listing version without any eBay write."""
 
     identity = normalize_listing_project_identity(listing_project_identity)
+    request_failure = listing_draft_generation_request_failure(current_draft_fields, generation_mode=generation_mode)
+    if request_failure:
+        return _generation_request_blocked(request_failure, identity)
+    if generation_mode == "rewrite_buyer_copy":
+        source = listing_draft_rewrite_source(
+            repository=repository, company_id=company_id, store_id=store_id,
+            listing_project_identity=listing_project_identity, current_draft_fields=current_draft_fields,
+            expected_base_report_id=expected_base_report_id, expected_checkpoint_revision=expected_checkpoint_revision,
+            merchant_product_fact_packet=merchant_product_fact_packet,
+        )
+        if source["failure_code"]:
+            return _generation_request_blocked(source["failure_code"], identity)
+        merchant_product_fact_packet = source["packet"]
     packet = normalize_merchant_product_fact_packet(
         merchant_product_fact_packet,
         source="authenticated_merchant_request",
@@ -239,7 +368,12 @@ def generate_listing_draft(
             "secret_exposed": False,
         }
 
-    safe_current = _safe_current_draft_fields(current_draft_fields)
+    rewrite_buyer_copy = generation_mode == "rewrite_buyer_copy"
+    safe_current = (
+        {**{key: current_draft_fields[key] for key in LISTING_EDIT_FIELD_KEYS},
+         "merchant_edited_fields": sorted(set(current_draft_fields["merchant_edited_fields"]))}
+        if rewrite_buyer_copy else _safe_current_draft_fields(current_draft_fields)
+    )
     selected_packet = packet_record
     if selected_packet is None:
         packets = repository.list_platform_data_packets(
@@ -253,7 +387,7 @@ def generate_listing_draft(
     model_meta = _safe_model_metadata(model_resolution)
     product_name = str(packet.get("product_name") or "")[:120]
     marketplace = str((selected_packet or {}).get("packet", {}).get("marketplace") or "EBAY_US")[:40]
-    merchant_copy_failure = _merchant_edited_copy_failure_code(
+    merchant_copy_failure = "" if rewrite_buyer_copy else _merchant_edited_copy_failure_code(
         safe_current,
         marketplace=marketplace,
         merchant_product_fact_packet=packet,
@@ -280,6 +414,7 @@ def generate_listing_draft(
         title=f"AI Listing 草稿：{product_name}"[:180],
         input_data={
             "contract_version": LISTING_DRAFT_GENERATION_CONTRACT_VERSION,
+            "generation_mode": generation_mode,
             "listing_project_identity": identity,
             "merchant_product_fact_packet": packet,
             "current_draft_fields": safe_current,
@@ -295,6 +430,7 @@ def generate_listing_draft(
     )
     metered = MeteredModelClient(model_client)
     usage_recorded = False
+    report_save_attempted = False
     try:
         model_output = _generate_valid_model_output(
             metered=metered,
@@ -302,14 +438,29 @@ def generate_listing_draft(
             current_draft_fields=safe_current,
             ebay_handoff=ebay_handoff,
             marketplace=marketplace,
+            generation_mode=generation_mode,
         )
         listing_handoff = _merge_listing_fields(
             packet=packet,
-            current_draft_fields=safe_current,
+            current_draft_fields={} if rewrite_buyer_copy else safe_current,
             model_output=model_output,
             ebay_handoff=ebay_handoff,
             marketplace=marketplace,
         )
+        if rewrite_buyer_copy:
+            previous_fields = {key: safe_current[key] for key in LISTING_EDIT_FIELD_KEYS}
+            listing_handoff["buyer_copy_rewrite"] = {
+                "contract_version": LISTING_BUYER_COPY_REWRITE_CONTRACT,
+                "expected_base_report_id": expected_base_report_id,
+                "expected_checkpoint_revision": expected_checkpoint_revision,
+                "previous_fields": previous_fields,
+                "fields": {**previous_fields, "title": listing_handoff["title"],
+                           "selling_points": "\n".join(listing_handoff["selling_points"]),
+                           "description": listing_handoff["description_seed"]},
+                "previous_merchant_edited_fields": list(safe_current["merchant_edited_fields"]),
+                "merchant_edited_fields": [key for key in safe_current["merchant_edited_fields"]
+                                          if key not in LISTING_BUYER_COPY_FIELDS],
+            }
         missing_fields = _listing_missing_fields(packet=packet, listing_handoff=listing_handoff)
         version = _next_listing_version(repository, company_id=company_id, identity=identity)
         usage = metered.usage_summary()
@@ -340,6 +491,7 @@ def generate_listing_draft(
             },
             audit_summary="AI Listing draft passed generation and quality validation without an eBay write.",
         )
+        report_save_attempted = True
         report = repository.save_listing_draft_report(
             task=task,
             listing_project_identity=identity,
@@ -349,6 +501,9 @@ def generate_listing_draft(
             model_metadata=model_meta,
             version=version,
         )
+        # The immediate response must carry the same authenticated ownership
+        # as GET /reports; consumers must not infer it from browser state.
+        report = {**report, "company_id": company_id, "store_id": store_id}
         try:
             task = repository.update_task_status(
                 task_id=task["task_id"],
@@ -430,6 +585,7 @@ def generate_listing_draft(
             model_called=bool(usage.get("request_count")),
             usage_consumed=bool(usage.get("request_count")),
             model_usage=usage,
+            report_save_attempted=report_save_attempted,
         ) from exc
 
 
@@ -498,6 +654,7 @@ def _listing_user_prompt(
     ebay_handoff: dict[str, Any],
     marketplace: str,
     repair_failure_code: str = "",
+    generation_mode: str = "preserve_merchant_edits",
 ) -> str:
     prompt = {
         "contract": LISTING_DRAFT_GENERATION_CONTRACT_VERSION,
@@ -525,6 +682,15 @@ def _listing_user_prompt(
             "device_compatibility",
         ],
     }
+    if generation_mode == "rewrite_buyer_copy":
+        prompt["generation_mode"] = generation_mode
+        prompt["merchant_current_draft"] = {}
+        prompt["sanitized_ebay_context"] = {}
+        prompt["required_output"] = {
+            "title": "string, <=80 chars",
+            "selling_points": ["3 to 5 concise factual English strings; newline-joined length <=1400 chars"],
+            "description": "concise factual English string, <=1400 chars",
+        }
     if repair_failure_code:
         prompt["repair_attempt"] = {
             "attempt": 1,
@@ -567,6 +733,7 @@ def _generate_valid_model_output(
     current_draft_fields: dict[str, Any],
     ebay_handoff: dict[str, Any],
     marketplace: str,
+    generation_mode: str = "preserve_merchant_edits",
 ) -> dict[str, Any]:
     merchant_current_draft = _merchant_edited_current_draft_fields(current_draft_fields)
     prompt_args = {
@@ -574,6 +741,7 @@ def _generate_valid_model_output(
         "current_draft_fields": merchant_current_draft,
         "ebay_handoff": ebay_handoff,
         "marketplace": marketplace,
+        "generation_mode": generation_mode,
     }
     model_result = metered.generate_text(
         system_prompt=_listing_system_prompt(),
@@ -583,7 +751,7 @@ def _generate_valid_model_output(
         timeout_seconds=60,
     )
     try:
-        return _parse_model_output(model_result, marketplace=marketplace, packet=packet)
+        return _parse_model_output(model_result, marketplace=marketplace, packet=packet, generation_mode=generation_mode)
     except (json.JSONDecodeError, TypeError, ValueError) as first_error:
         repair_code = _safe_failure_code(first_error)
     repaired_result = metered.generate_text(
@@ -593,7 +761,7 @@ def _generate_valid_model_output(
         max_output_tokens=1800,
         timeout_seconds=60,
     )
-    return _parse_model_output(repaired_result, marketplace=marketplace, packet=packet)
+    return _parse_model_output(repaired_result, marketplace=marketplace, packet=packet, generation_mode=generation_mode)
 
 
 def _merchant_edited_current_draft_fields(value: dict[str, Any]) -> dict[str, Any]:
@@ -652,12 +820,31 @@ def _merchant_edited_copy_failure_code(
     return ""
 
 
-def _parse_model_output(result: Any, *, marketplace: str, packet: dict[str, Any]) -> dict[str, Any]:
+def _parse_model_output(result: Any, *, marketplace: str, packet: dict[str, Any],
+                        generation_mode: str = "preserve_merchant_edits") -> dict[str, Any]:
     text = str((result or {}).get("text") or "").strip() if isinstance(result, dict) else ""
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE).strip()
     parsed = json.loads(text)
     if not isinstance(parsed, dict):
         raise ValueError("listing_model_output_not_object")
+    if generation_mode == "rewrite_buyer_copy":
+        buyer_copy = {key: parsed.get(key) for key in LISTING_BUYER_COPY_FIELDS}
+        raw_points = buyer_copy["selling_points"]
+        if (not isinstance(buyer_copy["title"], str) or not isinstance(buyer_copy["description"], str)
+            or not isinstance(raw_points, list) or any(not isinstance(point, str) for point in raw_points)):
+            raise ValueError("listing_model_output_rewrite_copy_invalid")
+        for value in [buyer_copy["title"], buyer_copy["description"], *raw_points]:
+            if "\x00" in value:
+                raise ValueError("listing_model_output_rewrite_copy_invalid")
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError("listing_model_output_rewrite_copy_invalid") from None
+        if (len(buyer_copy["title"]) > 80 or len(buyer_copy["description"]) > 1400
+            or len("\n".join(raw_points)) > 1400 or any(len(point) > 300 for point in raw_points)):
+            raise ValueError("listing_model_output_rewrite_copy_too_long")
+        if contains_secret_like_data(buyer_copy) or _redact_secret_like(buyer_copy) != buyer_copy:
+            raise ValueError("listing_model_output_rewrite_copy_sensitive_text")
     title = str(parsed.get("title") or "").strip()[:80]
     description = str(parsed.get("description") or "").strip()[:6000]
     if not title or not description:
@@ -669,6 +856,10 @@ def _parse_model_output(result: Any, *, marketplace: str, packet: dict[str, Any]
     )
     if not LISTING_BUYER_COPY_MIN_POINTS <= len(selling_points) <= LISTING_BUYER_COPY_MAX_POINTS:
         raise ValueError("listing_model_output_selling_points_count")
+    if generation_mode == "rewrite_buyer_copy" and (
+        len(description) > 1400 or len("\n".join(selling_points)) > 1400
+    ):
+        raise ValueError("listing_model_output_rewrite_copy_too_long")
     _validate_buyer_copy(
         title=title,
         description=description,
@@ -677,6 +868,8 @@ def _parse_model_output(result: Any, *, marketplace: str, packet: dict[str, Any]
         failure_prefix="listing_model_output",
         merchant_product_fact_packet=packet,
     )
+    if generation_mode == "rewrite_buyer_copy":
+        return {"title": title, "selling_points": selling_points, "description": description}
     keywords = _string_list(parsed.get("keywords"), limit=20, item_limit=80)
     item_specifics = _safe_model_item_specifics(parsed.get("item_specifics"))
     supplemental_grounding_failure = _buyer_copy_grounding_failure(

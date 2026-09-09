@@ -96,13 +96,13 @@ def _connection(repository):
             conn.close()
 
 
-def _scope(conn, company_id, store_id):
-    if not conn.execute("select store_id from stores where company_id = ? and store_id = ?",
+def _scope(conn, company_id, store_id, *, lock=False):
+    if not conn.execute("select store_id from stores where company_id = ? and store_id = ?" + (" for update" if lock else ""),
                         (company_id, store_id)).fetchone():
         raise KeyError("listing_draft_not_found")
 
 
-def _base(repository, conn, company_id, store_id, identity):
+def _base_candidate(repository, conn, company_id, store_id, identity, excluded_ids):
     def field(key):
         if repository.database_engine == "postgres":
             return f"r.report_json -> 'listing_project_identity' ->> '{key}'"
@@ -111,19 +111,78 @@ def _base(repository, conn, company_id, store_id, identity):
     # Compare instants, not offset-bearing SQLite text; new fact actions advance
     # primary reports by at least a millisecond. Postgres already uses timestamptz.
     order_time = "r.created_at" if repository.database_engine == "postgres" else "julianday(r.created_at)"
+    exclusion = " and r.report_id not in (" + ",".join("?" for _ in excluded_ids) + ")" if excluded_ids else ""
+    parameters = (company_id, store_id, *(identity[key] for key in IDENTITY_KEYS))
+    parameters += tuple(excluded_ids)
     row = conn.execute(
         f"""select r.*, t.company_id, t.store_id from reports r
         join tasks t on t.task_id = r.task_id
         where t.company_id = ? and t.store_id = ? and r.status = 'saved'
           and r.report_type in ('listing.package','product.listing','merchant.product_facts','ai_ceo.market_research')
-          and {predicates}
+          and {predicates}{exclusion}
         order by case when r.report_type = 'ai_ceo.market_research' then 1 else 0 end,
           {order_time} desc, r.report_id desc limit 1""",
-        (company_id, store_id, *(identity[key] for key in IDENTITY_KEYS)),
+        parameters,
     ).fetchone()
     if not row:
         raise KeyError("listing_draft_not_found")
     return repository._report_row_to_dict(row)
+
+
+def _rewrite_contract(base):
+    report = base.get("report") if isinstance(base.get("report"), dict) else {}
+    handoff = report.get("listing_handoff") if isinstance(report.get("listing_handoff"), dict) else {}
+    fields = handoff.get("listing_fields") if isinstance(handoff.get("listing_fields"), dict) else {}
+    if "buyer_copy_rewrite" not in fields:
+        return None
+    rewrite = fields["buyer_copy_rewrite"]
+    return rewrite if isinstance(rewrite, dict) else {}
+
+
+def _valid_rewrite_anchors(base, rewrite):
+    return (rewrite.get("contract_version") == "listing_buyer_copy_rewrite_v1"
+            and base.get("report_type") == "listing.package"
+            and base.get("runtime_run_id") == "listing_draft_generation"
+            and base.get("report", {}).get("contract_version") == "listing_ai_draft_generation_v1"
+            and isinstance(rewrite.get("expected_base_report_id"), str)
+            and re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", rewrite["expected_base_report_id"]) is not None
+            and not isinstance(rewrite.get("expected_checkpoint_revision"), bool)
+            and isinstance(rewrite.get("expected_checkpoint_revision"), int)
+            and 0 <= rewrite["expected_checkpoint_revision"] < 2147483647)
+
+
+def _base(repository, conn, company_id, store_id, identity, *, superseded=None):
+    # An unadopted rewrite must not hide newer merchant facts/edits forever.
+    # Keep its immutable report as history, but fall back to the valid source.
+    # Walk only pending rewrite predecessors; the ordinary one-row path stays.
+    excluded = []
+    pending = []
+    while True:
+        base = _base_candidate(repository, conn, company_id, store_id, identity, excluded)
+        rewrite = _rewrite_contract(base)
+        if rewrite is None:
+            break
+        adopted = conn.execute("""select checkpoint_id from listing_draft_edit_revisions
+            where company_id = ? and store_id = ? and project_key = ? and source_report_id = ?
+              and candidate_id = ? and base_report_id = ? limit 1""",
+            (company_id, store_id, *(identity[key] for key in IDENTITY_KEYS), base["report_id"])).fetchone()
+        if adopted:
+            break
+        pending.append((base, rewrite))
+        excluded.append(base["report_id"])
+    if pending:
+        head = conn.execute("""select revision from listing_draft_edit_heads
+            where company_id = ? and store_id = ? and project_key = ? and source_report_id = ? and candidate_id = ?""",
+            (company_id, store_id, *(identity[key] for key in IDENTITY_KEYS))).fetchone()
+        revision = head["revision"] if head else 0
+        for candidate, rewrite in reversed(pending):
+            if (_valid_rewrite_anchors(candidate, rewrite)
+                and rewrite["expected_checkpoint_revision"] == revision
+                and rewrite["expected_base_report_id"] == base["report_id"]):
+                base = candidate
+            elif superseded is not None:
+                superseded.append(candidate["report_id"])
+    return base
 
 
 def _view(repository, conn, company_id, store_id, identity):
@@ -136,11 +195,13 @@ def _view(repository, conn, company_id, store_id, identity):
     checkpoint = _decode(row["receipt_json"]) if row else None
     if checkpoint and checkpoint["listing_project_identity"] != identity:
         raise KeyError("listing_draft_not_found")
-    base = _base(repository, conn, company_id, store_id, identity)
+    superseded = []
+    base = _base(repository, conn, company_id, store_id, identity, superseded=superseded)
     return {"contract_version": CONTRACT_VERSION, "status": "saved" if checkpoint else "empty",
             "checkpoint": checkpoint, "current_revision": checkpoint["revision"] if checkpoint else 0,
             "current_base_report_id": base["report_id"], "current_base_report": base,
-            "base_changed": bool(checkpoint and checkpoint["base_report_id"] != base["report_id"]), **SAFETY}
+            "base_changed": bool(checkpoint and checkpoint["base_report_id"] != base["report_id"]),
+            **({"superseded_rewrite_report_ids": superseded} if superseded else {}), **SAFETY}
 
 
 def read_checkpoint(repository, *, company_id, store_id, identity):
@@ -157,7 +218,9 @@ def _conflict(repository, conn, company_id, store_id, identity, body, code):
                               "expected_revision": body["expected_revision"],
                               "current_revision": view["current_revision"], "latest_checkpoint": view["checkpoint"],
                               "current_base_report_id": view["current_base_report_id"],
-                              "current_base_report": view["current_base_report"], **SAFETY})
+                              "current_base_report": view["current_base_report"],
+                              **({"superseded_rewrite_report_ids": view["superseded_rewrite_report_ids"]}
+                                 if view.get("superseded_rewrite_report_ids") else {}), **SAFETY})
 
 
 def save_checkpoint(repository, *, company_id, store_id, user_id, project_key, body):
@@ -171,7 +234,9 @@ def save_checkpoint(repository, *, company_id, store_id, user_id, project_key, b
     with _connection(repository) as conn:
         if repository.database_engine != "postgres":
             conn.execute("begin immediate")
-        _scope(conn, company_id, store_id)
+        # Fact saves use this same store lock. Keep their source update and this
+        # short adoption transaction ordered on Postgres; reads remain unlocked.
+        _scope(conn, company_id, store_id, lock=repository.database_engine == "postgres")
         scope = (company_id, store_id, project_key)
         conn.execute("""insert into listing_draft_edit_heads
             (company_id,store_id,project_key,source_report_id,candidate_id,revision,checkpoint_id,updated_at)

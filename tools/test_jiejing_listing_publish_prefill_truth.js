@@ -22,6 +22,10 @@ const publishPrefillSource = extractFunction(
   "function saasPublishIntakePrefillValues",
   "\nfunction renderSaasPublishInputField",
 );
+const buyerCopyRewriteLookupSource = extractFunction(
+  "function saasListingBuyerCopyRewriteForDraft",
+  "\nfunction renderSaasListingBuyerCopyRewriteHistory",
+);
 const duplicateGuardSource = extractFunction(
   "function saasPreTestPayloadText",
   "\nfunction saasPreTestFormSummary",
@@ -58,6 +62,7 @@ function publishPrefill({ input = "", logistics = "", draft = null }) {
 const state = {
   saasListingComposerInput: globalThis.__input,
   saasListingSourceMode: "ai_ceo_market_report",
+  saasReports: [],
   saasListingComposerDraft: globalThis.__draft || {
     product: "禅意佛手托莲花倒流香炉",
     title: "禅意佛手托莲花倒流香炉",
@@ -87,6 +92,7 @@ const parseSaasKeyValueLines = (value) => String(value || "").split(/\\r?\\n/).r
   return out;
 }, {});
 const saasListingMediaWritebackImageUrls = () => [];
+${buyerCopyRewriteLookupSource}
 ${publishPrefillSource}
 globalThis.__result = saasPublishIntakePrefillValues();
 `,
