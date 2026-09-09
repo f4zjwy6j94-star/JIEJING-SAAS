@@ -154,3 +154,33 @@ test("legacy product tasks remain visible and tasks without a saved Listing only
     assert.equal(await page.locator("[data-continue-recent-product-task]").count(), 2);
   });
 });
+
+test("a failed generation without local feedback returns to the saved draft without promising a missing recovery card", async () => {
+  const failed = task("listing_draft_generation", "failed-before-report", { user_id: "recent-user", status: "failed" });
+  await withRecent([failed], [], async (page) => {
+    const card = await page.locator('[data-recent-product-task-id="failed-before-report"]').innerText();
+    assert.doesNotMatch(card, /查看生成反馈/, "a saved task cannot promise browser-local feedback still exists");
+    assert.match(card, /核对已保存内容/);
+    assert.match(card, /不会自动重新生成/);
+    const result = await page.evaluate(({ identity }) => {
+      state.saasProtectedStateReady = true;
+      state.saasProtectedStateFromCache = false;
+      state.saasSessionExpiryHandled = false;
+      state.saasListingComposerDraft = { product: "Foldable Tablet Stand", listing_project_identity: identity,
+        fields: { title: "My saved tablet title", description: "My saved buyer copy" }, ai_generation_feedback: null };
+      const before = JSON.stringify(state.saasListingComposerDraft);
+      const returned = continueSaasRecentProductTaskFacts("failed-before-report");
+      return { returned, unchanged: JSON.stringify(state.saasListingComposerDraft) === before,
+        feedback: state.saasListingComposerDraft.ai_generation_feedback,
+        view: state.view, mode: state.saasListingMode, text: document.body.innerText };
+    }, { identity });
+    assert.equal(result.returned, true);
+    assert.equal(result.unchanged, true);
+    assert.equal(result.feedback, null, "missing recovery metadata must not be synthesized from an unrelated task");
+    assert.equal(result.view, "product");
+    assert.equal(result.mode, "single");
+    assert.doesNotMatch(result.text, /请在生成反馈中核对本次结果/);
+    assert.match(result.text, /已保存内容保留/);
+    assert.match(result.text, /没有重新生成或补建商品/);
+  });
+});

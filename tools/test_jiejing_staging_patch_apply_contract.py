@@ -650,6 +650,16 @@ def main() -> int:
         missing_rewrite_wiring.append("HTTP browser child must run only through the Python API regression")
     if missing_rewrite_wiring:
         return fail("buyer-copy rewrite regressions must ship and run: " + "; ".join(missing_rewrite_wiring))
+    expiry_frontend = "tools/test_jiejing_listing_session_expiry_recovery.js"
+    expiry_spec = "docs/superpowers/specs/2026-09-10-listing-expired-session-resume-design.md"
+    for script_path in (expiry_frontend, expiry_spec):
+        if whitelist_entries.count(f'"{script_path}"') != 1 or not (ROOT / script_path).is_file():
+            return fail(f"Listing expired-session recovery dependency must ship exactly once: {script_path}")
+    if node_check_entries.count(f'"$NODE_BIN" --check {expiry_frontend}') != 1:
+        return fail("Listing expired-session recovery regression must receive a Node syntax check")
+    expiry_gate = f'("listing_session_expiry_recovery", ["node", "--test", "{expiry_frontend}"])'
+    if precloud_gate.count(expiry_gate) != 1 or precloud_gate.count(expiry_frontend) != 1:
+        return fail("Listing expired-session recovery regression must run exactly once in precloud gate")
     for marker in [
         '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',

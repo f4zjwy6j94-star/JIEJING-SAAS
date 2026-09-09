@@ -646,7 +646,7 @@ function handleSaasUnrecoverableSession(error = null) {
   const firstFailure = state.saasSessionExpiryHandled !== true;
   state.saasSessionExpiryHandled = true;
   stopSaasAiCeoCrossDeviceSync();
-  clearSaasSessionFromStorage({ preserveCeoThread: true });
+  clearSaasSessionFromStorage({ preserveCeoThread: true, preservePendingListingGeneration: true });
   resetSaasProtectedWorkbenchState();
   state.saasConnected = false;
   state.saasProtectedStateReady = false;
@@ -16611,6 +16611,79 @@ function buildSaasProtectedStateSnapshot() {
   };
 }
 
+// Expiry retains only non-secret operation metadata, never the protected cache.
+// This independent version cannot hydrate an account or authorize any action.
+function saasExpiredListingGenerationMetadata(feedback) {
+  const operation = saasListingGenerationOperation(feedback?.operation);
+  if (!operation || !["running", "generation_uncertain", "generated_unapplied"].includes(feedback.status) ||
+      feedback.context_key !== saasListingGenerationOperationContextKey(operation)) return null;
+  const ids = [...Object.values(operation.listing_project_identity), operation.company_id, operation.user_id, operation.store_id];
+  if (ids.some((id) => !/^[A-Za-z0-9._:-]{0,160}$/.test(id))) return null;
+  const rewriteSource = saasListingRewriteFeedbackSource(feedback.rewrite_source);
+  if (operation.generation_mode === "rewrite_buyer_copy"
+      ? !rewriteSource || rewriteSource.base_report_id !== operation.expected_base_report_id || rewriteSource.revision !== operation.expected_checkpoint_revision
+      : rewriteSource !== null) return null;
+  const metadata = { status: feedback.status === "running" ? "generation_uncertain" : feedback.status,
+    context_key: saasListingGenerationOperationContextKey(operation), operation, rewrite_source: rewriteSource,
+    result_report_id: typeof feedback.result_report_id === "string" && /^[A-Za-z0-9._:-]{1,160}$/.test(feedback.result_report_id) ? feedback.result_report_id : null,
+    input_signature: feedback.input_signature == null ? null
+      : typeof feedback.input_signature === "string" && /^[a-f0-9]{64}$/.test(feedback.input_signature) ? feedback.input_signature : "invalid",
+    request_signature: feedback.request_signature == null ? null
+      : typeof feedback.request_signature === "string" && /^[a-f0-9]{64}$/.test(feedback.request_signature) ? feedback.request_signature : "invalid" };
+  const serialized = JSON.stringify(metadata);
+  return saasProductFeedbackTextContainsSecret(serialized) || /\bsk-[A-Za-z0-9]{16,}/i.test(serialized) ? null : metadata;
+}
+
+function saasExpiredListingGenerationStorageKey() {
+  return `${saasProtectedSnapshotStorageKey()}:pending_listing_generation`;
+}
+
+function readSaasExpiredListingGeneration() {
+  try {
+    // Exact account key only: email/last-account aliases cannot establish ownership.
+    const raw = localStorage.getItem(saasExpiredListingGenerationStorageKey());
+    if (!raw || raw.length > 4096) return null;
+    const value = JSON.parse(raw);
+    if (value?.version !== "listing_session_expiry_recovery_v1" ||
+        typeof value.saved_at !== "string" || value.saved_at.length !== 24 ||
+        !value.feedback || !Object.hasOwn(value.feedback, "request_signature")) return null;
+    const feedback = saasExpiredListingGenerationMetadata(value.feedback);
+    const savedAt = Date.parse(value.saved_at || "");
+    const now = saasServerNowMs();
+    if (!feedback || !Number.isFinite(savedAt) || savedAt > now + 300000 || now - savedAt > 14 * 86400000 ||
+        new Date(savedAt).toISOString() !== value.saved_at ||
+        value.account_key !== feedback.operation.user_id.toLowerCase() ||
+        JSON.stringify(saasCanonicalJsonValue(value.feedback)) !== JSON.stringify(saasCanonicalJsonValue(feedback)) ||
+        Object.keys(value).sort().join(",") !== "account_key,feedback,saved_at,version") return null;
+    return { version: value.version, account_key: value.account_key, saved_at: value.saved_at, feedback };
+  } catch (error) { return null; }
+}
+
+function restoreSaasExpiredListingGeneration(me, authorizedStores) {
+  const recovery = readSaasExpiredListingGeneration();
+  const feedback = recovery?.feedback;
+  const draft = state.saasListingComposerDraft;
+  const operation = feedback?.operation;
+  if (!operation || !draft || draft.ai_generation_feedback || !hasSaasProtectedSessionCandidate() ||
+      me?.user?.user_id !== operation.user_id || me?.identity?.user_id !== operation.user_id ||
+      me?.company?.company_id !== operation.company_id || me?.identity?.company_id !== operation.company_id ||
+      !Array.isArray(authorizedStores) || !authorizedStores.some((store) => store.store_id === operation.store_id && store.company_id === operation.company_id) ||
+      feedback.context_key !== saasListingAiGenerationContextKey(draft) ||
+      !(state.saasReports || []).some((report) => report.company_id === operation.company_id && report.store_id === operation.store_id &&
+        JSON.stringify(saasListingProjectIdentityFromReport(report)) === JSON.stringify(operation.listing_project_identity))) return false;
+  // Fresh backend data supplies the draft. Metadata supplies no copy or facts and
+  // cannot set resume_available: the existing exact-result/signature/CAS path does.
+  draft.ai_generation_feedback = { ...feedback,
+    message: "登录已恢复，请先核对本次生成结果。当前商品以云端已保存内容为准，没有自动继续生成。" };
+  try {
+    // Replace atomically only after successful identity/project recovery. If
+    // storage fails, the original metadata remains available for the next login.
+    localStorage.setItem(saasProtectedSnapshotStorageKey(), JSON.stringify(buildSaasProtectedStateSnapshot()));
+    localStorage.removeItem(saasExpiredListingGenerationStorageKey());
+  } catch (error) { /* Optional cache; no operation or signature is recreated. */ }
+  return true;
+}
+
 function saveSaasProtectedStateSnapshot() {
   if (!isSaasPublicMvpMode() || !hasSaasProtectedBackendState()) return;
   try {
@@ -16742,6 +16815,14 @@ function hydrateSaasProtectedStateFromCache() {
 }
 
 function clearSaasSessionFromStorage(options = {}) {
+  const preservePendingListingGeneration = options.preservePendingListingGeneration === true;
+  const feedback = preservePendingListingGeneration && state.saasListingComposerDraft?.ai_generation_feedback;
+  const metadata = feedback && feedback.context_key === saasListingAiGenerationContextKey()
+    ? saasExpiredListingGenerationMetadata(feedback) : null;
+  const pendingListingRecovery = preservePendingListingGeneration
+    ? metadata ? { version: "listing_session_expiry_recovery_v1", account_key: metadata.operation.user_id.toLowerCase(),
+      saved_at: new Date(saasServerNowMs()).toISOString(), feedback: metadata } : readSaasExpiredListingGeneration()
+    : null;
   invalidateSaasSettingsActionContext();
   stopSaasAiCeoCrossDeviceSync();
   resetSaasAiCeoHistoryArchive();
@@ -16765,6 +16846,8 @@ function clearSaasSessionFromStorage(options = {}) {
     localStorage.removeItem(saasStorageKeys.sessionHint);
     localStorage.removeItem(saasStorageKeys.token);
     localStorage.removeItem(saasProtectedSnapshotStorageKey());
+    if (pendingListingRecovery) localStorage.setItem(saasExpiredListingGenerationStorageKey(), JSON.stringify(pendingListingRecovery));
+    else localStorage.removeItem(saasExpiredListingGenerationStorageKey());
     localStorage.removeItem(saasStorageKeys.protectedSnapshot);
     clearStoredSaasStoreContext();
   } catch (error) {
@@ -17270,7 +17353,9 @@ async function ensureSaasDemoSession() {
         return me;
       }
     } catch (error) {
-      clearSaasSessionFromStorage({ preserveCeoThread: true });
+      if (!isSaasUnrecoverableSessionError(error) || state.saasSessionExpiryHandled !== true) {
+        clearSaasSessionFromStorage({ preserveCeoThread: true, preservePendingListingGeneration: true });
+      }
     }
   }
   if (!state.saasDemoBootstrapEnabled) {
@@ -19394,7 +19479,7 @@ function renderSaasRecentProductTasks() {
                   const nextCopy = report
                     ? saasRecentProductTaskBlocker(task)
                     : task.task_type === "listing_draft_generation"
-                      ? "本次生成结果需核对；请返回该商品的已有草稿查看生成反馈，不必重新补货源资料。"
+                      ? "本次生成未附可恢复的新报告；可返回已有商品草稿核对已保存内容，不会自动重新生成。"
                       : saasRecentProductTaskBlocker(task, "补充商品链接、来源图片或真实规格后，再生成可核对的 Listing 草稿。");
                   return `
                     <article class="saas-recent-product-card" data-recent-product-task-id="${escapeHtml(taskId)}" data-recent-product-task-type="${escapeHtml(task.task_type)}">
@@ -19502,7 +19587,7 @@ function continueSaasRecentProductTaskFacts(taskId = "") {
       return false;
     }
     activateSaasListingMode("single");
-    showActionToast("已返回当前商品草稿，请在生成反馈中核对本次结果；没有重新生成或补建商品。");
+    showActionToast("已返回当前商品草稿；已保存内容保留，没有重新生成或补建商品。");
     return true;
   }
   const projectId = String(taskIdentity?.key || task.project_id || task.input?.project_id || task.output?.project_id || "").trim();
@@ -30070,6 +30155,7 @@ async function refreshSaasState(options = {}) {
       preferBackendLatest: restoredCachedState,
       restoreDetachedDraft: restoredCachedState,
     });
+    restoreSaasExpiredListingGeneration(me, stores.stores);
     const liveConfirmations = confirmations.confirmations || [];
     await verifySaasUnpublishedDraftSaveConfirmations(liveConfirmations);
     await verifySaasInventoryLocationConfirmations(liveConfirmations);

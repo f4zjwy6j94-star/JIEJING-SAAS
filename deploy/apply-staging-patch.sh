@@ -370,6 +370,8 @@ FILES=(
   "tools/test_jiejing_listing_cloud_checkpoint_frontend.js"
   "tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js"
   "tools/test_jiejing_listing_buyer_copy_rewrite_frontend.js"
+  "tools/test_jiejing_listing_session_expiry_recovery.js"
+  "docs/superpowers/specs/2026-09-10-listing-expired-session-resume-design.md"
   "tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js"
   "tools/test_jiejing_recent_product_tasks.js"
   "tools/test_jiejing_listing_product_fact_confirmation_ui.js"
@@ -901,6 +903,7 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_frontend.js
 "$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_listing_buyer_copy_rewrite_frontend.js
+"$NODE_BIN" --check tools/test_jiejing_listing_session_expiry_recovery.js
 "$NODE_BIN" --check tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_recent_product_tasks.js
 "$NODE_BIN" --check tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js
