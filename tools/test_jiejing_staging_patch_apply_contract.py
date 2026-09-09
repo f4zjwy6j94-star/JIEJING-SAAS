@@ -614,11 +614,16 @@ def main() -> int:
     rewrite_python_checks = {
         "listing_buyer_copy_rewrite": "tools/test_jiejing_listing_buyer_copy_rewrite.py",
         "listing_buyer_copy_rewrite_api": "tools/test_jiejing_listing_buyer_copy_rewrite_api.py",
+        "listing_generation_operations": "tools/test_jiejing_listing_generation_operations.py",
+        "listing_generation_legacy_recovery": "tools/test_jiejing_listing_generation_legacy_recovery.py",
     }
     rewrite_frontend = "tools/test_jiejing_listing_buyer_copy_rewrite_frontend.js"
     rewrite_http = "tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js"
     rewrite_spec = "docs/superpowers/specs/2026-09-09-listing-buyer-copy-rewrite-design.md"
-    rewrite_whitelist = [rewrite_spec, *rewrite_python_checks.values(), rewrite_frontend, rewrite_http]
+    rewrite_whitelist = [rewrite_spec, *rewrite_python_checks.values(), rewrite_frontend, rewrite_http,
+        "jiejing_saas/listing_generation_operations.py", "jiejing_saas/listing_generation_legacy_recovery.py",
+        "docs/superpowers/specs/2026-09-09-listing-generation-result-recovery-design.md",
+        "docs/superpowers/plans/2026-09-09-listing-generation-result-recovery-plan.md"]
     whitelist_entries = [line.strip() for line in text[whitelist_start:whitelist_end].splitlines()]
     node_check_entries = [line.strip() for line in node_check_block.splitlines()]
     missing_rewrite_wiring = []

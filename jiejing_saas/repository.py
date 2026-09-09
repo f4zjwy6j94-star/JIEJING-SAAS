@@ -2961,6 +2961,71 @@ class SaaSRepository:
             raise KeyError("task id collision")
         return task
 
+    def claim_listing_generation_operation_task(self, *, task_id: str, company_id: str, store_id: str,
+        user_id: str, input_data: dict[str, Any]) -> dict[str, Any]:
+        """Only the unique insert winner may start this Listing operation."""
+        self.initialize()
+        created_at = now_iso()
+        output = {"phase": "before_model", "report_save_attempted": False, "model_called": False,
+                  "usage_consumed": False, "real_platform_writes_enabled": False, "secret_exposed": False}
+        with self._connect() as conn:
+            inserted = conn.execute("""insert or ignore into tasks
+                (task_id,company_id,store_id,user_id,runtime_run_id,task_type,title,status,created_at,updated_at,input_json,output_json)
+                values (?,?,?,?,?,?,?,?,?,?,?,?)""", (task_id, company_id, store_id, user_id, None,
+                "listing_draft_generation", "AI Listing 文案生成", "queued", created_at, created_at,
+                json.dumps(input_data, ensure_ascii=False), json.dumps(output, ensure_ascii=False)))
+            claimed = int(inserted.rowcount or 0) == 1
+            if claimed:
+                self._insert_audit(conn, company_id=company_id, store_id=store_id, user_id=user_id,
+                    actor_type="user", action_type="listing.generation.operation.claimed", target_type="task",
+                    target_id=task_id, summary="One Listing generation operation claimed without a model request.",
+                    details={"real_platform_writes_enabled": False, "secret_exposed": False})
+        task = self.get_task(company_id=company_id, task_id=task_id)
+        if not task:
+            raise KeyError("listing_generation_operation_not_found")
+        return {"claimed": claimed, "task": task}
+
+    def transition_listing_generation_operation_task(self, *, task_id: str, company_id: str, store_id: str,
+        user_id: str, expected_phases: tuple[str, ...], phase: str, status: str,
+        output: dict[str, Any], model_metadata: dict[str, str] | None = None) -> dict[str, Any] | None:
+        """Persist a phase exactly once; an uncertain write never licenses retry."""
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute("""select * from tasks where task_id=? and company_id=? and store_id=? and user_id=?
+                and task_type='listing_draft_generation'""", (task_id, company_id, store_id, user_id)).fetchone()
+            if not row:
+                return None
+            current = self._task_row_to_dict(row)
+            if ((current.get("input") or {}).get("contract_version") != "listing_generation_operation_v1"
+                or (current.get("output") or {}).get("phase") not in expected_phases):
+                return None
+            input_data = current["input"]
+            if model_metadata is not None:
+                if (phase != "model_running" or set(model_metadata) != {"model_usage_owner", "provider_key"}
+                    or model_metadata["model_usage_owner"] not in ("merchant_account_byok", "jiejing_platform_trial")
+                    or not isinstance(model_metadata["provider_key"], str) or len(model_metadata["provider_key"]) > 80):
+                    raise ValueError("listing_generation_operation_metadata_invalid")
+                input_data = {**input_data, **model_metadata}
+            updated = conn.execute("""update tasks set status=?,updated_at=?,output_json=?,input_json=?
+                where task_id=? and company_id=? and store_id=? and user_id=? and status=? and updated_at=?""",
+                (status, now_iso(), json.dumps({**output, "phase": phase}, ensure_ascii=False),
+                 json.dumps(input_data, ensure_ascii=False), task_id, company_id,
+                 store_id, user_id, current["status"], current["updated_at"]))
+            if int(updated.rowcount or 0) != 1:
+                return None
+        return self.get_task(company_id=company_id, task_id=task_id)
+
+    def list_listing_generation_operation_reports(self, *, company_id: str, store_id: str,
+        user_id: str, task_id: str) -> list[dict[str, Any]]:
+        """Read exact-operation reports, not the latest report for a product."""
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute("""select r.*, t.company_id, t.store_id, t.user_id from reports r
+                join tasks t on t.task_id=r.task_id
+                where r.task_id=? and t.company_id=? and t.store_id=? and t.user_id=?
+                order by r.created_at, r.report_id""", (task_id, company_id, store_id, user_id)).fetchall()
+        return [{**self._report_row_to_dict(row), "user_id": row["user_id"]} for row in rows]
+
     def claim_ai_ceo_chat_request(
         self,
         *,
@@ -14600,6 +14665,57 @@ class SaaSRepository:
             ).fetchone()
         return dict(row) if row else {}
 
+    def read_legacy_listing_generation_evidence(
+        self, *, company_id: str, store_id: str, user_id: str, task_id: str,
+        identity: dict[str, str], base_report_id: str, revision: int,
+    ) -> dict[str, Any]:
+        """Read one bounded, immutable-evidence snapshot; never repair legacy rows."""
+        conn = self._connect()
+        try:
+            with conn:
+                if self.database_engine == "postgres":
+                    conn.execute("set transaction isolation level repeatable read, read only")
+                else:
+                    conn.execute("pragma query_only = on")
+                    conn.execute("begin")
+                task = conn.execute("select * from tasks where company_id = ? and store_id = ? and user_id = ? and task_id = ?",
+                                    (company_id, store_id, user_id, task_id)).fetchone()
+                if task is None:
+                    return {}
+                checkpoint = conn.execute("""select * from listing_draft_edit_revisions
+                    where company_id = ? and store_id = ? and project_key = ? and source_report_id = ?
+                      and candidate_id = ? and revision = ? and base_report_id = ?""",
+                    (company_id, store_id, identity["key"], identity["source_report_id"], identity["candidate_id"], revision, base_report_id)).fetchone()
+                base = conn.execute("""select r.*, t.company_id, t.store_id, t.user_id from reports r
+                    join tasks t on t.task_id = r.task_id
+                    where t.company_id = ? and t.store_id = ? and r.report_id = ?""",
+                    (company_id, store_id, base_report_id)).fetchone()
+                ledger = conn.execute("select * from model_usage_ledger where company_id = ? and task_id = ? limit 3",
+                                      (company_id, task_id)).fetchall()
+                field = (lambda key: f"input_json -> 'listing_project_identity' ->> '{key}'") if self.database_engine == "postgres" else (
+                    lambda key: f"case when json_valid(input_json) then json_extract(input_json, '$.listing_project_identity.{key}') end")
+                predicates = " and ".join(f"({field(key)}) = ?" for key in ("key", "source_report_id", "candidate_id"))
+                related = conn.execute(f"""select * from tasks where company_id = ? and store_id = ?
+                    and task_type = 'listing_draft_generation' and {predicates} limit 201""",
+                    (company_id, store_id, identity["key"], identity["source_report_id"], identity["candidate_id"])).fetchall()
+                ids = list(dict.fromkeys([task_id, *(row["task_id"] for row in related)]))
+                marks = ",".join("?" for _ in ids)
+                reports = conn.execute(f"""select r.*, t.company_id, t.store_id, t.user_id from reports r
+                    join tasks t on t.task_id = r.task_id where t.company_id = ? and t.store_id = ?
+                    and r.task_id in ({marks})""", (company_id, store_id, *ids)).fetchall()
+                related_ledger = conn.execute(f"select * from model_usage_ledger where company_id = ? and task_id in ({marks}) limit 401",
+                                              (company_id, *ids)).fetchall()
+                return {"task": self._task_row_to_dict(task), "checkpoint": dict(checkpoint) if checkpoint else None,
+                        "base_report": self._report_row_to_dict(base) if base else None,
+                        "ledger": [dict(row) for row in ledger],
+                        "related_tasks": [self._task_row_to_dict(row) for row in related],
+                        "related_truncated": len(related) > 200 or len(related_ledger) > 400,
+                        "related_ledger": [dict(row) for row in related_ledger],
+                        "reports": [self._report_row_to_dict(row) for row in reports]}
+        finally:
+            if self.database_engine != "postgres":
+                conn.close()
+
     def record_model_usage(
         self,
         *,
@@ -17961,6 +18077,8 @@ class SaaSRepository:
             projected["company_id"] = row["company_id"]
         if "store_id" in row_keys:
             projected["store_id"] = row["store_id"]
+        if "user_id" in row_keys:
+            projected["user_id"] = row["user_id"]
         return projected
 
     def _task_step_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:

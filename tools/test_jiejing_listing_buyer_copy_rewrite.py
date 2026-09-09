@@ -106,6 +106,21 @@ class BuyerCopyRewriteTests(unittest.TestCase):
         args.update(overrides)
         return generate_listing_draft(**args)
 
+    def save_material_checkpoint(self, material):
+        self.packet["derived_listing_suggestions"]["material"] = material
+        view = self.repository.get_listing_draft_checkpoint(company_id=self.company_id,
+            store_id=self.store["store_id"], identity=self.identity)
+        saved_facts = self.repository.save_merchant_product_fact_checkpoint(company_id=self.company_id,
+            store_id=self.store["store_id"], user_id=self.user_id, packet=self.packet,
+            listing_project_identity=self.identity)
+        self.base_report_id = saved_facts["report"]["report_id"]
+        self.repository.save_listing_draft_checkpoint(company_id=self.company_id, store_id=self.store["store_id"],
+            user_id=self.user_id, project_key=self.identity["key"], body={
+                "contract_version": "listing_merchant_edit_v1", "listing_project_identity": self.identity,
+                "base_report_id": self.base_report_id, "expected_revision": view["current_revision"],
+                "mutation_id": str(uuid.uuid4()), "fields": self.fields, "merchant_edited_fields": self.edited})
+        return view["current_revision"] + 1
+
     def test_explicit_rewrite_replaces_only_three_fields_and_preserves_original_in_report(self):
         before = copy.deepcopy(self.fields)
         default = self.generate()
@@ -148,6 +163,94 @@ class BuyerCopyRewriteTests(unittest.TestCase):
                 self.assertIsNone(result["report"])
         self.assertEqual(self.model.calls, [])
         self.assertEqual(self.repository.list_tasks(company_id=self.company_id), self.original_tasks)
+
+    def test_chinese_material_facts_authorize_their_english_buyer_copy_without_changing_facts(self):
+        revision = self.save_material_checkpoint("铝合金 + 硅胶防滑垫")
+        before = copy.deepcopy(self.fields)
+        result = self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len(self.model.calls), 1, "a grounded translation needs no model repair")
+        saved = self.repository.get_report_for_company(company_id=self.company_id,
+            report_id=result["report"]["report_id"])
+        handoff = saved["report"]["listing_handoff"]["listing_fields"]
+        self.assertEqual(handoff["merchant_product_fact_packet"]["derived_listing_suggestions"]["material"],
+            "铝合金 + 硅胶防滑垫")
+        contract = handoff["buyer_copy_rewrite"]
+        self.assertEqual(contract["previous_fields"], before)
+        for key in set(FIELD_KEYS) - BUYER_FIELDS:
+            self.assertEqual(contract["fields"][key], before[key], key)
+        self.assertTrue(handoff["simulation_only"])
+        self.assertTrue(handoff["image_requirements"]["rights_check_required"])
+        self.assertFalse(handoff["real_platform_writes_enabled"])
+
+    def test_chinese_material_alias_does_not_authorize_an_aluminum_grade_upgrade(self):
+        revision = self.save_material_checkpoint("铝合金 + 硅胶防滑垫")
+        self.model.output["title"] = "6061 Aluminum Tablet Stand"
+        before_reports = self.repository.list_reports(company_id=self.company_id)
+        with self.assertRaises(ListingDraftGenerationError) as failure:
+            self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
+        self.assertEqual(failure.exception.failure_code, "listing_model_output_ungrounded_material")
+        self.assertFalse(failure.exception.report_save_attempted)
+        self.assertEqual(len(self.model.calls), 2)
+        self.assertEqual(self.repository.list_reports(company_id=self.company_id), before_reports)
+
+    def test_material_aliases_accept_only_complete_equivalent_components(self):
+        for material in ("鋁合金 ＋ 矽膠防滑墊", "铝合金、硅胶", "鋁合金; 硅膠防滑墊"):
+            with self.subTest(material=material):
+                revision = self.save_material_checkpoint(material)
+                before_calls = len(self.model.calls)
+                result = self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(len(self.model.calls) - before_calls, 1)
+                saved = self.repository.get_report_for_company(company_id=self.company_id,
+                    report_id=result["report"]["report_id"])
+                handoff = saved["report"]["listing_handoff"]["listing_fields"]
+                self.assertEqual(handoff["merchant_product_fact_packet"]["derived_listing_suggestions"]["material"], material)
+                self.assertTrue(handoff["simulation_only"])
+
+    def test_ambiguous_or_different_material_components_cannot_authorize_the_translated_copy(self):
+        cases = ("铝合金", "硅胶防滑垫", "未知",
+            "可能是铝合金 + 硅胶防滑垫", "不含铝合金 + 硅胶防滑垫", "铝合金 + 非硅胶",
+            "仿铝合金 + 硅胶防滑垫", "铝合金涂层 + 硅胶防滑垫", "铝塑复合 + 硅胶防滑垫",
+            "铝合金 + 硅", "金色 + 硅胶防滑垫", "镀金 + 硅胶防滑垫", "铝合金/硅胶防滑垫")
+        for material in cases:
+            with self.subTest(material=material):
+                revision = self.save_material_checkpoint(material)
+                before_reports = self.repository.list_reports(company_id=self.company_id)
+                before_calls = len(self.model.calls)
+                with self.assertRaises(ListingDraftGenerationError) as failure:
+                    self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
+                self.assertEqual(failure.exception.failure_code, "listing_model_output_ungrounded_material")
+                self.assertFalse(failure.exception.report_save_attempted)
+                self.assertEqual(len(self.model.calls) - before_calls, 2)
+                self.assertEqual(self.repository.list_reports(company_id=self.company_id), before_reports)
+
+    def test_unconfirmed_material_remains_blocked_before_any_model_request(self):
+        revision = self.save_material_checkpoint("材质待确认，铝合金 + 硅胶防滑垫")
+        before_reports = self.repository.list_reports(company_id=self.company_id)
+        result = self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["blocked_by"], ["listing_core_fact_missing:material"])
+        self.assertFalse(result["model_called"])
+        self.assertFalse(result["usage_consumed"])
+        self.assertEqual(self.model.calls, [])
+        self.assertEqual(self.repository.list_reports(company_id=self.company_id), before_reports)
+
+    def test_translated_material_does_not_authorize_other_materials_or_grade_and_purity_claims(self):
+        revision = self.save_material_checkpoint("铝合金 + 硅胶防滑垫")
+        before_reports = self.repository.list_reports(company_id=self.company_id)
+        for title in ("Titanium Tablet Stand", "Aircraft Grade Aluminum Tablet Stand", "Pure Aluminum Tablet Stand",
+                      "Aluminum Alloy 6061 Tablet Stand", "Medical Grade Silicone Tablet Stand", "100% Silicone Tablet Stand",
+                      "6061-grade Aluminum Tablet Stand", "6061 grade Aluminum Tablet Stand"):
+            with self.subTest(title=title):
+                self.model.output["title"] = title
+                before_calls = len(self.model.calls)
+                with self.assertRaises(ListingDraftGenerationError) as failure:
+                    self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
+                self.assertEqual(failure.exception.failure_code, "listing_model_output_ungrounded_material")
+                self.assertFalse(failure.exception.report_save_attempted)
+                self.assertEqual(len(self.model.calls) - before_calls, 2)
+                self.assertEqual(self.repository.list_reports(company_id=self.company_id), before_reports)
 
     def test_rewrite_requires_a_complete_bounded_secret_free_string_snapshot(self):
         source = {**self.fields, "merchant_edited_fields": self.edited}

@@ -385,7 +385,7 @@ def main() -> int:
             listing_payload,
             token=listing_token,
         )
-        if failed_status != 502 or failed_listing.get("failure_code") != "listing_model_output_invalid_json":
+        if failed_status != 422 or failed_listing.get("failure_code") != "listing_model_output_invalid_json":
             return fail(f"invalid platform Listing should fail after one repair: {failed_status} {failed_listing}")
         if failed_listing.get("model_called") is not True or failed_listing.get("model_usage", {}).get("request_count") != 2:
             return fail(f"failed Listing must report both provider requests: {failed_listing}")
@@ -462,7 +462,7 @@ def main() -> int:
             {**listing_payload, "listing_project_identity": {"key": "listing-project-byok-after-trial"}},
             token=listing_token,
         )
-        if byok_listing_status != 502 or byok_listing.get("failure_code") != "listing_model_output_invalid_json":
+        if byok_listing_status != 422 or byok_listing.get("failure_code") != "listing_model_output_invalid_json":
             return fail(f"BYOK Listing should bypass trial exhaustion and reach the model: {byok_listing_status} {byok_listing}")
         if len(FakeModelHandler.calls) != byok_baseline_calls + 2:
             return fail("BYOK Listing did not reach the provider for generation and one repair")

@@ -317,29 +317,66 @@ def generate_listing_draft(
     generation_mode: str = "preserve_merchant_edits",
     expected_base_report_id: str | None = None,
     expected_checkpoint_revision: int | None = None,
+    operation_task: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate and persist one Listing version without any eBay write."""
 
     identity = normalize_listing_project_identity(listing_project_identity)
+    from .listing_generation_operations import (
+        read_listing_generation_operation, transition_listing_generation_operation, finish_listing_generation_operation,
+    )
+
+    def operation_view():
+        return read_listing_generation_operation(repository, company_id=company_id, store_id=store_id,
+            user_id=user_id, operation_id=operation_task["input"]["operation_id"], listing_project_identity=identity)
+
+    def blocked(result):
+        if operation_task is not None:
+            finish_listing_generation_operation(repository, operation_task=operation_task,
+                failure_code=result.get("failure_code") or (result.get("blocked_by") or ["listing_generation_blocked"])[0])
+        return result
+
+    if operation_task is not None:
+        operation_task = repository.get_task(company_id=company_id, task_id=operation_task.get("task_id", ""))
+        data = (operation_task or {}).get("input") or {}
+        if (not operation_task or operation_task.get("store_id") != store_id or operation_task.get("user_id") != user_id
+            or data.get("contract_version") != "listing_generation_operation_v1"
+            or data.get("listing_project_identity") != identity or data.get("generation_mode") != generation_mode
+            or data.get("expected_base_report_id") != expected_base_report_id
+            or data.get("expected_checkpoint_revision") != expected_checkpoint_revision
+            or data.get("current_draft_fields") != (current_draft_fields if generation_mode == "rewrite_buyer_copy"
+                                                    else _safe_current_draft_fields(current_draft_fields))
+            or normalize_merchant_product_fact_packet(data.get("merchant_product_fact_packet"), source="authenticated_merchant_request")
+                != normalize_merchant_product_fact_packet(merchant_product_fact_packet, source="authenticated_merchant_request")):
+            return {"status": "conflict", "failure_code": "listing_generation_operation_conflict",
+                    "model_called": False, "usage_consumed": False, "report": None,
+                    "real_platform_writes_enabled": False, "secret_exposed": False}
+        if (operation_task.get("output") or {}).get("phase") != "before_model":
+            return operation_view()
     request_failure = listing_draft_generation_request_failure(current_draft_fields, generation_mode=generation_mode)
     if request_failure:
-        return _generation_request_blocked(request_failure, identity)
+        return blocked(_generation_request_blocked(request_failure, identity))
     if generation_mode == "rewrite_buyer_copy":
-        source = listing_draft_rewrite_source(
-            repository=repository, company_id=company_id, store_id=store_id,
-            listing_project_identity=listing_project_identity, current_draft_fields=current_draft_fields,
-            expected_base_report_id=expected_base_report_id, expected_checkpoint_revision=expected_checkpoint_revision,
-            merchant_product_fact_packet=merchant_product_fact_packet,
-        )
+        try:
+            source = listing_draft_rewrite_source(
+                repository=repository, company_id=company_id, store_id=store_id,
+                listing_project_identity=listing_project_identity, current_draft_fields=current_draft_fields,
+                expected_base_report_id=expected_base_report_id, expected_checkpoint_revision=expected_checkpoint_revision,
+                merchant_product_fact_packet=merchant_product_fact_packet,
+            )
+        except Exception:
+            if operation_task is None:
+                raise
+            return blocked(_generation_request_blocked("listing_rewrite_source_unavailable", identity))
         if source["failure_code"]:
-            return _generation_request_blocked(source["failure_code"], identity)
+            return blocked(_generation_request_blocked(source["failure_code"], identity))
         merchant_product_fact_packet = source["packet"]
     packet = normalize_merchant_product_fact_packet(
         merchant_product_fact_packet,
         source="authenticated_merchant_request",
     )
     if packet.get("sensitive_text_detected") is True:
-        return {
+        return blocked({
             "status": "blocked",
             "blocked_by": ["listing_product_fact_sensitive_text"],
             "failure_code": "listing_product_fact_sensitive_text",
@@ -351,12 +388,12 @@ def generate_listing_draft(
             "listing_project_identity": identity,
             "real_platform_writes_enabled": False,
             "secret_exposed": False,
-        }
+        })
     missing_core = listing_draft_core_missing_fields(packet)
     if not identity.get("key"):
         missing_core.append("listing_project_identity")
     if missing_core:
-        return {
+        return blocked({
             "status": "blocked",
             "blocked_by": [f"listing_core_fact_missing:{key}" for key in missing_core],
             "missing_fields": missing_core,
@@ -366,7 +403,7 @@ def generate_listing_draft(
             "listing_project_identity": identity,
             "real_platform_writes_enabled": False,
             "secret_exposed": False,
-        }
+        })
 
     rewrite_buyer_copy = generation_mode == "rewrite_buyer_copy"
     safe_current = (
@@ -393,7 +430,7 @@ def generate_listing_draft(
         merchant_product_fact_packet=packet,
     )
     if merchant_copy_failure:
-        return {
+        return blocked({
             "status": "blocked",
             "blocked_by": [merchant_copy_failure],
             "failure_code": merchant_copy_failure,
@@ -405,8 +442,8 @@ def generate_listing_draft(
             "listing_project_identity": identity,
             "real_platform_writes_enabled": False,
             "secret_exposed": False,
-        }
-    task = repository.create_task(
+        })
+    task = operation_task or repository.create_task(
         company_id=company_id,
         store_id=store_id,
         user_id=user_id,
@@ -432,6 +469,14 @@ def generate_listing_draft(
     usage_recorded = False
     report_save_attempted = False
     try:
+        if operation_task is not None:
+            started = transition_listing_generation_operation(repository, operation_task=task,
+                expected_phases=("before_model",), phase="model_running", status="running",
+                output={"report_save_attempted": False, "model_called": None, "usage_consumed": None},
+                model_metadata={"model_usage_owner": _usage_owner(model_resolution), "provider_key": model_meta["provider_key"]})
+            if not started:
+                return operation_view()
+            task = started
         model_output = _generate_valid_model_output(
             metered=metered,
             packet=packet,
@@ -490,7 +535,16 @@ def generate_listing_draft(
                 "secret_exposed": False,
             },
             audit_summary="AI Listing draft passed generation and quality validation without an eBay write.",
-        )
+        ) if operation_task is None else task
+        if operation_task is not None:
+            # Persistence must succeed before report storage is even attempted.
+            saving = transition_listing_generation_operation(repository, operation_task=task,
+                expected_phases=("model_running",), phase="saving_report", status="running",
+                output={"report_save_attempted": True, "model_called": True,
+                        "usage_consumed": bool(usage.get("request_count")), "model_request_count": int(usage.get("request_count") or 0)})
+            if not saving:
+                return operation_view()
+            task = saving
         report_save_attempted = True
         report = repository.save_listing_draft_report(
             task=task,
@@ -520,7 +574,10 @@ def generate_listing_draft(
                     "secret_exposed": False,
                 },
                 audit_summary="AI Listing draft generated and saved without an eBay write.",
-            )
+            ) if operation_task is None else transition_listing_generation_operation(repository, operation_task=task,
+                expected_phases=("saving_report",), phase="report_saved", status="completed",
+                output={"report_id": report["report_id"], "report_save_attempted": True, "model_called": True,
+                        "usage_consumed": bool(usage.get("request_count")), "model_request_count": int(usage.get("request_count") or 0)}) or task
         except Exception:
             # The report is already a valid project artifact. A secondary task
             # metadata refresh must not tell the merchant to regenerate it.
@@ -573,7 +630,11 @@ def generate_listing_draft(
                     "secret_exposed": False,
                 },
                 audit_summary="AI Listing draft generation failed before any eBay write.",
-            )
+            ) if operation_task is None else finish_listing_generation_operation(repository, operation_task=task,
+                failure_code=failure_code, model_called=bool(usage.get("request_count")),
+                usage_consumed=bool(usage.get("request_count")), model_request_count=int(usage.get("request_count") or 0),
+                report_save_attempted=report_save_attempted,
+                expected_phases=("model_running", "saving_report") if report_save_attempted else ("before_model", "model_running"))
         except Exception:
             # Failure-audit storage can be unavailable for the same reason as
             # the original write. Preserve metered usage for quota settlement;
@@ -1177,7 +1238,8 @@ def _buyer_copy_grounding_failure(
     if not isinstance(merchant_product_fact_packet, dict):
         return ""
     facts = _effective_listing_facts(merchant_product_fact_packet)
-    material_fact_text = _canonical_material_spelling(str(facts.get("material") or "").casefold())
+    raw_material_fact = _canonical_material_spelling(str(facts.get("material") or "").casefold())
+    material_fact_text = _grounded_material_fact_text(raw_material_fact)
     buyer_text = " ".join(values).casefold()
     buyer_material_text = _canonical_material_spelling(buyer_text)
     for material in _HIGH_RISK_MATERIAL_TERMS:
@@ -1187,6 +1249,15 @@ def _buyer_copy_grounding_failure(
             material_fact_text,
         ):
             return "ungrounded_material"
+    if material_fact_text != raw_material_fact and re.search(
+        r"\b(?:\d{3,5}(?:[- ]t\d+)?(?:[- ]grade)?|(?:aircraft|aerospace|food|medical)(?:[ -]grade)?|pure|solid)\s+"
+        r"(?:aluminum(?:\s+alloy)?|silicone)\b|"
+        r"\b(?:aluminum(?:\s+alloy)?|silicone)\s+(?:grade\s*)?\d{3,5}(?:[- ]t\d+)?\b|"
+        r"\b\d+(?:\.\d+)?\s*%\s*(?:pure\s+)?(?:aluminum|silicone)\b",
+        buyer_material_text,
+    ):
+        # These finite aliases establish the material, not a grade or purity.
+        return "ungrounded_material"
     for pattern in _HIGH_RISK_PERFORMANCE_PATTERNS:
         if pattern.search(buyer_text):
             return "ungrounded_performance_claim"
@@ -1201,6 +1272,21 @@ def _buyer_copy_grounding_failure(
 
 def _canonical_material_spelling(value: str) -> str:
     return re.sub(r"(?<![a-z])aluminium(?![a-z])", "aluminum", str(value or ""), flags=re.IGNORECASE)
+
+
+def _grounded_material_fact_text(value: str) -> str:
+    text = _canonical_material_spelling(value)
+    # Translate only complete, unambiguous components in the material field.
+    # An unknown qualifier/component must not turn into authoritative material.
+    aliases = {
+        "铝合金": "aluminum alloy", "鋁合金": "aluminum alloy",
+        "硅胶": "silicone", "硅膠": "silicone", "矽膠": "silicone",
+        "硅胶防滑垫": "silicone pads", "硅膠防滑墊": "silicone pads", "矽膠防滑墊": "silicone pads",
+    }
+    components = [item.strip() for item in re.split(r"[+＋,，;；、\n]", text)]
+    if components and all(item in aliases for item in components):
+        return " + ".join(aliases[item] for item in components)
+    return text
 
 
 def _numeric_spec_grounding_failure(buyer_text: str, facts: dict[str, Any]) -> bool:

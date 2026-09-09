@@ -93,6 +93,8 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("listing_draft_generation", [sys.executable, "tools/test_jiejing_listing_draft_generation.py"]),
     ("listing_buyer_copy_rewrite", [sys.executable, "tools/test_jiejing_listing_buyer_copy_rewrite.py"]),
     ("listing_buyer_copy_rewrite_api", [sys.executable, "tools/test_jiejing_listing_buyer_copy_rewrite_api.py"]),
+    ("listing_generation_operations", [sys.executable, "tools/test_jiejing_listing_generation_operations.py"]),
+    ("listing_generation_legacy_recovery", [sys.executable, "tools/test_jiejing_listing_generation_legacy_recovery.py"]),
     ("listing_draft_buyer_copy_quality", [sys.executable, "tools/test_jiejing_listing_draft_buyer_copy_quality.py"]),
     ("listing_grounding_security", [sys.executable, "tools/test_jiejing_listing_grounding_security.py"]),
     ("listing_draft_generation_api", [sys.executable, "tools/test_jiejing_listing_draft_generation_api.py"]),

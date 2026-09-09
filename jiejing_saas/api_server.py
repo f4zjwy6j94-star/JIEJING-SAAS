@@ -131,6 +131,13 @@ from .listing_draft_generation import (
     listing_draft_core_missing_fields,
     listing_draft_merchant_copy_failure,
 )
+from .listing_generation_operations import (
+    build_listing_generation_operation,
+    claim_listing_generation_operation,
+    finish_listing_generation_operation,
+    read_listing_generation_operation,
+)
+from .listing_generation_legacy_recovery import read_legacy_listing_generation_result
 from .model_value_gate import build_model_value_gate
 from .model_value_rehearsal import run_model_value_rehearsal
 from .model_provider_catalog import (
@@ -379,6 +386,16 @@ def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[s
 
 
 _MERCHANT_INTERNAL_REPORT_TYPES = frozenset({"owner.review"})
+_LISTING_QUALITY_REJECTION_CODES = frozenset({
+    "listing_model_output_invalid_json", "listing_model_output_not_object",
+    "listing_model_output_rewrite_copy_invalid", "listing_model_output_rewrite_copy_too_long",
+    "listing_model_output_rewrite_copy_sensitive_text",
+    *{f"{prefix}_{reason}" for prefix in ("listing_model_output", "listing_final_copy") for reason in (
+        "missing_buyer_copy", "selling_points_count", "marketplace_language", "unverified_compatibility",
+        "ungrounded_material", "ungrounded_performance_claim", "ungrounded_warranty",
+        "ungrounded_certification", "ungrounded_numeric_spec",
+    )},
+})
 
 
 def _merchant_safe_reports(value: Any) -> list[dict[str, Any]]:
@@ -3499,6 +3516,51 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_json({"timeline": self.repository.task_timeline(company_id=identity["company_id"], task_id=parts[1])})
             except KeyError:
                 self._send_error(HTTPStatus.NOT_FOUND, "task not found")
+            return
+
+        if len(parts) == 5 and parts[0] == "stores" and parts[2] == "listing-drafts" and parts[4] == "generation-status":
+            if not self._require_permission(identity, "view_report"):
+                return
+            status_query = parse_qs(parsed.query, keep_blank_values=True)
+            legacy = "legacy_task_id" in status_query
+            required = (("legacy_task_id", "source_report_id", "candidate_id", "expected_base_report_id", "expected_checkpoint_revision")
+                        if legacy else ("operation_id", "source_report_id", "candidate_id"))
+            if set(status_query) != set(required) or any(len(status_query.get(key, [])) != 1 for key in required):
+                self._send_json({"error_code": "listing_generation_status_invalid", "secret_exposed": False},
+                                status=HTTPStatus.BAD_REQUEST)
+                return
+            if not self.repository.get_store_for_company(company_id=identity["company_id"], store_id=parts[1]):
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            try:
+                status_identity = {"key": parts[3], "source_report_id": status_query["source_report_id"][0],
+                                   "candidate_id": status_query["candidate_id"][0]}
+                if legacy:
+                    revision = status_query["expected_checkpoint_revision"][0]
+                    if not re.fullmatch(r"0|[1-9][0-9]{0,9}", revision) or int(revision) >= 2147483647:
+                        raise ValueError("invalid revision")
+                    result = read_legacy_listing_generation_result(
+                        repository=self.repository, company_id=identity["company_id"], store_id=parts[1],
+                        user_id=identity["user_id"], task_id=status_query["legacy_task_id"][0],
+                        listing_project_identity=status_identity,
+                        expected_base_report_id=status_query["expected_base_report_id"][0],
+                        expected_checkpoint_revision=int(revision),
+                    )
+                else:
+                    result = read_listing_generation_operation(
+                        repository=self.repository, company_id=identity["company_id"], store_id=parts[1],
+                        user_id=identity["user_id"], operation_id=status_query["operation_id"][0],
+                        listing_project_identity=status_identity,
+                    )
+            except ValueError:
+                self._send_json({"error_code": "listing_generation_status_invalid", "secret_exposed": False},
+                                status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception:
+                self._send_json({"error_code": "listing_generation_status_unavailable", "secret_exposed": False},
+                                status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(result, status=HTTPStatus.CONFLICT if result["status"] == "conflict" else HTTPStatus.OK)
             return
 
         if len(parts) == 5 and parts[0] == "stores" and parts[2] == "listing-drafts" and parts[4] == "checkpoint":
@@ -9998,6 +10060,64 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "real_platform_writes_enabled": False, "secret_exposed": False,
                 }, status=HTTPStatus.UNPROCESSABLE_ENTITY if request_failure.endswith("sensitive_text") else HTTPStatus.BAD_REQUEST)
                 return
+            operation = None
+            operation_task = None
+            if "operation_id" in body:
+                try:
+                    operation = build_listing_generation_operation(
+                        company_id=identity["company_id"], store_id=store_id, user_id=identity["user_id"],
+                        operation_id=body["operation_id"], listing_project_identity=body.get("listing_project_identity"),
+                        merchant_product_fact_packet=body.get("merchant_product_fact_packet"),
+                        current_draft_fields=body.get("current_draft_fields"), generation_mode=generation_mode,
+                        expected_base_report_id=body.get("expected_base_report_id"),
+                        expected_checkpoint_revision=body.get("expected_checkpoint_revision"),
+                    )
+                    observed = read_listing_generation_operation(
+                        repository=self.repository, company_id=identity["company_id"], store_id=store_id,
+                        user_id=identity["user_id"], operation_id=body["operation_id"],
+                        listing_project_identity=body.get("listing_project_identity"), fingerprint=operation["fingerprint"],
+                    )
+                except ValueError:
+                    self._send_json({"status": "blocked", "failure_code": "listing_generation_operation_invalid",
+                                     "model_called": False, "usage_consumed": False, "report": None,
+                                     "real_platform_writes_enabled": False, "secret_exposed": False}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                except Exception:
+                    self._send_json({"error_code": "listing_generation_status_unavailable", "secret_exposed": False},
+                                    status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                if observed["status"] != "not_found":
+                    self._send_json(observed, status=HTTPStatus.CONFLICT if observed["status"] == "conflict" else HTTPStatus.OK)
+                    return
+                try:
+                    claim = claim_listing_generation_operation(repository=self.repository, operation=operation)
+                    operation_task = claim.get("task")
+                    if claim.get("claimed") is not True:
+                        observed = read_listing_generation_operation(
+                            repository=self.repository, company_id=identity["company_id"], store_id=store_id,
+                            user_id=identity["user_id"], operation_id=body["operation_id"],
+                            listing_project_identity=body.get("listing_project_identity"), fingerprint=operation["fingerprint"],
+                        )
+                        self._send_json(observed, status=HTTPStatus.CONFLICT if observed["status"] == "conflict" else HTTPStatus.OK)
+                        return
+                except Exception:
+                    self._send_json({"error_code": "listing_generation_claim_unavailable", "secret_exposed": False},
+                                    status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+
+            def finish_unstarted_operation(code, *, response_already_sent=False):
+                if operation_task is None:
+                    return True
+                try:
+                    finished = finish_listing_generation_operation(
+                        repository=self.repository, operation_task=operation_task, failure_code=code)
+                except Exception:
+                    finished = None
+                if finished is None and not response_already_sent:
+                    self._send_json({"error_code": "listing_generation_status_unavailable", "secret_exposed": False},
+                                    status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return finished is not None
+
             if generation_mode == "rewrite_buyer_copy":
                 try:
                     rewrite_source = listing_draft_rewrite_source(
@@ -10012,6 +10132,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 except Exception:
                     source_failure = "listing_rewrite_source_unavailable"
                 if source_failure:
+                    if not finish_unstarted_operation(source_failure):
+                        return
                     self._send_json({
                         "status": "blocked", "failure_code": source_failure, "blocked_by": [source_failure],
                         "merchant_message": "原稿或商品资料已变化，或云端保存暂不可用；请核对后再重写。现有文案未被替换。",
@@ -10026,6 +10148,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             listing_project_identity = normalize_listing_project_identity(body.get("listing_project_identity"))
             if packet.get("sensitive_text_detected") is True:
+                if not finish_unstarted_operation("listing_product_fact_sensitive_text"):
+                    return
                 self._send_json(
                     {
                         "status": "blocked",
@@ -10046,6 +10170,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not listing_project_identity.get("key"):
                 missing_core.append("listing_project_identity")
             if missing_core:
+                if not finish_unstarted_operation("listing_core_fact_missing"):
+                    return
                 self._send_json(
                     {
                         "status": "blocked",
@@ -10066,6 +10192,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 merchant_product_fact_packet=packet,
             )
             if merchant_copy_failure:
+                if not finish_unstarted_operation(merchant_copy_failure):
+                    return
                 self._send_json(
                     {
                         "status": "blocked",
@@ -10092,6 +10220,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "listing_project_identity": listing_project_identity,
                 },
             ):
+                finish_unstarted_operation("listing_generation_quota_unavailable", response_already_sent=True)
                 return
             model_resolution = self._resolve_model_client_for_store(
                 identity=identity,
@@ -10105,6 +10234,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if key not in {"model_client", "secret_value", "secret_ref", "requested_secret_ref"}
             }
             if model_resolution.get("status") != "resolved" or not model_resolution.get("model_client"):
+                if not finish_unstarted_operation("listing_model_not_ready"):
+                    return
                 self._send_json(
                     {
                         "status": "blocked",
@@ -10127,6 +10258,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     trial_blocker = str(
                         platform_trial_quota.get("blocked_by") or "platform_default_model_trial_exhausted"
                     )
+                    if not finish_unstarted_operation(trial_blocker):
+                        return
                     self._send_json(
                         {
                             "status": "blocked",
@@ -10162,6 +10295,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if candidate and str(candidate.get("store_id") or "") == store_id:
                     packet_record = candidate
                 else:
+                    if not finish_unstarted_operation("listing_source_packet_not_accessible"):
+                        return
                     self._send_error(HTTPStatus.NOT_FOUND, "eBay account data packet not found or not accessible")
                     return
             platform_trial_reservation: dict[str, Any] = {}
@@ -10176,6 +10311,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     trial_blocker = str(
                         platform_trial_quota.get("blocked_by") or "platform_default_model_trial_exhausted"
                     )
+                    if not finish_unstarted_operation(trial_blocker):
+                        return
                     self._send_json(
                         {
                             "status": "blocked",
@@ -10218,6 +10355,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     generation_mode=generation_mode,
                     expected_base_report_id=body.get("expected_base_report_id"),
                     expected_checkpoint_revision=body.get("expected_checkpoint_revision"),
+                    operation_task=operation_task,
                 )
             except ListingDraftGenerationError as exc:
                 trial_settlement = self._settle_platform_model_trial_reservation(
@@ -10256,7 +10394,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "real_platform_writes_enabled": False,
                         "secret_exposed": False,
                     },
-                    status=HTTPStatus.BAD_GATEWAY,
+                    status=(HTTPStatus.UNPROCESSABLE_ENTITY
+                            if exc.report_save_attempted is False and exc.failure_code in _LISTING_QUALITY_REJECTION_CODES
+                            else HTTPStatus.BAD_GATEWAY),
                 )
                 return
             except Exception:

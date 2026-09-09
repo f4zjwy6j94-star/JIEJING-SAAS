@@ -73,6 +73,18 @@ def serve_fixture(directory, port):
 
     def checkpoint_read_with_explicit_fault(self, **kwargs):
         control = json.loads((root / "provider-control.json").read_text(encoding="utf-8"))
+        if control.get("hold_first_source_read"):
+            try:
+                with (root / "source-entered").open("x", encoding="utf-8"):
+                    pass
+            except FileExistsError:
+                pass
+            else:
+                deadline = time.monotonic() + 20
+                while not (root / "source-release").exists():
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("local source fixture release was not received")
+                    time.sleep(0.01)
         if control.get("source_read_error"):
             raise sqlite3.OperationalError("local checkpoint storage unavailable")
         return real_checkpoint_read(self, **kwargs)
@@ -185,7 +197,12 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
     def quota(self):
         status, payload = self.request(f"/stores/{self.store_id}/model/settings")
         self.assertEqual(status, 200)
-        return payload["model_settings"]["platform_trial_quota"]
+        quota = payload["model_settings"]["platform_trial_quota"]
+        # The countdown naturally changes during a read-only request; compare
+        # all entitlement, usage and immutable window fields, not wall time.
+        self.assertIs(type(quota.get("seconds_remaining")), int)
+        self.assertGreaterEqual(quota["seconds_remaining"], 0)
+        return {key: value for key, value in quota.items() if key != "seconds_remaining"}
 
     def test_http_rejects_unknown_mode_before_model(self):
         status, rejected = self.request(self.path, method="POST", body={**self.body, "generation_mode": "rewrite"})
@@ -195,6 +212,152 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertFalse(rejected["usage_consumed"])
         self.assertIsNone(rejected["report"])
         self.assertEqual(self.calls(), [])
+
+    def test_operation_result_is_readable_and_replay_does_not_call_model_again(self):
+        operation_id = str(uuid.uuid4())
+        request = {**self.body, "operation_id": operation_id}
+        status, generated = self.request(self.path, method="POST", body=request)
+        self.assertEqual(status, 201)
+        report_id = generated["report"]["report_id"]
+        calls = len(self.calls())
+        quota = self.quota()
+        status_path = f"/stores/{self.store_id}/listing-drafts/{self.identity['key']}/generation-status?" + urllib.parse.urlencode({
+            "operation_id": operation_id, "source_report_id": self.identity["source_report_id"],
+            "candidate_id": self.identity["candidate_id"],
+        })
+        status, observed = self.request(status_path)
+        self.assertEqual(status, 200)
+        self.assertEqual(observed["contract_version"], "listing_generation_operation_v1")
+        self.assertEqual(observed["operation_id"], operation_id)
+        self.assertEqual(observed["status"], "report_saved")
+        self.assertEqual(observed["report"]["report_id"], report_id)
+        self.assertIs(observed["can_retry"], False)
+        status, replay = self.request(self.path, method="POST", body=request)
+        self.assertEqual(status, 200)
+        self.assertEqual(replay["status"], "report_saved")
+        self.assertEqual(replay["report"]["report_id"], report_id)
+        self.assertEqual(len(self.calls()), calls)
+        self.assertEqual(self.quota(), quota)
+
+    def test_pending_operation_replay_and_conflict_do_not_reserve_or_generate_again(self):
+        operation_id = str(uuid.uuid4())
+        request = {**self.body, "operation_id": operation_id}
+        (self.root / "provider-control.json").write_text(json.dumps({"hold": True}), encoding="utf-8")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(self.request, self.path, method="POST", body=request)
+            try:
+                deadline = time.monotonic() + 10
+                while not (self.root / "provider-entered").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue((self.root / "provider-entered").exists())
+                quota = self.quota()
+                status, pending = self.request(self.path, method="POST", body=request)
+                self.assertEqual(status, 200)
+                self.assertEqual(pending["status"], "running")
+                self.assertIs(pending["can_retry"], False)
+                changed = {**request, "current_draft_fields": {**request["current_draft_fields"], "title": "不同的标题"}}
+                status, conflict = self.request(self.path, method="POST", body=changed)
+                self.assertEqual(status, 409)
+                self.assertEqual(conflict["status"], "conflict")
+                self.assertIs(conflict["can_retry"], False)
+                self.assertEqual(len(self.calls()), 1)
+                self.assertEqual(self.quota(), quota)
+            finally:
+                (self.root / "provider-release").touch()
+            self.assertEqual(first.result(timeout=20)[0], 201)
+
+    def test_operation_is_claimed_before_source_precheck_can_race_a_replay(self):
+        request = {**self.body, "operation_id": str(uuid.uuid4())}
+        (self.root / "provider-control.json").write_text(json.dumps({"hold_first_source_read": True}), encoding="utf-8")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(self.request, self.path, method="POST", body=request)
+            try:
+                deadline = time.monotonic() + 10
+                while not (self.root / "source-entered").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue((self.root / "source-entered").exists())
+                status, replay = self.request(self.path, method="POST", body=request)
+                self.assertEqual(status, 200)
+                self.assertEqual(replay["status"], "running")
+                self.assertIs(replay["can_retry"], False)
+                self.assertEqual(self.calls(), [], "a replay cannot overtake its source-checking owner")
+            finally:
+                (self.root / "source-release").touch()
+            self.assertEqual(first.result(timeout=20)[0], 201)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_claimed_operation_source_failure_settles_without_model_and_never_reexecutes(self):
+        request = {**self.body, "operation_id": str(uuid.uuid4())}
+        (self.root / "provider-control.json").write_text(json.dumps({"source_read_error": True}), encoding="utf-8")
+        status, blocked = self.request(self.path, method="POST", body=request)
+        self.assertEqual(status, 503)
+        self.assertEqual(blocked["failure_code"], "listing_rewrite_source_unavailable")
+        status_path = f"/stores/{self.store_id}/listing-drafts/{self.identity['key']}/generation-status?" + urllib.parse.urlencode({
+            "operation_id": request["operation_id"], "source_report_id": self.identity["source_report_id"],
+            "candidate_id": self.identity["candidate_id"]})
+        status, observed = self.request(status_path)
+        self.assertEqual(status, 200)
+        self.assertEqual(observed["status"], "failed_before_report")
+        self.assertIs(observed["can_retry"], True)
+        self.assertIs(observed["model_called"], False)
+        self.assertIs(observed["usage_consumed"], False)
+        self.assertIs(observed["report_save_attempted"], False)
+        (self.root / "provider-control.json").write_text("{}", encoding="utf-8")
+        status, replay = self.request(self.path, method="POST", body=request)
+        self.assertEqual(status, 200)
+        self.assertEqual(replay["status"], "failed_before_report")
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.quota()["used"], 0)
+        status, retry = self.request(self.path, method="POST", body={**request, "operation_id": str(uuid.uuid4())})
+        self.assertEqual(status, 201)
+        self.assertEqual(retry["status"], "completed")
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_legacy_failed_result_requires_exact_task_checkpoint_and_presave_ledger(self):
+        invalid_output = LocalModelBoundary().output
+        invalid_output["title"] = "中文结果不能通过"
+        (self.root / "provider-control.json").write_text(json.dumps({"output": invalid_output}), encoding="utf-8")
+        status, failed = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 422)
+        query = {"legacy_task_id": failed["task_id"], "source_report_id": self.identity["source_report_id"],
+                 "candidate_id": self.identity["candidate_id"], "expected_base_report_id": self.body["expected_base_report_id"],
+                 "expected_checkpoint_revision": 1}
+        path = f"/stores/{self.store_id}/listing-drafts/{self.identity['key']}/generation-status?"
+        before_tasks, before_reports, quota = self.request("/tasks")[1], self.request("/reports")[1], self.quota()
+        status, result = self.request(path + urllib.parse.urlencode(query))
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "legacy_failed_before_report")
+        self.assertIs(result["can_retry"], True)
+        self.assertEqual(result["proof_kind"], "immutable_failed_usage_ledger")
+        self.assertNotIn("report_save_attempted", result)
+        self.assertNotIn("operation_id", result)
+        status, wrong = self.request(path + urllib.parse.urlencode({**query, "expected_checkpoint_revision": 2}))
+        self.assertEqual(status, 200)
+        self.assertEqual(wrong["status"], "legacy_evidence_incomplete")
+        self.assertIs(wrong["can_retry"], False)
+        self.assertEqual(len(self.calls()), 2)
+        self.assertEqual(self.request("/tasks")[1], before_tasks)
+        self.assertEqual(self.request("/reports")[1], before_reports)
+        self.assertEqual(self.quota(), quota)
+
+    def test_legacy_saved_report_recovery_preserves_authenticated_author(self):
+        status, generated = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 201)
+        query = {"legacy_task_id": generated["report"]["task_id"],
+                 "source_report_id": self.identity["source_report_id"], "candidate_id": self.identity["candidate_id"],
+                 "expected_base_report_id": self.body["expected_base_report_id"], "expected_checkpoint_revision": 1}
+        path = f"/stores/{self.store_id}/listing-drafts/{self.identity['key']}/generation-status?"
+        before_tasks, before_reports, quota = self.request("/tasks")[1], self.request("/reports")[1], self.quota()
+        status, recovered = self.request(path + urllib.parse.urlencode(query))
+        self.assertEqual(status, 200)
+        self.assertEqual(recovered["status"], "report_saved")
+        self.assertEqual(recovered["report"]["report_id"], generated["report"]["report_id"])
+        self.assertEqual(recovered["report"].get("user_id"), recovered["user_id"])
+        self.assertIs(recovered["can_retry"], False)
+        self.assertEqual(self.request("/tasks")[1], before_tasks)
+        self.assertEqual(self.request("/reports")[1], before_reports)
+        self.assertEqual(self.quota(), quota)
+        self.assertEqual(len(self.calls()), 1)
 
     def test_http_requires_the_saved_source_revision_before_model(self):
         status, rejected = self.request(self.path, method="POST", body={**self.body,
@@ -325,7 +488,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         (self.root / "provider-control.json").write_text(json.dumps({"output": invalid_output}), encoding="utf-8")
         original_reports = self.request("/reports")[1]
         status, failed = self.request(self.path, method="POST", body=self.body)
-        self.assertEqual(status, 502)
+        self.assertEqual(status, 422)
         self.assertEqual(failed["failure_code"], "listing_model_output_marketplace_language")
         self.assertTrue(failed["model_called"])
         self.assertTrue(failed["usage_consumed"])
@@ -355,12 +518,34 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             "email": uuid.uuid4().hex + "@local.invalid", "password": "local-other-tenant-pass",
             "company_name": "Other local tenant"})
         self.assertEqual(status, 201)
+        status_path = f"/stores/{self.store_id}/listing-drafts/{self.identity['key']}/generation-status?" + urllib.parse.urlencode({
+            "operation_id": str(uuid.uuid4()), "source_report_id": self.identity["source_report_id"],
+            "candidate_id": self.identity["candidate_id"],
+        })
         for path, method, body in ((self.path, "POST", self.body),
-            (self.checkpoint_path + self.checkpoint_query, "GET", None)):
+            (self.checkpoint_path + self.checkpoint_query, "GET", None), (status_path, "GET", None)):
             with self.subTest(method=method):
                 status, rejected = self.request(path, method=method, body=body, token=other["token"])
                 self.assertEqual(status, 404)
                 self.assertNotIn(self.fields["title"], json.dumps(rejected, ensure_ascii=False))
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.quota()["used"], 0)
+
+    def test_status_not_found_or_malformed_identity_never_authorizes_generation(self):
+        operation_id = str(uuid.uuid4())
+        query = {"operation_id": operation_id, "source_report_id": self.identity["source_report_id"],
+                 "candidate_id": self.identity["candidate_id"]}
+        path = f"/stores/{self.store_id}/listing-drafts/{self.identity['key']}/generation-status?"
+        status, missing = self.request(path + urllib.parse.urlencode(query))
+        self.assertEqual(status, 200)
+        self.assertEqual(missing["status"], "not_found")
+        self.assertIs(missing["can_retry"], False)
+        for invalid in (urllib.parse.urlencode(query) + "&operation_id=another-id",
+                        urllib.parse.urlencode({**query, "unexpected": "value"}),
+                        urllib.parse.urlencode({key: value for key, value in query.items() if key != "candidate_id"})):
+            status, rejected = self.request(path + invalid)
+            self.assertEqual(status, 400)
+            self.assertNotIn("can_retry", rejected)
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.quota()["used"], 0)
 

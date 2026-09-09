@@ -479,6 +479,9 @@ const baseFunctionNames = [
   "captureSaasListingDraftEditor",
   "saasListingCurrentDraftFieldsForAi",
   "sanitizeSaasListingComposerDraftSnapshot",
+  "saasSha256Hex",
+  "readSaasProtectedStateSnapshotFromStorage",
+  "saasListingCloudSameIdentity",
 ];
 const baseFunctions = baseFunctionNames.map((name) => {
   const functionSource = extractFunction(name);
@@ -500,7 +503,8 @@ async function withProductFactPage(run) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(String(error?.stack || error)));
-    await page.setContent('<main id="product-fact-test-root"></main><section id="listing-draft-test-root"></section>');
+    await page.route("http://127.0.0.1/product-fact-test", (route) => route.fulfill({ contentType: "text/html", body: '<main id="product-fact-test-root"></main><section id="listing-draft-test-root"></section>' }));
+    await page.goto("http://127.0.0.1/product-fact-test");
     await page.addScriptTag({
       content: `
         const SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT = "merchant_product_fact_packet_v1";
@@ -510,6 +514,8 @@ async function withProductFactPage(run) {
           saasConnected: false,
           saasTasks: [],
           saasReports: [],
+          saasCompany: { company_id: "fact-test-company" },
+          saasUser: { user_id: "fact-test-user" },
           saasListingAiGenerationStatus: "idle",
           saasListingComposerInput: "",
           saasListingComposerDraft: {
@@ -539,7 +545,12 @@ async function withProductFactPage(run) {
         const parseSaasKeyValueLines = () => ({});
         window.__productFactToasts = [];
         const showActionToast = (message) => window.__productFactToasts.push(String(message || ""));
-        const saveSaasProtectedStateSnapshot = () => { window.__savedFactPacket = sanitizeSaasMerchantProductFactPacketSnapshot(state.saasListingComposerDraft?.merchant_product_fact_packet); return true; };
+        const saasProtectedSnapshotStorageKeys = () => ["product-fact-test-snapshot"];
+        const saveSaasProtectedStateSnapshot = () => {
+          window.__savedFactPacket = sanitizeSaasMerchantProductFactPacketSnapshot(state.saasListingComposerDraft?.merchant_product_fact_packet);
+          localStorage.setItem("product-fact-test-snapshot", JSON.stringify({ listing_composer_draft: sanitizeSaasListingComposerDraftSnapshot(state.saasListingComposerDraft) }));
+          return true;
+        };
         const requireSaasProtectedSessionForAction = () => true;
         const scheduleSaasListingDraftSnapshotSave = () => true;
         const renderProductListingCenter = () => {
@@ -828,7 +839,9 @@ test("a blocked vision Listing generation keeps image provenance and the unconfi
       let result;
       window.__productFactFetch = async (_path, options) => {
         result = JSON.parse(options.body).merchant_product_fact_packet;
-        throw new Error("provider unavailable");
+        throw Object.assign(new Error("provider unavailable"), { status: 502, payload: { status: "failed", report_save_attempted: false,
+          report: null, task_id: "fact-generation-failed", failure_code: "listing_model_generation_failed", model_called: false,
+          usage_consumed: false, model_usage: { request_count: 0 }, real_platform_writes_enabled: false, secret_exposed: false } });
       };
       const completed = await generateSaasListingDraftFromCurrentProject();
       return { completed, status: state.saasListingAiGenerationStatus, result, statePacket: state.saasListingComposerDraft.merchant_product_fact_packet, savedPacket: window.__savedFactPacket };

@@ -41,6 +41,8 @@ FILES=(
   "docs/superpowers/specs/2026-09-08-production-evidence-no-restart-design.md"
   "docs/superpowers/specs/2026-09-08-personal-model-connection-recovery-design.md"
   "docs/superpowers/specs/2026-09-09-listing-buyer-copy-rewrite-design.md"
+  "docs/superpowers/specs/2026-09-09-listing-generation-result-recovery-design.md"
+  "docs/superpowers/plans/2026-09-09-listing-generation-result-recovery-plan.md"
   "docs/superpowers/plans/2026-09-08-production-evidence-no-restart-implementation-plan.md"
   "deploy/systemd/jiejing-production-evidence-refresh.service"
   "deploy/systemd/jiejing-production-evidence-refresh.timer"
@@ -155,6 +157,8 @@ FILES=(
   "jiejing_saas/billing_wechat_pay_rehearsal.py"
   "jiejing_saas/ai_ceo_chat.py"
   "jiejing_saas/listing_draft_generation.py"
+  "jiejing_saas/listing_generation_operations.py"
+  "jiejing_saas/listing_generation_legacy_recovery.py"
   "jiejing_saas/listing_draft_checkpoint.py"
   "jiejing_saas/sensitive_text.py"
   "jiejing_saas/commercial_launch_gate.py"
@@ -348,6 +352,8 @@ FILES=(
   "tools/test_jiejing_listing_draft_generation.py"
   "tools/test_jiejing_listing_buyer_copy_rewrite.py"
   "tools/test_jiejing_listing_buyer_copy_rewrite_api.py"
+  "tools/test_jiejing_listing_generation_operations.py"
+  "tools/test_jiejing_listing_generation_legacy_recovery.py"
   "tools/test_jiejing_listing_draft_buyer_copy_quality.py"
   "tools/test_jiejing_listing_grounding_security.py"
   "tools/test_jiejing_listing_draft_generation_api.py"
@@ -759,6 +765,8 @@ python3 -m py_compile \
   tools/test_jiejing_listing_draft_generation.py \
   tools/test_jiejing_listing_buyer_copy_rewrite.py \
   tools/test_jiejing_listing_buyer_copy_rewrite_api.py \
+  tools/test_jiejing_listing_generation_operations.py \
+  tools/test_jiejing_listing_generation_legacy_recovery.py \
   tools/test_jiejing_listing_draft_buyer_copy_quality.py \
   tools/test_jiejing_listing_grounding_security.py \
   tools/test_jiejing_listing_draft_generation_api.py \

@@ -15,6 +15,7 @@ const companyId = "rewrite-company", userId = "rewrite-owner", storeId = "rewrit
 const identity = { key: "rewrite-tablet", source_report_id: "rewrite-source", candidate_id: "tablet" };
 const checkpointPath = `/stores/${storeId}/listing-drafts/${identity.key}/checkpoint`;
 const generationPath = `/stores/${storeId}/listing-drafts/generate`;
+const generationStatusPath = `/stores/${storeId}/listing-drafts/${identity.key}/generation-status`;
 const fieldKeys = ["title", "selling_points", "description", "category", "item_specifics", "keywords", "price", "images", "logistics", "risk_notes"];
 const copyKeys = ["title", "selling_points", "description"];
 const previousFields = { title: "可折叠平板支架", selling_points: "铝合金\n折叠收纳\n桌面使用", description: "商家原来的中文商品介绍",
@@ -42,8 +43,8 @@ const rewriteReport = { ...originalReport, report_id: "rewrite-generated-report"
       buyer_copy_rewrite: { contract_version: "listing_buyer_copy_rewrite_v1", previous_fields: previousFields, fields: nextFields,
         expected_base_report_id: "rewrite-original-report", expected_checkpoint_revision: 1,
         previous_merchant_edited_fields: ["title", "selling_points", "description", "price"], merchant_edited_fields: ["price"] } } } } };
-let server, browser, base, head, currentBase, requests, unexpected, generationHandler, checkpointHandler, supersededIds;
-function reset() { head = null; currentBase = originalReport; requests = []; unexpected = []; generationHandler = null; checkpointHandler = null; supersededIds = []; }
+let server, browser, base, head, currentBase, requests, unexpected, generationHandler, generationStatusHandler, checkpointHandler, supersededIds;
+function reset() { head = null; currentBase = originalReport; requests = []; unexpected = []; generationHandler = null; generationStatusHandler = null; checkpointHandler = null; supersededIds = []; }
 function json(res, status, body) { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body)); }
 function checkpoint(fields, revision, mutation, reportId = currentBase.report_id) { return { checkpoint_id: `rewrite-edit-${revision}`, revision,
   mutation_id: mutation, company_id: companyId, store_id: storeId, listing_project_identity: identity, base_report_id: reportId,
@@ -72,10 +73,14 @@ before(async () => {
       const [file, type] = staticAssets[url.pathname]; res.writeHead(200, { "content-type": type }); return res.end(fs.readFileSync(path.join(root, file)));
     }
     if (req.method === "GET" && url.pathname === `/stores/${storeId}/merchant-project-status`) return json(res, 200, { merchant_project_status: null });
-    if (![checkpointPath, generationPath].includes(url.pathname)) { unexpected.push(`${req.method} ${url.pathname}`); return json(res, 404, {}); }
+    if (![checkpointPath, generationPath, generationStatusPath].includes(url.pathname)) { unexpected.push(`${req.method} ${url.pathname}`); return json(res, 404, {}); }
     let raw = ""; for await (const chunk of req) raw += chunk;
-    const request = { method: req.method, path: url.pathname, body: raw ? JSON.parse(raw) : null };
+    const request = { method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), body: raw ? JSON.parse(raw) : null };
     requests.push(request);
+    if (url.pathname === generationStatusPath) {
+      if (generationStatusHandler && await generationStatusHandler(request, res)) return;
+      return json(res, 404, {});
+    }
     if (url.pathname === generationPath && req.method === "POST") {
       if (generationHandler && await generationHandler(request, res)) return;
       currentBase = rewriteReport;
@@ -108,6 +113,7 @@ async function device(report = originalReport, options = {}) {
   await page.evaluate(({ base, companyId, userId, storeId, identity, report, previousFields, factPacket, visual }) => {
     window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
     localStorage.setItem(saasStorageKeys.storeId, storeId);
+    localStorage.setItem(saasStorageKeys.lastAccount, userId);
     localStorage.setItem("jiejing_saas_backend_session_hint", "1"); localStorage.setItem("jiejing_saas_session_hint", "1");
     state.saasApiBase = base; state.saasIdentity = { company_id: companyId, user_id: userId, role: "owner" };
     state.saasCompany = { company_id: companyId }; state.saasUser = { user_id: userId, email: "rewrite@example.invalid" };
@@ -131,6 +137,421 @@ async function device(report = originalReport, options = {}) {
   await page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
   return { page, context, errors };
 }
+
+test("unknown generation keeps an operation identity and explicit result check reads one exact operation without another model call", async () => {
+  reset();
+  generationHandler = async (_request, res) => {
+    res.writeHead(200, { "content-type": "application/json" }); res.end('{"status":'); return true;
+  };
+  generationStatusHandler = async (request, res) => {
+    json(res, 200, { contract_version: "listing_generation_operation_v1", operation_id: request.query.operation_id,
+      company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: identity,
+      generation_mode: "rewrite_buyer_copy", expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+      task_id: "known-failed-task", status: "failed_before_report", report_save_attempted: false, can_retry: true,
+      model_called: true, usage_consumed: true, report: null, failure_code: "listing_model_output_ungrounded_material",
+      message: "本次文案未通过材质检查，旧稿未被替换。", real_platform_writes_enabled: false, secret_exposed: false });
+    return true;
+  };
+  const first = await device();
+  try {
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generation_uncertain");
+    const operation = requests.find((request) => request.path === generationPath).body.operation_id;
+    assert.match(operation || "", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    assert.equal(await first.page.evaluate((id) => Object.values(localStorage).some((value) => value.includes(id)), operation), true);
+    await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "failed");
+    assert.match(await first.page.locator("[data-saas-listing-ai-feedback]").innerText(), /未通过材质检查/);
+    assert.deepEqual(requests.filter((request) => request.path === generationStatusPath).map(({ method, query }) => ({ method, query })),
+      [{ method: "GET", query: { operation_id: operation, source_report_id: identity.source_report_id, candidate_id: identity.candidate_id } }]);
+    assert.equal(requests.filter((request) => request.path === generationPath).length, 1);
+    assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("result check adopts the exact saved rewrite through the original revision and never repeats generation", async () => {
+  reset();
+  generationHandler = async (_request, res) => {
+    currentBase = rewriteReport;
+    res.writeHead(200, { "content-type": "application/json" }); res.end('{"status":'); return true;
+  };
+  generationStatusHandler = async (request, res) => {
+    json(res, 200, { contract_version: "listing_generation_operation_v1", operation_id: request.query.operation_id,
+      company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: identity,
+      generation_mode: "rewrite_buyer_copy", expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+      task_id: "rewrite-task", status: "report_saved", report_save_attempted: true, can_retry: false,
+      model_called: true, usage_consumed: true, report: { ...rewriteReport, user_id: userId }, failure_code: null,
+      message: "本次文案已保存。", real_platform_writes_enabled: false, secret_exposed: false });
+    return true;
+  };
+  const first = await device();
+  try {
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generation_uncertain");
+    await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+    await first.page.waitForFunction((title) => state.saasListingComposerDraft.fields.title === title, nextFields.title, { timeout: 3000 });
+    assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), nextFields);
+    assert.equal(head.base_report_id, rewriteReport.report_id); assert.equal(head.revision, 2);
+    assert.equal(requests.filter((r) => r.path === generationPath).length, 1);
+    assert.deepEqual(requests.filter((r) => r.path === checkpointPath && r.method === "POST").map((r) => r.body.expected_revision), [0, 1]);
+    assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback), null);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("a real reload retains a running operation and result checking preserves edits made before or during the GET", async () => {
+  reset(); const submitted = deferred(), finish = deferred(), read = deferred(), releaseRead = deferred();
+  generationHandler = async (_request, res) => { submitted.resolve(); await finish.promise; json(res, 200, {}); return true; };
+  generationStatusHandler = async (request, res) => {
+    read.resolve(); await releaseRead.promise;
+    json(res, 200, { contract_version: "listing_generation_operation_v1", operation_id: request.query.operation_id,
+      company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: identity,
+      generation_mode: "rewrite_buyer_copy", expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+      task_id: "rewrite-task", status: "report_saved", report_save_attempted: true, can_retry: false,
+      model_called: true, usage_consumed: true, report: { ...rewriteReport, user_id: userId }, failure_code: null,
+      message: "本次文案已保存。", real_platform_writes_enabled: false, secret_exposed: false }); return true;
+  };
+  const first = await device();
+  try {
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click(); await submitted.promise;
+    const operation = requests.find((r) => r.path === generationPath).body.operation_id;
+    assert.equal(await first.page.evaluate(() => {
+      restoreSaasListingComposerDraftFromBackendReports({ preferBackendLatest: true, projectId: "rewrite-tablet" });
+      renderProductListingCenter();
+      return state.saasListingComposerDraft.ai_generation_feedback?.operation?.operation_id;
+    }), operation, "same-project backend restoration must not discard a running operation");
+    await first.page.reload();
+    assert.equal(await first.page.evaluate((base) => {
+      window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasApiBase = base;
+      const restored = hydrateSaasProtectedStateFromCache();
+      // This owned fixture is authenticated as the same account; cache by
+      // itself must not grant access in the real product.
+      state.saasProtectedStateReady = true; state.saasProtectedStateFromCache = false; state.view = "product";
+      bindEvents(); renderProductListingCenter();
+      document.querySelector("#view-product").classList.add("is-active"); return restored;
+    }, base), true);
+    assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.operation.operation_id), operation);
+    assert.deepEqual(await first.page.evaluate(() => ({ saved: state.saasListingComposerDraft.ai_generation_feedback.context_key, current: saasListingAiGenerationContextKey() })),
+      { saved: JSON.stringify([companyId, userId, storeId, identity.key, identity.source_report_id, identity.candidate_id]), current: JSON.stringify([companyId, userId, storeId, identity.key, identity.source_report_id, identity.candidate_id]) });
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    assert.equal(requests.filter((r) => r.path === generationPath).length, 1);
+    await first.page.locator('[data-saas-listing-draft-field="title"]').fill("Merchant new title before check");
+    assert.equal(await first.page.getByRole("button", { name: "核对本次结果", exact: true }).count(), 1);
+    await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click(); await read.promise;
+    await first.page.locator('[data-saas-listing-draft-field="description"]').fill("Merchant new description during check");
+    releaseRead.resolve();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generated_unapplied");
+    assert.equal(await first.page.getByText("查看重写前文案", { exact: true }).count(), 1);
+    assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Merchant new title before check");
+    assert.equal(await first.page.locator('[data-saas-listing-draft-field="description"]').inputValue(), "Merchant new description during check");
+    assert.equal(requests.filter((r) => r.path === generationPath).length, 1);
+    assert.equal(requests.filter((r) => r.path === checkpointPath && r.method === "POST" && r.body.base_report_id === rewriteReport.report_id).length, 0);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { finish.resolve(); releaseRead.resolve(); await first.context.close(); }
+});
+
+test("only a complete 422 quality rejection permits a new explicit operation; malformed client errors and success bodies remain protected", async () => {
+  for (const kind of ["known", "attempted", "missing", "other-code", "bare409", "bare422", "bare200"]) {
+    reset();
+    generationHandler = async (_request, res) => {
+      const body = { status: "failed", report_save_attempted: false, report: null, task_id: "quality-rejected-task",
+        failure_code: "listing_model_output_ungrounded_material", merchant_message: "本次文案未通过材质检查。",
+        model_called: true, usage_consumed: true, model_usage: { request_count: 1 }, real_platform_writes_enabled: false, secret_exposed: false };
+      if (kind === "attempted") body.report_save_attempted = true;
+      if (kind === "missing") delete body.report_save_attempted;
+      if (kind === "other-code") body.failure_code = "report_storage_json_error";
+      json(res, kind === "bare409" ? 409 : kind === "bare200" ? 200 : 422, kind.startsWith("bare") ? {} : body); return true;
+    };
+    const first = await device();
+    try {
+      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+      await first.page.waitForFunction(() => !state.saasLoading);
+      assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.status), kind === "known" ? "failed" : "generation_uncertain", kind);
+      const firstOp = requests.find((r) => r.path === generationPath).body.operation_id;
+      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+      if (kind === "known") {
+        await first.page.waitForFunction(() => !state.saasLoading);
+        assert.equal(requests.filter((r) => r.path === generationPath).length, 2);
+        assert.notEqual(requests.filter((r) => r.path === generationPath)[1].body.operation_id, firstOp);
+      } else assert.equal(requests.filter((r) => r.path === generationPath).length, 1, kind);
+      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+      assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { await first.context.close(); }
+  }
+});
+
+test("result status rejects mismatched ownership anchors and false-like proofs, and coalesces double clicks across a late foreign-context response", async () => {
+  for (const kind of ["company", "store", "user", "candidate", "source", "base", "revision", "operation", "missing", "false-string", "contradictory", "not-found", "late"]) {
+    reset(); const entered = deferred(), release = deferred();
+    generationHandler = async (_request, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end('{"status":'); return true; };
+    generationStatusHandler = async (request, res) => {
+      const result = { contract_version: "listing_generation_operation_v1", operation_id: request.query.operation_id,
+        company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: { ...identity },
+        generation_mode: "rewrite_buyer_copy", expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+        task_id: "known-failed-task", status: "failed_before_report", report_save_attempted: false, can_retry: true,
+        model_called: true, usage_consumed: true, report: null, failure_code: "listing_model_output_ungrounded_material",
+        message: "未保存新文案。", real_platform_writes_enabled: false, secret_exposed: false };
+      if (["company", "store", "user"].includes(kind)) result[`${kind}_id`] = `foreign-${kind}`;
+      if (kind === "candidate") result.listing_project_identity.candidate_id = "foreign";
+      if (kind === "source") result.listing_project_identity.source_report_id = "foreign";
+      if (kind === "base") result.expected_base_report_id = "foreign";
+      if (kind === "revision") result.expected_checkpoint_revision = 2;
+      if (kind === "operation") result.operation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      if (kind === "missing") delete result.report_save_attempted;
+      if (kind === "false-string") result.report_save_attempted = "false";
+      if (kind === "contradictory") result.report = rewriteReport;
+      if (kind === "not-found") { result.status = "not_found"; result.can_retry = false; result.generation_mode = null; result.expected_base_report_id = null; result.expected_checkpoint_revision = null; }
+      entered.resolve(); await release.promise; json(res, 200, result); return true;
+    };
+    const first = await device();
+    try {
+      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+      await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generation_uncertain");
+      await first.page.getByRole("button", { name: "核对本次结果", exact: true }).dblclick(); await entered.promise;
+      if (kind === "late") await first.page.evaluate(() => {
+        state.saasListingComposerDraft.listing_project_identity = { key: "other-project", source_report_id: "other-source", candidate_id: "other" };
+        state.saasListingComposerDraft.ai_generation_feedback = null;
+      });
+      release.resolve();
+      await first.page.waitForResponse((r) => new URL(r.url()).pathname === generationStatusPath);
+      // Await the public action's settled DOM state without an arbitrary sleep.
+      if (kind !== "late") await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.message.startsWith("暂时无法") || state.saasListingComposerDraft.ai_generation_feedback?.message === "未保存新文案。");
+      assert.equal(requests.filter((r) => r.path === generationStatusPath).length, 1, kind);
+      assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback?.status || null), kind === "late" ? null : "generation_uncertain", kind);
+      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+      assert.equal(requests.filter((r) => r.path === generationPath).length, 1); assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { release.resolve(); await first.context.close(); }
+  }
+});
+
+test("failure to persist the operation stops before generation without weakening checkpoint storage", async () => {
+  reset(); const first = await device();
+  try {
+    await first.page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (String(value).includes('"operation_id"')) throw new DOMException("owned storage boundary", "QuotaExceededError");
+        return original.call(this, key, value);
+      };
+    });
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    await first.page.waitForFunction(() => !state.saasLoading);
+    assert.equal(requests.filter((r) => r.path === generationPath).length, 0);
+    assert.equal(head.revision, 1);
+    assert.match(await first.page.locator("[data-saas-listing-ai-feedback]").innerText(), /本机.*存|操作.*保留/);
+    assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("default generation also recovers its exact saved report with null rewrite anchors", async () => {
+  reset();
+  const saved = { ...originalReport, report_id: "default-operation-result", user_id: userId };
+  generationHandler = async (_request, res) => { currentBase = saved; res.writeHead(200, { "content-type": "application/json" }); res.end('{"status":'); return true; };
+  generationStatusHandler = async (request, res) => {
+    json(res, 200, { contract_version: "listing_generation_operation_v1", operation_id: request.query.operation_id,
+      company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: identity,
+      generation_mode: "preserve_merchant_edits", expected_base_report_id: null, expected_checkpoint_revision: null,
+      task_id: saved.task_id, status: "report_saved", report_save_attempted: true, can_retry: false,
+      model_called: true, usage_consumed: true, report: saved, failure_code: null,
+      message: "本次草稿已保存。", real_platform_writes_enabled: false, secret_exposed: false }); return true;
+  };
+  const first = await device();
+  try {
+    await first.page.evaluate(() => renderProductListingCenter());
+    await first.page.getByRole("button", { name: "AI 生成 Listing 草稿", exact: true }).click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generation_uncertain");
+    await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback === null, null, { timeout: 3000 });
+    assert.equal(await first.page.evaluate(() => state.saasListingAiGenerationStatus), "completed");
+    assert.equal(await first.page.evaluate(() => state.saasReports.some((r) => r.report_id === "default-operation-result")), true);
+    assert.equal(requests.filter((r) => r.path === generationPath).length, 1);
+    assert.equal(requests.filter((r) => r.path === checkpointPath && r.method === "POST").length, 0);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("a known default generation success with newer merchant edits shows the saved report instead of remaining running", async () => {
+  reset(); const entered = deferred(), release = deferred();
+  const saved = { ...originalReport, report_id: "known-default-result", user_id: userId };
+  generationHandler = async (_request, res) => { entered.resolve(); await release.promise; currentBase = saved;
+    json(res, 201, { status: "completed", report: saved, listing_project_identity: identity, missing_fields: [] }); return true; };
+  const first = await device();
+  try {
+    await first.page.evaluate(() => renderProductListingCenter());
+    await first.page.getByRole("button", { name: "AI 生成 Listing 草稿", exact: true }).click(); await entered.promise;
+    await first.page.locator('[data-saas-listing-draft-field="title"]').fill("Merchant title typed during generation");
+    release.resolve(); await first.page.waitForFunction(() => state.saasListingAiGenerationStatus === "completed" && !state.saasLoading);
+    const result = await first.page.evaluate(() => ({ title: state.saasListingComposerDraft.fields.title,
+      feedback: state.saasListingComposerDraft.ai_generation_feedback, reports: state.saasReports.map((report) => report.report_id) }));
+    assert.equal(result.title, "Merchant title typed during generation");
+    assert.equal(result.feedback.status, "generated_unapplied"); assert.equal(result.feedback.result_report_id, saved.report_id);
+    assert.ok(result.reports.includes(saved.report_id)); assert.equal(requests.filter((r) => r.path === generationPath).length, 1);
+    assert.match(await first.page.locator("[data-saas-listing-ai-feedback]").innerText(), /已生成/);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { release.resolve(); await first.context.close(); }
+});
+
+test("complete pre-model blocked responses preserve the reason and allow action only after fixing it, unlike incomplete blocked bodies", async () => {
+  for (const kind of ["missing", "connection", "trial", "incomplete"]) {
+    reset();
+    generationHandler = async (_request, res) => {
+      const body = { status: "blocked", blocked_by: [], model_called: false, usage_consumed: false,
+        report: null, listing_project_identity: identity, real_platform_writes_enabled: false, secret_exposed: false };
+      if (kind === "missing") { body.missing_fields = ["material"]; body.blocked_by = ["listing_core_fact_missing:material"]; }
+      if (kind === "connection") { body.model_resolution = { status: "blocked" }; body.blocked_by = ["listing_model_not_ready"]; }
+      if (kind === "trial" || kind === "incomplete") { body.model_resolution = { status: "resolved" }; body.platform_trial_quota = { allowed: false };
+        body.blocked_by = ["platform_default_model_trial_expired"]; body.merchant_message = "试用已到期；已有资料保留。"; }
+      if (kind === "incomplete") delete body.usage_consumed;
+      json(res, kind === "trial" || kind === "incomplete" ? 402 : kind === "connection" ? 202 : 200, body); return true;
+    };
+    const first = await device();
+    try {
+      await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click(); await first.page.waitForFunction(() => !state.saasLoading);
+      assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.status), kind === "incomplete" ? "generation_uncertain" : "blocked", kind);
+      if (kind === "trial") assert.match(await first.page.locator("[data-saas-listing-ai-feedback]").innerText(), /试用已到期/);
+      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+      assert.equal(requests.filter((r) => r.path === generationPath).length, 1); assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { await first.context.close(); }
+  }
+});
+
+test("legacy unknown offers explicit scoped failed tasks and only immutable failed-ledger proof releases the selected attempt", async () => {
+  reset();
+  generationStatusHandler = async (request, res) => {
+    json(res, 200, { contract_version: "listing_generation_legacy_recovery_v1", task_id: request.query.legacy_task_id,
+      company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: identity,
+      expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+      status: "legacy_failed_before_report", can_retry: true, proof_kind: "immutable_failed_usage_ledger", report: null,
+      failure_code: "listing_model_output_ungrounded_material", merchant_message: "已核对此次失败，旧文案保留，可以主动重写。",
+      model_called: false, usage_consumed: false, real_platform_writes_enabled: false, secret_exposed: false }); return true;
+  };
+  const first = await device();
+  try {
+    await first.page.evaluate(({ companyId, storeId, userId, identity }) => {
+      const task = { task_id: "legacy-failed-1", task_type: "listing_draft_generation", company_id: companyId, store_id: storeId, user_id: userId,
+        status: "failed", created_at: "2026-09-09T01:10:00Z", input: { contract_version: "listing_ai_draft_generation_v1", generation_mode: "rewrite_buyer_copy", listing_project_identity: identity, product: "平板支架" } };
+      state.saasTasks = [task, { ...task, task_id: "legacy-failed-2", created_at: "2026-09-09T02:10:00Z" },
+        { ...task, task_id: "foreign-user", user_id: "other" }, { ...task, task_id: "foreign-source", input: { ...task.input, listing_project_identity: { ...identity, source_report_id: "other" } } }];
+      state.saasListingComposerDraft.ai_generation_feedback = { status: "generation_uncertain", context_key: saasListingAiGenerationContextKey(),
+        message: "生成结果尚未确认。", rewrite_source: { base_report_id: "rewrite-original-report", revision: 1 } };
+      renderProductListingCenter();
+    }, { companyId, storeId, userId, identity });
+    assert.equal(await first.page.getByRole("button", { name: "核对此次失败", exact: true }).count(), 2);
+    assert.equal(requests.filter((r) => r.path === generationStatusPath).length, 0, "no latest-task inference");
+    await first.page.locator('[data-saas-action="listing-check-legacy-generation-result"][data-task-id="legacy-failed-1"]').click();
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "failed");
+    assert.deepEqual(requests.filter((r) => r.path === generationStatusPath).map((r) => r.query), [{ legacy_task_id: "legacy-failed-1",
+      source_report_id: identity.source_report_id, candidate_id: identity.candidate_id, expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: "1" }]);
+    assert.equal(requests.filter((r) => r.path === generationPath).length, 0);
+    assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("legacy recovery does not infer proof from matching dates, another task, missing fields, or a late response", async () => {
+  for (const kind of ["proof", "task", "company", "user", "source", "base", "revision", "string-true", "incomplete", "report", "late"]) {
+    reset(); const entered = deferred(), release = deferred();
+    generationStatusHandler = async (_request, res) => {
+      const result = { contract_version: "listing_generation_legacy_recovery_v1", task_id: "legacy-selected",
+        company_id: companyId, store_id: storeId, user_id: userId, listing_project_identity: { ...identity },
+        expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+        status: "legacy_failed_before_report", can_retry: true, proof_kind: "immutable_failed_usage_ledger", report: null,
+        failure_code: "listing_model_output_ungrounded_material", merchant_message: "这次记录仍需核对。",
+        model_called: false, usage_consumed: false, real_platform_writes_enabled: false, secret_exposed: false };
+      if (kind === "proof") result.proof_kind = "task_status_failed";
+      if (kind === "task") result.task_id = "same-date-other-task";
+      if (kind === "company") result.company_id = "foreign";
+      if (kind === "user") result.user_id = "foreign";
+      if (kind === "source") result.listing_project_identity.source_report_id = "foreign";
+      if (kind === "base") result.expected_base_report_id = "different-base";
+      if (kind === "revision") result.expected_checkpoint_revision = 2;
+      if (kind === "string-true") result.can_retry = "true";
+      if (kind === "incomplete") delete result.secret_exposed;
+      if (kind === "report") result.report = rewriteReport;
+      entered.resolve(); await release.promise; json(res, 200, result); return true;
+    };
+    const first = await device();
+    try {
+      await first.page.evaluate(({ companyId, userId, storeId, identity }) => {
+        state.saasTasks = [{ task_id: "legacy-selected", task_type: "listing_draft_generation", status: "failed", company_id: companyId,
+          user_id: userId, store_id: storeId, input: { contract_version: "listing_ai_draft_generation_v1", generation_mode: "rewrite_buyer_copy", listing_project_identity: identity } }];
+        state.saasListingComposerDraft.ai_generation_feedback = { status: "generation_uncertain", context_key: saasListingAiGenerationContextKey(),
+          message: "旧操作尚未确认。", rewrite_source: { base_report_id: "rewrite-original-report", revision: 1 } }; renderProductListingCenter();
+      }, { companyId, userId, storeId, identity });
+      await first.page.getByRole("button", { name: "核对此次失败", exact: true }).dblclick(); await entered.promise;
+      if (kind === "late") await first.page.evaluate(() => { state.saasIdentity.user_id = "new-user"; state.saasUser.user_id = "new-user"; state.saasListingComposerDraft.ai_generation_feedback = null; });
+      const completed = first.page.waitForResponse((r) => new URL(r.url()).pathname === generationStatusPath); release.resolve(); await completed;
+      if (kind !== "late") await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.message !== "旧操作尚未确认。");
+      assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback?.status || null), kind === "late" ? null : "generation_uncertain", kind);
+      assert.equal(requests.filter((r) => r.path === generationStatusPath).length, 1);
+      assert.equal(requests.filter((r) => r.path === generationPath).length, 0);
+      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+      assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { release.resolve(); await first.context.close(); }
+  }
+});
+
+test("a failed generation in Recent returns to the same protected draft instead of asking for new sourcing facts", async () => {
+  reset(); const first = await device();
+  try {
+    await first.page.evaluate(({ companyId, userId, storeId, identity }) => {
+      state.saasTasks = [{ task_id: "legacy-recent", task_type: "listing_draft_generation", status: "failed", company_id: companyId, user_id: userId, store_id: storeId,
+        input: { contract_version: "listing_ai_draft_generation_v1", generation_mode: "rewrite_buyer_copy", listing_project_identity: identity, product: "平板支架" },
+        output: { failure_code: "listing_model_output_ungrounded_material" } }];
+      state.saasListingComposerDraft.ai_generation_feedback = { status: "generation_uncertain", context_key: saasListingAiGenerationContextKey(), message: "结果待核对。",
+        rewrite_source: { base_report_id: "rewrite-original-report", revision: 1 } };
+      activateSaasListingMode("recent");
+    }, { companyId, userId, storeId, identity });
+    const card = first.page.locator('[data-recent-product-task-id="legacy-recent"]');
+    assert.doesNotMatch(await card.innerText(), /补充商品链接|补商品资料/);
+    await card.getByRole("button", { name: "返回已有商品草稿", exact: true }).click();
+    assert.equal(await first.page.getByRole("button", { name: "核对此次失败", exact: true }).count(), 1);
+    assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+    assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.status), "generation_uncertain");
+    assert.equal(requests.filter((r) => r.method === "POST").length, 0);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+test("a generation POST replay DTO and an explicit legacy saved result reuse the same validated adoption path", async () => {
+  for (const kind of ["post-dto", "legacy-saved"]) {
+    reset();
+    const saved = { ...rewriteReport, user_id: userId };
+    const reply = (operationId) => ({ contract_version: "listing_generation_operation_v1", operation_id: operationId, company_id: companyId, store_id: storeId, user_id: userId,
+      listing_project_identity: identity, generation_mode: "rewrite_buyer_copy", expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+      status: "report_saved", task_id: saved.task_id, report: saved, report_save_attempted: true, model_called: true, usage_consumed: true,
+      can_retry: false, message: "已找到本次文案。", failure_code: null, real_platform_writes_enabled: false, secret_exposed: false });
+    generationHandler = async (request, res) => { currentBase = saved; json(res, 200, reply(request.body.operation_id)); return true; };
+    generationStatusHandler = async (_request, res) => {
+      currentBase = saved;
+      json(res, 200, { contract_version: "listing_generation_legacy_recovery_v1", company_id: companyId, store_id: storeId, user_id: userId,
+        listing_project_identity: identity, expected_base_report_id: originalReport.report_id, expected_checkpoint_revision: 1,
+        task_id: saved.task_id, status: "report_saved", can_retry: false, proof_kind: "", report: saved, failure_code: "", merchant_message: "已找到这次保存的文案。",
+        model_called: false, usage_consumed: false, real_platform_writes_enabled: false, secret_exposed: false }); return true;
+    };
+    if (kind === "legacy-saved") { head = checkpoint(previousFields, 1, "legacy-before-generation", originalReport.report_id); head.merchant_edited_fields = ["title", "selling_points", "description", "price"]; }
+    const first = await device();
+    try {
+      if (kind === "post-dto") await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+      else {
+        await first.page.evaluate(({ companyId, userId, storeId, identity }) => {
+          state.saasTasks = [{ task_id: "rewrite-task", task_type: "listing_draft_generation", status: "failed", company_id: companyId, user_id: userId, store_id: storeId,
+            input: { contract_version: "listing_ai_draft_generation_v1", generation_mode: "rewrite_buyer_copy", listing_project_identity: identity } }];
+          state.saasListingComposerDraft.ai_generation_feedback = { status: "generation_uncertain", context_key: saasListingAiGenerationContextKey(), message: "历史结果未知。",
+            rewrite_source: { base_report_id: "rewrite-original-report", revision: 1 } }; renderProductListingCenter();
+        }, { companyId, userId, storeId, identity });
+        await first.page.getByRole("button", { name: "核对此次失败", exact: true }).click();
+      }
+      await first.page.waitForFunction((title) => state.saasListingComposerDraft.fields.title === title, nextFields.title, { timeout: 3000 });
+      assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), nextFields);
+      assert.equal(head.revision, 2); assert.equal(head.base_report_id, saved.report_id);
+      assert.equal(requests.filter((r) => r.path === generationPath).length, kind === "post-dto" ? 1 : 0);
+      assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+    } finally { await first.context.close(); }
+  }
+});
 
 test("explicit buyer-copy rewrite saves only three fields through fixed-revision CAS and restores old copy without undoing later price edits", async () => {
   reset();
