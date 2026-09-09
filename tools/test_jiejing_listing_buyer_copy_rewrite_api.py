@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -25,7 +26,7 @@ from tools.test_jiejing_listing_buyer_copy_rewrite import FIELD_KEYS, LocalModel
 
 
 def serve_fixture(directory, port):
-    """Local provider plus an explicit report-save fault; normal storage stays real."""
+    """Local provider and explicit persistence faults; normal storage stays real."""
     from jiejing_runtime.model_clients import OpenAICompatibleModelClient
     from jiejing_saas.api_server import SaaSBackendServer
     from jiejing_saas.repository import SaaSRepository
@@ -68,6 +69,15 @@ def serve_fixture(directory, port):
         return real_report_save(self, **kwargs)
 
     SaaSRepository.save_listing_draft_report = report_save_with_explicit_fault
+    real_checkpoint_read = SaaSRepository.get_listing_draft_checkpoint
+
+    def checkpoint_read_with_explicit_fault(self, **kwargs):
+        control = json.loads((root / "provider-control.json").read_text(encoding="utf-8"))
+        if control.get("source_read_error"):
+            raise sqlite3.OperationalError("local checkpoint storage unavailable")
+        return real_checkpoint_read(self, **kwargs)
+
+    SaaSRepository.get_listing_draft_checkpoint = checkpoint_read_with_explicit_fault
     SaaSBackendServer(db_path=root / "saas.sqlite", runtime_db_path=root / "runtime.sqlite",
         output_root=root, host="127.0.0.1", port=int(port)).serve_forever()
 
@@ -195,6 +205,41 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertFalse(rejected["usage_consumed"])
         self.assertIsNone(rejected["report"])
         self.assertEqual(self.calls(), [])
+
+    def test_source_storage_unavailable_is_a_known_no_model_block_and_retry_recovers(self):
+        original_reports = self.request("/reports")[1]
+        original_tasks = self.request("/tasks")[1]
+        original_quota = self.quota()
+        (self.root / "provider-control.json").write_text(json.dumps({"source_read_error": True}), encoding="utf-8")
+        status, blocked = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 503)
+        self.assertEqual(blocked, {
+            "status": "blocked",
+            "failure_code": "listing_rewrite_source_unavailable",
+            "blocked_by": ["listing_rewrite_source_unavailable"],
+            "merchant_message": "原稿或商品资料已变化，或云端保存暂不可用；请核对后再重写。现有文案未被替换。",
+            "model_called": False, "usage_consumed": False, "report": None,
+            "real_platform_writes_enabled": False, "secret_exposed": False,
+        })
+        for key in ("model_called", "usage_consumed", "real_platform_writes_enabled", "secret_exposed"):
+            self.assertIs(blocked[key], False)
+        self.assertEqual(self.calls(), [])
+        after_block_quota = self.quota()
+        self.assertEqual(after_block_quota["used"], original_quota["used"])
+        self.assertEqual(after_block_quota["remaining"], original_quota["remaining"])
+        self.assertEqual(self.request("/reports")[1], original_reports)
+        self.assertEqual(self.request("/tasks")[1], original_tasks)
+        # Remove only the synthetic storage fault; leave original source,
+        # checkpoint, quota, auth and request unchanged for the explicit retry.
+        (self.root / "provider-control.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"], self.original_checkpoint)
+        status, completed = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 201)
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(self.quota()["used"], original_quota["used"] + 1)
+        self.assertEqual(len(self.request("/reports")[1]["reports"]), len(original_reports["reports"]) + 1)
+        self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"], self.original_checkpoint)
 
     def test_http_rewrite_persists_original_and_accepts_new_checkpoint(self):
         self.assertEqual(self.quota()["used"], 0)

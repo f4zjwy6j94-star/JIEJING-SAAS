@@ -21,6 +21,11 @@ const previousFields = { title: "可折叠平板支架", selling_points: "铝合
   category: "", item_specifics: "Material: Aluminum", keywords: "", price: "29.00 USD", images: "https://example.invalid/owned.jpg",
   logistics: "Merchant shipping terms", risk_notes: "" };
 const nextFields = { ...previousFields, title: "Foldable Aluminum Tablet Stand", selling_points: "Aluminum construction\nFoldable design\nFor desktop use", description: "An aluminum tablet stand with a folding design for desktop use." };
+const sourceUnavailableFailure = { status: "blocked", failure_code: "listing_rewrite_source_unavailable",
+  blocked_by: ["listing_rewrite_source_unavailable"],
+  merchant_message: "原稿或商品资料已变化，或云端保存暂不可用；请核对后再重写。现有文案未被替换。",
+  model_called: false, usage_consumed: false, report: null,
+  real_platform_writes_enabled: false, secret_exposed: false };
 const factPacket = { contract_version: "merchant_product_fact_packet_v1", product_name: "Foldable Tablet Stand",
   merchant_confirmed_facts: { product_name: "Foldable Tablet Stand", material: "Aluminum", condition: "NEW" },
   source_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: [], fact_conflicts: [], simulation_only: true };
@@ -286,6 +291,88 @@ test("a lost generation acknowledgement is not reported as failure and is reconc
     assert.equal(await first.page.getByText("查看重写前文案", { exact: true }).count(), 1);
     assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
   } finally { await first.context.close(); }
+});
+
+test("a definite pre-model source failure preserves copy and permits only a second explicit rewrite click", async () => {
+  reset(); let attempts = 0;
+  generationHandler = async (request, res) => {
+    attempts += 1;
+    if (attempts === 1) { json(res, 503, sourceUnavailableFailure); return true; }
+    const report = JSON.parse(JSON.stringify(rewriteReport));
+    report.report.listing_handoff.listing_fields.buyer_copy_rewrite.expected_checkpoint_revision = request.body.expected_checkpoint_revision;
+    currentBase = report;
+    json(res, 201, { status: "completed", report, listing_project_identity: identity }); return true;
+  };
+  const first = await device();
+  try {
+    const firstResponse = first.page.waitForResponse((r) => new URL(r.url()).pathname === generationPath && r.request().method() === "POST");
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    assert.equal((await firstResponse).status(), 503);
+    await first.page.waitForFunction(() => !saasListingAiGenerationRequest);
+    assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields);
+    assert.equal(attempts, 1, "pre-model rejection does not automatically retry the generation request");
+    const retried = first.page.waitForResponse((r) => new URL(r.url()).pathname === generationPath && r.request().method() === "POST",
+      { timeout: 3000 }).then((response) => response, () => null);
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    const response = await retried;
+    assert.ok(response, "a second deliberate click can retry after the server definitively rejected before model use");
+    assert.equal(response.status(), 201);
+    await first.page.waitForFunction(() => state.saasListingComposerDraft.fields.title === "Foldable Aluminum Tablet Stand");
+    assert.equal(attempts, 2);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+});
+
+async function assertUncertainSourceFailure(payload, label, httpStatus = 503) {
+  reset(); let attempts = 0;
+  generationHandler = async (_request, res) => { attempts += 1; json(res, httpStatus, payload); return true; };
+  const first = await device();
+  try {
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    await first.page.waitForFunction(() => !saasListingAiGenerationRequest);
+    assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.status), "generation_uncertain", label);
+    assert.deepEqual(await first.page.evaluate(() => state.saasListingComposerDraft.fields), previousFields, label);
+    assert.equal(attempts, 1, label);
+    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    await first.page.waitForFunction(() => !saasListingAiGenerationRequest);
+    assert.equal(attempts, 1, `${label}: unknown response cannot authorize another model request`);
+    assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
+  } finally { await first.context.close(); }
+}
+
+test("a source-unavailable 503 missing any required envelope field remains uncertain", async () => {
+  for (const key of Object.keys(sourceUnavailableFailure)) {
+    const incomplete = { ...sourceUnavailableFailure }; delete incomplete[key];
+    await assertUncertainSourceFailure(incomplete, `missing ${key}`);
+  }
+});
+
+test("false-like strings in source-unavailable safety or usage fields cannot authorize retry", async () => {
+  for (const key of ["model_called", "usage_consumed", "real_platform_writes_enabled", "secret_exposed"]) {
+    await assertUncertainSourceFailure({ ...sourceUnavailableFailure, [key]: "false" }, `${key} is a string`);
+  }
+});
+
+test("task or persistence-phase fields cannot turn an ambiguous 503 into a pre-model rejection", async () => {
+  const additions = [{ task_id: "task_possible_generation" }, { task_id: null },
+    { report_save_attempted: true }, { report_save_attempted: false },
+    { model_usage: { request_count: 1 } }, { model_usage: { request_count: 0 } }];
+  for (const extra of additions) {
+    await assertUncertainSourceFailure({ ...sourceUnavailableFailure, ...extra }, `additional ${Object.keys(extra)[0]}`);
+  }
+});
+
+test("only the exact blocked source code, singleton reason and null report prove a pre-model rejection", async () => {
+  const changes = [{ status: "failed" }, { failure_code: "listing_model_generation_failed" },
+    { blocked_by: [] }, { blocked_by: [sourceUnavailableFailure.failure_code, sourceUnavailableFailure.failure_code] },
+    { blocked_by: sourceUnavailableFailure.failure_code }, { report: { report_id: "possible_generated_report" } }];
+  for (const change of changes) {
+    await assertUncertainSourceFailure({ ...sourceUnavailableFailure, ...change }, `inconsistent ${Object.keys(change)[0]}`);
+  }
+});
+
+test("a source-shaped envelope on any other server error does not unlock blind retry", async () => {
+  for (const status of [500, 502, 504]) await assertUncertainSourceFailure(sourceUnavailableFailure, `HTTP ${status}`, status);
 });
 
 test("a complete pre-report terminal failure permits an explicit retry, while attempted or unknown 502 results stay uncertain", async () => {

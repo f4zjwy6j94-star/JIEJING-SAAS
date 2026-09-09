@@ -34,6 +34,8 @@
 
 失败码不是“没有保存”的证据：模型校验与存储异常可能映射到同一个公开错误码。受控生成异常增加 `report_save_attempted`，仅完整失败响应明确为 `false` 时允许商家主动重试；开始调用报告保存前即置 `true`，旧响应、通用异常与截断响应均保持结果未知，不自动重调模型。生成 POST 返回的报告必须带后端已授权的公司/店铺归属，与认证 GET 一致；前端不能补造归属或放宽跨租户校验。
 
+生成前的源读取异常是另一种明确未执行的失败：仅现有 HTTP 503、`status=blocked`、`failure_code=listing_rewrite_source_unavailable` 的完整九字段响应，且唯一 blocked_by 与其一致、model_called/usage_consumed/real_platform_writes_enabled/secret_exposed 均严格 false、report 为 null，允许商家主动再试。缺字段、额外执行阶段信息或互相矛盾的信封仍保留结果未知；不把所有 503 或单独 model_called=false 当作可安全重试。真实 HTTP 故障回归须证明任务、报告和配额未增加，页面回归须证明没有自动重试、显式第二次点击可恢复。
+
 ## 现有来源与接口
 
 - `app.js`: `generateSaasListingDraftFromCurrentProject`、`saasListingCurrentDraftFieldsForAi`、`saasListingDraftFromReport`、`renderSaasListingDraftEditor`。

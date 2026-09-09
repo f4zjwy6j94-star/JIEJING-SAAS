@@ -34302,6 +34302,18 @@ function releaseSaasListingAiGenerationButtons() {
 function saasListingRewriteKnownTerminalFailure(error) {
   const payload = error?.payload;
   const usage = payload?.model_usage;
+  if (error?.status === 503) {
+    // This exact API source-read rejection precedes task/model creation. Do
+    // not generalize 503, false-like strings, or mixed persistence-phase data.
+    const keys = ["status", "failure_code", "blocked_by", "merchant_message", "model_called", "usage_consumed",
+      "report", "real_platform_writes_enabled", "secret_exposed"];
+    return payload && typeof payload === "object" && !Array.isArray(payload) &&
+      Object.keys(payload).length === keys.length && keys.every((key) => Object.hasOwn(payload, key)) &&
+      payload.status === "blocked" && payload.failure_code === "listing_rewrite_source_unavailable" &&
+      Array.isArray(payload.blocked_by) && payload.blocked_by.length === 1 && payload.blocked_by[0] === payload.failure_code &&
+      typeof payload.merchant_message === "string" && payload.model_called === false && payload.usage_consumed === false &&
+      payload.report === null && payload.real_platform_writes_enabled === false && payload.secret_exposed === false;
+  }
   // Failure-code text cannot prove persistence state: even JSON/timeout errors
   // can arise during storage. Only the backend's explicit pre-save phase plus
   // its complete typed failure envelope permits another user-initiated call.
