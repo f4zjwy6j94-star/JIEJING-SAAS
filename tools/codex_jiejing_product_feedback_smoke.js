@@ -48,22 +48,22 @@ const accountA = {
   companyId: "company-feedback-smoke-a",
   userId: "user-feedback-smoke-a",
   storeId: "store-feedback-smoke-a",
-  stores: [{ store_id: "store-feedback-smoke-a", platform: "ebay", store_name: "Feedback Smoke Store A", marketplace: "EBAY_US" }],
+  stores: [{ store_id: "store-feedback-smoke-a", company_id: "company-feedback-smoke-a", platform: "ebay", store_name: "Feedback Smoke Store A", marketplace: "EBAY_US" }],
 };
 const accountB = {
   companyId: "company-feedback-smoke-b",
   userId: "user-feedback-smoke-b",
   storeId: "store-feedback-smoke-b1",
   stores: [
-    { store_id: "store-feedback-smoke-b1", platform: "ebay", store_name: "Feedback Smoke Store B1", marketplace: "EBAY_US" },
-    { store_id: "store-feedback-smoke-b2", platform: "ebay", store_name: "Feedback Smoke Store B2", marketplace: "EBAY_UK" },
+    { store_id: "store-feedback-smoke-b1", company_id: "company-feedback-smoke-b", platform: "ebay", store_name: "Feedback Smoke Store B1", marketplace: "EBAY_US" },
+    { store_id: "store-feedback-smoke-b2", company_id: "company-feedback-smoke-b", platform: "ebay", store_name: "Feedback Smoke Store B2", marketplace: "EBAY_UK" },
   ],
 };
 const accountC = {
   companyId: "company-feedback-smoke-c",
   userId: "user-feedback-smoke-c",
   storeId: "store-feedback-smoke-c",
-  stores: [{ store_id: "store-feedback-smoke-c", platform: "ebay", store_name: "Feedback Smoke Store C", marketplace: "EBAY_US" }],
+  stores: [{ store_id: "store-feedback-smoke-c", company_id: "company-feedback-smoke-c", platform: "ebay", store_name: "Feedback Smoke Store C", marketplace: "EBAY_US" }],
 };
 const fixture = {
   mode: "success",
@@ -353,19 +353,28 @@ async function main() {
       throw new Error(`online success did not persist one server receipt: ${JSON.stringify(receipts)}`);
     }
 
+    const feedbackStorageBeforePending = await page.evaluate(() => ({
+      outbox: localStorage.getItem("jiejing_saas_product_feedback_outbox_v1"),
+      receipts: localStorage.getItem("jiejing_saas_product_feedback_receipts_v1"),
+    }));
     fixture.meMode = "hang";
     fixture.feedbackRequests = [];
-    await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-    await waitForWorkbench(page);
-    await page.click("#workflowFeedbackToggle");
-    await page.click('[data-workflow-feedback-reason="unclear"]');
-    await page.fill("#workflowFeedbackText", "Cached identity must not establish a feedback scope.");
-    if (!(await page.locator("[data-workflow-feedback-submit]").isDisabled())) {
-      throw new Error("cached /me snapshot enabled product-feedback submit");
-    }
+    await Promise.all([
+      page.waitForRequest((request) => request.method() === "GET" && new URL(request.url()).pathname === "/me", { timeout: 30000 }),
+      page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }),
+    ]);
+    await page.waitForFunction(() => document.documentElement.classList.contains("app-auth-pending")
+      && document.querySelector("#appShell")?.classList.contains("is-hidden")
+      && document.querySelector("#workflowFeedbackShell")?.hidden, null, { timeout: 8000 });
+    await page.waitForTimeout(250);
     if (fixture.feedbackRequests.length !== 0) throw new Error("cached /me snapshot allowed product feedback to send");
-    if ((await currentOutboxItems(page)).some((item) => item.payload.detail.includes("Cached identity"))) {
-      throw new Error("cached /me snapshot allowed product feedback to read or write the scoped outbox");
+    const feedbackStorageWhilePending = await page.evaluate(() => ({
+      outbox: localStorage.getItem("jiejing_saas_product_feedback_outbox_v1"),
+      receipts: localStorage.getItem("jiejing_saas_product_feedback_receipts_v1"),
+    }));
+    if (feedbackStorageWhilePending.outbox !== feedbackStorageBeforePending.outbox
+      || feedbackStorageWhilePending.receipts !== feedbackStorageBeforePending.receipts) {
+      throw new Error("unverified reload changed the retained product-feedback outbox or receipts");
     }
     for (const response of fixture.hangingResponses.splice(0)) response.destroy();
     fixture.meMode = "success";

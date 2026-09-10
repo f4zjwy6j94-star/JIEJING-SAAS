@@ -213,7 +213,7 @@ test("core refresh saves the normal cache without overwriting the independent pe
   });
 });
 
-test("a temporary login identity verification failure clears access but retains the existing pending record", async () => {
+test("a temporary login identity verification failure retains the login hint but denies workbench access and retains the pending record", async () => {
   await harness(async ({ page, fixture, open }) => {
     await seed(page); await expire(page); await open();
     const raw = await page.evaluate(() => localStorage.getItem(saasExpiredListingGenerationStorageKey()));
@@ -222,7 +222,9 @@ test("a temporary login identity verification failure clears access but retains 
       rememberSaasAuthAccount(profile); saveSaasSessionToStorage();
       try { await ensureSaasDemoSession(); } catch (error) { /* Expected protected verification failure. */ }
     }, profile);
-    assert.equal(await page.evaluate(() => hasSaasProtectedSessionCandidate()), false);
+    assert.equal(await page.evaluate(() => hasSaasProtectedSessionCandidate()), true);
+    assert.equal(await page.evaluate(() => state.saasProtectedStateReady), false);
+    assert.equal(await page.evaluate(() => shouldDeferSaasProtectedAppReveal()), true);
     assert.equal(await page.evaluate(() => localStorage.getItem(saasExpiredListingGenerationStorageKey())), raw);
     fixture.meStatus = 0;
     await loginRefresh(page);

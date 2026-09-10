@@ -86,6 +86,9 @@ async function withMerchantPage(run, options = {}) {
     await page.goto(`${base}/app.html?start=app&qa=public-saas`);
     await page.evaluate(({ base, store, identity, packet, modelSettings, connection }) => {
       window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
+      // The fixture strips inline scripts, so reproduce the app.html boot
+      // marker required by the real post-auth shell visibility guard.
+      document.documentElement.classList.add("app-start-requested");
       document.body.classList.add("saas-public-mvp");
       sessionStorage.setItem(saasStorageKeys.token, "local-entry-fixture-token");
       localStorage.setItem(saasStorageKeys.storeId, store.store_id);
@@ -394,8 +397,16 @@ test("Settings requests remain invalid after leaving and returning to the same a
           });
           sessionStorage.setItem(saasStorageKeys.token, state.saasToken);
           localStorage.setItem(saasStorageKeys.storeId, store.store_id);
-          state.saasSettingsTab = "model"; setView("connect"); showActionToast("New request feedback");
+          // This fixture has supplied a newly verified identity above. Follow
+          // the real post-login reveal path; setView alone must not bypass the
+          // shell hidden by clearSaasSessionFromStorage().
+          state.saasSettingsTab = "model"; openApp("connect"); showActionToast("New request feedback");
         }, { resetKind, store, identity, connection, packet, modelSettings });
+        assert.equal(await page.locator("#appShell").isVisible(), true, JSON.stringify(await page.evaluate(() => ({
+          ready: state.saasProtectedStateReady, cached: state.saasProtectedStateFromCache,
+          candidate: hasSaasProtectedSessionCandidate(), classes: document.documentElement.className,
+          shell: appShell.className, identity: state.saasIdentity?.user_id, user: state.saasUser?.user_id,
+        }))));
         const newStarted = page.waitForRequest((request) => request.method() === "POST");
         await page.locator('[data-saas-action="refresh-merchant-memory"]').click();
         await newStarted;

@@ -37926,7 +37926,7 @@ function invalidateSaasProtectedSessionContext() {
   state.saasLoading = false;
   state.saasProtectedStateReady = false;
   if (isSaasPublicMvpMode() && isProtectedSaasAppRoute()) {
-    appShell.classList.add("is-hidden");
+    appShell?.classList.add("is-hidden");
     document.documentElement.classList.add("app-auth-pending");
     document.documentElement.classList.remove("app-ready");
   }

@@ -122,7 +122,7 @@ async function withManualSourcePage(run) {
     const starterBegin = source.indexOf('<section class="source-manual-form is-active saas-listing-source-facts-starter"');
     const starter = source.slice(starterBegin, source.indexOf("</section>", starterBegin) + "</section>".length);
     const functions = [...new Set([...baseFunctionNames, "handleSaasAction", "collectManualSourceFacts",
-      "persistSaasManualSourceFacts", "saasFetch", "saasListingDraftFromManualSourceFacts",
+      "persistSaasManualSourceFacts", "saasFetch", "assertSaasAccountSessionCurrent", "saasListingDraftFromManualSourceFacts",
       "buildSaasAiCeoSupplierFactIntake", "isFilledOperationalValue", "saasListingComposerDraftFromText",
       "saasListingSafeMaterialValue", "saasIsConcreteProductLabel", "saasIsInvalidMarketProductLabel",
       "saasCurrentListingProjectIdentity", "saasNormalizeListingProjectIdentity", "hashString",
@@ -132,6 +132,7 @@ async function withManualSourcePage(run) {
     await page.addScriptTag({ content: `
       const SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT = "merchant_product_fact_packet_v1";
       let saasStateRefreshGeneration = 0;
+      let saasAccountSessionEpoch = 0;
       const state = { saasConnected: true, saasApiBase: location.origin, saasToken: "", saasTasks: [], saasReports: [],
         saasIdentity: { company_id: "fixture-company-A", user_id: "fixture-user-A" }, manualSourceFacts: {} };
       window.__storeId = "fixture-store-A";

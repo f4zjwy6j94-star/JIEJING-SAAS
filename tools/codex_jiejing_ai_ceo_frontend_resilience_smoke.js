@@ -246,7 +246,7 @@ async function main() {
         json(res, 200, {
           user: { user_id: "resilience-user", email: "merchant@local.invalid" },
           company: { company_id: "resilience-company" },
-          identity: { user_id: "resilience-user", email: "merchant@local.invalid" },
+          identity: { user_id: "resilience-user", company_id: "resilience-company", email: "merchant@local.invalid" },
           secret_exposed: false,
         });
       } else {
@@ -1914,7 +1914,17 @@ async function main() {
           listing_project_identity: identity,
         },
       }));
-      const hydrated = hydrateSaasProtectedStateFromCache();
+      // Supply independently confirmed scope so this exercises the timestamp guard,
+      // not the earlier rejection of callers without live identity evidence.
+      const hydrated = hydrateSaasProtectedStateFromCache({
+        me: {
+          user: { user_id: accountKey },
+          identity: { user_id: accountKey, company_id: "future-snapshot-company" },
+          company: { company_id: "future-snapshot-company" },
+        },
+        stores: [{ store_id: "future-snapshot-store", company_id: "future-snapshot-company" }],
+        storeId: "future-snapshot-store",
+      });
       return {
         hydrated,
         draftPresent: Boolean(state.saasListingComposerDraft),
@@ -2232,7 +2242,17 @@ async function main() {
         stores: [{ store_id: "legacy-pending-store", platform: "ebay", marketplace: "EBAY_US" }],
         pending_new_listing_project_request: { phase: "pending", commandId: "injected-command" },
       }));
-      const hydrated = hydrateSaasProtectedStateFromCache();
+      // This legacy-format check begins after live scope confirmation; cached
+      // identity itself must not serve as authority for restoring the snapshot.
+      const hydrated = hydrateSaasProtectedStateFromCache({
+        me: {
+          user: { user_id: accountKey },
+          identity: { user_id: accountKey, company_id: "legacy-pending-company" },
+          company: { company_id: "legacy-pending-company" },
+        },
+        stores: [{ store_id: "legacy-pending-store", company_id: "legacy-pending-company" }],
+        storeId: "legacy-pending-store",
+      });
       return { hydrated, pendingPresent: Boolean(state.saasPendingNewListingProjectRequest) };
     });
     await legacyPendingPage.close();

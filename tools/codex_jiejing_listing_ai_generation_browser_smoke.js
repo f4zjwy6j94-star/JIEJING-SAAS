@@ -888,7 +888,11 @@ async function runSmoke() {
       localStorage.setItem("jiejing_saas_backend_session_hint", "1");
       localStorage.setItem("jiejing_saas_session_hint", "1");
       localStorage.setItem("jiejing_saas_last_account", seed.accountKey);
-      localStorage.setItem("jiejing_saas_backend_store_id", seed.storeId);
+      // Seed the first visit only; reload must retain the merchant's later
+      // store switch so live /stores can authorize that store's cached draft.
+      if (!localStorage.getItem("jiejing_saas_backend_store_id")) {
+        localStorage.setItem("jiejing_saas_backend_store_id", seed.storeId);
+      }
       localStorage.setItem(`jiejing_saas_onboarding_done:${seed.accountKey}`, "1");
       window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
     },
@@ -1404,8 +1408,16 @@ async function runSmoke() {
   await page.click('.nav-item[data-view="media"]');
   await page.evaluate(() => setView("product", { listingMode: "single" }));
   if (!await generationFeedback.isVisible()) throw new Error("generation reason disappeared after same-project navigation");
+  const reloadStoreId = await page.evaluate(() => {
+    const storeId = activeSaasStore()?.store_id;
+    if (storedSaasStoreId() !== storeId) throw new Error("merchant store switch was not persisted before reload");
+    return storeId;
+  });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => typeof state !== "undefined" && state.saasProtectedStateReady && !state.saasLoading);
+  if (!await page.evaluate((storeId) => activeSaasStore()?.store_id === storeId, reloadStoreId)) {
+    throw new Error("same-project reload changed the merchant's selected store");
+  }
   await page.evaluate(() => setView("product", { listingMode: "single" }));
   if (!await generationFeedback.isVisible() || !(await generationFeedback.textContent()).includes(expiredMessage)) {
     throw new Error("generation reason disappeared after same-project reload");

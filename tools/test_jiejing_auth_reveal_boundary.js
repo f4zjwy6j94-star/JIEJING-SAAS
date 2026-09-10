@@ -437,6 +437,44 @@ test("mixed identity and user accounts cannot reveal or read cached conversation
   assert.equal(run(context, "shouldReadSaasAccountScopedLocalCache()"), false);
 });
 
+test("session clear and workbench reset complete even when the app shell is absent", () => {
+  const context = harness();
+  context.appShell = null;
+  context.document.querySelector = () => null;
+  context.state.saasToken = "fixture-token-before-cleanup";
+  context.localStorage.setItem(context.saasStorageKeys.token, "fixture-local-token");
+  context.sessionStorage.setItem(context.saasStorageKeys.token, "fixture-session-token");
+  context.localStorage.setItem("snapshot:fixture-user-a", "fixture-protected-snapshot");
+  context.localStorage.setItem("snapshot", "fixture-legacy-snapshot");
+  const retainedHistory = context.localStorage.getItem("ceo-thread");
+
+  assert.doesNotThrow(() => run(context, "clearSaasSessionFromStorage()"));
+  assert.equal(context.saasAccountSessionEpoch, 1);
+  assert.equal(context.saasStateRefreshGeneration, 1);
+  assert.equal(context.state.saasToken, "");
+  assert.equal(context.localStorage.getItem("session-hint"), null);
+  assert.equal(context.localStorage.getItem(context.saasStorageKeys.token), null);
+  assert.equal(context.sessionStorage.getItem(context.saasStorageKeys.token), null);
+  assert.equal(context.localStorage.getItem("snapshot:fixture-user-a"), null);
+  assert.equal(context.localStorage.getItem("snapshot"), null);
+  assert.equal(context.state.saasProtectedStateReady, false);
+  assert.equal(context.document.documentElement.classList.contains("app-auth-pending"), true);
+  assert.equal(context.document.documentElement.classList.contains("app-ready"), false);
+
+  context.state.saasProtectedStateReady = true;
+  context.state.saasReports = [{ report_id: "PRIVATE_REPORT_BEFORE_RESET" }];
+  assert.doesNotThrow(() => run(context, "resetSaasProtectedWorkbenchState()"));
+  assert.equal(context.saasAccountSessionEpoch, 2);
+  assert.equal(context.saasStateRefreshGeneration, 2);
+  assert.equal(context.state.saasProtectedStateReady, false);
+  assert.equal(context.state.saasConnected, false);
+  assert.equal(context.state.saasIdentity, null);
+  assert.equal(context.state.saasUser, null);
+  assert.equal(context.state.saasReports.length, 0);
+  assert.equal(context.localStorage.getItem("ceo-thread"), retainedHistory,
+    "missing UI must neither interrupt credential cleanup nor delete retained conversation history");
+});
+
 for (const action of ["clearSaasSessionFromStorage()", "resetSaasProtectedWorkbenchState()", "startSaasAccountSwitch()"]) {
   test(`${action} invalidates an already pending real refresh before it can repopulate identity`, async () => {
     const context = harness();
