@@ -87,6 +87,14 @@ before(async () => {
     if (req.method === "GET" && Object.hasOwn(staticAssets, url.pathname)) {
       const [file, type] = staticAssets[url.pathname]; res.writeHead(200, { "content-type": type }); return res.end(fs.readFileSync(path.join(root, file)));
     }
+    if (req.method === "GET" && !url.search && ["/me", "/stores"].includes(url.pathname)) {
+      requests.push({ method: req.method, path: url.pathname });
+      return json(res, 200, url.pathname === "/me"
+        ? { identity: { company_id: companyId, user_id: userId, role: "owner" },
+            user: { user_id: userId, email: "rewrite@example.invalid" }, company: { company_id: companyId },
+            permissions: ["view_report", "create_task"] }
+        : { stores: [{ store_id: storeId, company_id: companyId, platform: "ebay", marketplace: "EBAY_US" }] });
+    }
     if (req.method === "GET" && url.pathname === `/stores/${storeId}/merchant-project-status`) return json(res, 200, { merchant_project_status: null });
     if (req.method === "GET" && refreshFixture?.otherCheckpoint?.path === url.pathname) return json(res, 200, refreshFixture.otherCheckpoint.body);
     if (refreshFixture && ![checkpointPath, generationPath, generationStatusPath].includes(url.pathname)) {
@@ -96,10 +104,7 @@ before(async () => {
       }
       if (url.pathname === "/billing/plans") await refreshFixture.extendedHold.promise;
       let body = {};
-      if (url.pathname === "/me") body = { identity: { company_id: companyId, user_id: userId, role: "owner" },
-        user: { user_id: userId, email: "rewrite@example.invalid" }, company: { company_id: companyId } };
       if (url.pathname === "/permissions/me") body = { permissions: ["view_report", "create_task"], roles: ["owner"] };
-      if (url.pathname === "/stores") body = { stores: [{ store_id: storeId, company_id: companyId, platform: "ebay", marketplace: "EBAY_US" }] };
       if (url.pathname === "/connections") body = { connections: [{ connection_id: "rewrite-connection", store_id: storeId, platform: "ebay", status: "authorized" }] };
       if (url.pathname === "/reports") body = { reports: refreshFixture.reports || [currentBase] };
       if (url.pathname === "/health") body = { status: "ok" };
@@ -303,12 +308,15 @@ test("a damaged request signature remains damaged across actual reload instead o
     await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
     await first.page.evaluate(() => { state.saasListingComposerDraft.ai_generation_feedback.request_signature = "damaged-original-proof"; saveSaasProtectedStateSnapshot(); });
     await first.page.reload();
-    assert.equal(await first.page.evaluate((base) => {
+    assert.equal(await first.page.evaluate(async ({ base, storeId }) => {
       window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasApiBase = base;
-      const restored = hydrateSaasProtectedStateFromCache();
+      const [me, storeResponse] = await Promise.all([saasFetch("/me"), saasFetch("/stores")]);
+      state.saasIdentity = me.identity; state.saasUser = me.user; state.saasCompany = me.company;
+      state.saasPermissions = me.permissions; state.saasStores = storeResponse.stores;
+      const restored = hydrateSaasProtectedStateFromCache({ me, stores: storeResponse.stores, storeId });
       state.saasProtectedStateReady = true; state.saasProtectedStateFromCache = false; state.view = "product";
       bindEvents(); renderProductListingCenter(); return restored;
-    }, base), true);
+    }, { base, storeId }), true);
     assert.notEqual(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.request_signature), null);
     await first.page.getByRole("button", { name: "核对本次结果", exact: true }).click();
     await first.page.waitForFunction(() => !state.saasListingComposerDraft.ai_generation_feedback.checking);
@@ -659,15 +667,18 @@ test("a real reload retains a running operation and result checking preserves ed
       return state.saasListingComposerDraft.ai_generation_feedback?.operation?.operation_id;
     }), operation, "same-project backend restoration must not discard a running operation");
     await first.page.reload();
-    assert.equal(await first.page.evaluate((base) => {
+    assert.equal(await first.page.evaluate(async ({ base, storeId }) => {
       window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasApiBase = base;
-      const restored = hydrateSaasProtectedStateFromCache();
-      // This owned fixture is authenticated as the same account; cache by
-      // itself must not grant access in the real product.
+      const [me, storeResponse] = await Promise.all([saasFetch("/me"), saasFetch("/stores")]);
+      state.saasIdentity = me.identity; state.saasUser = me.user; state.saasCompany = me.company;
+      state.saasPermissions = me.permissions; state.saasStores = storeResponse.stores;
+      // Restore only after the owned HTTP fixture returns the live account and
+      // store membership; cached identity cannot grant access by itself.
+      const restored = hydrateSaasProtectedStateFromCache({ me, stores: storeResponse.stores, storeId });
       state.saasProtectedStateReady = true; state.saasProtectedStateFromCache = false; state.view = "product";
       bindEvents(); renderProductListingCenter();
       document.querySelector("#view-product").classList.add("is-active"); return restored;
-    }, base), true);
+    }, { base, storeId }), true);
     assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.operation.operation_id), operation);
     assert.deepEqual(await first.page.evaluate(() => ({ saved: state.saasListingComposerDraft.ai_generation_feedback.context_key, current: saasListingAiGenerationContextKey() })),
       { saved: JSON.stringify([companyId, userId, storeId, identity.key, identity.source_report_id, identity.candidate_id]), current: JSON.stringify([companyId, userId, storeId, identity.key, identity.source_report_id, identity.candidate_id]) });

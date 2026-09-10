@@ -54,7 +54,8 @@ async function main() {
       && url.searchParams.get("candidate_id") === fixture.identity.candidate_id;
     const statusRequest = url.pathname === statusPath && req.method === "GET"
       && url.searchParams.size === 1 && url.searchParams.get("project_id") === fixture.identity.key;
-    if (!checkpointRequest && !generationRequest && !generationRead && !statusRequest) {
+    const liveScopeRequest = req.method === "GET" && !url.search && ["/me", "/stores"].includes(url.pathname);
+    if (!checkpointRequest && !generationRequest && !generationRead && !statusRequest && !liveScopeRequest) {
       forbidden.push("unapproved_request"); res.writeHead(404); return res.end();
     }
     requests.push({ method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams) });
@@ -170,11 +171,13 @@ async function main() {
         assert.match(proof.request_signature, /^[a-f0-9]{64}$/);
         assert.equal(proof.operation.expected_base_report_id, null); assert.equal(proof.operation.expected_checkpoint_revision, null);
         await first.page.reload();
-        await first.page.evaluate(({ fixture, base }) => {
+        await first.page.evaluate(async ({ fixture, base }) => {
           window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasApiBase = base;
-          if (!hydrateSaasProtectedStateFromCache()) throw new Error("fixture_cache_missing");
-          state.saasIdentity = fixture.profile.identity; state.saasUser = fixture.profile.user; state.saasCompany = fixture.profile.company;
-          state.saasPermissions = fixture.profile.permissions; state.saasProtectedStateReady = true; state.saasProtectedStateFromCache = false;
+          const [me, storeResponse] = await Promise.all([saasFetch("/me"), saasFetch("/stores")]);
+          state.saasIdentity = me.identity; state.saasUser = me.user; state.saasCompany = me.company;
+          state.saasPermissions = me.permissions; state.saasStores = storeResponse.stores;
+          if (!hydrateSaasProtectedStateFromCache({ me, stores: storeResponse.stores, storeId: fixture.store_id })) throw new Error("fixture_cache_missing");
+          state.saasProtectedStateReady = true; state.saasProtectedStateFromCache = false;
           state.view = "product"; bindEvents(); renderProductListingCenter();
         }, { fixture: safeFixture, base });
         await first.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
@@ -268,13 +271,14 @@ async function main() {
       assert.equal(feedback.operation.operation_id, generationRequest.operation_id);
       if (fixture.reload_before_check) {
         await first.page.reload();
-        assert.equal(await first.page.evaluate(({ fixture, base }) => {
+        assert.equal(await first.page.evaluate(async ({ fixture, base }) => {
           window.__JIEJING_FORCE_PUBLIC_MVP__ = true; state.saasApiBase = base;
-          const restored = hydrateSaasProtectedStateFromCache();
-          // The owned API session is still authenticated as this same fixture
-          // account. No draft, signature, or operation is manufactured here.
-          state.saasIdentity = fixture.profile.identity; state.saasUser = fixture.profile.user;
-          state.saasCompany = fixture.profile.company; state.saasPermissions = fixture.profile.permissions;
+          const [me, storeResponse] = await Promise.all([saasFetch("/me"), saasFetch("/stores")]);
+          state.saasIdentity = me.identity; state.saasUser = me.user; state.saasCompany = me.company;
+          state.saasPermissions = me.permissions; state.saasStores = storeResponse.stores;
+          // The real owned API verifies the session and store membership before
+          // restoration. No draft, signature, or operation is manufactured here.
+          const restored = hydrateSaasProtectedStateFromCache({ me, stores: storeResponse.stores, storeId: fixture.store_id });
           state.saasProtectedStateReady = true; state.saasProtectedStateFromCache = false; state.view = "product";
           bindEvents(); renderProductListingCenter();
           document.querySelector("#view-product").classList.add("is-active");

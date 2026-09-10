@@ -12477,6 +12477,12 @@ body.saas-mvp-login-required #appShell .sidebar {
   display: none;
 }
 
+/* Login owns this screen; protected views are never content below the form. */
+body.saas-mvp-login-required #appShell .main > .view,
+body.saas-mvp-login-required #workflowFeedbackShell {
+  display: none !important;
+}
+
 body.saas-mvp-login-required #appShell .main {
   width: 100%;
   margin: 0;

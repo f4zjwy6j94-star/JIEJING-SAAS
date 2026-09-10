@@ -660,6 +660,14 @@ def main() -> int:
     expiry_gate = f'("listing_session_expiry_recovery", ["node", "--test", "{expiry_frontend}"])'
     if precloud_gate.count(expiry_gate) != 1 or precloud_gate.count(expiry_frontend) != 1:
         return fail("Listing expired-session recovery regression must run exactly once in precloud gate")
+    auth_boundary = "tools/test_jiejing_auth_reveal_boundary.js"
+    if whitelist_entries.count(f'"{auth_boundary}"') != 1 or not (ROOT / auth_boundary).is_file():
+        return fail("auth reveal boundary regression must ship exactly once")
+    if node_check_entries.count(f'"$NODE_BIN" --check {auth_boundary}') != 1:
+        return fail("auth reveal boundary regression must receive a Node syntax check")
+    auth_gate = f'("auth_reveal_boundary", ["node", "--test", "{auth_boundary}"])'
+    if precloud_gate.count(auth_gate) != 1 or precloud_gate.count(auth_boundary) != 1:
+        return fail("auth reveal boundary regression must run exactly once in precloud gate")
     for marker in [
         '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',

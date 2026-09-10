@@ -58,10 +58,11 @@ def main() -> int:
         "state.saasProtectedStateFromCache",
         "state.saasUser?.user_id",
         "state.saasIdentity?.user_id",
-        "state.saasCompany?.company_id",
-        "safeStorageValue(saasStorageKeys.lastAccount)",
+        "state.saasUser.user_id === state.saasIdentity.user_id",
     ]:
         require(account_cache_gate, marker, "confirmed-account cache gate")
+    if "safeStorageValue(saasStorageKeys.lastAccount)" in account_cache_gate:
+        raise AssertionError("a last-account hint must not authorize reading private chat cache")
 
     source_scope = function_body(app_js, "saasSourceRecordStorageScope")
     require(source_scope, "saasSourceRecordAccountKey()", "source record account-scoped key")

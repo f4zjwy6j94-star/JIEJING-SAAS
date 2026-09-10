@@ -1100,15 +1100,12 @@ def main() -> int:
     store_fetch_index = refresh_body.find("const store = await ensureSaasDemoStoreAndConnection();")
     if guard_index < 0 or store_fetch_index < 0 or guard_index > store_fetch_index:
         return fail("refreshSaasState must skip protected store/report reads before ensuring a store")
-    cached_restore_start = refresh_body.index("if (restoredCachedState)")
-    cached_restore_end = refresh_body.index("\n  try", cached_restore_start)
-    cached_restore_body = refresh_body[cached_restore_start:cached_restore_end]
-    for cached_restore_marker in (
-        'document.documentElement.classList.remove("app-auth-pending")',
-        'openApp(activeSaasRefreshView("cockpit"))',
-    ):
-        if cached_restore_marker not in cached_restore_body:
-            return fail(f"account-scoped fast restore must reveal the cached workbench immediately: {cached_restore_marker}")
+    cached_restore_index = refresh_body.index("hydrateSaasProtectedStateFromCache({ me: coreMe,")
+    live_stores_index = refresh_body.index("state.saasStores = coreStores.stores || [];")
+    if cached_restore_index < live_stores_index:
+        return fail("business cache must only hydrate after live identity and store membership are applied")
+    if "hydrateSaasProtectedStateFromCache()" in refresh_body:
+        return fail("refresh must not hydrate a protected snapshot without live scope evidence")
     for endpoint in [
         "live-read-plan",
         "http-client-dry-run",

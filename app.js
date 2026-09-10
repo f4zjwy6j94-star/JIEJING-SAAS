@@ -1641,6 +1641,7 @@ let saasVerifiedUnpublishedDraftSaveConfirmations = new WeakSet();
 let saasVerifiedInventoryLocationConfirmations = new WeakSet();
 let saasExactReadOnlyOAuthConfirmationRenderGeneration = 0;
 let saasStateRefreshGeneration = 0;
+let saasAccountSessionEpoch = 0;
 const saasReadOnlyOAuthPlanAttemptKeys = new Set();
 const saasUnpublishedDraftOAuthPlanAttemptKeys = new Set();
 const saasEbayRefreshProofAttemptKeys = new Set();
@@ -15046,6 +15047,7 @@ function saasHasFreshServerClock(referenceLocalNow = Date.now()) {
 }
 
 async function saasFetch(path, options = {}) {
+  const accountEpoch = saasAccountSessionEpoch;
   const {
     saasRequestRetriedAfterRefresh = false,
     saasDeferUnauthorizedTermination = false,
@@ -15053,6 +15055,7 @@ async function saasFetch(path, options = {}) {
     ...fetchOptions
   } = options;
   const assertCurrentRequest = () => {
+    assertSaasAccountSessionCurrent(accountEpoch);
     if (typeof saasRequestIsCurrent === "function" && !saasRequestIsCurrent()) {
       const error = new Error("request_context_changed");
       error.code = "saas_request_context_changed";
@@ -15114,9 +15117,12 @@ async function saasFetch(path, options = {}) {
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
     const detail = await response.text();
+    assertCurrentRequest();
     throw new Error(`捷境后端接口返回了非 JSON 内容，请刷新重试。接口：${url}；返回：${detail.slice(0, 80)}`);
   }
-  return response.json();
+  const payload = await response.json();
+  assertCurrentRequest();
+  return payload;
 }
 
 function saasRequestCanRetryAfterSessionRefresh(path, options = {}) {
@@ -15132,28 +15138,35 @@ function saasRequestCanRetryAfterSessionRefresh(path, options = {}) {
 
 async function refreshSaasBrowserSession() {
   if (saasBrowserSessionRefreshPromise) return saasBrowserSessionRefreshPromise;
-  saasBrowserSessionRefreshPromise = (async () => {
+  const accountEpoch = saasAccountSessionEpoch;
+  const refreshPromise = (async () => {
     try {
       if (globalThis.navigator?.locks?.request) {
-        return navigator.locks.request(SAAS_BROWSER_SESSION_REFRESH_LOCK, refreshSaasBrowserSessionInsideLock);
+        return await navigator.locks.request(SAAS_BROWSER_SESSION_REFRESH_LOCK,
+          () => refreshSaasBrowserSessionInsideLock(accountEpoch));
       }
-      return refreshSaasBrowserSessionInsideLock();
+      return await refreshSaasBrowserSessionInsideLock(accountEpoch);
     } catch {
       return false;
-    } finally {
-      saasBrowserSessionRefreshPromise = null;
     }
   })();
-  return saasBrowserSessionRefreshPromise;
+  saasBrowserSessionRefreshPromise = refreshPromise;
+  try {
+    return await refreshPromise;
+  } finally {
+    if (saasBrowserSessionRefreshPromise === refreshPromise) saasBrowserSessionRefreshPromise = null;
+  }
 }
 
-async function refreshSaasBrowserSessionInsideLock() {
+async function refreshSaasBrowserSessionInsideLock(accountEpoch = saasAccountSessionEpoch) {
+  assertSaasAccountSessionCurrent(accountEpoch);
   const sessionProbe = await saasBrowserSessionRefreshFetch(`${state.saasApiBase}/me`, {
     method: "GET",
     cache: "no-store",
     credentials: "include",
     headers: { accept: "application/json" },
   });
+  assertSaasAccountSessionCurrent(accountEpoch);
   if (sessionProbe.ok) return true;
   if (sessionProbe.status !== 401) return false;
   const response = await saasBrowserSessionRefreshFetch(`${state.saasApiBase}/auth/refresh`, {
@@ -15162,8 +15175,10 @@ async function refreshSaasBrowserSessionInsideLock() {
     credentials: "include",
     headers: { accept: "application/json", "content-type": "application/json" },
   });
+  assertSaasAccountSessionCurrent(accountEpoch);
   if (!response.ok) return false;
   const payload = await response.json();
+  assertSaasAccountSessionCurrent(accountEpoch);
   return payload?.ok === true && payload?.session_refreshed === true && payload?.secret_exposed === false;
 }
 
@@ -16727,9 +16742,17 @@ function readSaasProtectedStateSnapshotFromStorage() {
   return null;
 }
 
-function hydrateSaasProtectedStateFromCache() {
-  if (!isSaasPublicMvpMode() || state.saasProtectedStateReady || hasSaasProtectedBackendState()) return false;
+function hydrateSaasProtectedStateFromCache(liveScope = {}) {
+  if (!isSaasPublicMvpMode() || state.saasProtectedStateReady) return false;
   if (!hasSaasProtectedSessionCandidate()) return false;
+  const liveUserId = String(liveScope.me?.user?.user_id || "").trim();
+  const liveCompanyId = String(liveScope.me?.company?.company_id || "").trim();
+  const liveStoreId = String(liveScope.storeId || "").trim();
+  if (!liveUserId || liveUserId !== String(liveScope.me?.identity?.user_id || "").trim() ||
+      !liveCompanyId || liveCompanyId !== String(liveScope.me?.identity?.company_id || "").trim() ||
+      !liveStoreId || !Array.isArray(liveScope.stores) ||
+      !liveScope.stores.some((store) => String(store?.store_id || "").trim() === liveStoreId &&
+        String(store?.company_id || "").trim() === liveCompanyId)) return false;
   clearSaasProductFeedbackLiveIdentity();
   try {
     let snapshot = readSaasProtectedStateSnapshotFromStorage();
@@ -16743,6 +16766,11 @@ function hydrateSaasProtectedStateFromCache() {
       ].includes(snapshot.version)
     ) return false;
     if (!saasAccountStorageAliases().includes(String(snapshot.account_key || "").toLowerCase())) return false;
+    if (String(snapshot.user?.user_id || "").trim() !== liveUserId ||
+        String(snapshot.identity?.user_id || "").trim() !== liveUserId ||
+        String(snapshot.company?.company_id || "").trim() !== liveCompanyId ||
+        String(snapshot.identity?.company_id || "").trim() !== liveCompanyId ||
+        String(snapshot.store_id || "").trim() !== liveStoreId) return false;
     const savedAt = Date.parse(snapshot.saved_at || "");
     const snapshotReferenceNow = saasServerNowMs();
     if (
@@ -16763,18 +16791,11 @@ function hydrateSaasProtectedStateFromCache() {
       }
       localStorage.setItem(saasProtectedSnapshotStorageKey(), JSON.stringify(snapshot));
     }
-    state.saasIdentity = snapshot.identity || state.saasIdentity || null;
-    state.saasUser = snapshot.user || state.saasUser || null;
-    state.saasCompany = snapshot.company || state.saasCompany || null;
-    state.saasTeamMember = snapshot.team_member || state.saasTeamMember || null;
-    state.saasPermissions = Array.isArray(snapshot.permissions) ? snapshot.permissions : state.saasPermissions || [];
-    state.saasRoles = Array.isArray(snapshot.roles) ? snapshot.roles : state.saasRoles || [];
-    state.saasStores = Array.isArray(snapshot.stores) ? snapshot.stores : state.saasStores || [];
-    state.saasConnections = Array.isArray(snapshot.connections) ? snapshot.connections : state.saasConnections || [];
+    // Cached identity, roles and store membership are never live authority.
     state.saasDataPackets = Array.isArray(snapshot.data_packets) ? snapshot.data_packets : state.saasDataPackets || [];
     const snapshotStoreId = String(snapshot.store_id || "").trim();
     const snapshotCompanyId = String(snapshot.company?.company_id || snapshot.identity?.company_id || "").trim();
-    const snapshotStoreExists = state.saasStores.some((store) => String(store?.store_id || "").trim() === snapshotStoreId);
+    const snapshotStoreExists = snapshotStoreId === liveStoreId;
     const detachedEntries = ["2026-09-01-project-isolation-v4", "2026-09-01-project-isolation-idempotency-v5"].includes(snapshot.version) && snapshotStoreExists
       ? sanitizeSaasDetachedListingProjectDraftsSnapshot(snapshot.detached_listing_project_drafts, {
           companyId: snapshotCompanyId,
@@ -16828,7 +16849,7 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasAiCeoLatestTurn = null;
     state.saasAiCeoThreadCloudReady = false;
     state.saasConnected = Boolean(snapshot.connected || state.saasToken || hasSaasPersistentSessionHint());
-    state.saasProtectedStateReady = true;
+    state.saasProtectedStateReady = false;
     state.saasProtectedStateFromCache = true;
     state.saasProtectedStateCachedAt = snapshot.saved_at || "";
     if (snapshot.store_id) {
@@ -16841,6 +16862,7 @@ function hydrateSaasProtectedStateFromCache() {
 }
 
 function clearSaasSessionFromStorage(options = {}) {
+  invalidateSaasProtectedSessionContext();
   const preservePendingListingGeneration = options.preservePendingListingGeneration === true;
   const feedback = preservePendingListingGeneration && state.saasListingComposerDraft?.ai_generation_feedback;
   const metadata = feedback && feedback.context_key === saasListingAiGenerationContextKey()
@@ -17159,6 +17181,7 @@ function shouldFetchDirectRuntimeApi() {
 }
 
 function resetSaasProtectedWorkbenchState() {
+  invalidateSaasProtectedSessionContext();
   invalidateSaasSettingsActionContext();
   resetSaasAiCeoComposerDrafts();
   clearSaasProductFeedbackLiveIdentity();
@@ -17367,10 +17390,13 @@ function storedSaasStoreId() {
 }
 
 async function ensureSaasDemoSession() {
+  const accountEpoch = saasAccountSessionEpoch;
   loadSaasSessionFromStorage();
   if (state.saasToken || hasSaasPersistentSessionHint()) {
     try {
       const me = await saasFetch("/me");
+      assertSaasAccountSessionCurrent(accountEpoch);
+      assertSaasLiveIdentityScope(me);
       if (me.user?.user_id) {
         state.saasIdentity = me.identity || null;
         state.saasUser = me.user || null;
@@ -17379,9 +17405,13 @@ async function ensureSaasDemoSession() {
         return me;
       }
     } catch (error) {
+      assertSaasAccountSessionCurrent(accountEpoch);
+      // A temporary network failure is not proof that the login expired.
+      if (!isSaasUnrecoverableSessionError(error)) throw error;
       if (!isSaasUnrecoverableSessionError(error) || state.saasSessionExpiryHandled !== true) {
         clearSaasSessionFromStorage({ preserveCeoThread: true, preservePendingListingGeneration: true });
       }
+      throw error;
     }
   }
   if (!state.saasDemoBootstrapEnabled) {
@@ -17431,9 +17461,12 @@ async function ensureSaasDemoSession() {
       });
     }
   }
+  assertSaasAccountSessionCurrent(accountEpoch);
   state.saasToken = session.token || "";
   saveSaasSessionToStorage();
   const me = await saasFetch("/me");
+  assertSaasAccountSessionCurrent(accountEpoch);
+  assertSaasLiveIdentityScope(me);
   state.saasIdentity = me.identity || null;
   state.saasUser = me.user || null;
   state.saasCompany = me.company || null;
@@ -17442,11 +17475,15 @@ async function ensureSaasDemoSession() {
 
 async function ensureSaasDemoStoreAndConnection() {
   if (state.saasStoreEnsurePromise) return state.saasStoreEnsurePromise;
-  state.saasStoreEnsurePromise = (async () => {
+  const accountEpoch = saasAccountSessionEpoch;
+  const ensurePromise = (async () => {
   await ensureSaasDemoSession();
+  assertSaasAccountSessionCurrent(accountEpoch);
   const storesPayload = await saasFetch("/stores");
+  assertSaasAccountSessionCurrent(accountEpoch);
   state.saasStores = storesPayload.stores || [];
   const allConnectionsPayload = await saasFetch("/connections");
+  assertSaasAccountSessionCurrent(accountEpoch);
   state.saasConnections = allConnectionsPayload.connections || [];
   const preferredStoreId = storedSaasStoreId();
   let store = preferredSaasStore(state.saasStores, {
@@ -17471,6 +17508,7 @@ async function ensureSaasDemoStoreAndConnection() {
         },
       }),
     });
+    assertSaasAccountSessionCurrent(accountEpoch);
     store = created.store;
     state.saasStores = [store];
   }
@@ -17490,14 +17528,16 @@ async function ensureSaasDemoStoreAndConnection() {
         },
       }),
     });
+    assertSaasAccountSessionCurrent(accountEpoch);
     state.saasConnections = [connection.connection, ...state.saasConnections];
   }
   return store;
   })();
+  state.saasStoreEnsurePromise = ensurePromise;
   try {
-    return await state.saasStoreEnsurePromise;
+    return await ensurePromise;
   } finally {
-    state.saasStoreEnsurePromise = null;
+    if (state.saasStoreEnsurePromise === ensurePromise) state.saasStoreEnsurePromise = null;
   }
 }
 
@@ -23531,14 +23571,11 @@ function saasCeoCommandStorageScope() {
 
 function shouldReadSaasAccountScopedLocalCache() {
   if (!isSaasPublicMvpMode()) return true;
+  if (!hasSaasProtectedSessionCandidate()) return false;
   if (state.saasProtectedStateFromCache) return false;
   return Boolean(
-    state.saasUser?.user_id ||
-      state.saasIdentity?.user_id ||
-      state.saasUser?.email ||
-      state.saasIdentity?.email ||
-      state.saasCompany?.company_id ||
-      safeStorageValue(saasStorageKeys.lastAccount),
+    state.saasUser?.user_id && state.saasIdentity?.user_id &&
+      state.saasUser.user_id === state.saasIdentity.user_id,
   );
 }
 
@@ -29827,9 +29864,8 @@ async function refreshSaasState(options = {}) {
   const isCurrentRefresh = () => refreshGeneration === saasStateRefreshGeneration;
   const canFetchProtectedState = hasSaasProtectedSessionCandidate();
   const activeAccountAliasesBeforeRefresh = new Set(saasAccountStorageAliases());
-  const restoredCachedState = canFetchProtectedState && hydrateSaasProtectedStateFromCache();
   state.saasLoading = true;
-  if (canFetchProtectedState && !restoredCachedState && !hasSaasProtectedBackendState()) {
+  if (canFetchProtectedState && !hasSaasProtectedBackendState()) {
     state.saasProtectedStateReady = false;
   }
   state.saasError = "";
@@ -29839,16 +29875,6 @@ async function refreshSaasState(options = {}) {
     : [];
   const activeLatestTurnBeforeRefresh = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
   renderSaasBackendPanel();
-  if (restoredCachedState) {
-    renderGlobalLoopWorkbench();
-    renderStoreContext();
-    const restoredStartupView = consumeSaasStartupRequestedView("cockpit");
-    setView(restoredStartupView, { preserveFlowKey: true });
-    document.documentElement.classList.remove("app-auth-pending");
-    if (isSaasPublicMvpMode() && isProtectedSaasAppRoute()) {
-      openApp(activeSaasRefreshView("cockpit"));
-    }
-  }
   try {
     if (!canFetchProtectedState) {
       const healthPayload = await saasFetch("/health");
@@ -29913,6 +29939,7 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/health", state.saasServiceHealth || { status: "unknown" }, 10000),
     ]);
     if (!isCurrentRefresh()) return;
+    assertSaasLiveIdentityScope(coreMe);
     state.saasIdentity = coreMe.identity || null;
     state.saasUser = coreMe.user || null;
     state.saasCompany = coreMe.company || null;
@@ -29920,14 +29947,12 @@ async function refreshSaasState(options = {}) {
       .map((value) => String(value || "").trim().toLowerCase())
       .filter(Boolean);
     const shouldPreserveActiveCeoState = confirmedAccountAliases.some((alias) => activeAccountAliasesBeforeRefresh.has(alias));
-    if (restoredCachedState && !shouldPreserveActiveCeoState) {
-      reconcileSaasCachedProjectStateForConfirmedAccount(confirmedAccountAliases, activeAccountAliasesBeforeRefresh);
-    }
     state.saasTeamMember = corePermissions.team_member || coreMe.team_member || null;
     state.saasPermissions = corePermissions.permissions || [];
     state.saasRoles = corePermissions.roles || [];
     state.saasStores = coreStores.stores || [];
     state.saasConnections = coreConnections.connections || [];
+    const restoredCachedState = hydrateSaasProtectedStateFromCache({ me: coreMe, stores: state.saasStores, storeId: store.store_id });
     state.saasMerchantOnboarding = coreMerchantOnboarding.merchant_onboarding || null;
     syncSaasOnboardingCompletionFromBackend(state.saasMerchantOnboarding);
     state.saasEbayWriteAdapter = coreEbayWriteAdapter.ebay_write_adapter || null;
@@ -30241,12 +30266,14 @@ async function refreshSaasState(options = {}) {
       return;
     }
     state.saasConnected = Boolean(state.saasToken || state.saasUser || state.saasIdentity);
-    state.saasProtectedStateReady = hasSaasProtectedBackendState();
+    // A partial /me response is not a completed protected-state load.
+    state.saasProtectedStateReady = state.saasProtectedStateReady === true && state.saasProtectedStateFromCache !== true;
     state.saasError = `工作台部分状态读取失败：${error.message}`;
     if (!silent) showActionToast("工作台已保持登录；部分状态读取失败，请刷新重试。");
   } finally {
     if (!isCurrentRefresh()) return;
     state.saasLoading = false;
+    syncAppStartVisibleShellGuard();
     syncSaasPublicMvpMode();
     renderSaasBackendPanel();
     renderGlobalLoopWorkbench();
@@ -37886,14 +37913,70 @@ function openApp(targetView = "cockpit") {
 
 function shouldDeferSaasProtectedAppReveal() {
   if (!isSaasPublicMvpMode() || !isProtectedSaasAppRoute()) return false;
-  if (!hasSaasProtectedSessionCandidate()) return false;
-  return !Boolean(state.saasIdentity?.user_id && state.saasUser?.user_id);
+  return !Boolean(hasSaasProtectedSessionCandidate() && state.saasProtectedStateReady === true &&
+    state.saasProtectedStateFromCache !== true && state.saasIdentity?.user_id && state.saasUser?.user_id &&
+    state.saasIdentity.user_id === state.saasUser.user_id);
+}
+
+function invalidateSaasProtectedSessionContext() {
+  saasAccountSessionEpoch += 1;
+  saasStateRefreshGeneration += 1;
+  saasBrowserSessionRefreshPromise = null;
+  state.saasStoreEnsurePromise = null;
+  state.saasLoading = false;
+  state.saasProtectedStateReady = false;
+  if (isSaasPublicMvpMode() && isProtectedSaasAppRoute()) {
+    appShell.classList.add("is-hidden");
+    document.documentElement.classList.add("app-auth-pending");
+    document.documentElement.classList.remove("app-ready");
+  }
+}
+
+function assertSaasAccountSessionCurrent(epoch) {
+  if (epoch === saasAccountSessionEpoch) return;
+  const error = new Error("账号已切换，本次旧请求已停止。");
+  error.code = "saas_account_context_changed";
+  throw error;
+}
+
+function assertSaasLiveIdentityScope(me = {}) {
+  const userId = String(me.user?.user_id || "").trim();
+  const companyId = String(me.company?.company_id || "").trim();
+  if (!userId || userId !== String(me.identity?.user_id || "").trim() ||
+      !companyId || companyId !== String(me.identity?.company_id || "").trim()) {
+    const error = new Error("暂时无法核对账号信息，请重试。");
+    error.code = "saas_identity_response_incomplete";
+    throw error;
+  }
+  const previousUser = String(state.saasUser?.user_id || state.saasIdentity?.user_id || "").trim();
+  const previousCompany = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  if ((previousUser && previousUser !== userId) || (previousCompany && previousCompany !== companyId)) {
+    // Preserve the old account's own unsent edits, but never relabel them as
+    // another account's data when browser cookies changed outside this page.
+    saveSaasProtectedStateSnapshot();
+    resetSaasProtectedWorkbenchState();
+    stopSaasAiCeoCrossDeviceSync();
+    resetSaasAiCeoHistoryArchive();
+    state.saasAiCeoThread = [];
+    state.saasLastCeoCommand = null;
+    state.saasAiCeoLatestTurn = null;
+    state.saasError = "登录账号或工作空间已变化，请重新加载。原账号的草稿仍保留。";
+    syncAppStartVisibleShellGuard();
+    const error = new Error(state.saasError);
+    error.code = "saas_account_context_changed";
+    throw error;
+  }
 }
 
 function syncAppStartVisibleShellGuard() {
   if (!document.documentElement.classList.contains("app-start-requested")) return;
   const hasVisibleShell = [entryShell, siteShell, onboardingShell, appShell].some((shell) => shell && !shell.classList.contains("is-hidden"));
   document.documentElement.classList.toggle("app-shell-empty", !hasVisibleShell);
+  const blocked = shouldDeferSaasProtectedAppReveal();
+  document.documentElement.classList.toggle("app-auth-pending", blocked);
+  document.documentElement.classList.toggle("app-auth-failed", blocked && !state.saasLoading && Boolean(state.saasError));
+  document.querySelector("#appBootLoading")?.setAttribute("aria-label",
+    blocked && !state.saasLoading && state.saasError ? "暂时无法验证登录，请重试" : "正在打开捷境工作台");
 }
 
 function applyStartupShellVisibility() {
@@ -48802,6 +48885,7 @@ function init() {
   }
   if (!state.bulkApprovedCount) detachBulkHandoffDrafts();
   bindEvents();
+  document.querySelector("#appBootRetry")?.addEventListener("click", () => window.location.reload());
   window.addEventListener("online", () => {
     const scope = syncSaasProductFeedbackViewScope();
     if (scope) void flushSaasProductFeedbackOutbox({ scope, trigger: "online" });

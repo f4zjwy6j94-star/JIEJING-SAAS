@@ -93,5 +93,6 @@ jobs:
         run: |
           python tools/test_jiejing_frontend_staging_config.py
           python tools/test_jiejing_session_restore_and_ebay_ops_ui.py
+          node --test tools/test_jiejing_auth_reveal_boundary.js
           python tools/test_jiejing_saas_clean_settings_and_listing_ui.py
           python tools/test_jiejing_frontend_settings_module_split.py
