@@ -484,6 +484,8 @@ const baseFunctionNames = [
   "saasMerchantProductFactSavedMessage",
   "renderSaasMerchantProductFactField",
   "renderSaasMerchantProductFactsModule",
+  "renderSaasListingGapAndRiskPanel",
+  "markSaasMerchantProductFactUnknown",
   "saasMerchantProductFactLabel",
   "saasListingItemSpecificsWithMerchantFacts",
   "saasMerchantProductFactProjectedValue",
@@ -1679,6 +1681,200 @@ test("fact footer and save feedback retain every pending or missing label at sum
           : "商品资料已保存；可以继续审核 Listing，真实发布仍需确认中心。") + " 登录后会写入账号工作记录。",
         `${kind} ${count}: actual save feedback must list every field`);
       }
+    }
+  });
+});
+
+async function captureRiskPanelFixture(page, name, width) {
+  const directory = process.env.JIEJING_RISK_FIXTURE_SCREENSHOT_DIR;
+  if (!directory) return;
+  assert.ok(path.isAbsolute(directory), "risk fixture screenshots require an explicit absolute output directory");
+  await page.setViewportSize({ width, height: 900 });
+  await page.route("**/*", (route) => route.abort());
+  await page.addStyleTag({ content: fs.readFileSync(path.join(root, "styles.css"), "utf8") });
+  await page.evaluate(() => {
+    document.body.classList.add("saas-public-mvp");
+    document.querySelector("#product-fact-test-root").hidden = true;
+    Object.assign(document.querySelector("#listing-draft-test-root").style,
+      { width: "100%", padding: "24px", boxSizing: "border-box" });
+  });
+  fs.mkdirSync(directory, { recursive: true });
+  await page.getByRole("complementary", { name: "发布前缺口和风险" }).screenshot({ path: path.join(directory, name) });
+}
+
+test("advanced risk hints reflect current tablet facts without changing saved copy or historical reports", async () => {
+  await withProductFactPage(async (page) => {
+    const before = await page.evaluate(() => {
+      const staleHints = {
+        bullets: ["核心材质/规格待补", "物流、重量、尺寸待补", "价格、采购成本和费用待补", "主图、场景图和细节图待补"],
+        gaps: ["sku", "item_location", "image_rights_confirmed", "售价、采购价或成本", "重量、尺寸、发货地或物流承诺"],
+        risks: ["真实发布必须进入确认中心"],
+      };
+      const packet = {
+        contract_version: "merchant_product_fact_packet_v1", source: "authenticated_merchant_request",
+        source_mode: "merchant_owned_product", product_name: "Foldable Tablet Stand", simulation_only: true,
+        source_confirmed_facts: {}, derived_listing_suggestions: {},
+        merchant_confirmed_facts: {
+          product_name: "Foldable Tablet Stand", merchant_owned_product_confirmed: true,
+          condition: "NEW", brand: "Unbranded", mpn: "Does Not Apply", material: "Aluminum Alloy",
+          product_dimensions_cm: "15 x 12 x 8", net_weight_g: "220",
+          package_weight_g: "320", package_length_cm: "20", package_width_cm: "15", package_height_cm: "5",
+          unit_cost: "3.5", selling_price: "16.99", currency: "USD", quantity: "2",
+          image_urls: "https://example.invalid/tablet-fixture.jpg",
+        },
+        unknown_facts: ["sku", "item_location", "image_rights_confirmed"],
+      };
+      state.saasReports = [{ report_id: "fixture-original-research", report_type: "ai_ceo.market_research",
+        report: { listing_handoff: { publish_preflight_gaps: structuredClone(staleHints.gaps) } } }];
+      state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft({
+        product: "Foldable Tablet Stand", title: "Foldable Tablet Stand", ...structuredClone(staleHints),
+        source_report_id: "fixture-original-research", source_product_fact_report_id: "fixture-adopted-rewrite",
+        fields: {
+          title: "Foldable Portable Tablet Stand", selling_points: "Portable support for a tablet.",
+          description: "A folding tablet stand for a desk.", item_specifics: "Material: Aluminum Alloy",
+          category: "Tablet Stands", keywords: "tablet stand", price: "16.99", cost_price: "3.5",
+          images: "", logistics: "",
+        },
+        publish_prefill: {},
+      }, packet);
+      window.__riskFixtureCheckpoint = { revision: 8, base_report_id: "fixture-adopted-rewrite",
+        fields: Object.fromEntries(saasListingMerchantEditableFieldKeys().map((key) =>
+          [key, String(state.saasListingComposerDraft.fields[key] || "")])) };
+      window.__riskFixtureBusinessCalls = 0;
+      window.__productFactFetch = async () => { window.__riskFixtureBusinessCalls += 1; throw new Error("risk rendering cannot call a business API"); };
+      const snapshot = { draft: structuredClone(state.saasListingComposerDraft), reports: structuredClone(state.saasReports),
+        checkpoint: structuredClone(window.__riskFixtureCheckpoint) };
+      renderProductListingCenter();
+      document.querySelector("#listing-draft-test-root").innerHTML =
+        renderSaasListingGapAndRiskPanel(state.saasListingComposerDraft, {});
+      return snapshot;
+    });
+    const panel = await page.getByRole("complementary", { name: "发布前缺口和风险" }).innerText();
+    const after = await page.evaluate(() => ({ draft: state.saasListingComposerDraft, reports: state.saasReports,
+      checkpoint: window.__riskFixtureCheckpoint }));
+    assert.deepEqual(after, before, "rendering current hints must not rewrite R8 fields, fact provenance, or the original report");
+    assert.equal(await page.evaluate(() => window.__riskFixtureBusinessCalls), 0);
+    assert.doesNotMatch(panel, /核心材质\/规格待补|物流、重量、尺寸待补|价格、采购成本和费用待补|售价、采购价或成本|重量、尺寸、发货地或物流承诺/,
+      "confirmed current material, dimensions, weights and prices must not inherit the original empty-draft hints");
+    for (const label of ["SKU", "实际发货地", "图片商业使用权"]) assert.ok(panel.includes(label), `${label} remains an unresolved fact`);
+    assert.doesNotMatch(panel, /\bsku\b|item_location|image_rights_confirmed/, "known fact keys must use their merchant-facing labels");
+    assert.match(panel, /模拟/);
+    assert.match(panel, /不可|不能|不允许/, "simulation must remain ineligible for eBay writing");
+    assert.match(panel, /确认中心/);
+    await captureRiskPanelFixture(page, "risk-current-facts-local-1280.png", 1280);
+  });
+});
+
+test("advanced risk hints keep packaging and dispatch gaps separate from confirmed product measurements", async () => {
+  await withProductFactPage(async (page) => {
+    await page.evaluate(() => {
+      const packet = {
+        contract_version: "merchant_product_fact_packet_v1", simulation_only: true,
+        source_confirmed_facts: { material: "Aluminum Alloy", product_dimensions_cm: "15 x 12 x 8",
+          net_weight_g: "220", product_origin: "China" },
+        merchant_confirmed_facts: {
+          product_name: "Foldable Tablet Stand", merchant_owned_product_confirmed: true,
+          sku: "LOCAL-TABLET-BOUNDARY", condition: "NEW", unit_cost: "3.5", selling_price: "16.99",
+          currency: "USD", quantity: "2", image_urls: "https://example.invalid/tablet-fixture.jpg", image_rights_confirmed: true,
+        },
+        derived_listing_suggestions: {},
+        unknown_facts: ["package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm", "item_location"],
+      };
+      state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft({
+        product: "Foldable Tablet Stand", fields: {}, publish_prefill: {},
+        bullets: ["已出现物流、尺寸或重量线索，可以继续做履约体检"], gaps: [],
+        risks: ["真实发布必须进入确认中心"],
+      }, packet);
+      renderProductListingCenter();
+      document.querySelector("#listing-draft-test-root").innerHTML = renderSaasListingGapAndRiskPanel(state.saasListingComposerDraft, {});
+    });
+    for (const [key, value] of [["product_dimensions_cm", "15 x 12 x 8"], ["net_weight_g", "220"], ["product_origin", "China"]]) {
+      assert.equal(await page.locator(`[data-saas-product-fact-field="${key}"]`).inputValue(), value);
+      assert.equal(await page.locator(`[data-product-fact-key="${key}"] [data-product-fact-origin]`).innerText(), "来源资料");
+    }
+    const panel = page.getByRole("complementary", { name: "发布前缺口和风险" });
+    const gaps = panel.locator("article").filter({ has: page.getByText("资料缺口", { exact: true }) });
+    const labels = ["包装重量 g", "包装长 cm", "包装宽 cm", "包装高 cm", "实际发货地"];
+    const gapRows = await gaps.locator("li").allTextContents();
+    assert.equal(gapRows.length, labels.length, "product measurements and origin cannot fill any of the five shipping gaps");
+    for (const label of labels) assert.ok(gapRows.some((row) => row.includes(label)), `${label} remains visible`);
+    assert.match(await gaps.locator("strong").innerText(), /5/);
+    assert.doesNotMatch(gapRows.join("\n"), /商品尺寸|商品净重|商品产地|package_weight_g|package_length_cm|package_width_cm|package_height_cm|item_location/);
+    const projection = await page.evaluate(() => state.saasListingComposerDraft.publish_prefill);
+    for (const key of ["package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm", "item_location"]) assert.equal(projection[key], "");
+    assert.match(await panel.innerText(), /模拟/);
+    await captureRiskPanelFixture(page, "risk-packaging-gaps-local-919.png", 919);
+  });
+});
+
+test("advanced risk hints retain suggestion confirmation and unknown transitions without truncating long gaps", async () => {
+  await withProductFactPage(async (page) => {
+    await page.evaluate(() => document.addEventListener("click", (event) => {
+      const button = event.target?.closest?.('[data-saas-action="mark-product-fact-unknown"]');
+      if (button) markSaasMerchantProductFactUnknown(button);
+    }));
+    const renderGaps = async () => {
+      await page.evaluate(() => {
+        document.querySelector("#listing-draft-test-root").innerHTML = renderSaasListingGapAndRiskPanel(state.saasListingComposerDraft, {});
+      });
+      const gaps = page.getByRole("complementary", { name: "发布前缺口和风险" }).locator("article")
+        .filter({ has: page.getByText("资料缺口", { exact: true }) });
+      return { rows: await gaps.locator("li").allTextContents(), headline: await gaps.locator("strong").innerText() };
+    };
+    const remainingLabels = ["SKU", "包装重量 g", "包装长 cm", "包装宽 cm", "包装高 cm", "实际发货地", "图片商业使用权"];
+    for (const origin of ["ai", "vision"]) {
+      await page.evaluate((origin) => {
+        const packet = {
+          contract_version: "merchant_product_fact_packet_v1", simulation_only: true,
+          source: origin === "vision" ? "backend_product_vision_extraction" : "authenticated_merchant_request",
+          vision_contract_version: origin === "vision" ? "jiejing_ai_ceo_product_vision_intake_v1" : "",
+          source_confirmed_facts: {},
+          merchant_confirmed_facts: { product_name: "Foldable Tablet Stand", merchant_owned_product_confirmed: true,
+            condition: "NEW", unit_cost: "3.5", currency: "USD", quantity: "2", image_urls: "https://example.invalid/tablet-fixture.jpg" },
+          derived_listing_suggestions: { material: "Aluminum Alloy", selling_price: "16.99" },
+          unknown_facts: ["material", "selling_price", "sku", "package_weight_g", "package_length_cm", "package_width_cm",
+            "package_height_cm", "item_location", "image_rights_confirmed"],
+        };
+        state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft({
+          product: "Foldable Tablet Stand", fields: {}, publish_prefill: {}, gaps: [], bullets: [],
+          risks: ["真实发布必须进入确认中心"],
+        }, packet);
+        renderProductListingCenter();
+      }, origin);
+      for (const key of ["material", "selling_price"]) {
+        assert.equal(await page.locator(`[data-product-fact-key="${key}"] [data-product-fact-origin]`).innerText(),
+          origin === "vision" ? "图片识别 · 待确认" : "AI 建议 · 待确认");
+      }
+      let gaps = await renderGaps();
+      assert.equal(gaps.rows.length, 9, `${origin}: two suggestions plus seven missing facts must all remain visible`);
+      assert.match(gaps.headline, /9/);
+      for (const label of ["材质", "计划售价"]) assert.ok(gaps.rows.some((row) => row.includes("待确认") && row.includes(label)));
+      for (const label of remainingLabels) assert.ok(gaps.rows.some((row) => row.includes(label)), `${origin}: ${label} is not truncated`);
+      for (const key of ["material", "selling_price"]) await page.locator(`[data-product-fact-key="${key}"] [data-saas-action="confirm-product-fact-suggestion"]`).click();
+      await page.locator('[data-saas-action="save-merchant-product-facts"]').click();
+      await page.evaluate(() => window.__productFactSavePromise);
+      gaps = await renderGaps();
+      assert.equal(gaps.rows.length, 7, `${origin}: confirmation removes only those two pending facts`);
+      assert.match(gaps.headline, /7/);
+      assert.doesNotMatch(gaps.rows.join("\n"), /材质|计划售价/);
+      for (const label of remainingLabels) assert.ok(gaps.rows.some((row) => row.includes(label)));
+      for (const key of ["material", "selling_price"]) await page.locator(`[data-product-fact-key="${key}"] [data-saas-action="mark-product-fact-unknown"]`).click();
+      await page.locator('[data-saas-action="save-merchant-product-facts"]').click();
+      await page.evaluate(() => window.__productFactSavePromise);
+      gaps = await renderGaps();
+      assert.equal(gaps.rows.length, 9, `${origin}: explicitly unknown facts reappear without reviving old suggestions`);
+      assert.match(gaps.headline, /9/);
+      for (const label of ["材质", "计划售价"]) assert.ok(gaps.rows.some((row) => row.includes("待补") && row.includes(label)));
+      assert.ok(gaps.rows.at(-1).includes("图片商业使用权"), `${origin}: the final missing fact must never be cut off at six`);
+      const packet = await page.evaluate(() => state.saasListingComposerDraft.merchant_product_fact_packet);
+      for (const key of ["material", "selling_price"]) {
+        assert.equal(Boolean(packet.merchant_confirmed_facts[key]), false);
+        assert.equal(Boolean(packet.derived_listing_suggestions[key]), false);
+        assert.ok(packet.unknown_facts.includes(key));
+      }
+      assert.equal(packet.simulation_only, true);
+      assert.equal(packet.source, origin === "vision" ? "backend_product_vision_extraction" : "authenticated_merchant_request");
+      assert.equal(packet.vision_contract_version || "", origin === "vision" ? "jiejing_ai_ceo_product_vision_intake_v1" : "");
     }
   });
 });

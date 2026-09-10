@@ -10341,19 +10341,39 @@ function renderSaasListingVisiblePublishBridge(
 }
 
 function renderSaasListingGapAndRiskPanel(draft = state.saasListingComposerDraft, opportunity = {}) {
-  const gaps = (draft?.gaps || opportunity.gaps || []).slice(0, 6);
-  const risks = (draft?.risks || opportunity.risks || []).slice(0, 6);
-  const signals = (draft?.bullets || opportunity.reasons || []).slice(0, 4);
+  // Import-time report hints are history, not the current product's missing facts.
+  // Reuse the fact form's projection; do not mutate drafts or publish readiness.
+  const packet = saasMerchantProductFactPacket(draft);
+  const review = packet ? saasMerchantProductFactReviewSummary(packet) : null;
+  const gaps = review
+    ? [...review.pendingSuggestionLabels.map((label) => `待确认：${label}`),
+      ...review.missingLabels.map((label) => `待补：${label}`)]
+    : (draft?.gaps || opportunity.gaps || []).slice(0, 6);
+  const risks = [
+    ...(packet?.simulation_only === true || draft?.simulation_only === true
+      ? ["模拟演练资料不能保存到 eBay 或正式发布"] : []),
+    ...(draft?.risks || opportunity.risks || []),
+  ].slice(0, 6);
+  const signals = review
+    ? saasMerchantProductFactDefinitions().map((group) => {
+      const labels = new Set(group.fields.map(([, label]) => label));
+      const pending = review.pendingSuggestionLabels.filter((label) => labels.has(label));
+      const missing = review.missingLabels.filter((label) => labels.has(label));
+      const detail = [pending.length ? `待确认 ${pending.join("、")}` : "",
+        missing.length ? `待补 ${missing.join("、")}` : ""].filter(Boolean).join("；");
+      return `${group.label}：${detail || "必需资料已填写，仍需体检"}`;
+    })
+    : (draft?.bullets || opportunity.reasons || []).slice(0, 4);
   return `
     <aside class="saas-listing-v2-risk-panel" aria-label="发布前缺口和风险">
-      <article class="is-green">
-        <span>素材/利润</span>
-        <strong>先判断是否值得继续</strong>
+      <article class="${gaps.length ? "is-amber" : "is-green"}">
+        <span>资料核对</span>
+        <strong>核对当前商品资料</strong>
         <ul>${(signals.length ? signals : ["补图片、价格、成本和物流后再做发布体检"]).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
       </article>
       <article class="${gaps.length ? "is-amber" : "is-green"}">
         <span>资料缺口</span>
-        <strong>${gaps.length ? `${gaps.length} 项待补` : "资料线索较完整"}</strong>
+        <strong>${gaps.length ? `${gaps.length} 项待补或确认` : "资料线索较完整"}</strong>
         <ul>${(gaps.length ? gaps : ["继续进入发布体检"]).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
       </article>
       <article class="is-red">
