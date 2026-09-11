@@ -1,6 +1,6 @@
 # 捷境当前执行状态
 
-最后更新：2026-09-10。用途：中断、重启或压缩后从此处续接；不是公开产品文案，也不是线上状态证明。维护本文件，不另建同名意义的平行“最新状态”。旧日期交接仅用于按需追溯。
+最后更新：2026-09-11。用途：中断、重启或压缩后从此处续接；不是公开产品文案，也不是线上状态证明。维护本文件，不另建同名意义的平行“最新状态”。旧日期交接仅用于按需追溯。
 
 ## 目标与本轮范围
 
@@ -11,6 +11,16 @@
 正常实现与方案选择已授权；2026-09-06上一批商家验收修复主站部署已获准并完成。本轮用户最新“确认继续推进……按照昨天……下一步”已明确批准2026-09-07 Listing云保存的精确`898210e`候选及既有已核验包正式apply；本次部署、独立postflight、005生产目录核验与原商品手改保存/刷新/清空/冲突UI验收均已完成，证据见下节，不再等待apply。重复出现的辅助GET 502仍在独立诊断，不将部署成功写成控制台零错误或完整真实发布旅程通过；资金与eBay高风险动作仍需动作时确认。2026-09-06用户随后明确“允许”，批准旧ops仅前端、代理及API的SSH窄范围例外；代码同步已完成。其后“好的，继续”又明确批准运营端微信退款能力配置对齐，仅旧API的公开布尔覆盖及必要重启/代理刷新；不含真实收费、退款、订单provider查询，也不含主站、Worker、Vault、Cloudflared、DNS、私有密钥复制或共享数据库变更。W1–W6补丁已提交并部署；三项原有用户修改完整保留且未混入发布。
 
 ## 精确续接点
+
+- **2026-09-11 用户已认可布局，账号与店铺已接入真实前端代码，尚未提交/部署。** 新 `renderSaasSettingsAccountWorkspace` 使用实际账号/店铺/会话读模型，不含预览示例；五类设置改为水平导航，账号单行、店铺摘要与下一步常显，连接三权限/政策/健康/登录记录按需展开。六业务入口、唯一 `#storeSwitch` 与原切店隔离/刷新、OAuth与草稿确认、会话撤销绑定保留；后台业务逻辑未改。`index.html`仅同步预取/预载资源版本，不改官网内容。新JS LF SHA=`f7cdba02434487cd2145752f34f2f755794ad867c0f156a631b68b2f62298f69`，CSS LF SHA=`1331ad674ac4379e78ca77c0332e1c7a31b4e5f1b9cf4c9b2129eceb56056aad`。
+- **本批联动修复：** 缺收款证据不再显示“未发现付款冻结”；primary onboarding必须顶层store_id匹配当前店铺，不能把A政策/下一步套给B；账号异常CTA直接展开store+health并聚焦；同scope刷新保留展开与键盘焦点、换user/company/store不继承；站点优先真实store记录，不受connection默认US覆盖。无主店铺绑定时政策显示待核实，按钮展开当前店铺详情，不自动重复同步或OAuth。服务端primary onboarding目前仍为主店读模型，未改成每店接口。
+- **验证与准确边界：** 新 `test_jiejing_settings_account_workspace_ui.py` 已接CI与precloud（未执行完整新门禁）；新workspace/旧clean-settings/onboarding、资源版本、会话、tenant scope、AI scope、只读OAuth/草稿OAuth、模块懒加载、CI保护、secret scan通过；原认证28例通过；node语法/diffcheck/Impeccable layout[]通过。更新资源时曾因index预取仍旧版本导致2专项失败，已同步五处引用后复测通过。原3项用户dirty哈希不变，未并入本批产品改动。
+- **浏览器证据：** 任务工作区 `output/settings-account-integration-20260911/`，真实app.js/styles/app.html + 同源只GET合成后台，Chrome `http://127.0.0.1:9035/app.html?start=app&onboarded=1&view=connect&qa=public-saas`，server session95548。1487×1058、820×1180、390×844无横溢出；五设置分类实点通过、受限CTA展开、刷新保留sessions和焦点、切B清旧展开且三政策待核实已实际检查。浏览器无JS error，存在预期403 warning：fixture阻止原应用自动chat-history/sync写入；不得报零告警或真实后端动作验收。截图/失败捕获限制见该目录QA.md；两本地预览9034/9035保留，不重复生成。未触及真实支付退款、FAL、eBay或生产。
+- **唯一下一步：** 交付本批代码待发布候选；后续提交/部署只含本批文件，隔离原三项用户dirty，按当前部署确认边界执行完整候选门禁/dry-run/apply/线上验证。当前“认可”是预览方向认可，不自行当作正式部署确认。不重新进行竞品调研/认证部署/整套UI重设计，也不宣称本批覆盖了Listing/素材其他页面的视觉改造。
+
+- **2026-09-11 最新续接：账号与店铺可点击布局预览已完成，未接入/部署生产。** 用户“中断了吗，继续未完成的任务”按上一条预览方案接续，不重做认证部署。任务工作区 `output/settings-account-preview-20260911/` 使用 Product Design 本地模板和现有logo；`BRIEF.md`、`design-qa.md` 与 `qa/` 图片已保存。Chrome `http://127.0.0.1:9034/`，tab1331219619已标deliverable；本地Vite仅127.0.0.1，session77094保留，后续先查进程是否仍在，不重复创建预览。桌面1487×1058、平板820×1180、手机390×844已渲染；视口覆盖已reset；构建通过、机械扫描[]、浏览器error/warn为空。代码SHA与截图证据见QA，不是生产功能验收。
+- **预览作用与发现：** 账号单行、店铺与待办首屏、授权/政策/登录记录按需展开；五设置分类与六业务入口保留。不是另建SaaS，无API/凭证/真实账号/持久化。示例刷新失败假成功、切店旧timer串状态、确认取消/退出后焦点丢失三类本地问题已修复并实测。图中未实现的“连接店铺”改为已有语义刷新；“密码管理”不假造。原三项用户dirty哈希完整不变。本轮只更新此索引，未提交产品代码、未部署、未刷新线上收费状态、未OAuth/支付退款/素材生成/eBay写入。
+- **下一步：让用户实际打开预览点评；认可后才将这一页布局接回现有动作并专项验证。** 不能把前端示例搬进生产，不能删批量铺货或其他业务。未来保留原唯一storeSwitch与切店清缓存/刷新，原只读OAuth/草稿权限/连接验证三项区别，登录会话按稳定身份绑定。以下9月10日已完成认证部署仍是生产代码证据，不重跑。
 
 - **2026-09-10 最新唯一续接：认证加载修复 ca5a353b 已正式部署并独立验收通过，不再重复此发布。** active=`/opt/jiejing-production/releases/20260910T132406Z-ca5a353b00b7/app`，source=`ca5a353b00b77817c898545e29036671a5877635`，tree=`658d896f54b667d85a9d89421271445815d6c6dd`；前版 bef1d400 保留回滚。任务工作区 `output/auth-reveal-boundary-release-20260910/native-apply-r2.json` SHA=`88f349e71ec57365bf61fb180a22ed3a2ecbb5e4bbb8d41f4cd0132b8e04fd60`，session63557 exit0；candidate/active/snapshot均true，secretfalse。本条为发布后的文档收口，后续文档提交不改变已验证的代码候选身份。
 - **本批完整同源验证：** 干净隔离候选 `C:\Users\57249\Documents\Codex\2026-09-10\jiejing-release-auth-reveal-boundary-r2` 完整236/236（2085.07s，run01891ab5498d490e8064db446c1d49e7），gate SHA=`a6dc1e3d5aec02d19feb57dbbcb58fe6ba4b8a2d7748b2f16a27c554482a2035`，capture SHA=`da3f3d4adbf08ce3c7deeef08489fe4b1abc46ac55dcc0dbd162baa501b91782`；CI34469354171/job102845359724共15步success。官方484文件包 `jiejing-public-staging-20260910-123030.zip` SHA=`0e88c7726eae384a4cc530c6ada204db67be9da216c1983eb61897b596dca203`，manifest SHA=`5b4ed556df0f4513dffbef8d99618126122115281428df6753ddf532481f48ec`。dry-run `native-dry_run-r2.json` SHA=`62af1002053c288fc0466d7149de72c2393c107d8836b019db60db4449c6def7`，三持久化/切换标记均false。

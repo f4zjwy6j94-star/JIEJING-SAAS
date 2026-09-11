@@ -44401,6 +44401,9 @@ function renderSaasMerchantOnboardingPanel(options = {}) {
     ["退货政策", policyStatuses.return === true],
   ];
   if (compact) {
+    const actionAttribute = options.accountWorkspace === true && stage === "account_review_required"
+      ? "data-saas-account-open-health"
+      : `data-saas-action="${escapeHtml(action.key)}"`;
     return `
       <section class="saas-settings-card saas-merchant-onboarding-panel is-compact" data-onboarding-contract="merchant_onboarding_single_next_step_v1" aria-label="eBay 起步下一步">
         <div class="saas-settings-card-head">
@@ -44410,7 +44413,7 @@ function renderSaasMerchantOnboardingPanel(options = {}) {
           </div>
         </div>
         <div class="saas-backend-preflight-actions">
-          <button class="primary-action" type="button" data-saas-action="${escapeHtml(action.key)}" ${state.saasLoading ? "disabled" : ""}>${escapeHtml(action.label)}</button>
+          <button class="primary-action" type="button" ${actionAttribute} ${state.saasLoading ? "disabled" : ""}>${escapeHtml(action.label)}</button>
           <small>${escapeHtml(action.note)}</small>
         </div>
         <div hidden aria-hidden="true">
@@ -44512,9 +44515,9 @@ function renderSaasAccountHealthPanel() {
           <strong>${escapeHtml(saasMerchantVisiblePublishCode(evidence.seller_account_status || health.status, "等待账号状态"))}</strong>
           <small>${escapeHtml(evidence.selling_limits ? `销售额度 ${saasCompactValue(evidence.selling_limits)}` : "等待读取销售额度")}</small>
         </article>
-        <article class="${evidence.payout_status ? "is-amber" : "is-green"}">
+        <article class="is-amber">
           <span>付款/资金</span>
-          <strong>${escapeHtml(evidence.payout_status || "未发现付款冻结")}</strong>
+          <strong>${escapeHtml(saasMerchantSafeSettingsText(evidence.payout_status, "收款状态待核实"))}</strong>
           <small>${Number(evidence.restriction_count || 0)} 条限制 / ${Number((evidence.recent_platform_errors || []).length || 0)} 条近期平台错误</small>
         </article>
       </div>
@@ -44669,6 +44672,187 @@ function saasCurrentStoreEbayRefreshProofView(ebayAuthorized = false) {
   };
 }
 
+function saasSettingsAccountStoreStatus(ctx = saasMerchantWorkbenchContext()) {
+  const health = saasAccountHealthSnapshot();
+  const evidence = health.evidence_package || {};
+  const status = String(health.status || "").toLowerCase();
+  const connectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "not_connected";
+  if (!ctx.store) return { label: "尚未关联店铺", tone: "neutral", detail: "连接 eBay 后，可在这里管理店铺与授权。" };
+  if (health.incident_mode || ["restricted", "suspended", "payout_hold", "quota_limited"].includes(status)) {
+    return {
+      label: saasMerchantSafeSettingsText(health.label, "需要处理"), tone: "warning",
+      detail: saasMerchantSafeSettingsText(health.summary, "店铺有待处理事项，请查看检查详情后继续。"),
+    };
+  }
+  if (evidence.official_packet_present === true && status === "normal") {
+    return { label: "账号状态正常", tone: "success", detail: "账号检查已完成；连接权限与发布条件仍需分别核对。" };
+  }
+  return {
+    label: "状态待核实", tone: "neutral",
+    detail: isSaasAuthorizedConnectionStatus(connectionStatus)
+      ? "只读连接已建立，账号与收款状态仍需核实。"
+      : "店铺尚未完成连接，请展开查看下一步。",
+  };
+}
+
+const saasSettingsAccountDisclosureSnapshots = new WeakMap();
+
+function saasSettingsAccountDisclosureScope(ctx = saasMerchantWorkbenchContext()) {
+  return JSON.stringify([
+    state.saasUser?.user_id || state.saasUser?.id || state.saasUser?.email || "",
+    state.saasCompany?.company_id || state.saasCompany?.id || "",
+    ctx.store?.store_id || "",
+  ]);
+}
+
+function captureSaasSettingsAccountDisclosureState(root, ctx = saasMerchantWorkbenchContext()) {
+  const scope = saasSettingsAccountDisclosureScope(ctx);
+  const previous = saasSettingsAccountDisclosureSnapshots.get(root);
+  const sameScope = previous?.scope === scope;
+  const details = [...(root?.querySelectorAll?.("[data-saas-account-disclosure]") || [])];
+  const active = root?.ownerDocument?.activeElement;
+  const focused = active && root?.contains?.(active) ? active : null;
+  let focusKey = null;
+  if (sameScope && focused?.tagName === "SUMMARY") focusKey = `summary:${focused.parentElement?.dataset?.saasAccountDisclosure || ""}`;
+  if (sameScope && focused?.dataset?.saasAction === "refresh") focusKey = "refresh";
+  if (sameScope && focused?.dataset?.saasSettingsTab) focusKey = `tab:${focused.dataset.saasSettingsTab}`;
+  if (sameScope && !focused && active === root?.ownerDocument?.body && previous.pendingFocus) focusKey = previous.focusKey;
+  return {
+    scope,
+    focusKey,
+    openKeys: sameScope ? (details.length
+      ? details.filter((item) => item.open).map((item) => item.dataset.saasAccountDisclosure)
+      : previous.openKeys) : [],
+  };
+}
+
+function restoreSaasSettingsAccountDisclosureState(root, snapshot) {
+  saasSettingsAccountDisclosureSnapshots.set(root, snapshot);
+  root?.querySelectorAll?.("[data-saas-account-disclosure]").forEach((item) => {
+    item.open = snapshot.openKeys.includes(item.dataset.saasAccountDisclosure);
+  });
+  let focusTarget = null;
+  if (snapshot.focusKey === "refresh") focusTarget = root.querySelector('[data-saas-action="refresh"]');
+  if (snapshot.focusKey?.startsWith("summary:")) {
+    focusTarget = [...root.querySelectorAll("[data-saas-account-disclosure]")]
+      .find((item) => item.dataset.saasAccountDisclosure === snapshot.focusKey.slice(8))?.querySelector("summary");
+  }
+  if (snapshot.focusKey?.startsWith("tab:")) {
+    focusTarget = [...root.querySelectorAll("[data-saas-settings-tab]")]
+      .find((item) => item.dataset.saasSettingsTab === snapshot.focusKey.slice(4));
+  }
+  snapshot.pendingFocus = Boolean(focusTarget?.disabled);
+  if (focusTarget && !focusTarget.disabled) focusTarget.focus({ preventScroll: true });
+}
+
+function bindSaasSettingsAccountControls(root) {
+  root?.querySelectorAll?.("[data-saas-account-open-health]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.disabled) return;
+      const store = root.querySelector('[data-saas-account-disclosure="store"]');
+      const health = root.querySelector('[data-saas-account-disclosure="health"]');
+      if (!store || !health) return;
+      store.open = true;
+      health.open = true;
+      health.querySelector("summary")?.focus();
+      health.scrollIntoView({ block: "nearest" });
+    });
+  });
+  root?.querySelectorAll?.("[data-saas-account-open-store]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const details = root.querySelector('[data-saas-account-disclosure="store"]');
+      if (!details) return;
+      details.open = true;
+      details.querySelector("summary")?.focus();
+      details.scrollIntoView({ block: "nearest" });
+    });
+  });
+  root?.querySelectorAll?.("[data-saas-account-store]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.disabled || state.saasLoading) return;
+      const select = document.querySelector("#storeSwitch");
+      const value = `saas:${button.dataset.saasAccountStore || ""}`;
+      if (!select || ![...select.options].some((option) => option.value === value)) return;
+      // Reuse the existing store switch transaction, including project isolation and refresh.
+      button.disabled = true;
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  });
+}
+
+function saasSettingsAccountOnboardingMatchesStore(ctx = saasMerchantWorkbenchContext()) {
+  const selectedStoreId = String(ctx.store?.store_id || "");
+  return Boolean(selectedStoreId && selectedStoreId === String(state.saasMerchantOnboarding?.store_id || ""));
+}
+
+function renderSaasSettingsAccountPolicies(ctx = saasMerchantWorkbenchContext()) {
+  // The onboarding endpoint describes the primary store, not necessarily the selected store.
+  const policies = saasSettingsAccountOnboardingMatchesStore(ctx) ? state.saasMerchantOnboarding?.business_policy_statuses || {} : {};
+  return `<details class="saas-account-check-details" data-saas-account-disclosure="policies">
+    <summary>配送、付款与退货政策<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></summary>
+    <dl class="saas-account-policy-list">${[["fulfillment", "配送政策"], ["payment", "付款政策"], ["return", "退货政策"]].map(([key, label]) => `<div><dt>${label}</dt><dd>${policies[key] === true ? "已读取" : policies[key] === false ? "待补齐" : "待核实"}</dd></div>`).join("")}</dl>
+    <p class="saas-account-policy-note">Listing 会引用店铺已有政策。修改后，更新店铺数据以读取最新设置。</p>
+    <button class="secondary-action compact-action" type="button" data-saas-action="open-official-ebay-business-policies" ${state.saasLoading ? "disabled" : ""}>管理 eBay 政策</button>
+  </details>`;
+}
+
+function renderSaasSettingsAccountWorkspace(ctx = saasMerchantWorkbenchContext(), options = {}) {
+  const account = saasCurrentAccountSummary();
+  const storeStatus = saasSettingsAccountStoreStatus(ctx);
+  const candidates = state.saasConnected ? saasKnownStoreCandidates(state.saasStores || [], {
+    connections: state.saasConnections || [], dataPackets: state.saasDataPackets || [], secretRefs: state.saasSecretRefs || [],
+  }) : [];
+  const stores = candidates.length ? candidates : (state.saasConnected && ctx.store ? [ctx.store] : []);
+  const chevron = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>';
+  const sessionCount = safeSaasBrowserSessionsForDisplay().length;
+  return `<div class="saas-account-workspace">
+    <section class="saas-account-section" aria-labelledby="saas-account-heading">
+      <h3 id="saas-account-heading">我的账号</h3>
+      <details class="saas-account-identity" data-saas-account-disclosure="account">
+        <summary>
+          <span class="saas-account-avatar" aria-hidden="true">${escapeHtml(Array.from(account.displayName || "捷").slice(0, 2).join("").toUpperCase())}</span>
+          <span class="saas-account-identity-copy"><strong>${escapeHtml(account.displayName)}</strong><small>${escapeHtml(account.email || "登录后管理账号")}</small></span>
+          <span class="saas-account-summary-action">管理${chevron}</span>
+        </summary>
+        <div class="saas-account-expanded">${renderSaasSettingsAccountAccessPanel()}</div>
+      </details>
+    </section>
+    <section class="saas-account-section" aria-labelledby="saas-account-stores-heading">
+      <div class="saas-account-section-heading"><div><h3 id="saas-account-stores-heading">eBay 店铺</h3><p>查看店铺状态，管理连接与权限。</p></div>
+        <button class="secondary-action compact-action" type="button" data-saas-action="refresh" ${state.saasLoading || !account.connected ? "disabled" : ""}>${state.saasLoading ? "正在刷新…" : "刷新状态"}</button>
+      </div>
+      <div class="saas-account-store-list">
+        ${stores.length ? `<div class="saas-account-store-columns" aria-hidden="true"><span>店铺</span><span>站点</span><span>账号状态</span><span></span></div>${stores.map((store) => {
+          const selected = String(store.store_id) === String(ctx.store?.store_id);
+          const connection = saasConnectionForStore(store);
+          const name = saasStoreDisplayName(store, connection);
+          const status = selected ? storeStatus : { label: "切换后查看", tone: "neutral" };
+          const declaredStore = (state.saasStores || []).find((item) => String(item.store_id) === String(store.store_id));
+          const marketplace = declaredStore?.marketplace || store.marketplace;
+          const market = ({ EBAY_US: "美国站", EBAY_GB: "英国站", EBAY_DE: "德国站", EBAY_FR: "法国站", EBAY_AU: "澳大利亚站", EBAY_CA: "加拿大站" })[marketplace] || saasMerchantSafeSettingsText(marketplace, "站点待确认");
+          const row = `<span class="saas-account-store-name"><strong>${escapeHtml(name)}</strong>${selected ? '<small>当前店铺</small>' : ""}</span><span class="saas-account-store-market">${escapeHtml(market)}</span><span class="saas-account-store-status is-${escapeHtml(status.tone)}">${escapeHtml(status.label)}</span>`;
+          return selected
+            ? `<details class="saas-account-store-detail" data-saas-account-disclosure="store"><summary class="saas-account-store-row">${row}<span class="saas-account-summary-action">查看详情${chevron}</span></summary><div class="saas-account-expanded">${renderSaasSettingsAccountPanel(ctx, options)}${renderSaasSettingsAccountPolicies(ctx)}<details class="saas-account-check-details" data-saas-account-disclosure="health"><summary>账号检查详情${chevron}</summary>${renderSaasAccountHealthPanel()}</details></div></details>`
+            : `<div class="saas-account-store-row">${row}<button class="secondary-action compact-action" type="button" data-saas-account-store="${escapeHtml(store.store_id)}" ${state.saasLoading ? "disabled" : ""}>切换店铺</button></div>`;
+        }).join("")}` : `<div class="saas-account-empty"><strong>尚未关联 eBay 店铺</strong><p>连接店铺后，可读取商品、订单和政策，继续准备 Listing。</p></div>`}
+      </div>
+      <p class="saas-account-store-notice is-${escapeHtml(storeStatus.tone)}" role="status">${escapeHtml(storeStatus.detail)}</p>
+      <div class="saas-account-next-step">${saasSettingsAccountOnboardingMatchesStore(ctx)
+        ? renderSaasMerchantOnboardingPanel({ compact: true, accountWorkspace: true })
+        : '<div class="saas-account-next-step-fallback"><p>先核对当前店铺的连接与账号状态，再继续准备商品。</p><button class="secondary-action compact-action" type="button" data-saas-account-open-store>查看连接详情</button></div>'}</div>
+      ${!stores.length ? `<details class="saas-account-empty-connection" data-saas-account-disclosure="store"><summary>连接与权限${chevron}</summary><div class="saas-account-expanded">${renderSaasSettingsAccountPanel(ctx, options)}</div></details>` : ""}
+    </section>
+    <section class="saas-account-section" aria-labelledby="saas-account-security-heading">
+      <h3 id="saas-account-security-heading">登录与安全</h3>
+      <div class="saas-account-disclosure-list">
+        <details data-saas-account-disclosure="sessions"><summary><span><strong>登录记录</strong><small>${sessionCount ? `${sessionCount} 条有效登录会话，可退出不再使用的会话。` : "查看已登录的会话，管理账号访问。"}</small></span>${chevron}</summary><div class="saas-account-expanded">${renderSaasBrowserSessionsPanel()}</div></details>
+        <details data-saas-account-disclosure="security"><summary><span><strong>账号访问</strong><small>切换账号或安全退出当前登录。</small></span>${chevron}</summary><div class="saas-account-expanded"><p>切换账号不会删除已保存的商品、报告与店铺设置。</p><div class="saas-account-access-actions"><button class="secondary-action compact-action" type="button" data-account-action="switch-account">切换账号</button><button class="secondary-action compact-action" type="button" data-account-action="logout" ${account.connected ? "" : "disabled"}>退出登录</button></div></div></details>
+      </div>
+    </section>
+  </div>`;
+}
+
 function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), options = {}) {
   const ebayAuthorized = options.ebayAuthorized === true;
   const ebayDraftAuthorized = options.ebayDraftAuthorized === true;
@@ -44680,39 +44864,31 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
     <section class="saas-settings-card">
       <div class="saas-settings-card-head">
         <div>
-          <span>账号</span>
-          <strong>登录、eBay 店铺连接和安全边界</strong>
-          <p>页面只显示连接状态和可用性，不展示平台原始授权信息或 AI 连接原文。</p>
+          <strong>连接与权限</strong>
+          <p>读取数据、保存未发布草稿和正式发布具有不同权限；正式发布仍需单独确认。</p>
         </div>
       </div>
       <div class="saas-settings-row-list">
         <article>
           <div>
-            <span>捷境账号</span>
-            <strong>${escapeHtml(saasAccountDisplayName())}</strong>
-            <small>${state.saasConnected ? "会话已恢复，关闭窗口后优先自动恢复。" : "未登录时不会读取店铺数据。"}</small>
-          </div>
-          <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新</button>
-        </article>
-        <article>
-          <div>
-            <span>eBay 店铺连接</span>
-            <strong>${escapeHtml(saasStoreStatusLabel(ctx.connection?.status || ctx.store?.status || "not_connected"))}</strong>
-            <small>${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</small>
+            <strong>读取店铺数据</strong>
             <small class="saas-oauth-confirmation-guidance is-${escapeHtml(readOnlyConfirmationView.status)}" data-ebay-oauth-confirmation-status="${escapeHtml(readOnlyConfirmationView.status)}">${escapeHtml(readOnlyConfirmationView.copy.detail)}</small>
-            <small class="saas-oauth-confirmation-guidance is-${escapeHtml(draftConfirmationView.status)}" data-ebay-draft-oauth-confirmation-status="${escapeHtml(draftConfirmationView.status)}">${escapeHtml(draftConfirmationView.copy.detail)}</small>
-            <small class="saas-oauth-confirmation-guidance is-${escapeHtml(refreshProofView.status)}" data-ebay-refresh-proof-status="${escapeHtml(refreshProofView.status)}">${escapeHtml(refreshProofView.detail)}</small>
           </div>
           <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-oauth" ${!hasSessionCandidate || ebayAuthorized ? "disabled" : ""}>${escapeHtml(readOnlyConfirmationView.copy.label)}</button>
-          <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-draft-oauth" ${!hasSessionCandidate || !ebayAuthorized || ebayDraftAuthorized ? "disabled" : ""}>${escapeHtml(draftConfirmationView.copy.label)}</button>
-          <button class="secondary-action compact-action" type="button" data-saas-action="verify-ebay-credential-proof" ${!hasSessionCandidate || !ebayAuthorized || refreshProofView.ready || state.saasLoading ? "disabled" : ""}>${escapeHtml(refreshProofView.label)}</button>
         </article>
         <article>
           <div>
-            <span>官方连接返回地址</span>
-            <strong>由捷境维护</strong>
-            <small>商家一般不需要复制或配置；连接异常时按页面提示联系客服或管理员处理。</small>
+            <strong>保存未发布草稿</strong>
+            <small class="saas-oauth-confirmation-guidance is-${escapeHtml(draftConfirmationView.status)}" data-ebay-draft-oauth-confirmation-status="${escapeHtml(draftConfirmationView.status)}">${escapeHtml(draftConfirmationView.copy.detail)}</small>
           </div>
+          <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-draft-oauth" ${!hasSessionCandidate || !ebayAuthorized || ebayDraftAuthorized ? "disabled" : ""}>${escapeHtml(draftConfirmationView.copy.label)}</button>
+        </article>
+        <article>
+          <div>
+            <strong>验证当前连接</strong>
+            <small class="saas-oauth-confirmation-guidance is-${escapeHtml(refreshProofView.status)}" data-ebay-refresh-proof-status="${escapeHtml(refreshProofView.status)}">${escapeHtml(refreshProofView.detail)}</small>
+          </div>
+          <button class="secondary-action compact-action" type="button" data-saas-action="verify-ebay-credential-proof" ${!hasSessionCandidate || !ebayAuthorized || refreshProofView.ready || state.saasLoading ? "disabled" : ""}>${escapeHtml(refreshProofView.label)}</button>
         </article>
       </div>
     </section>
@@ -45354,12 +45530,11 @@ function saasBrowserSessionTime(value = "") {
 function renderSaasBrowserSessionsPanel() {
   const sessions = safeSaasBrowserSessionsForDisplay();
   return `
-    <section class="saas-settings-card saas-browser-sessions" aria-label="登录设备">
+    <section class="saas-settings-card saas-browser-sessions" aria-label="登录记录">
       <div class="saas-settings-card-head">
         <div>
-          <span>登录设备</span>
-          <strong>${sessions.length ? `${sessions.length} 台设备保持登录` : "正在读取安全会话"}</strong>
-          <p>访问凭证每 30 分钟更新；页面只显示设备类别和时间，不保存 IP、原始浏览器标识或登录令牌。</p>
+          <strong>${sessions.length ? `${sessions.length} 条有效登录会话` : "登录记录待读取"}</strong>
+          <p>同一设备可能有多条登录记录。可退出不再使用的会话。</p>
         </div>
         ${sessions.length > 1 ? '<button class="secondary-action compact-action" type="button" data-saas-session-revoke-others>退出其它设备</button>' : ""}
       </div>
@@ -45442,12 +45617,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "账号与店铺",
       intro: "管理捷境登录账号、eBay 店铺连接和账号健康。",
       panels: [
-        renderSaasMerchantOnboardingPanel(),
-        renderSaasAccountHealthPanel(),
-        renderSaasSettingsAccountAccessPanel(),
-        renderSaasBrowserSessionsPanel(),
-        renderSaasSettingsPlatformPanel(ctx),
-        renderSaasSettingsAccountPanel(ctx, options),
+        renderSaasSettingsAccountWorkspace(ctx, options),
       ],
     },
     {
@@ -45513,16 +45683,19 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
   const activeTab = tabs.find((tab) => tab.id === state.saasSettingsTab) || tabs[0];
   state.saasSettingsTab = activeTab.id;
   return `
-    <section class="panel full saas-settings-clean-shell" aria-label="设置">
+    <section class="panel full saas-settings-clean-shell saas-settings-workspace-shell" aria-label="设置">
+      <button class="saas-settings-back" type="button" data-global-flow-view="cockpit">返回工作台</button>
+      <header class="saas-settings-workspace-heading">
+        <h2>${escapeHtml(activeTab.title)}</h2>
+        <p>${escapeHtml(activeTab.intro || "管理账号、店铺与使用偏好。")}</p>
+      </header>
       <aside class="saas-settings-clean-nav" aria-label="设置分类">
-        <button class="saas-settings-back" type="button" data-global-flow-view="cockpit">返回工作台</button>
-        <nav>
+        <nav aria-label="设置分类">
           ${tabs
             .map(
               (tab) => `
-                <button class="${tab.id === activeTab.id ? "is-active" : ""}" type="button" data-saas-settings-tab="${escapeHtml(tab.id)}">
+                <button class="${tab.id === activeTab.id ? "is-active" : ""}" type="button" data-saas-settings-tab="${escapeHtml(tab.id)}" ${tab.id === activeTab.id ? 'aria-current="page"' : ""}>
                   <strong>${escapeHtml(tab.label)}</strong>
-                  <small>${escapeHtml(tab.detail)}</small>
                 </button>
               `,
             )
@@ -45530,13 +45703,6 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
         </nav>
       </aside>
       <section class="saas-settings-clean-content">
-        <header>
-          <p class="eyebrow">设置</p>
-          <h2>${escapeHtml(activeTab.title)}</h2>
-          <p>${escapeHtml(activeTab.intro || "设置只处理连接、安全、来源、AI、权限和订阅安全。日常经营仍回到工作台。")}</p>
-        </header>
-        ${activeTab.id === "account" ? renderSaasSettingsOneGlanceStrip(activeTab.id) : ""}
-        ${activeTab.id === "account" ? renderSaasSettingsReadableMap(activeTab.id) : ""}
         <div class="saas-settings-clean-panels">
           ${activeTab.panels.filter(Boolean).join("")}
         </div>
@@ -45551,11 +45717,14 @@ function renderSaasConnectCenter(view) {
   const ebayConnectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "";
   const ebayAuthorized = isSaasAuthorizedConnectionStatus(ebayConnectionStatus);
   const ebayDraftAuthorized = isSaasEbayUnpublishedDraftAuthorized(ctx.store);
+  const disclosureState = captureSaasSettingsAccountDisclosureState(view, ctx);
   setJiejingTrustedHtml(
     view,
     trustedJiejingHtml(renderSaasSettingsCleanLayout(ctx, { ebayAuthorized, ebayDraftAuthorized }), "settings.clean_layout"),
   );
   bindSaasBrowserSessionControls(view);
+  restoreSaasSettingsAccountDisclosureState(view, disclosureState);
+  bindSaasSettingsAccountControls(view);
   return;
 }
 

@@ -62,6 +62,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("merchant_source_paths_copy", [sys.executable, "tools/test_jiejing_merchant_source_paths_copy.py"]),
     ("merchant_pricing_media_copy", [sys.executable, "tools/test_jiejing_merchant_pricing_media_copy.py"]),
     ("clean_settings_and_listing_ui", [sys.executable, "tools/test_jiejing_saas_clean_settings_and_listing_ui.py"]),
+    ("settings_account_workspace_ui", [sys.executable, "tools/test_jiejing_settings_account_workspace_ui.py"]),
     ("ai_ceo_copy_fidelity", [sys.executable, "tools/test_jiejing_ai_ceo_copy_fidelity.py"]),
     ("merchant_copy_maturity", [sys.executable, "tools/test_jiejing_merchant_copy_maturity.py"]),
     ("workbench_boot_efficiency", [sys.executable, "tools/test_jiejing_workbench_boot_efficiency.py"]),

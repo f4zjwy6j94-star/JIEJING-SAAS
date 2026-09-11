@@ -782,8 +782,8 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     require(app_js, "什么时候需要打开设置", "settings usage-rule section")
     if "主理人高级区" in app_js:
         return fail("merchant app must not contain the owner-only advanced settings surface")
-    require(app_js, "登录、eBay 店铺连接和安全边界", "account settings uses merchant-facing connection copy")
-    require(app_js, "官方连接返回地址", "account settings avoids callback wording")
+    for account_connection_copy in ["连接与权限", "读取店铺数据", "保存未发布草稿", "验证当前连接"]:
+        require(app_js, account_connection_copy, "account settings distinguishes existing connection capabilities in merchant language")
     require(app_js, "权限围绕捷境确认中心设计", "governance settings uses Jiejing-owned permission copy")
     require(app_js, "AI 与素材", "merchant-friendly model settings title")
     require(app_js, "账号 AI 已连接", "model settings uses merchant-facing AI connection copy")
@@ -976,9 +976,7 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     if tab_labels != expected_tab_labels:
         raise AssertionError(f"Merchant Settings must expose exactly five merchant tabs: {tab_labels}")
     for required_marker in [
-        "renderSaasSettingsAccountAccessPanel()",
-        "renderSaasSettingsPlatformPanel(ctx)",
-        "renderSaasSettingsAccountPanel(ctx, options)",
+        "renderSaasSettingsAccountWorkspace(ctx, options)",
         "renderSaasMerchantModelProviderPanel(ctx)",
         "renderSaasSettingsDataPanel(ctx)",
         "renderSaasMerchantPermissionPanel()",
@@ -989,6 +987,17 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
         "renderSaasMerchantSecurityBoundaryPanel()",
     ]:
         require(settings_def_body, required_marker, "settings five merchant tabs keep their merchant controls")
+    account_workspace_start = app_js.index("function renderSaasSettingsAccountWorkspace")
+    account_workspace_end = app_js.index("\nfunction ", account_workspace_start + 1)
+    account_workspace_body = app_js[account_workspace_start:account_workspace_end]
+    for required_marker in [
+        "renderSaasSettingsAccountAccessPanel()",
+        "renderSaasSettingsAccountPanel(ctx, options)",
+        "renderSaasAccountHealthPanel()",
+        "renderSaasBrowserSessionsPanel()",
+        "renderSaasMerchantOnboardingPanel({ compact: true, accountWorkspace: true })",
+    ]:
+        require(account_workspace_body, required_marker, "account workspace keeps existing merchant controls")
     for forbidden_marker in [
         'id: "general"',
         'id: "owner_ops"',
@@ -1067,9 +1076,9 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     settings_layout_body = app_js[settings_layout_start:settings_layout_end]
     require(settings_layout_body, "|| tabs[0]", "settings defaults to the first real merchant tab")
     require(settings_layout_body, "state.saasSettingsTab = activeTab.id", "settings keeps the selected five-tab destination")
-    require(settings_layout_body, 'activeTab.id === "account"', "settings overview is scoped to the first merchant tab")
-    require(settings_layout_body, "renderSaasSettingsReadableMap(activeTab.id)", "settings readable overview stays on the account landing tab")
-    require(settings_layout_body, "renderSaasSettingsOneGlanceStrip(activeTab.id)", "settings one-glance summary stays on the account landing tab")
+    # Account now owns a compact workspace; requiring its retired introductory
+    # maps here would enforce the stacked layout instead of retained capabilities.
+    require(settings_def_body, "renderSaasSettingsAccountWorkspace(ctx, options)", "account landing retains its actionable workspace")
     if 'activeTab.id === "general"' in settings_layout_body or 'id: "general"' in settings_layout_body:
         raise AssertionError("Settings must not restore a sixth general tab")
     settings_connect_start = app_js.index("function renderSaasConnectCenter")
