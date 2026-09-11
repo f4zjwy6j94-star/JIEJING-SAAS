@@ -671,6 +671,13 @@ async function showAccountSettings(page) {
   const accountTab = page.locator('[data-saas-settings-tab="account"]:visible');
   await accountTab.waitFor({ state: "visible", timeout: 5000 });
   await accountTab.click();
+  // Follow the merchant's visible path; connection controls live in store details.
+  const storeDetails = page.locator('[data-saas-account-disclosure="store"]');
+  await storeDetails.waitFor({ state: "visible", timeout: 5000 });
+  if (await storeDetails.getAttribute("open") === null) {
+    await storeDetails.locator(":scope > summary").click();
+  }
+  await storeDetails.locator('[data-saas-action="plan-ebay-oauth"]').waitFor({ state: "visible", timeout: 5000 });
 }
 
 async function main() {
