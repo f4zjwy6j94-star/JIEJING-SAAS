@@ -61,11 +61,18 @@ from pathlib import Path
 root = Path('/var/lib/docker/volumes/deploy_jiejing_caddy_data/_data/caddy/certificates')
 issuers = ('acme-v02.api.letsencrypt.org-directory', 'acme.zerossl.com-v2-DV90')
 def safe(path):
+    snapshot = []
     for part in (path, *path.parents):
         value = part.lstat()
-        if stat.S_ISLNK(value.st_mode) or value.st_uid != 0 or value.st_mode & 0o022:
-            return False
-    return True
+        # The official Caddy image initializes only its data/caddy root as
+        # root-owned 01777. Never extend this exception to its descendants.
+        caddy_storage = (str(part) == '/var/lib/docker/volumes/deploy_jiejing_caddy_data/_data/caddy'
+                         and stat.S_ISDIR(value.st_mode) and value.st_uid == value.st_gid == 0
+                         and stat.S_IMODE(value.st_mode) == 0o1777)
+        if stat.S_ISLNK(value.st_mode) or value.st_uid != 0 or (value.st_mode & 0o022 and not caddy_storage):
+            return None
+        snapshot.append((part, identity(value)))
+    return snapshot
 def run(args):
     return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
                           env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'})
@@ -80,7 +87,8 @@ try:
             key = cert.with_suffix('.key')
             if not cert.exists() or not key.exists():
                 continue
-            if not safe(cert) or not safe(key):
+            cert_path, key_path = safe(cert), safe(key)
+            if not cert_path or not key_path:
                 raise ValueError()
             ci, ki = cert.lstat(), key.lstat()
             if not stat.S_ISREG(ci.st_mode) or not stat.S_ISREG(ki.st_mode) or not 1 <= ci.st_size <= 262144 or not 1 <= ki.st_size <= 65536 or stat.S_IMODE(ki.st_mode) != 0o600:
@@ -95,6 +103,8 @@ try:
             if expiry.returncode or chain.returncode:
                 continue
             if identity(cert.lstat()) != identity(ci) or identity(key.lstat()) != identity(ki):
+                raise ValueError()
+            if any(identity(part.lstat()) != before for part, before in (*cert_path, *key_path)):
                 raise ValueError()
             found = True
         if not found:

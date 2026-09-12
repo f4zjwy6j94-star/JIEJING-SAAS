@@ -200,7 +200,14 @@ printf 'STOPPED=%s\\n' "${{STOPPED:-0}}"
     def test_certificate_preflight_needs_both_hosts_valid_chain_and_private_metadata(self):
         shell = bash_function('verify_ops_stored_certificates')
         code = shell.split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
-        for failure in ('none', 'missing_apex', 'wrong_san', 'expired', 'chain', 'key_permissions', 'symlink', 'changed'):
+        cases = ('none', 'caddy_sticky', 'missing_apex', 'wrong_san', 'expired', 'chain',
+                 'key_permissions', 'symlink', 'changed', 'caddy_nonsticky',
+                 'caddy_other_sticky_mode', 'caddy_wrong_owner', 'caddy_wrong_group',
+                 'caddy_not_directory', 'caddy_symlink', 'writable_other_ancestor',
+                 'writable_descendant', 'caddy_replaced', 'ancestor_replaced',
+                 'caddy_permissions_changed')
+        storage = '/var/lib/docker/volumes/deploy_jiejing_caddy_data/_data/caddy'
+        for failure in cases:
             completed_checks = [False]
             class PublicPath:
                 def __init__(self, value): self.value = PurePosixPath(value)
@@ -214,9 +221,27 @@ printf 'STOPPED=%s\\n' "${{STOPPED:-0}}"
                     is_key = self.value.suffix == '.key'
                     regular = self.value.suffix in ('.crt', '.key')
                     mode = (stat.S_IFREG | 0o600) if regular else (stat.S_IFDIR | 0o700)
+                    is_storage = str(self.value) == storage
+                    owner = group = 0
+                    inode = 2 + int(failure == 'changed' and completed_checks[0])
+                    if is_storage and failure.startswith('caddy_'):
+                        mode = stat.S_IFDIR | 0o1777
+                        if failure == 'caddy_nonsticky': mode = stat.S_IFDIR | 0o777
+                        if failure == 'caddy_other_sticky_mode': mode = stat.S_IFDIR | 0o1775
+                        if failure == 'caddy_wrong_owner': owner = 1000
+                        if failure == 'caddy_wrong_group': group = 1000
+                        if failure == 'caddy_not_directory': mode = stat.S_IFREG | 0o1777
+                        if failure == 'caddy_symlink': mode = stat.S_IFLNK | 0o1777
+                        if failure == 'caddy_replaced' and completed_checks[0]: inode += 1
+                        if failure == 'caddy_permissions_changed' and completed_checks[0]: mode = stat.S_IFDIR | 0o1775
+                    if str(self.value) == str(PurePosixPath(storage).parent):
+                        if failure == 'writable_other_ancestor': mode = stat.S_IFDIR | 0o1777
+                        if failure == 'ancestor_replaced' and completed_checks[0]: inode += 1
+                    if str(self.value) == storage + '/certificates' and failure == 'writable_descendant':
+                        mode = stat.S_IFDIR | 0o1777
                     if is_key and failure == 'key_permissions': mode = stat.S_IFREG | 0o644
                     if is_key and failure == 'symlink': mode = stat.S_IFLNK | 0o777
-                    return types.SimpleNamespace(st_dev=1, st_ino=2 + int(failure == 'changed' and completed_checks[0]), st_uid=0, st_gid=0, st_mode=mode, st_size=2048, st_mtime_ns=1234, st_ctime_ns=1234)
+                    return types.SimpleNamespace(st_dev=1, st_ino=inode, st_uid=owner, st_gid=group, st_mode=mode, st_size=2048, st_mtime_ns=1234, st_ctime_ns=1234)
             commands = []
             def openssl(args, **kwargs):
                 commands.append(args)
@@ -231,11 +256,11 @@ printf 'STOPPED=%s\\n' "${{STOPPED:-0}}"
                 completed_checks[0] = True
                 return types.SimpleNamespace(returncode=int(failure == 'chain'), stdout=b'')
             with patch('pathlib.Path', PublicPath), patch('subprocess.run', side_effect=openssl):
-                if failure == 'none': exec(compile(code, '<certificate-fixture>', 'exec'), {})
+                if failure in ('none', 'caddy_sticky'): exec(compile(code, '<certificate-fixture>', 'exec'), {})
                 else:
                     with self.assertRaises(SystemExit) as result: exec(compile(code, '<certificate-fixture>', 'exec'), {})
                     self.assertEqual(result.exception.code, 1)
-            if failure == 'none':
+            if failure in ('none', 'caddy_sticky'):
                 self.assertEqual({args[args.index('-verify_hostname')+1] for args in commands if '-verify_hostname' in args}, {'ops.jiejing.shop', 'jiejing.shop'})
 
     def test_transition_rollback_restores_app_but_never_hides_ops_dns_failure(self):
