@@ -201,7 +201,7 @@ def main() -> int:
         return fail("every production Python stage must use the reviewed immutable image digest")
     expected_compose_refs = {
         "jiejing-vault": 2,
-        "jiejing-frontend": 1,
+        "jiejing-frontend": 2,
         "jiejing-edge": 1,
     }
     for name, expected_count in expected_compose_refs.items():

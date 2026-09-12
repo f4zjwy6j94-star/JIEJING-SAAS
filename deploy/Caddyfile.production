@@ -6,6 +6,21 @@ pilot.jiejing.shop {
 	redir https://app.jiejing.shop{uri} permanent
 }
 
+jiejing.shop {
+	redir https://app.jiejing.shop{uri} permanent
+}
+
+# This hostname retains managed ACME. Its existing trusted certificate must
+# already be present in the production Caddy store before a migration apply.
+# Secret certificate import is a separate reviewed host-side operation.
+ops.jiejing.shop {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+	}
+	reverse_proxy jiejing-ops-frontend:80
+}
+
 {$JIEJING_PRODUCTION_HOST} {
 	encode zstd gzip
 

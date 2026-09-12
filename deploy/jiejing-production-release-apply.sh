@@ -44,10 +44,111 @@ previous_worker_hold_existed=0
 rollback_image_holds_ready=0
 candidate_api_image_id=""
 candidate_worker_image_id=""
+previous_ops_supported=0
 
 refuse() {
   printf '%s\n' "$1" >&2
   exit "${2:-1}"
+}
+
+verify_ops_stored_certificates() {
+  # Public certificates only. Private key contents are never opened here.
+  # A separate reviewed import binds each keypair; post-start TLS verifies it.
+  python3 - <<'PY'
+import os, stat, subprocess
+from pathlib import Path
+
+root = Path('/var/lib/docker/volumes/deploy_jiejing_caddy_data/_data/caddy/certificates')
+issuers = ('acme-v02.api.letsencrypt.org-directory', 'acme.zerossl.com-v2-DV90')
+def safe(path):
+    for part in (path, *path.parents):
+        value = part.lstat()
+        if stat.S_ISLNK(value.st_mode) or value.st_uid != 0 or value.st_mode & 0o022:
+            return False
+    return True
+def run(args):
+    return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
+                          env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'})
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+            value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+try:
+    for host in ('ops.jiejing.shop', 'jiejing.shop'):
+        found = False
+        for issuer in issuers:
+            cert = root / issuer / host / (host + '.crt')
+            key = cert.with_suffix('.key')
+            if not cert.exists() or not key.exists():
+                continue
+            if not safe(cert) or not safe(key):
+                raise ValueError()
+            ci, ki = cert.lstat(), key.lstat()
+            if not stat.S_ISREG(ci.st_mode) or not stat.S_ISREG(ki.st_mode) or not 1 <= ci.st_size <= 262144 or not 1 <= ki.st_size <= 65536 or stat.S_IMODE(ki.st_mode) != 0o600:
+                raise ValueError()
+            san = run(['openssl','x509','-in',str(cert),'-noout','-ext','subjectAltName'])
+            names = {x.strip() for x in san.stdout.decode('ascii').replace('\n', ',').split(',')}
+            if san.returncode or 'DNS:' + host not in names:
+                continue
+            expiry = run(['openssl','x509','-in',str(cert),'-noout','-checkend','604800'])
+            chain = run(['openssl','verify','-purpose','sslserver','-verify_hostname',host,
+                         '-CApath','/etc/ssl/certs','-untrusted',str(cert),str(cert)])
+            if expiry.returncode or chain.returncode:
+                continue
+            if identity(cert.lstat()) != identity(ci) or identity(key.lstat()) != identity(ki):
+                raise ValueError()
+            found = True
+        if not found:
+            raise ValueError()
+except Exception:
+    raise SystemExit(1) from None
+PY
+}
+
+ops_dns_points_to_old_host() {
+  # Only the DNS-only operations A record is used for this transition gate.
+  # The proxied apex cannot be classified from its public Cloudflare IPs.
+  timeout --signal=TERM --kill-after=2 15 python3 - <<'PY'
+import socket
+try:
+    addresses = {row[4][0] for row in socket.getaddrinfo('ops.jiejing.shop', 443, type=socket.SOCK_STREAM)}
+    raise SystemExit(0 if addresses == {'43.129.205.244'} else 1)
+except Exception:
+    raise SystemExit(1) from None
+PY
+}
+
+stop_candidate_ops_if_owned() {
+  local config container_id
+  container_id="$(docker ps -aq --no-trunc --filter 'name=^/deploy-jiejing-ops-frontend-1$' 2>/dev/null)" || return 1
+  [[ -n "$container_id" ]] || return 0
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || return 1
+  config="$(docker inspect "$container_id" --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' 2>/dev/null)" || return 1
+  [[ "$config" == "$candidate_app/deploy/docker-compose.production-pilot.yml" ]] || return 1
+  docker stop --time 30 "$container_id" >/dev/null 2>&1
+}
+
+verify_ops_surface() {
+  local source_app="$1" name expected actual code redirect
+  local -a local_tls=(--noproxy '*' --resolve ops.jiejing.shop:443:127.0.0.1 --max-time 10 --max-filesize 2097152 -A 'Mozilla/5.0 JiejingProductionOps/1.0')
+  for name in ops.html ops.js ops.css assets/jiejing-logo-mark.svg assets/jiejing-app-icon.svg assets/jiejing-ops-panels.js; do
+    expected="$(sha256sum -- "$source_app/$name" | cut -d' ' -f1)" || return 1
+    actual="$(curl -fsS "${local_tls[@]}" "https://ops.jiejing.shop/$name" 2>/dev/null | sha256sum | cut -d' ' -f1)" || return 1
+    [[ "$actual" == "$expected" ]] || return 1
+  done
+  for name in /owner/operations-overview /owner/billing/domestic/refunds /permissions/me; do
+    code="$(curl -sS "${local_tls[@]}" -o /dev/null -w '%{http_code}' "https://ops.jiejing.shop$name" 2>/dev/null)" || return 1
+    [[ "$code" == "401" || "$code" == "403" ]] || return 1
+  done
+  for name in /owner/not-allowlisted /app.html; do
+    code="$(curl -sS "${local_tls[@]}" -o /dev/null -w '%{http_code}' "https://ops.jiejing.shop$name" 2>/dev/null)" || return 1
+    [[ "$code" == "404" ]] || return 1
+  done
+  for name in /ops.html /ops.js /ops.css /assets/jiejing-ops-panels.js /owner/operations-overview; do
+    code="$(curl -sS --noproxy '*' --resolve app.jiejing.shop:443:127.0.0.1 --max-time 10 -o /dev/null -w '%{http_code}' "https://app.jiejing.shop$name" 2>/dev/null)" || return 1
+    [[ "$code" == "404" ]] || return 1
+  done
+  redirect="$(curl -sS --noproxy '*' --resolve jiejing.shop:443:127.0.0.1 --max-time 10 -o /dev/null -w '%{http_code} %{redirect_url}' 'https://jiejing.shop/migration-check?source=ops' 2>/dev/null)" || return 1
+  [[ "$redirect" == '308 https://app.jiejing.shop/migration-check?source=ops' ]] || return 1
 }
 
 validate_evidence_refresh_candidate() {
@@ -430,6 +531,17 @@ private_env_normalization_required=0
 assess_private_env_normalization
 private_env_normalization_applied=0
 
+if grep -q '^  jiejing-ops-frontend:' "$active_app/deploy/docker-compose.production-pilot.yml" \
+  && grep -Fqx 'ops.jiejing.shop {' "$active_app/deploy/Caddyfile.production" \
+  && grep -Fqx 'jiejing.shop {' "$active_app/deploy/Caddyfile.production"; then
+  previous_ops_supported=1
+else
+  ops_dns_points_to_old_host || refuse "REFUSE_OPS_TRANSITION_DNS_CUTBACK_REQUIRED=1" 40
+fi
+verify_ops_stored_certificates || refuse "REFUSE_OPS_CERTIFICATE_PREFLIGHT=1" 40
+printf 'OPS_PREVIOUS_RELEASE_SUPPORTED=%s\n' "$previous_ops_supported"
+printf '%s\n' 'OPS_STORED_CERTIFICATE_PREFLIGHT=1'
+
 short_sha="${SOURCE_SHA:0:12}"
 if [[ "$DRY_RUN" == "1" ]]; then
   arm_dry_run_cleanup_traps
@@ -524,6 +636,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   printf '%s\n' "ACTIVE_SWITCHED=0"
   printf '%s\n' "PRIVATE_ENV_NORMALIZATION_APPLIED=0"
   printf '%s\n' "EVIDENCE_SNAPSHOT_INITIALIZED=0"
+  printf '%s\n' "OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=0"
   exit 0
 fi
 
@@ -853,6 +966,12 @@ rollback_application_release() {
   "${previous_compose[@]}" up -d --no-build --no-deps --force-recreate jiejing-worker || rollback_rc=1
   wait_container_healthy deploy-jiejing-worker-1 30 || rollback_rc=1
   "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-frontend || rollback_rc=1
+  if [[ "${previous_ops_supported:-0}" == "1" ]]; then
+    "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-ops-frontend || rollback_rc=1
+    wait_container_healthy deploy-jiejing-ops-frontend-1 30 || rollback_rc=1
+  else
+    stop_candidate_ops_if_owned || rollback_rc=1
+  fi
   "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-edge || rollback_rc=1
   wait_container_healthy deploy-jiejing-frontend-1 30 || rollback_rc=1
   wait_container_healthy deploy-jiejing-edge-1 30 || rollback_rc=1
@@ -866,6 +985,20 @@ rollback_application_release() {
   wait_public_json "/health" 45 || rollback_rc=1
   wait_public_json "/health/deep" 45 || rollback_rc=1
   wait_public_json "/readiness/product-saas" 45 || rollback_rc=1
+  if [[ "$rollback_rc" == "0" ]]; then
+    printf '%s\n' 'APPLICATION_RELEASE_RESTORED=1'
+  fi
+  if [[ "${previous_ops_supported:-0}" == "1" ]]; then
+    verify_ops_surface "$active_app" || rollback_rc=1
+  else
+    if ! ops_dns_points_to_old_host; then
+      printf '%s\n' 'OPS_ROLLBACK_NEEDS_DNS_CUTBACK=1' >&2
+    fi
+    # DNS-only ops cannot establish where the proxied apex points. A prior
+    # app-only release never receives an automatic full rollback proof.
+    printf '%s\n' 'OPS_APEX_TRANSITION_ROLLBACK_REQUIRES_VERIFICATION=1' 'OPS_ROLLBACK_VERIFIED=0' >&2
+    rollback_rc=1
+  fi
   [[ "$rollback_rc" == "0" ]]
 }
 
@@ -1200,6 +1333,9 @@ current_stage="verify_candidate_runtime_image_coherence"
 verify_candidate_runtime_image_coherence
 current_stage="start_candidate_frontend"
 "${candidate_compose[@]}" up -d --no-deps --force-recreate jiejing-frontend
+current_stage="start_candidate_ops_frontend"
+"${candidate_compose[@]}" up -d --no-deps --force-recreate jiejing-ops-frontend
+wait_container_healthy deploy-jiejing-ops-frontend-1 30
 current_stage="start_candidate_edge"
 "${candidate_compose[@]}" up -d --no-deps --force-recreate jiejing-edge
 wait_container_healthy deploy-jiejing-frontend-1 30
@@ -1210,6 +1346,9 @@ current_stage="verify_public_deep_health"
 wait_public_json "/health/deep" 45
 current_stage="verify_public_product_readiness"
 wait_public_json "/readiness/product-saas" 45
+current_stage="verify_operations_tls_assets_and_anonymous_isolation"
+verify_ops_surface "$candidate_app"
+printf '%s\n' 'OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=1'
 current_stage="activate_release"
 arm_unit_transaction_traps
 atomic_replace_active_link "$candidate_app" "$active_app"

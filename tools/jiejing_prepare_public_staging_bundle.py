@@ -24,6 +24,7 @@ OUT = ROOT / "output" / "jiejing-public-staging-bundle"
 APPLY_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
 BUNDLE_SCOPE_MARKER = "public_staging_patch_whitelist_v1"
 ATOMIC_FRONTEND_FILES = ("index.html", "app.html", "app.js", "styles.css")
+ATOMIC_OPS_FILES = ("ops.html", "ops.js", "ops.css", "assets/jiejing-logo-mark.svg", "assets/jiejing-app-icon.svg", "assets/jiejing-ops-panels.js")
 
 EXCLUDED_PARTS = {
     ".git",
@@ -70,6 +71,7 @@ def main() -> int:
     committed_files = _committed_bundle_files(source_commit, files)
     files_sha256 = _bundle_file_hashes(committed_files)
     frontend_files_sha256 = {name: files_sha256[name] for name in ATOMIC_FRONTEND_FILES}
+    ops_files_sha256 = {name: files_sha256[name] for name in ATOMIC_OPS_FILES}
     _assert_source_unchanged(source_commit)
     _assert_worktree_fingerprints_unchanged(files, worktree_fingerprints)
 
@@ -88,6 +90,7 @@ def main() -> int:
         "secret_files_excluded": sorted(EXCLUDED_FILENAMES),
         "real_platform_writes_enabled": False,
         "frontend_files_sha256": frontend_files_sha256,
+        "ops_files_sha256": ops_files_sha256,
     }
 
     if args.dry_run:
@@ -269,9 +272,9 @@ def _git_blob_bytes(source_commit: str, relative_path: str) -> bytes:
 
 
 def _bundle_file_hashes(files: dict[str, bytes]) -> dict[str, str]:
-    missing = [name for name in ATOMIC_FRONTEND_FILES if name not in files]
+    missing = [name for name in (*ATOMIC_FRONTEND_FILES, *ATOMIC_OPS_FILES) if name not in files]
     if missing:
-        raise RuntimeError("atomic frontend files missing from bundle whitelist: " + ", ".join(missing))
+        raise RuntimeError("atomic frontend or ops files missing from bundle whitelist: " + ", ".join(missing))
     return {name: hashlib.sha256(contents).hexdigest() for name, contents in files.items()}
 
 

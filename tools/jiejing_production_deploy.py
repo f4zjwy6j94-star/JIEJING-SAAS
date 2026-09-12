@@ -34,6 +34,7 @@ DEFAULT_KNOWN_HOSTS = Path.home() / ".ssh" / "known_hosts"
 EXPECTED_CONFIRM = "deploy app.jiejing.shop production"
 ALLOWED_SCOPE = "public_staging_patch_whitelist_v1"
 ATOMIC_FRONTEND_FILES = ("index.html", "app.html", "app.js", "styles.css")
+ATOMIC_OPS_FILES = ("ops.html", "ops.js", "ops.css", "assets/jiejing-logo-mark.svg", "assets/jiejing-app-icon.svg", "assets/jiejing-ops-panels.js")
 PRODUCTION_REMOTE_APPLY_TIMEOUT_SECONDS = 3600
 PHASE3_REQUIRED_BUNDLE_FILES = {
     "jiejing_saas/runtime_evidence.py",
@@ -55,6 +56,9 @@ REMOTE_BOOLEAN_CONTRACT = {
     "PRIVATE_ENV_NORMALIZATION_PLANNED": "private_env_normalization_planned",
     "PRIVATE_ENV_NORMALIZATION_APPLIED": "private_env_normalization_applied",
     "EVIDENCE_SNAPSHOT_INITIALIZED": "evidence_snapshot_initialized",
+    "OPS_PREVIOUS_RELEASE_SUPPORTED": "ops_previous_release_supported",
+    "OPS_STORED_CERTIFICATE_PREFLIGHT": "ops_stored_certificate_preflight",
+    "OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED": "ops_local_tls_assets_isolation_verified",
 }
 
 
@@ -234,6 +238,10 @@ def parse_remote_stdout_contract(output: str, mode: str, expected_source_sha: st
         raise ValueError("active_switch_mismatch")
     if observed["evidence_snapshot_initialized"] is not expected_persistence:
         raise ValueError("evidence_snapshot_initialization_mismatch")
+    if observed["ops_stored_certificate_preflight"] is not True:
+        raise ValueError("ops_certificate_preflight_not_verified")
+    if observed["ops_local_tls_assets_isolation_verified"] is not expected_persistence:
+        raise ValueError("ops_surface_verification_mismatch")
     if observed["private_env_normalization_planned"] is not observed["private_env_normalization_required"]:
         raise ValueError("normalization_plan_mismatch")
     expected_applied = mode == "apply" and observed["private_env_normalization_required"]
@@ -298,6 +306,7 @@ def validate_local_release_candidate(
         source_files_sha256=source_files_sha256,
     )
     validate_atomic_frontend_release(bundle, manifest)
+    validate_atomic_ops_release(bundle, manifest)
     validate_bundle_javascript(bundle)
     return manifest, bundle_sha256, manifest_sha256
 
@@ -431,7 +440,9 @@ def validate_zip(path: Path, *, allowed_files: set[str] | None = None) -> None:
             "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
             "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql",
             "tools/jiejing_secret_scan.py",
-        } | PHASE3_REQUIRED_BUNDLE_FILES
+            "deploy/Caddyfile.production",
+            "deploy/nginx.ops.production.conf",
+        } | PHASE3_REQUIRED_BUNDLE_FILES | set(ATOMIC_OPS_FILES)
         missing = sorted(required.difference(names))
         if missing:
             raise ValueError("missing_required:" + ",".join(missing))
@@ -505,6 +516,66 @@ def parse_apply_patch_file_list(text: str) -> list[str]:
         if posix.is_absolute() or ".." in posix.parts or not posix.parts:
             raise ValueError(f"bundle_whitelist_unsafe:{name}")
     return files
+
+
+def ops_asset_version(contents: dict[str, bytes]) -> str:
+    """Version executable assets by UTF-8/LF content; ZIP hashes still bind raw bytes."""
+    hashes = {
+        name: _normalized_utf8_sha256(contents[name].decode("utf-8"))
+        for name in ("assets/jiejing-ops-panels.js", "ops.css", "ops.js")
+    }
+    digest = hashlib.sha256(json.dumps(hashes, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return "ops-v1-" + digest[:12]
+
+
+def validate_atomic_ops_release(path: Path, manifest: dict[str, Any]) -> None:
+    """Keep the isolated operations surface on one exact release, separately from app."""
+    expected = manifest.get("ops_files_sha256")
+    if type(expected) is not dict or set(expected) != set(ATOMIC_OPS_FILES):
+        raise ValueError("ops_manifest_scope_invalid")
+    with zipfile.ZipFile(path, "r") as archive:
+        contents = {}
+        for name in ATOMIC_OPS_FILES:
+            digest = expected[name]
+            if type(digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("ops_manifest_hash_invalid")
+            if archive.namelist().count(name) != 1:
+                raise ValueError("ops_asset_entry_count_invalid")
+            contents[name] = archive.read(name)
+            if hashlib.sha256(contents[name]).hexdigest() != digest:
+                raise ValueError("ops_asset_hash_mismatch")
+    class OpsAssetParser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.references = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag in {"script", "link"} and len({name for name, _ in attrs}) != len(attrs):
+                raise ValueError("ops_duplicate_asset_attribute")
+            values = dict(attrs)
+            if tag == "script" and "src" in values:
+                self.references.append((tag, values.get("rel", ""), values["src"]))
+            elif tag == "link" and "stylesheet" in (values.get("rel") or "").lower().split():
+                self.references.append((tag, "stylesheet", values.get("href")))
+
+        handle_startendtag = handle_starttag
+
+    parser = OpsAssetParser()
+    parser.feed(contents["ops.html"].decode("utf-8"))
+    parser.close()
+    expected_refs = {"ops.css": "link", "assets/jiejing-ops-panels.js": "script", "ops.js": "script"}
+    seen = set()
+    versions = set()
+    for tag, _, reference in parser.references:
+        if not isinstance(reference, str): raise ValueError("ops_asset_reference_invalid")
+        match = re.fullmatch(r"(?:\./)?(ops\.css|assets/jiejing-ops-panels\.js|ops\.js)\?v=([A-Za-z0-9_-]+)", reference)
+        if not match or match[1] in seen or expected_refs[match[1]] != tag:
+            raise ValueError("ops_asset_reference_invalid")
+        seen.add(match[1]); versions.add(match[2])
+    if seen != set(expected_refs) or len(versions) != 1:
+        raise ValueError("ops_asset_version_split")
+    if versions != {ops_asset_version(contents)}:
+        raise ValueError("ops_asset_content_version_mismatch")
 
 
 def validate_atomic_frontend_release(path: Path, manifest: dict[str, Any]) -> None:

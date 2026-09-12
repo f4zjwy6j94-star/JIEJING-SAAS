@@ -56,6 +56,10 @@ BASE_BUNDLE_FILES = {
     "styles.css",
     "Dockerfile.saas",
     "deploy/docker-compose.production-pilot.yml",
+    "deploy/Caddyfile.production",
+    "deploy/nginx.ops.production.conf",
+    "ops.html", "ops.js", "ops.css", "assets/jiejing-logo-mark.svg",
+    "assets/jiejing-app-icon.svg", "assets/jiejing-ops-panels.js",
     "deploy/jiejing-production-release-apply.sh",
     "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
     "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
@@ -276,6 +280,12 @@ def validate_atomic_frontend_manifest() -> list[str]:
             name: files.get(name, b"placeholder\n")
             for name in BASE_BUNDLE_FILES | PHASE3_BUNDLE_FILES
         }
+        validation_files.update({name: b"/* public operations fixture */\n" for name in module.ATOMIC_OPS_FILES})
+        validation_files["ops.html"] = (
+            b'<link rel="stylesheet" href="ops.css?v=fixture">'
+            b'<script src="assets/jiejing-ops-panels.js?v=fixture"></script>'
+            b'<script src="ops.js?v=fixture"></script>'
+        ).replace(b'?v=fixture', b'?v=' + module.ops_asset_version(validation_files).encode())
         full_bundle = Path(temp_dir) / "full-candidate.zip"
         with zipfile.ZipFile(full_bundle, "w") as archive:
             for name, contents in validation_files.items():
@@ -293,6 +303,10 @@ def validate_atomic_frontend_manifest() -> list[str]:
             "frontend_files_sha256": {
                 name: hashlib.sha256(validation_files[name]).hexdigest()
                 for name in ("index.html", "app.html", "app.js", "styles.css")
+            },
+            "ops_files_sha256": {
+                name: hashlib.sha256(validation_files[name]).hexdigest()
+                for name in module.ATOMIC_OPS_FILES
             },
             "zip_sha256": module.sha256(full_bundle),
         }
@@ -805,6 +819,9 @@ def validate_remote_stdout_contract() -> list[str]:
             "PRIVATE_ENV_NORMALIZATION_PLANNED=1",
             "PRIVATE_ENV_NORMALIZATION_APPLIED=0",
             "EVIDENCE_SNAPSHOT_INITIALIZED=0",
+            "OPS_PREVIOUS_RELEASE_SUPPORTED=0",
+            "OPS_STORED_CERTIFICATE_PREFLIGHT=1",
+            "OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=0",
         ]
     )
     try:
@@ -818,6 +835,9 @@ def validate_remote_stdout_contract() -> list[str]:
         "private_env_normalization_planned": True,
         "private_env_normalization_applied": False,
         "evidence_snapshot_initialized": False,
+        "ops_previous_release_supported": False,
+        "ops_stored_certificate_preflight": True,
+        "ops_local_tls_assets_isolation_verified": False,
     }
     if parsed != expected:
         failures.append(f"dry-run stdout contract parsed incorrectly:{parsed}")
@@ -829,6 +849,8 @@ def validate_remote_stdout_contract() -> list[str]:
         dry_output.replace("ACTIVE_SWITCHED=0\n", ""),
         dry_output + "\nACTIVE_SWITCHED=1",
         dry_output.replace("PRIVATE_ENV_NORMALIZATION_REQUIRED=1", "PRIVATE_ENV_NORMALIZATION_REQUIRED=secret-value"),
+        dry_output.replace("OPS_STORED_CERTIFICATE_PREFLIGHT=1", "OPS_STORED_CERTIFICATE_PREFLIGHT=0"),
+        dry_output.replace("OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=0", "OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=1"),
     ):
         try:
             module.parse_remote_stdout_contract(broken, "dry_run", source_sha)
@@ -842,6 +864,7 @@ def validate_remote_stdout_contract() -> list[str]:
         .replace("ACTIVE_SWITCHED=0", "ACTIVE_SWITCHED=1")
         .replace("PRIVATE_ENV_NORMALIZATION_APPLIED=0", "PRIVATE_ENV_NORMALIZATION_APPLIED=1")
         .replace("EVIDENCE_SNAPSHOT_INITIALIZED=0", "EVIDENCE_SNAPSHOT_INITIALIZED=1")
+        .replace("OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=0", "OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=1")
     )
     try:
         parsed_apply = module.parse_remote_stdout_contract(apply_output, "apply", source_sha)
@@ -1177,8 +1200,12 @@ fake_previous_compose() {{
 }}
 candidate_compose=(fake_candidate_compose)
 previous_compose=(fake_previous_compose)
+previous_ops_supported=1
 wait_container_healthy() {{ return 0; }}
 wait_public_json() {{ return 0; }}
+stop_candidate_ops_if_owned() {{ return 0; }}
+ops_dns_points_to_old_host() {{ return 0; }}
+verify_ops_surface() {{ return 0; }}
 
 # Happy path: service-specific candidate images are valid, while fixed holds
 # keep both different previous images restorable after live tags/containers move.

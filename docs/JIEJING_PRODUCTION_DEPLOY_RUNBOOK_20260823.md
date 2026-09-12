@@ -13,10 +13,28 @@
 - 发布前 Git 工作区必须干净，候选包 SHA-256 必须与清单一致。
 - 候选必须先在同一干净commit/tree完整运行当前门禁；新报告绑定检查有序清单、全部结果及开始/结束源状态。脏目录、运行中变化、assume-unchanged/skip-worktree隐藏修改、旧版/错源/缺项报告均不得打包。打包和部署前共同验证清单中的脱敏门禁证明；这不是线上健康或真实业务执行证明。
 - 发布不会主动发起真实扣款、退款或 eBay 写入。
-- 当前部署只重建 SaaS、Worker，并重建前端与边缘代理；不会删除数据库、Docker volume 或 Vault 数据。
+- 当前部署只重建 SaaS、Worker、商家前端、独立运营前端与边缘代理；不会删除数据库、Docker volume 或 Vault 数据。
 - `dry_run` 不获取任何锁，不调用 `systemctl`，也不运行 COS/CLS 探针；它在创建 `/tmp/jiejing-production-dry-run-*.d` 之前安装清理 trap，完成 wrapper `bash -n`、固定 unit 合同和安装意图校验后自动删除；`HUP`、`INT`、`TERM` 和正常/异常退出均进入不可被二次可捕获信号打断的清理。成功必须精确输出 `CANDIDATE_RELEASE_PERSISTED=0`、`ACTIVE_SWITCHED=0` 以及不含值的 private env 权限规范化布尔，不会在 production release root 留下目录。
 - 正式 apply 先持有 deploy-only `/run/lock/jiejing-production-deploy.lock`，再持有与证据刷新共享的 `/run/lock/jiejing-production-maintenance.lock`，避免两个部署互相穿插或刷新任务撞上容器切换。
 - 正式 apply 必须先取得上述双锁，才允许读取 active release、容器环境文件标签和 private-dir 等 live snapshot，更不能提前在 production release root 创建永久候选目录。
+
+## 旧机运营入口合并：候选合同（2026-09-13）
+
+这是一份迁移候选要求，不是“已经完成迁移”的记录。配置归档、隔离恢复、运营域名切换和旧机停用分别验收；任一项通过都不能代替其余项。
+
+- 新机 `jiejing-ops-frontend` 只挂载 `ops.html`、`ops.js`、`ops.css`、两个品牌 SVG 和 `assets/jiejing-ops-panels.js` 六项公开资源。清单独立绑定六项 SHA-256，HTML 的三个实际样式/脚本引用必须同版本、唯一、来自本域。禁止把完整商家目录、private env 或 Vault volume 挂入运营前端。
+- 专用 `jiejing_ops` 内部网络仅连接运营 Nginx、边缘 Caddy 和 SaaS API。Nginx 无宿主端口，不属于 Vault 网络；非 `ops.jiejing.shop` Host 默认 404。精确路径与方法继续沿用现有后台授权合同，内网代理明确传递 HTTPS。退款执行入口保留，但迁移验证不得发起真实退款或收费。
+- `ops.jiejing.shop` 和 `jiejing.shop` 都必须在新源站正常验证 TLS。Caddy 继续托管 ACME；不得改为永久手工 `tls cert key`、关闭校验、切换 Cloudflare 代理模式或新增 DNS 凭据来绕过预检。旧 Caddy 中这两个准确域名的有效存储材料由另一批受审后端工具导入；本发布通道不读私钥正文、不创造证书或凭据。
+- 创建正式候选目录前，发布脚本只检查新机 Caddy 固定存储中的公证书 SAN、公开链、至少七天有效期及私钥的文件类型/权限/身份元数据。材料缺失、过期、路径异常都拒绝；这一步不证明公私钥匹配，匹配须由后续正常 TLS 握手证明。
+- 若上一发布不含独立 ops 与 apex，首次迁移 dry-run/apply 必须仍能确认 DNS-only `ops` 解析到旧机 `43.129.205.244`。这只是过渡保护，不是 apex 的代理 IP 证明；首次成功的新发布应成为后续完整回滚基线。
+- 发布后先在新机 loopback 使用真实域名、正常链校验和 `--resolve` 校验六资产哈希、匿名 API 401/403、未知后台路径 404、商家域名下后台资产/API 404，并验证 apex 的保留路径/查询参数 308 跳转。成功回执包含 `OPS_STORED_CERTIFICATE_PREFLIGHT=1`、`OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=1`；dry-run 后者必须为 0。loopback 验收不是外网可达性证明。
+- 切 DNS 前另从外部以 `curl --noproxy '*' --resolve ops.jiejing.shop:443:43.129.169.223 https://ops.jiejing.shop/` 和同方式的 apex 检查正常 TLS，不加 `-k`，并复核六资产/匿名权限/商家隔离。先通过本地后台角色专项与外网源站检查，再按已批准迁移计划切换域名；不在此步骤登录后台执行资金动作。
+- 故障回滚始终先恢复商家应用。上一发布支持 ops 时也恢复 ops 并重验本地 TLS/隔离；不支持时只停止本候选、经名称和 Compose 标签核对的精确运营容器 ID，不删除容器、卷或共享数据库。旧发布缺 ops/apex 时，即使 DNS-only `ops` 仍在旧机，也不能据此判断代理中的 apex 已回旧源站：输出 `APPLICATION_RELEASE_RESTORED=1` 与 `OPS_APEX_TRANSITION_ROLLBACK_REQUIRES_VERIFICATION=1`，整体回滚仍判失败，须核对两个准确 DNS 记录并复验。若 `ops` 不在旧机，另输出 `OPS_ROLLBACK_NEEDS_DNS_CUTBACK=1`。不得把商家恢复误报为全部恢复。
+- 旧机退出前必须已有可独立恢复的材料保管、旧 Vault v3 材料匹配、所有未决数据保全和稳定观察证据，并至少有一个同时支持 ops/apex 的可回滚发布。此合同本身不授权停旧机、删除数据或放弃续费。
+
+本地专项：`python tools/test_jiejing_production_ops_consolidation.py`，并继续运行部署通道、生产 Compose、后台权限与退款授权专项。完整发布门禁必须绑定最终干净候选；局部测试通过不能冒充完整门禁或生产发布成功。
+
+运营缓存版本规则：固定三项 `assets/jiejing-ops-panels.js`、`ops.css`、`ops.js` 分别按 UTF-8 解码，将 CRLF/CR 规范为 LF 后计算完整 SHA-256；以名称为键排序、无多余空格 JSON 序列化，再取该 JSON SHA-256 的前 12 位组成 `ops-v1-<hash>`。三个真实加载 URL 必须使用这个准确版本。更新资源时必须同步更新 `ops.html` 三引用；仅更新 manifest 哈希而沿用旧 URL 会被拒绝，避免浏览器 immutable 缓存继续运行旧资源。清单中的文件哈希仍校验未经规范化的原始 bytes。
 
 ## 标准顺序
 

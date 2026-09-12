@@ -18,7 +18,7 @@
 1. 复制已审查SSH封装，新增固定新/旧目标的只读能力与容量补查工具；只输出GNU tar/GPG选项布尔、完整预算范围的计数/大小、固定类别缺口。不得输出原环境、进程参数、cron命令或文件内容。不重复已有5容器审计。
    可在控制台确认免费配额与无需关机后，创建唯一迁前系统盘快照作为临时保护；运行中快照不是应用一致性备份。Lighthouse实例销毁会连带删除快照，不能把它当退役后的独立副本（腾讯云`https://cloud.tencent.com/document/product/1207/48546`）。
 2. 按实际证据完成持久路径范围及排除项；所有未分类用户数据保留，Docker overlay/日志/运行配置须明确归档或可验证重建策略。元信息预算不是最终可恢复归档。
-3. 创建专用D盘受限恢复目录和新机私有归档目录，验证空间/ACL/无链接/排他写入。先确认成熟加密收件人材料及恢复路径，进行小型非业务样本的加密→传输→隔离还原；只返回结果，不回显密钥。
+3. 创建专用D盘受限恢复目录和新机私有归档目录，验证空间/ACL/无链接/排他写入。ACL不能只检查已有ACE，还需核对Owner、根继承保护、当前用户/SYSTEM/Administrators必需权限及路径链无重解析点。先确认成熟加密收件人材料及恢复路径，进行小型非业务样本的加密→传输→隔离还原；只返回结果，不回显密钥。工具自动生成保护口令，不要求用户自设；受保护私钥导出包/keyring与本机DPAPI密文保留，失败不自动覆盖重生成。先在新隔离keyring导入、关闭仅该keyring的agent缓存后，验证错误口令拒绝及DPAPI恢复口令解密成功；此样本只证明当前Windows身份的本机恢复，不证明跨机或Windows身份丢失后的灾备。独立恢复材料交接/托管未验证前，不完成第一阶段、不释放旧机。
 4. 静态预归档；可变数据在旧写入者安全暂停并具备旧Vault恢复条件后作一致性备份。首轮恢复旧写入后标记增量待补。新机保留至少10GiB空闲，D盘另有独立密文副本。
 5. 用固定清单与分段hash记录传输；中断不覆盖已验证段、不删除源。Linux恢复验证权限/ACL/xattr/链接/稀疏，不在Windows解包冒充完整恢复。
 
@@ -28,11 +28,11 @@
 
 ## 第二阶段：切换验证
 
-1. Cloudflare实际DNS/隧道/代理模式只读确认，保存精确回滚值；当前登录未恢复，不猜源站。
+1. Cloudflare正确账户与4条A记录已只读取得，回滚值见任务`output/host-retirement-audit-20260912/cloudflare-domain-readonly.json`。仅根域/ops从旧机迁至新机，保留根域proxied、ops DNS-only及各自Auto TTL，app/pilot不动；不新增www/AAAA/CNAME。根域已有边缘HTTPS 301跳app，保留规则，不推断所有根域请求到旧源；旧cloudflared职责仍需单独确认。ops保持DNS-only，须先证明新机可提供浏览器可信证书和公网可达；与app/apex/pilot源站保护成对验收，不能套全局CF-only规则或直接运行旧UFW脚本。后者实际默认放行全部IPv4的80/443，不能被脚本名误导。核对云防火墙、宿主过滤和Docker转发，只补实际缺口，切换前再次核对回滚值。
 2. 核对生产ops资格、DB身份、Vault引用、退款能力配置及旧Worker/runner/cron职责，只读且不调provider。未知即不切换。
 3. 在现有生产部署路径版本化加入apex/ops Caddy、专用ops Nginx与最小隔离服务；同步apply/rollback/后验合同，保证之后主站更新仍保留ops。API/Worker保留单一production-pilot.yml身份，不临时追加override。首次迁移前的生产release没有ops/apex，不能当切DNS后合法回滚基线；切换前必须取得已验证的入口保留合同，或在失败时明确同时回滚DNS至仍可恢复的旧机。不删除旧API能力，不触碰原三用户dirty。
 4. 本地专项→干净候选完整门禁/精确CI→核包→官方dry-run→本批正式切换确认。不得复用456e245门禁或运行旧ops_switch代替此过程。
-5. 候选准备完成后才进入最终停写窗口；安全排空旧任务、绑定最后源截止点、补最终一致归档。失败恢复旧服务则封存验收失效，须重新补全。
+5. 候选准备完成后才进入最终停写窗口；先取得新机维护任务的等效覆盖证据，再停用旧机调度入口并排空运行/排队任务，绑定最后源截止点、补最终一致归档。特别注意旧`jiejing-cls-probe-auto-refresh.yml`在远端默认main分支仍声明每12小时调度，其脚本会`--force-recreate`旧API和Worker；若仅手动停容器而保留runner/调度，最终封存可能被后台任务破坏。停用具体工作流/runner后须读回状态，不以本地改YAML代表线上已停。失败恢复旧服务则封存验收失效，须重新补全。
 6. 一次切换；核对主站/ops精确资产、管理员/匿名隔离、回调地址、readiness各状态，原商品记录只读保留。失败只回滚本次路由/版本，不用旧库覆盖共享业务数据库。
 
 验证引用：`tools/test_jiejing_production_pilot_contract.py`、`tools/test_jiejing_production_deploy_channel.py`、`tools/test_jiejing_operations_console.py`、`tools/test_jiejing_refund_operator_authorization.py`及`tools/codex_jiejing_merchant_ops_surface_isolation_smoke.js`，完整门禁按当时源码读取。独立ops资产验证不能被主站HTTP200代替。

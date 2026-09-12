@@ -246,6 +246,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("deploy_channel_doctor_parser", [sys.executable, "tools/test_jiejing_deploy_channel_doctor.py"]),
     ("staging_deploy_channel_contract", [sys.executable, "tools/test_jiejing_staging_deploy_channel_contract.py"]),
     ("production_deploy_channel_contract", [sys.executable, "tools/test_jiejing_production_deploy_channel.py"]),
+    ("production_ops_consolidation_contract", [sys.executable, "tools/test_jiejing_production_ops_consolidation.py"]),
     ("staging_deploy_disk_guard", [sys.executable, "tools/test_jiejing_staging_deploy_disk_guard.py"]),
     ("staging_patch_apply_contract", [sys.executable, "tools/test_jiejing_staging_patch_apply_contract.py"]),
     ("runtime_env_overlap_guard", [sys.executable, "tools/test_jiejing_runtime_env_overlap_guard.py"]),
