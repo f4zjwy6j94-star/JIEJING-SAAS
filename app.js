@@ -44255,6 +44255,20 @@ function saasAccountHealthTone(health = saasAccountHealthSnapshot()) {
   return "amber";
 }
 
+function saasAccountHealthMerchantText(value = "", fallback = "状态待更新") {
+  // Translate known diagnostic messages for this view only; keep source evidence intact.
+  const text = saasMerchantSafeSettingsText(value, fallback);
+  const messages = new Map([
+    ["eBay 拒绝了最近一次正式发布并暂时限制账号；KYC 已清除也不代表该限制已解除，Offer 仍未公开，捷境已暂停后续真实写入。",
+      "eBay 最近拒绝了商品发布，账号的发布限制尚未解除。完成身份核验不代表可以恢复发布；商品仍未公开，相关店铺操作已暂停。"],
+    ["收到 eBay 明确的限制解除通知后，将该通知作为解除证据交给捷境；仅 KYC=clear 或普通只读同步不会解除门禁。",
+      "请提供 eBay 明确解除本次账号限制的通知。仅完成身份核验或更新店铺数据，不能解除发布限制。"],
+    ["捷境核验证据晚于最近一次 25019 拒绝后，才重新生成精确发布确认单；旧 Offer、Listing 草稿和素材无需重建。",
+      "解除限制的通知必须晚于最近一次发布被拒绝的时间。捷境核对后再生成新的发布确认单；原有商品草稿和素材无需重建，正式发布仍需你确认。"],
+  ]);
+  return messages.get(text) || text;
+}
+
 function saasSellerOnboardingGuidance(health = saasAccountHealthSnapshot()) {
   const evidence = health.evidence_package && typeof health.evidence_package === "object" ? health.evidence_package : {};
   const stage = String(health.onboarding_stage || "").toLowerCase();
@@ -44482,12 +44496,15 @@ function renderSaasAccountHealthPanel() {
     diagnostics: "检查账号",
     evidence_package: "查看检查详情",
     read_only_sync: "只读同步",
+    appeal_draft: "准备申诉材料",
     publish: "发布",
     revise_price: "改价",
     change_inventory: "改库存",
     refund: "退款",
     ads: "广告",
     policy_change: "修改店铺政策",
+    procurement_payment: "采购付款",
+    sensitive_customer_commitment: "敏感客服承诺",
   };
   return `
     <section class="saas-settings-card saas-account-health-card">
@@ -44495,13 +44512,13 @@ function renderSaasAccountHealthPanel() {
         <div>
           <span>账号健康</span>
           <strong>${escapeHtml(saasMerchantSafeSettingsText(health.label, "状态未知"))}</strong>
-          <p>${escapeHtml(saasMerchantSafeSettingsText(health.summary, "同步 eBay 店铺资料后，捷境会显示账号是否正常、受限、冻结、付款冻结或额度不足。"))}</p>
+          <p>${escapeHtml(saasAccountHealthMerchantText(health.summary, "同步 eBay 店铺资料后，捷境会显示账号是否正常、受限、冻结、付款冻结或额度不足。"))}</p>
         </div>
         <span class="pill ${tone}">${health.incident_mode ? "保护模式" : "可继续检查"}</span>
       </div>
       <div class="saas-settings-status-list">
         <article class="is-${escapeHtml(tone)}">
-          <span>真实写入</span>
+          <span>店铺操作</span>
           <strong>${health.can_execute_real_writes ? "可进入确认中心" : "已暂停"}</strong>
           <small>${health.can_execute_real_writes ? "仍必须经过发布体检和决策中心。" : "发布、改价、库存、退款、广告、政策和敏感承诺全部停止。"}</small>
         </article>
@@ -44537,8 +44554,8 @@ function renderSaasAccountHealthPanel() {
         health.incident_mode
           ? `<div class="saas-sync-failure-box">
               <strong>账号保护模式</strong>
-              <p>当前可做：${escapeHtml(allowed.map((item) => healthActionLabels[item] || "安全检查").join(" / ") || "检查账号 / 查看检查详情 / 只读同步")}</p>
-              <p>暂时停止：${escapeHtml(blocked.map((item) => healthActionLabels[item] || "高风险操作").join(" / ") || "发布 / 改价 / 改库存 / 退款 / 广告 / 修改店铺政策")}</p>
+              <p>当前可做：${escapeHtml([...new Set(allowed.map((item) => healthActionLabels[item] || "安全检查"))].join(" / ") || "检查账号 / 查看检查详情 / 只读同步")}</p>
+              <p>暂时停止：${escapeHtml([...new Set(blocked.map((item) => healthActionLabels[item] || "高风险操作"))].join(" / ") || "发布 / 改价 / 改库存 / 退款 / 广告 / 修改店铺政策")}</p>
             </div>`
           : ""
       }
@@ -44547,7 +44564,7 @@ function renderSaasAccountHealthPanel() {
           ? `<div class="saas-settings-resource-list">
               ${nextActions
                 .slice(0, 3)
-                .map((item, index) => `<article><span>下一步 ${index + 1}</span><strong>${escapeHtml(saasMerchantSafeSettingsText(item, "按页面提示完成账号检查与资料更新。"))}</strong><small>所有真实写入仍需确认中心。</small></article>`)
+                .map((item, index) => `<article><span>下一步 ${index + 1}</span><strong>${escapeHtml(saasAccountHealthMerchantText(item, "按页面提示完成账号检查与资料更新。"))}</strong><small>涉及发布等店铺操作，仍需在确认中心确认。</small></article>`)
                 .join("")}
             </div>`
           : ""
@@ -44681,7 +44698,7 @@ function saasSettingsAccountStoreStatus(ctx = saasMerchantWorkbenchContext()) {
   if (health.incident_mode || ["restricted", "suspended", "payout_hold", "quota_limited"].includes(status)) {
     return {
       label: saasMerchantSafeSettingsText(health.label, "需要处理"), tone: "warning",
-      detail: saasMerchantSafeSettingsText(health.summary, "店铺有待处理事项，请查看检查详情后继续。"),
+      detail: saasAccountHealthMerchantText(health.summary, "店铺有待处理事项，请查看检查详情后继续。"),
     };
   }
   if (evidence.official_packet_present === true && status === "normal") {

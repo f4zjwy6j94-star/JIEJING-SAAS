@@ -137,6 +137,36 @@ for (const status of ['restricted', 'suspended', 'payout_hold', 'quota_limited']
 state.saasAccountHealth = { status: 'normal', incident_mode: true, evidence_package: { official_packet_present: true } };
 nonGreen(saasSettingsAccountStoreStatus(ctx));
 resetFixture();
+state.saasAccountHealth = {
+  status: 'restricted', label: '账号受限', severity: 'red', incident_mode: true,
+  can_execute_real_writes: false,
+  summary: 'eBay 拒绝了最近一次正式发布并暂时限制账号；KYC 已清除也不代表该限制已解除，Offer 仍未公开，捷境已暂停后续真实写入。',
+  next_actions: [
+    '在 eBay 站内信打开本次账号限制的官方通知，按通知的实际要求完成资料核验或申诉；无需重新授权。',
+    '收到 eBay 明确的限制解除通知后，将该通知作为解除证据交给捷境；仅 KYC=clear 或普通只读同步不会解除门禁。',
+    '捷境核验证据晚于最近一次 25019 拒绝后，才重新生成精确发布确认单；旧 Offer、Listing 草稿和素材无需重建。',
+  ],
+  evidence_package: { official_packet_present: true, recent_platform_errors: [{ error_id: '25019' }] },
+};
+const restrictedBefore = JSON.stringify(state.saasAccountHealth);
+renders.restrictedMerchant = renderSaasSettingsAccountWorkspace(ctx, { ebayAuthorized: true, ebayDraftAuthorized: true });
+assert(!/KYC|Offer|25019|门禁|真实写入/.test(renders.restrictedMerchant), 'account settings must explain restrictions without internal diagnostic terms');
+for (const required of ['账号受限', '完成身份核验不代表可以恢复发布', '商品仍未公开', '明确解除本次账号限制的通知', '晚于最近一次发布被拒绝', '草稿和素材无需重建', '正式发布仍需你确认']) {
+  assert(renders.restrictedMerchant.includes(required), `merchant restriction copy lost safety meaning: ${required}`);
+}
+assert.equal(JSON.stringify(state.saasAccountHealth), restrictedBefore, 'copy rendering must preserve restriction evidence and execution flags');
+nonGreen(saasSettingsAccountStoreStatus(ctx));
+state.saasAccountHealth.guardrails = {
+  blocked_real_actions: ['publish', 'revise_price', 'change_inventory', 'refund', 'ads', 'policy_change', 'procurement_payment', 'sensitive_customer_commitment', 'publish', 'future-risk-a', 'future-risk-b'],
+  allowed_incident_actions: ['diagnostics', 'evidence_package', 'read_only_sync', 'appeal_draft', 'diagnostics', 'future-check-a', 'future-check-b'],
+};
+const actionEvidenceBefore = JSON.stringify(state.saasAccountHealth);
+const actionMarkup = renderSaasAccountHealthPanel();
+assert(actionMarkup.includes('当前可做：检查账号 / 查看检查详情 / 只读同步 / 准备申诉材料 / 安全检查'), 'allowed actions need distinct merchant labels and deduplicated fallback');
+assert(actionMarkup.includes('暂时停止：发布 / 改价 / 改库存 / 退款 / 广告 / 修改店铺政策 / 采购付款 / 敏感客服承诺 / 高风险操作'), 'blocked actions need complete merchant labels and deduplicated fallback');
+assert(!/高风险操作 \/ 高风险操作|安全检查 \/ 安全检查/.test(actionMarkup), 'unknown actions must not repeat their display fallback');
+assert.equal(JSON.stringify(state.saasAccountHealth), actionEvidenceBefore, 'deduplicating labels must not change action guardrails');
+resetFixture();
 renders.healthUnknown = renderSaasAccountHealthPanel();
 renders.policiesUnknown = renderSaasSettingsAccountPolicies();
 state.saasMerchantOnboarding.business_policy_statuses = { fulfillment: true, payment: false };
@@ -428,7 +458,7 @@ def main() -> None:
             raise AssertionError(f"layout-only helper introduced direct backend/storage access: {name}")
     names = (
         "saasCurrentAccountSummary", "saasKnownStoreCandidates", "saasAccountHealthSnapshot",
-        "saasMerchantSafeSettingsText", "saasAccountHealthTone", "saasSellerOnboardingGuidance",
+        "saasMerchantSafeSettingsText", "saasAccountHealthTone", "saasAccountHealthMerchantText", "saasSellerOnboardingGuidance",
         "renderSaasAccountHealthPanel", "renderSaasMerchantOnboardingPanel",
         "saasReadOnlyConnectionConfirmationView", "saasUnpublishedDraftConnectionConfirmationView",
         "saasCurrentStoreEbayRefreshProofView", "renderSaasSettingsAccountPanel",

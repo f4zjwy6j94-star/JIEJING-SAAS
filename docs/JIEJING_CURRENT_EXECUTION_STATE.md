@@ -1,6 +1,6 @@
 # 捷境当前执行状态
 
-最后更新：2026-09-11。用途：中断、重启或压缩后从此处续接；不是公开产品文案，也不是线上状态证明。维护本文件，不另建同名意义的平行“最新状态”。旧日期交接仅用于按需追溯。
+最后更新：2026-09-12。用途：中断、重启或压缩后从此处续接；不是公开产品文案，也不是线上状态证明。维护本文件，不另建同名意义的平行“最新状态”。旧日期交接仅用于按需追溯。
 
 ## 目标与本轮范围
 
@@ -12,8 +12,12 @@
 
 ## 精确续接点
 
+- **2026-09-12 文案补修进入发布检查，不重做已通过UI验收。** 用户回复“继续”，按既定下一步提交本批app.js/app.html/index.html、workspace回归及本索引5路径，随后在新干净候选 `C:/Users/57249/Documents/Codex/2026-09-12/jiejing-release-settings-copy` 运行完整门禁、精确CI、核包与dry-run。任务证据使用 `output/settings-account-copy-release-20260912/`；旧发布证据保留，不复用为新版证明。实际候选commit/tree及运行session须在取得后写回。本补修正式apply尚未获动作确认；原三用户dirty保留并排除。
+
 - **本批账号与店铺升级已正式上线并独立核验通过，不再部署。** 代码301ab5a，active=`/opt/jiejing-production/releases/20260911T155205Z-301ab5a15dfd/app`，previous=`/opt/jiejing-production/releases/20260910T132406Z-ca5a353b00b7`。apply session68233已e55809 exit0，回执SHA=`0c9a447b32b403e9cb26758bde92afe9044b29abbfae64a6a5402c60f957d1e5`；独立post session28078已02ec8a exit0，回执 `output/settings-account-release-r3-20260911/post-deploy-readback.json` SHA=`39a32187dddbd6b3e6bc1b96dab5bfb69a680969e4209e22fc99f510c9798432`。candidate_matches_current、source_and_inputs_stable、health_and_isolation_ok、frontend.verified均true；4容器标签/镜像及2后端源文件、4前端只读挂载吻合，公网JS/CSS逐字节匹配，两个HTML仅各排除1行Cloudflare统计注入。health/deep/readiness/ops200，主站ops.html404；production/beta/can_accept与公开收费三布尔true，0阻断/0warning，eBay总写入false；本轮未实际收费、退款或eBay写入。
-- **唯一剩余验收是已登录账号内的设置交互；不是发布阻断，也不重开设计。** 当前可控浏览器只列出IAB，tab1既有会话过期，停在正式首页；发布后普通reload及“登录 / 注册”按钮→可见登录弹窗实点通过，已保留handoff页。可用console窗口error/warn均0；未读取/输入密码或提交登录。实际“账号与店铺”页面与桌面/平板/手机线上交互未复验，不能把先前本地fixture截图替代它；观察回执在同任务目录 `public-ui-readback.json`。用户恢复这个登录后，从设置→账号与店铺核对摘要、展开项、分类导航即可，不重新生成商品、改配置、OAuth、收费退款或发布eBay。237门禁、CI、包、dry-run、apply、post均已完成，不再重复；本索引本轮仅文档收口不改变已发布代码身份。
+- **2026-09-12 登录后的生产设置验收已完成，不再等登录或重做本批上线。** 用户恢复登录后沿用IAB tab1，原平板项目 `listing-project-0ef70f19c079b4261e82` 保留；五设置分类导航、管理/店铺/政策/健康/登录记录/账号访问展开收起、Enter键、账号受限CTA展开并聚焦、返回工作台再回设置均通过。桌面1487×1058、平板820×1180、手机390×844实际截图与DOM无横向溢出；生产console可用窗口error/warn均0，viewport已reset，tab1已handoff。未点刷新/同步/验证连接/授权/退出/配置保存，也未生成商品或执行eBay/资金操作。当前收费/深健康仍引用前一条有时间的post证据，本轮不作新的实时收费声明。
+- **验收发现两类商家文案问题，已本地补修但未提交/部署。** 后台受限原文被直接透传，显示KYC/Offer/25019/门禁；动作中文标签缺3项，出现重复“高风险操作”。仅app.js账号健康专用三条精确展示映射、完整动作标签/展示去重和标题脚注；后台原始证据、限制与确认判定不变。app.html/index.html同步资源族，JS LF SHA=`2b2adaaa2230f2faa1debb52c6f1a0bd46604a468c4ee4917cb60b6fc5e67bc1`，CSS内容未改。独立审查发现初版原始混合换行hash/版本族不一致，已在发布前修正，staging-config通过。
+- **补修验证与唯一下步：** 两个回归先RED(e0f54f/664fca)再GREEN；workspace、onboarding、clean-settings/Listing、backend incident-mode、staging-config、secret-scan、node语法/diff检查全通过。新本地GET-only fixture9036/session92892只用合成账号，桌面1280×720和手机390×844实际渲染修正文案/CTA通过、0error；2条预期403 warning来自被拒绝的可选chat-history/sync，不能当真实商家数据验收。证据见任务工作区 `output/settings-account-copy-20260912/QA.md`。下一步只提交本批4源码/测试路径与本索引，建立新干净候选并运行绑定该候选的门禁/CI/核包/dry-run，正式部署须本补修确认；不得复用旧301ab5a的237证明新JS、不得再apply旧发布。三原用户dirty哈希完整不变，保留且排除。不要重跑OAuth、付款退款、旧商品生成或已完成的登录验收。
 
 - **301ab5a正式apply已成功，开始独立post，禁止再apply。** 唯一session68233已e55809 exit0，status=deployed；回执 `output/settings-account-release-r3-20260911/apply-receipt.json` SHA=`0c9a447b32b403e9cb26758bde92afe9044b29abbfae64a6a5402c60f957d1e5`，candidate_release_persisted/active_switched/evidence_snapshot_initialized均true，secret_exposed=false。独立post及公网前端精确读回尚待完成；浏览器真实账号交互仍待登录，不把apply回执当作这两项已通过。
 
