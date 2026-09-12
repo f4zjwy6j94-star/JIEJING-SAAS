@@ -65,7 +65,28 @@ def validate_prepare_bundle_contract() -> str:
                 f'<script src="./app.js?v={family}-{app_digest}"></script>\n'
             ),
         }
+        ops_fixture_files = {
+            "ops.js": "console.log('public operations fixture');\n",
+            "ops.css": "body { color: #234; }\n",
+            "assets/jiejing-ops-panels.js": "window.publicOpsFixture = true;\n",
+            "assets/jiejing-logo-mark.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>\n',
+            "assets/jiejing-app-icon.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>\n',
+        }
+        ops_hashes = {
+            name: hashlib.sha256(ops_fixture_files[name].encode("utf-8")).hexdigest()
+            for name in ("assets/jiejing-ops-panels.js", "ops.css", "ops.js")
+        }
+        ops_version = "ops-v1-" + hashlib.sha256(
+            json.dumps(ops_hashes, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:12]
+        ops_fixture_files["ops.html"] = (
+            f'<link rel="stylesheet" href="ops.css?v={ops_version}">\n'
+            f'<script src="assets/jiejing-ops-panels.js?v={ops_version}"></script>\n'
+            f'<script src="ops.js?v={ops_version}"></script>\n'
+        )
+        fixture_files.update(ops_fixture_files)
         for name, contents in fixture_files.items():
+            (fixture / name).parent.mkdir(parents=True, exist_ok=True)
             (fixture / name).write_text(contents, encoding="utf-8")
         whitelist = [
             "deploy/apply-staging-patch.sh",
@@ -73,6 +94,7 @@ def validate_prepare_bundle_contract() -> str:
             "app.html",
             "app.js",
             "styles.css",
+            *ops_fixture_files,
         ]
         apply_text = "FILES=(\n" + "".join(f'  "{name}"\n' for name in whitelist) + ")\n"
         (fixture / "deploy" / "apply-staging-patch.sh").write_text(apply_text, encoding="utf-8")
@@ -165,6 +187,11 @@ def validate_prepare_bundle_contract() -> str:
         atomic_frontend_files = {"index.html", "app.html", "app.js", "styles.css"}
         if not isinstance(frontend_hashes, dict) or set(frontend_hashes) != atomic_frontend_files:
             return "bundle manifest does not expose the four frontend hashes"
+        ops_manifest_hashes = bundle_manifest.get("ops_files_sha256")
+        if not isinstance(ops_manifest_hashes, dict) or set(ops_manifest_hashes) != set(ops_fixture_files):
+            return "bundle manifest does not expose exactly the six operations hashes"
+        if ops_manifest_hashes != {name: files_sha256[name] for name in ops_fixture_files}:
+            return "operations hashes do not match the source-bound whitelist"
         bundle_build = subprocess.run(
             [sys.executable, str(prepare)],
             cwd=fixture,
@@ -186,6 +213,8 @@ def validate_prepare_bundle_contract() -> str:
         built_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if built_manifest.get("release_gate_proof") != proof:
             return "built bundle lost or changed the reviewed gate proof"
+        if built_manifest.get("ops_files_sha256") != ops_manifest_hashes:
+            return "built bundle lost or changed the operations asset hashes"
         with zipfile.ZipFile(bundle_path, "r") as archive:
             names = archive.namelist()
             if len(names) != len(set(names)) or set(names) != set(whitelist):

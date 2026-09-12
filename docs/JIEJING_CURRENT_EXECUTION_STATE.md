@@ -31,6 +31,7 @@
 - 安全回执：同目录`persistent-metadata-completion.json` SHA=`9935e45d142ca8a1bc068157c10e4ba9d30cb884e855a5d5f53fee2a7eb33042`；Docker前批`docker-metadata-completion.json` SHA=`ab75081d4438c9a2022ef4071459a5b554d64edc43bec7827a374a47200c5414`。`metadata_collected`仅代表本批元数据取得，`rebuild_verified/retirement_ready=false`。
 - ops候选：14项源码/配置/测试/公开资源文件本地完成，独审发现并修复immutable缓存版本未绑定内容的P2；固定三资产UTF-8/LF聚合内容版本`ops-v1-b0add5273e04`，ops.html仅三个版本引用改变，业务JS/CSS与权限未改。尚未正式部署、切域名或完成外网/登录后台验收。
 - ops本地证据：最终12项ops专项`5fc0c3`、部署通道`466a9f`通过（唯一session84920 exit0）；Compose、四部署自动化专项、secret_scan、node语法此前均通过，14文件及3原用户dirty最终SHA核对`33a412`无漂移。本地验证不替代最终干净候选完整门禁、正常TLS与切换验收。
+- ops提交`0a6b6b51b8919a6dd66a61323b64a26b3693d729`的精确CI run34709281305/job103594934704失败于旧打包测试fixture仍只有四商家文件，未包含新合同要求的六ops资源；不是生产门禁可放宽的理由。失败回执`output/ops-consolidation-release-20260913/exact-ci-failed.json` SHA=`6fa164168e94d11d2927e4c5fa55e768902d01b7dd3407abd0f7e2e7f8e48816`保留，旧候选及runtime未启动完整门禁。仅补测试fixture和ops清单/构建摘要断言，整组前端专项及独审`14c1ee`通过；本次精确提交该测试与索引后，续接新clean候选`C:/Users/57249/Documents/Codex/2026-09-13/jiejing-release-ops-consolidation-r2`及任务证据`output/ops-consolidation-release-20260913/r2`，新精确CI绿后才运行一次完整238项门禁。
 - 未完成：`/usr/local`及其余数据、Docker可写层与未知范围的完整保全及对应恢复验证，独立恢复保管、ops正式发布及迁移验收、最终停写/封存/切换；旧机仍不可退役。
 - 禁止重跑：已成功配置create/fetch/copy/hash、旧6根/补8根/本轮Docker与metadata检查；旧static失败目录、13段密文及失败回执原样保留，不重试或改写成成功。
 - 下一执行顺序：旧Vault隔离材料匹配与剩余持久数据保全按已批准分批方案继续；ops在最终主审通过后精确提交并建立干净候选，绑定该候选完成门禁/核包/部署预演，再依动作授权正式发布及切换验收。不再重扫全机或重复本批还原，不把旧业务服务原样重复运行。
