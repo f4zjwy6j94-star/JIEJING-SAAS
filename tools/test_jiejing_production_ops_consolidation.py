@@ -300,6 +300,8 @@ rollback_application_release
             self.assertEqual('RESTORE:jiejing-ops-frontend' in result.stdout, supported == 1)
 
     def test_actual_surface_gate_rejects_tls_asset_auth_and_apex_failures(self):
+        # Caddy's configured `permanent` redirect is exactly 301, not 308:
+        # https://caddyserver.com/docs/caddyfile/directives/redir
         with tempfile.TemporaryDirectory(prefix='jiejing-ops-surface-', dir=ROOT) as directory:
             root = Path(directory)
             for name in OPS_ASSETS:
@@ -315,18 +317,37 @@ curl() {{
   case "$url" in
     https://ops.jiejing.shop/owner/operations-overview|https://ops.jiejing.shop/owner/billing/domestic/refunds|https://ops.jiejing.shop/permissions/me)
       [[ "$MOCK_FAIL" != auth ]] && printf 401 || printf 200 ;;
-    https://ops.jiejing.shop/owner/not-allowlisted|https://ops.jiejing.shop/app.html) printf 404 ;;
+    https://ops.jiejing.shop/owner/not-allowlisted|https://ops.jiejing.shop/app.html)
+      [[ "$MOCK_FAIL" != ops ]] && printf 404 || printf 200 ;;
     https://app.jiejing.shop/*) [[ "$MOCK_FAIL" != app ]] && printf 404 || printf 200 ;;
-    https://jiejing.shop/*) [[ "$MOCK_FAIL" != apex ]] && printf '%s' '308 https://app.jiejing.shop/migration-check?source=ops' || printf '200 ' ;;
+    https://jiejing.shop/*)
+      case "$MOCK_FAIL" in
+        apex) printf '200 ' ;;
+        apex_308) printf '%s' '308 https://app.jiejing.shop/migration-check?source=ops' ;;
+        apex_302) printf '%s' '302 https://app.jiejing.shop/migration-check?source=ops' ;;
+        apex_location) printf '%s' '301 https://app.jiejing.shop/WRONG_SECRET_SENTINEL' ;;
+        apex_status) printf '%s' 'SECRET_STATUS_SENTINEL https://app.jiejing.shop/migration-check?source=ops' ;;
+        *) printf '%s' '301 https://app.jiejing.shop/migration-check?source=ops' ;;
+      esac ;;
     https://ops.jiejing.shop/*) [[ "$MOCK_FAIL" != asset ]] && printf 'OPS_ASSET\\n' || printf WRONG ;;
     *) return 91 ;;
   esac
 }}
 verify_ops_surface "$PWD/{root.relative_to(ROOT).as_posix()}"
 '''
-            for failure in ("none", "tls", "asset", "auth", "app", "apex"):
-                result = run_bash(f"MOCK_FAIL={failure}\n" + source)
-                self.assertEqual(result.returncode == 0, failure == "none", result.stderr)
+            failures = {
+                "none": None, "tls": "asset_tls_or_http", "asset": "asset_hash",
+                "auth": "anonymous_auth", "ops": "ops_isolation", "app": "app_isolation",
+                "apex": "apex_redirect", "apex_308": "apex_redirect", "apex_302": "apex_redirect",
+                "apex_location": "apex_redirect", "apex_status": "apex_redirect",
+            }
+            for failure, marker in failures.items():
+                with self.subTest(failure=failure):
+                    result = run_bash(f"MOCK_FAIL={failure}\n" + source)
+                    self.assertEqual(result.returncode == 0, failure == "none", result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr, f"OPS_SURFACE_FAILED={marker}\n" if marker else "")
+                    self.assertNotIn("SECRET", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

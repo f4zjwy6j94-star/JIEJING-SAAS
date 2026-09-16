@@ -141,24 +141,24 @@ verify_ops_surface() {
   local source_app="$1" name expected actual code redirect
   local -a local_tls=(--noproxy '*' --resolve ops.jiejing.shop:443:127.0.0.1 --max-time 10 --max-filesize 2097152 -A 'Mozilla/5.0 JiejingProductionOps/1.0')
   for name in ops.html ops.js ops.css assets/jiejing-logo-mark.svg assets/jiejing-app-icon.svg assets/jiejing-ops-panels.js; do
-    expected="$(sha256sum -- "$source_app/$name" | cut -d' ' -f1)" || return 1
-    actual="$(curl -fsS "${local_tls[@]}" "https://ops.jiejing.shop/$name" 2>/dev/null | sha256sum | cut -d' ' -f1)" || return 1
-    [[ "$actual" == "$expected" ]] || return 1
+    expected="$(sha256sum -- "$source_app/$name" 2>/dev/null | cut -d' ' -f1)" || { printf '%s\n' 'OPS_SURFACE_FAILED=asset_source_hash' >&2; return 1; }
+    actual="$(curl -fsS "${local_tls[@]}" "https://ops.jiejing.shop/$name" 2>/dev/null | sha256sum | cut -d' ' -f1)" || { printf '%s\n' 'OPS_SURFACE_FAILED=asset_tls_or_http' >&2; return 1; }
+    [[ "$actual" == "$expected" ]] || { printf '%s\n' 'OPS_SURFACE_FAILED=asset_hash' >&2; return 1; }
   done
   for name in /owner/operations-overview /owner/billing/domestic/refunds /permissions/me; do
-    code="$(curl -sS "${local_tls[@]}" -o /dev/null -w '%{http_code}' "https://ops.jiejing.shop$name" 2>/dev/null)" || return 1
-    [[ "$code" == "401" || "$code" == "403" ]] || return 1
+    code="$(curl -sS "${local_tls[@]}" -o /dev/null -w '%{http_code}' "https://ops.jiejing.shop$name" 2>/dev/null)" || { printf '%s\n' 'OPS_SURFACE_FAILED=anonymous_request' >&2; return 1; }
+    [[ "$code" == "401" || "$code" == "403" ]] || { printf '%s\n' 'OPS_SURFACE_FAILED=anonymous_auth' >&2; return 1; }
   done
   for name in /owner/not-allowlisted /app.html; do
-    code="$(curl -sS "${local_tls[@]}" -o /dev/null -w '%{http_code}' "https://ops.jiejing.shop$name" 2>/dev/null)" || return 1
-    [[ "$code" == "404" ]] || return 1
+    code="$(curl -sS "${local_tls[@]}" -o /dev/null -w '%{http_code}' "https://ops.jiejing.shop$name" 2>/dev/null)" || { printf '%s\n' 'OPS_SURFACE_FAILED=ops_isolation_request' >&2; return 1; }
+    [[ "$code" == "404" ]] || { printf '%s\n' 'OPS_SURFACE_FAILED=ops_isolation' >&2; return 1; }
   done
   for name in /ops.html /ops.js /ops.css /assets/jiejing-ops-panels.js /owner/operations-overview; do
-    code="$(curl -sS --noproxy '*' --resolve app.jiejing.shop:443:127.0.0.1 --max-time 10 -o /dev/null -w '%{http_code}' "https://app.jiejing.shop$name" 2>/dev/null)" || return 1
-    [[ "$code" == "404" ]] || return 1
+    code="$(curl -sS --noproxy '*' --resolve app.jiejing.shop:443:127.0.0.1 --max-time 10 -o /dev/null -w '%{http_code}' "https://app.jiejing.shop$name" 2>/dev/null)" || { printf '%s\n' 'OPS_SURFACE_FAILED=app_isolation_request' >&2; return 1; }
+    [[ "$code" == "404" ]] || { printf '%s\n' 'OPS_SURFACE_FAILED=app_isolation' >&2; return 1; }
   done
-  redirect="$(curl -sS --noproxy '*' --resolve jiejing.shop:443:127.0.0.1 --max-time 10 -o /dev/null -w '%{http_code} %{redirect_url}' 'https://jiejing.shop/migration-check?source=ops' 2>/dev/null)" || return 1
-  [[ "$redirect" == '308 https://app.jiejing.shop/migration-check?source=ops' ]] || return 1
+  redirect="$(curl -sS --noproxy '*' --resolve jiejing.shop:443:127.0.0.1 --max-time 10 -o /dev/null -w '%{http_code} %{redirect_url}' 'https://jiejing.shop/migration-check?source=ops' 2>/dev/null)" || { printf '%s\n' 'OPS_SURFACE_FAILED=apex_request' >&2; return 1; }
+  [[ "$redirect" == '301 https://app.jiejing.shop/migration-check?source=ops' ]] || { printf '%s\n' 'OPS_SURFACE_FAILED=apex_redirect' >&2; return 1; }
 }
 
 validate_evidence_refresh_candidate() {
