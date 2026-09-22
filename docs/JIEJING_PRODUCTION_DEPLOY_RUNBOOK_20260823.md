@@ -27,7 +27,7 @@
 - `ops.jiejing.shop` 和 `jiejing.shop` 都必须在新源站正常验证 TLS。Caddy 继续托管 ACME；不得改为永久手工 `tls cert key`、关闭校验、切换 Cloudflare 代理模式或新增 DNS 凭据来绕过预检。旧 Caddy 中这两个准确域名的有效存储材料由另一批受审后端工具导入；本发布通道不读私钥正文、不创造证书或凭据。
 - 创建正式候选目录前，发布脚本只检查新机 Caddy 固定存储中的公证书 SAN、公开链、至少七天有效期及私钥的文件类型/权限/身份元数据。材料缺失、过期、路径异常都拒绝；这一步不证明公私钥匹配，匹配须由后续正常 TLS 握手证明。
 - 若上一发布不含独立 ops 与 apex，首次迁移 dry-run/apply 必须仍能确认 DNS-only `ops` 解析到旧机 `43.129.205.244`。这只是过渡保护，不是 apex 的代理 IP 证明；首次成功的新发布应成为后续完整回滚基线。
-- 发布后先在新机 loopback 使用真实域名、正常链校验和 `--resolve` 校验六资产哈希、匿名 API 401/403、未知后台路径 404、商家域名下后台资产/API 404，并验证 apex 的保留路径/查询参数 308 跳转。成功回执包含 `OPS_STORED_CERTIFICATE_PREFLIGHT=1`、`OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=1`；dry-run 后者必须为 0。loopback 验收不是外网可达性证明。
+- 发布后先在新机 loopback 使用真实域名、正常链校验和 `--resolve` 校验六资产哈希、匿名 API 401/403、未知后台路径 404、商家域名下后台资产/API 404，并验证 apex 的精确 301 跳转及保留路径/查询参数的 Location。这里与 Caddy `permanent` 及 commit `3b20b33` 的受审验收一致，不再沿用旧文档的 308 要求；不是同时接受任意 3xx。成功回执包含 `OPS_STORED_CERTIFICATE_PREFLIGHT=1`、`OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=1`；dry-run 后者必须为 0。loopback 验收不是外网可达性证明。
 - 切 DNS 前另从外部以 `curl --noproxy '*' --resolve ops.jiejing.shop:443:43.129.169.223 https://ops.jiejing.shop/` 和同方式的 apex 检查正常 TLS，不加 `-k`，并复核六资产/匿名权限/商家隔离。先通过本地后台角色专项与外网源站检查，再按已批准迁移计划切换域名；不在此步骤登录后台执行资金动作。
 - 故障回滚始终先恢复商家应用。上一发布支持 ops 时也恢复 ops 并重验本地 TLS/隔离；不支持时只停止本候选、经名称和 Compose 标签核对的精确运营容器 ID，不删除容器、卷或共享数据库。旧发布缺 ops/apex 时，即使 DNS-only `ops` 仍在旧机，也不能据此判断代理中的 apex 已回旧源站：输出 `APPLICATION_RELEASE_RESTORED=1` 与 `OPS_APEX_TRANSITION_ROLLBACK_REQUIRES_VERIFICATION=1`，整体回滚仍判失败，须核对两个准确 DNS 记录并复验。若 `ops` 不在旧机，另输出 `OPS_ROLLBACK_NEEDS_DNS_CUTBACK=1`。不得把商家恢复误报为全部恢复。
 - 旧机退出前必须已有可独立恢复的材料保管、旧 Vault v3 材料匹配、所有未决数据保全和稳定观察证据，并至少有一个同时支持 ops/apex 的可回滚发布。此合同本身不授权停旧机、删除数据或放弃续费。

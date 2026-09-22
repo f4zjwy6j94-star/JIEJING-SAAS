@@ -43,11 +43,44 @@ def run_bash(script):
     if not bash: raise AssertionError('bash is required for operations runtime contracts')
     os_keys = {"SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "ALLUSERSPROFILE", "COMPUTERNAME", "USERNAME", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432", "OS", "HOME", "PATH", "PATHEXT"}
     env = {key: value for key, value in os.environ.items() if key.upper() in os_keys}
-    result = subprocess.run([str(bash), "--noprofile", "--norc", "-s"], input=script.replace('\r\n', '\n').encode('utf-8'), capture_output=True, cwd=ROOT, env=env, timeout=30)
-    return types.SimpleNamespace(returncode=result.returncode, stdout=result.stdout.decode('utf-8', errors='replace'), stderr=result.stderr.decode('utf-8', errors='replace'))
+    # WSL may report host-launch warnings before Bash starts. Capture the
+    # script's stderr inside Bash; retain the unfiltered launcher bytes apart.
+    # Exact TLS/hash/auth/redirect error assertions below remain unchanged.
+    with tempfile.TemporaryDirectory(prefix='jiejing-ops-bash-', dir=ROOT) as directory:
+        script_stderr = Path(directory) / 'script.stderr'
+        capture_path = script_stderr.relative_to(ROOT).as_posix()
+        payload = f'exec 2>"$PWD/{capture_path}"\n' + script.replace('\r\n', '\n')
+        result = subprocess.run([str(bash), "--noprofile", "--norc", "-s"], input=payload.encode('utf-8'), capture_output=True, cwd=ROOT, env=env, timeout=30)
+        if not script_stderr.is_file():
+            raise AssertionError('Bash contract script did not start')
+        stderr = script_stderr.read_bytes()
+    return types.SimpleNamespace(returncode=result.returncode, stdout=result.stdout.decode('utf-8', errors='replace'), stderr=stderr.decode('utf-8', errors='replace'), launcher_stderr=result.stderr)
 
 
 class ProductionOpsConsolidationTest(unittest.TestCase):
+    def test_bash_contract_keeps_launcher_diagnostics_separate_from_script_errors(self):
+        launch = subprocess.run
+        warning = b"HOST_LAUNCHER_DIAGNOSTIC\n"
+
+        def noisy_launch(*args, **kwargs):
+            result = launch(*args, **kwargs)
+            return subprocess.CompletedProcess(
+                result.args, result.returncode, result.stdout, warning + result.stderr,
+            )
+
+        with patch('subprocess.run', side_effect=noisy_launch):
+            result = run_bash("printf 'SCRIPT_OUT'; printf 'SCRIPT_ERROR' >&2; exit 7\n")
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(result.stdout, 'SCRIPT_OUT')
+        self.assertEqual(result.stderr, 'SCRIPT_ERROR')
+        self.assertIn(warning, result.launcher_stderr)
+
+    def test_bash_contract_rejects_launcher_success_without_script_start(self):
+        not_started = subprocess.CompletedProcess(['bash'], 0, b'', b'LAUNCH_ONLY')
+        with patch('subprocess.run', return_value=not_started):
+            with self.assertRaisesRegex(AssertionError, 'Bash contract script did not start'):
+                run_bash('exit 0\n')
+
     def test_operations_service_is_isolated_and_serves_only_its_release_assets(self):
         compose = (ROOT / "deploy/docker-compose.production-pilot.yml").read_text()
         match = re.search(r"^  jiejing-ops-frontend:\n(.*?)(?=^  [a-z]|^volumes:)", compose, re.M | re.S)
