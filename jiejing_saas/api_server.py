@@ -1312,13 +1312,83 @@ def _is_signed_media_source_url(value: Any) -> bool:
 
 
 def _readiness_has_startup_blockers(readiness: object) -> bool:
-    """Fail closed on malformed readiness, but do not turn warnings into outages."""
+    """Keep unsafe cold starts closed without turning expired drill proof into an outage."""
     if not isinstance(readiness, dict):
         return True
     blocker_count = readiness.get("blocker_count")
     if type(blocker_count) is not int or blocker_count < 0:
         return True
-    return blocker_count > 0
+    return blocker_count > 0 and not _expired_vault_recovery_evidence_only(readiness)
+
+
+def _expired_vault_recovery_evidence_only(readiness: dict[str, Any]) -> bool:
+    """A narrow availability exception; it neither approves launch nor changes capabilities."""
+    if not (
+        readiness.get("environment") == "production"
+        and readiness.get("reason") == "readiness_blocked"
+        and readiness.get("degraded", False) is False
+        and all(readiness.get(key) is False for key in (
+            "production_ready", "beta_ready", "can_accept_real_customers", "secret_exposed",
+            "real_platform_writes_enabled", "requested_real_platform_writes",
+        ))
+        and type(readiness.get("blocker_count")) is int and readiness["blocker_count"] == 1
+        and type(readiness.get("warning_count")) is int and readiness["warning_count"] == 0
+    ):
+        return False
+    items = readiness.get("items")
+    if not isinstance(items, list) or not items:
+        return False
+    by_key: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict) or not all(
+            isinstance(item.get(key), str) and bool(item[key].strip())
+            for key in ("key", "label", "status", "severity", "detail", "next_action")
+        ) or item["key"] in by_key:
+            return False
+        if item["key"] == "backup_restore":
+            if item["severity"] != "blocker" or item["status"] != "blocked_backup_restore_not_ready":
+                return False
+        elif item["severity"] != "info":
+            return False
+        by_key[item["key"]] = item
+    # Verify the actual safety foundations, not all business info labels (many
+    # legitimate info states are named managed_adapter_live, exercised, etc.).
+    required = {
+        "environment": "ready", "session_secret": "ready", "cors_origin": "ready",
+        "team_permission_boundary": "role_boundary_ready", "database": "ready",
+        "database_adapter_contract": "managed_adapter_live",
+        "database_migration_plan": "migration_shape_ready", "queue": "postgres_durable_queue_ready",
+        "queue_adapter_contract": "managed_queue_live", "queue_worker_plan": "ready",
+        "database_live_probe": "ready", "queue_runtime_health": "ready", "worker_runtime_health": "ready",
+        "infrastructure_drivers": "ready", "independent_runtime": "ready", "controlled_bridges": "ready",
+        "vault": "ready", "vault_adapter_contract": "adapter_contract_ready", "runtime_workers": "ready",
+        "monitoring_alerting": "cloud_monitoring_ready", "tenant_audit": "ready", "billing_quota": "ready",
+        "backup_restore": "blocked_backup_restore_not_ready",
+    }
+    if any(by_key.get(key, {}).get("status") != status for key, status in required.items()):
+        return False
+    provider = readiness.get("provider_status")
+    backup = provider.get("backup") if isinstance(provider, dict) else None
+    if not isinstance(backup, dict) or not (
+        backup.get("contract_version") == "2026-05-18-backup-restore-boundary"
+        and backup.get("backup_ready_for_paid_launch") is False
+        and backup.get("secret_exposed") is False
+        and backup.get("blockers") == ["vault_restore_drill_overdue"]
+    ):
+        return False
+    health = readiness.get("operational_health")
+    if not isinstance(health, dict) or not (
+        health.get("contract_version") == "2026-06-17-deep-operational-health"
+        and health.get("environment") == "production" and health.get("status") == "ready"
+        and health.get("secret_exposed") is False
+        and health.get("blockers") == [] and health.get("warnings") == []
+    ):
+        return False
+    return all(
+        isinstance(health.get(key), dict)
+        and health[key].get("status") == "ready" and health[key].get("secret_exposed") is False
+        for key in ("database_live_probe", "redis_live_probe", "vault_live_probe")
+    )
 
 
 def _production_controlled_unpublished_draft_boot_allowed(settings: SaaSSettings) -> bool:
