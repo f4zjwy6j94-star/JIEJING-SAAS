@@ -188,6 +188,7 @@ def run_public_readiness_json_fixture(bash: str, serialized_payload: str) -> sub
           printf '%s\\n' {shlex.quote(serialized_payload)}
         }}
         public_readiness_ready
+        printf '%s\\n' "${{PUBLIC_READINESS_REPORT:-}}"
         '''
     )
     return subprocess.run(
@@ -443,6 +444,119 @@ def public_launch_readiness_payload() -> dict[str, object]:
     return payload
 
 
+def backup_blocked_readiness_payload() -> dict[str, object]:
+    payload = public_launch_readiness_payload()
+    readiness = payload["readiness"]
+    readiness.update(
+        production_ready=False, beta_ready=False, can_accept_real_customers=False,
+        blocker_count=1,
+        items=[{
+            "key": "backup_restore", "label": "Backup and restore",
+            "status": "blocked_backup_restore_not_ready", "severity": "blocker",
+            "detail": "Backup and restore evidence is not fully proven.",
+            "next_action": "Complete a real restore drill before paid launch.",
+        }],
+    )
+    return payload
+
+
+def validate_backup_blocked_classification(bash: str) -> list[str]:
+    result = run_public_readiness_fixture(bash, backup_blocked_readiness_payload())
+    expected = {
+        "PUBLIC_READINESS_CONTRACT_STATUS=verified",
+        "COMMERCIAL_READINESS_STATUS=blocked",
+        "COMMERCIAL_READINESS_REASON=backup_restore",
+        "COMMERCIAL_BLOCKER_COUNT=1",
+        "COMMERCIAL_WARNING_COUNT=0",
+        "COMMERCIAL_PRODUCTION_READY=false",
+        "COMMERCIAL_BETA_READY=false",
+        "COMMERCIAL_CAN_ACCEPT_REAL_CUSTOMERS=false",
+        "COMMERCIAL_PUBLIC_CHARGING_ALLOWED=true",
+    }
+    lines = result.stdout.decode("utf-8").splitlines()
+    if result.returncode != 0 or len(lines) != len(expected) or set(lines) != expected:
+        return [f"valid backup blocker must preserve commercial hold after successful collection: exit_{result.returncode}"]
+    failures = []
+    for path, value in (
+        (("production_ready",), True), (("beta_ready",), True),
+        (("can_accept_real_customers",), True), (("blocker_count",), 0),
+        (("blocker_count",), True), (("warning_count",), 1),
+        (("items", 0, "key"), "unknown"),
+        (("items", 0, "status"), "blocked_vault_unseal_custody_not_ready"),
+        (("items", 0, "severity"), "warning"), (("items", 0, "detail"), {}),
+        (("items", 0, "next_action"), ""), (("secret_exposed",), True),
+        (("real_platform_writes_enabled",), True),
+        (("provider_status", "billing", "triggers_real_charge"), True),
+        (("provider_status", "billing", "triggers_real_refund"), True),
+        (("provider_status", "billing", "public_charging_allowed"), False),
+        (("provider_status", "billing", "frontend_can_grant_quota"), True),
+        (("operational_health", "status"), "blocked"),
+    ):
+        payload = backup_blocked_readiness_payload()
+        cursor = payload["readiness"]
+        for segment in path[:-1]:
+            cursor = cursor[segment]
+        cursor[path[-1]] = value
+        rejected = run_public_readiness_fixture(bash, payload)
+        if rejected.returncode == 0 or rejected.stdout:
+            failures.append("backup hold must silently reject " + ".".join(map(str, path)))
+    for extra in (
+        {"key": "monitoring_alerting", "label": "Monitoring", "status": "blocked", "severity": "blocker", "detail": "pending", "next_action": "verify"},
+        copy.deepcopy(backup_blocked_readiness_payload()["readiness"]["items"][0]),
+    ):
+        payload = backup_blocked_readiness_payload()
+        payload["readiness"]["items"].append(extra)
+        payload["readiness"]["blocker_count"] = 2
+        if run_public_readiness_fixture(bash, payload).returncode == 0:
+            failures.append("backup hold must not admit extra or duplicate blockers")
+    return failures
+
+
+def validate_readiness_error_convergence(bash: str) -> list[str]:
+    failures = []
+    serialized = json.dumps(backup_blocked_readiness_payload(), separators=(",", ":"))
+    for outcome in ("backup", "network", "malformed"):
+        fixture = f'''set -euo pipefail
+source deploy/jiejing-production-evidence-auto-refresh.sh
+fixture_root="$(mktemp -d)"
+trap 'test -n "$fixture_root" && rm -r -- "$fixture_root"' EXIT
+counter="$fixture_root/attempts"
+printf 0 >"$counter"
+PUBLIC_READINESS_MAX_ATTEMPTS=3
+PUBLIC_READINESS_RETRY_SECONDS=0
+PUBLIC_READINESS_REPORT=stale_report_must_be_cleared
+curl() {{
+  count=$(<"$counter"); count=$((count+1)); printf '%s' "$count" >"$counter"
+  if [[ "$count" == 1 || {outcome} == network ]]; then return 7; fi
+  if [[ "$count" == 2 || {outcome} == malformed ]]; then printf '{{invalid'; return 0; fi
+  printf '%s\\n' {shlex.quote(serialized)}
+}}
+if wait_for_public_readiness; then rc=0; else rc=$?; fi
+[[ "$(<"$counter")" == 3 ]] || exit 91
+if [[ {outcome} == backup ]]; then
+  [[ "$rc" == 0 && "$PUBLIC_READINESS_REPORT" == *COMMERCIAL_READINESS_REASON=backup_restore* ]] || exit 92
+else
+  [[ "$rc" != 0 && -z "$PUBLIC_READINESS_REPORT" ]] || exit 93
+fi
+'''
+        result = subprocess.run([bash, "-s"], cwd=ROOT, input=fixture.encode("utf-8"),
+                                capture_output=True, check=False, timeout=30)
+        if result.returncode != 0:
+            failures.append(f"bounded readiness sequence failed: {outcome}, exit_{result.returncode}")
+    return failures
+
+
+def validate_readiness_items_types(bash: str) -> list[str]:
+    failures = []
+    for invalid in ({}, None, False, 0, ""):
+        payload = public_launch_readiness_payload()
+        payload["readiness"]["items"] = invalid
+        rejected = run_public_readiness_fixture(bash, payload)
+        if rejected.returncode == 0 or rejected.stdout:
+            failures.append("public ready classification must reject items=" + json.dumps(invalid))
+    return failures
+
+
 def mutated_public_readiness(path: tuple[str | int, ...], value: object) -> dict[str, object]:
     payload = current_public_readiness_payload()
     cursor: Any = payload
@@ -505,10 +619,13 @@ def run_runtime_image_fixture(
             drift_digest=0
             probe_failure=""
             deep_health_payload='{{}}'
+            admission_payload={shlex.quote(json.dumps(backup_blocked_readiness_payload(), separators=(",", ":")))}
+            main_phase=""
 
             stat() {{
               local actual
               actual="$(command stat "$@")" || return $?
+              if [[ "${{2:-}}" == '%U:%G' ]]; then printf '%s\n' root:root; return; fi
               # The isolated /tmp parent stands in for production's root-owned /opt.
               if [[ "${{@: -1}}" == /tmp ]]; then actual="root:root 755"; fi
               if [[ "$bad_directory_owner" == 1 ]]; then printf '%s\n' "untrusted:untrusted ${{actual##* }}"; return; fi
@@ -516,12 +633,18 @@ def run_runtime_image_fixture(
             }}
 
             curl() {{
+              if [[ "${{@: -1}}" == */readiness/product-saas ]]; then
+                if [[ "$main_phase" == final_identity ]]; then touch "$fixture_root/identity-drift"; fi
+                printf '%s\n' "$admission_payload"
+                return 0
+              fi
               printf '%s\n' "$deep_health_payload"
             }}
 
             docker() {{
               if [[ "${{1:-}}" == ps ]]; then
                 if [[ "$*" == *jiejing-saas* ]]; then
+                  if [[ -f "$fixture_root/identity-drift" ]]; then printf '%s\n' api-unexpected; return; fi
                   printf '%s\n' "$api_container"
                 else
                   printf '%s\n' "$worker_container"
@@ -891,6 +1014,39 @@ def run_runtime_image_fixture(
             if run_refresh_phases >/dev/null 2>&1; then exit 89; fi
             [[ "$LAST_BLOCKER" == environment_drift_detected && "$(<"$fixture_root/side-effects")" == probe ]]
             drift_digest=0
+
+            # Execute the actual entrypoint through collection, public parsing and
+            # final identity checks. The existing cloud/Docker boundaries stay fake.
+            ACTIVE_LINK="$fixture_root/app"
+            RELEASE_ROOT="$fixture_root/releases"
+            LOCK_FILE="$fixture_root/maintenance.lock"
+            ln -s "$active_app" "$ACTIVE_LINK"
+            PUBLIC_READINESS_MAX_ATTEMPTS=1
+            for main_phase in success cos alarm cls snapshot final_identity; do
+              probe_failure=""
+              snapshot_failure=0
+              rm -f "$fixture_root/identity-drift"
+              case "$main_phase" in
+                cos) probe_failure=cos-backup-probe ;;
+                alarm) probe_failure=provider-alarms ;;
+                cls) probe_failure=provider-cls-probe ;;
+                snapshot) snapshot_failure=1 ;;
+              esac
+              if main_output="$(main)"; then main_rc=0; else main_rc=$?; fi
+              if [[ "$main_phase" == success ]]; then
+                [[ "$main_rc" == 0 ]] || {{ printf 'MAIN_FAILURE=%s\n' "$main_output"; exit 94; }}
+                [[ "$(grep -Fxc 'JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success' <<<"$main_output")" == 1 ]]
+                [[ "$(grep -Fxc 'COMMERCIAL_READINESS_STATUS=blocked' <<<"$main_output")" == 1 ]]
+                [[ "$(grep -Fxc 'COMMERCIAL_PRODUCTION_READY=false' <<<"$main_output")" == 1 ]]
+                [[ "$(grep -Fxc 'COMMERCIAL_PUBLIC_CHARGING_ALLOWED=true' <<<"$main_output")" == 1 ]]
+                [[ "$(grep -Fxc 'SECRET_EXPOSED=false' <<<"$main_output")" == 1 ]]
+              else
+                [[ "$main_rc" == 2 ]] || exit 95
+                ! grep -Fqx 'JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success' <<<"$main_output"
+                ! grep -Fq 'COMMERCIAL_READINESS_STATUS=' <<<"$main_output"
+              fi
+              ! grep -q '^compose-up:' "$fixture_root/side-effects"
+            done
             printf '%s\n' RUNTIME_IMAGE_FIXTURE_PASS
             '''
         )
@@ -1047,7 +1203,7 @@ def main() -> int:
         'readiness.get("internal_detail_required") is True',
         'readiness.get("environment") == "production"',
         'type(blocker_count) is int',
-        'blocker_count == len(blockers) == 0',
+        'blocker_count == len(blockers) == (1 if public_backup_hold else 0)',
         'type(warning_count) is int',
         'warning_count == len(warnings)',
         'set(item_by_key) == {"billing_quota"}',
@@ -1062,7 +1218,8 @@ def main() -> int:
         'billing.get("public_charging_allowed") is False',
         'readiness.get("real_platform_writes_enabled") is False',
         'readiness.get("secret_exposed") is False',
-        'READINESS_STATUS=verified',
+        'PUBLIC_READINESS_CONTRACT_STATUS',
+        'COMMERCIAL_READINESS_STATUS',
         'JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success',
         'SECRET_EXPOSED=false',
     )
@@ -1169,6 +1326,12 @@ def main() -> int:
         return fail("provider probe tooling must not depend on the Worker image")
 
     bash = shutil.which("bash")
+    if bash:
+        classification_failures = (validate_backup_blocked_classification(bash)
+                                   + validate_readiness_error_convergence(bash)
+                                   + validate_readiness_items_types(bash))
+        if classification_failures:
+            return fail("; ".join(classification_failures))
     if bash:
         syntax = subprocess.run(
             [bash, "-n", "deploy/jiejing-production-evidence-auto-refresh.sh"],

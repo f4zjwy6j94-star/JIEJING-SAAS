@@ -195,7 +195,7 @@ def main() -> int:
     return 0
 
 
-def parse_remote_stdout_contract(output: str, mode: str, expected_source_sha: str) -> dict[str, bool]:
+def parse_remote_stdout_contract(output: str, mode: str, expected_source_sha: str) -> dict[str, Any]:
     lines = [line.strip() for line in output.splitlines()]
 
     def receipt_values(key: str) -> list[str]:
@@ -217,7 +217,7 @@ def parse_remote_stdout_contract(output: str, mode: str, expected_source_sha: st
         raise ValueError(f"receipt_count:{opposite_marker}:{len(opposite_values)}")
     if exact_receipt_value("SOURCE_COMMIT") != expected_source_sha:
         raise ValueError("source_commit_mismatch")
-    observed: dict[str, bool] = {}
+    observed: dict[str, Any] = {}
     for raw_line in lines:
         key, separator, raw_value = raw_line.partition("=")
         if not separator or key not in REMOTE_BOOLEAN_CONTRACT:
@@ -247,6 +247,34 @@ def parse_remote_stdout_contract(output: str, mode: str, expected_source_sha: st
     expected_applied = mode == "apply" and observed["private_env_normalization_required"]
     if observed["private_env_normalization_applied"] is not expected_applied:
         raise ValueError("normalization_apply_mismatch")
+    readiness_fields = (
+        "PUBLIC_READINESS_CONTRACT_STATUS", "COMMERCIAL_READINESS_STATUS",
+        "COMMERCIAL_READINESS_REASON", "COMMERCIAL_BLOCKER_COUNT",
+        "COMMERCIAL_WARNING_COUNT", "COMMERCIAL_PRODUCTION_READY",
+        "COMMERCIAL_BETA_READY", "COMMERCIAL_CAN_ACCEPT_REAL_CUSTOMERS",
+        "COMMERCIAL_PUBLIC_CHARGING_ALLOWED",
+    )
+    readiness_lines = [line for line in lines if line.startswith(("PUBLIC_READINESS_", "COMMERCIAL_"))]
+    if mode == "dry_run":
+        if readiness_lines:
+            raise ValueError("dry_run_cannot_claim_commercial_readiness")
+        return observed
+    values = tuple(exact_receipt_value(field) for field in readiness_fields)
+    supported = {
+        ("verified", "ready", "none", "0", "0", "true", "true", "true", "true"),
+        ("verified", "blocked", "backup_restore", "1", "0", "false", "false", "false", "true"),
+        ("verified", "blocked", "billing_quota", "0", "1", "false", "true", "false", "false"),
+    }
+    if values not in supported or len(readiness_lines) != len(readiness_fields):
+        raise ValueError("commercial_readiness_receipt_invalid")
+    observed["commercial_readiness"] = {
+        "contract_verified": True,
+        "status": values[1], "reason": values[2],
+        "blocker_count": int(values[3]), "warning_count": int(values[4]),
+        "production_ready": values[5] == "true", "beta_ready": values[6] == "true",
+        "can_accept_real_customers": values[7] == "true",
+        "public_charging_allowed": values[8] == "true",
+    }
     return observed
 
 

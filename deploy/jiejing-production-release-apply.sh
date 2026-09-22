@@ -1163,8 +1163,58 @@ install_evidence_refresh_units() {
   [[ "$(systemctl is-enabled "$EVIDENCE_REFRESH_TIMER" 2>/dev/null || true)" == "enabled" ]] || return 1
 }
 
+verify_evidence_refresh_journal() {
+  python3 -c '
+from collections import Counter
+import sys
+
+lines = sys.stdin.read().splitlines()
+counts = Counter(lines)
+fixed = {
+    "LIVE_RELEASE_GUARD_STATUS=ready": 1,
+    "COS_PROBE_STATUS=verified": 1,
+    "PROVIDER_ALARM_STATUS=verified": 1,
+    "CLS_PROBE_STATUS=verified": 1,
+    "RUNTIME_EVIDENCE_SNAPSHOT_STATUS=verified": 1,
+    "API_RUNTIME_STATUS=unchanged": 2,
+    "WORKER_RUNTIME_STATUS=unchanged": 2,
+    "JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success": 1,
+    "SECRET_EXPOSED=false": 1,
+    }
+fields = (
+    "PUBLIC_READINESS_CONTRACT_STATUS", "COMMERCIAL_READINESS_STATUS",
+    "COMMERCIAL_READINESS_REASON", "COMMERCIAL_BLOCKER_COUNT",
+    "COMMERCIAL_WARNING_COUNT", "COMMERCIAL_PRODUCTION_READY",
+    "COMMERCIAL_BETA_READY", "COMMERCIAL_CAN_ACCEPT_REAL_CUSTOMERS",
+    "COMMERCIAL_PUBLIC_CHARGING_ALLOWED",
+)
+report = {}
+for field in fields:
+    matches = [line[len(field) + 1:] for line in lines if line.startswith(field + "=")]
+    if len(matches) != 1:
+        raise SystemExit(1)
+    report[field] = matches[0]
+allowed = {
+    ("verified", "ready", "none", "0", "0", "true", "true", "true", "true"),
+    ("verified", "blocked", "backup_restore", "1", "0", "false", "false", "false", "true"),
+    ("verified", "blocked", "billing_quota", "0", "1", "false", "true", "false", "false"),
+    }
+if tuple(report.values()) not in allowed or any(counts[line] != number for line, number in fixed.items()):
+    raise SystemExit(1)
+report_lines = [f"{field}={report[field]}" for field in fields]
+accepted = set(fixed) | set(report_lines)
+prefixes = tuple(line.partition("=")[0] + "=" for line in fixed) + (
+    "PUBLIC_READINESS_", "COMMERCIAL_", "JIEJING_PRODUCTION_EVIDENCE_REFRESH_", "SECRET_EXPOSED=",
+)
+if any(line.startswith(prefixes) and line not in accepted for line in lines):
+    raise SystemExit(1)
+print("\n".join(report_lines))
+' 2>/dev/null
+}
+
 verify_first_evidence_refresh_oneshot() {
   local before_invocation after_invocation result exec_main_status journal_output attempt secret_safe_count
+  FIRST_ONESHOT_READINESS_REPORT=""
   before_invocation="$(systemctl show "$EVIDENCE_REFRESH_SERVICE" -p InvocationID --value 2>/dev/null || true)"
   systemctl start "$EVIDENCE_REFRESH_SERVICE" || return 1
   after_invocation="$(systemctl show "$EVIDENCE_REFRESH_SERVICE" -p InvocationID --value 2>/dev/null || true)"
@@ -1182,7 +1232,9 @@ verify_first_evidence_refresh_oneshot() {
       && ! grep -Fqx 'JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=blocked' <<<"$journal_output" \
       && ! grep -Fq 'JIEJING_PRODUCTION_EVIDENCE_REFRESH_BLOCKER=' <<<"$journal_output" \
       && ! grep -Fqx 'SECRET_EXPOSED=true' <<<"$journal_output"; then
-      return 0
+      if FIRST_ONESHOT_READINESS_REPORT="$(verify_evidence_refresh_journal <<<"$journal_output")"; then
+        return 0
+      fi
     fi
     sleep 1
   done
@@ -1395,6 +1447,7 @@ trap - ERR
 release_deploy_lock
 
 printf '%s\n' "JIEJING_PRODUCTION_DEPLOY_APPLIED=1"
+printf '%s\n' "$FIRST_ONESHOT_READINESS_REPORT"
 printf '%s\n' "CANDIDATE_RELEASE_PERSISTED=1"
 printf '%s\n' "ACTIVE_SWITCHED=1"
 printf 'SOURCE_COMMIT=%s\n' "$SOURCE_SHA"

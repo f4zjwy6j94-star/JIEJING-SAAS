@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -865,7 +866,7 @@ def validate_remote_stdout_contract() -> list[str]:
         .replace("PRIVATE_ENV_NORMALIZATION_APPLIED=0", "PRIVATE_ENV_NORMALIZATION_APPLIED=1")
         .replace("EVIDENCE_SNAPSHOT_INITIALIZED=0", "EVIDENCE_SNAPSHOT_INITIALIZED=1")
         .replace("OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=0", "OPS_LOCAL_TLS_ASSETS_ISOLATION_VERIFIED=1")
-    )
+    ) + "\n" + commercial_report_fixture("ready")
     try:
         parsed_apply = module.parse_remote_stdout_contract(apply_output, "apply", source_sha)
     except ValueError as exc:
@@ -876,8 +877,41 @@ def validate_remote_stdout_contract() -> list[str]:
             and parsed_apply["active_switched"]
             and parsed_apply["private_env_normalization_applied"]
             and parsed_apply.get("evidence_snapshot_initialized") is True
+            and parsed_apply.get("commercial_readiness", {}).get("status") == "ready"
         ):
             failures.append(f"apply stdout contract parsed incorrectly:{parsed_apply}")
+    blocked_output = apply_output.replace(commercial_report_fixture("ready"), commercial_report_fixture("backup_restore"))
+    try:
+        blocked = module.parse_remote_stdout_contract(blocked_output, "apply", source_sha)
+        if blocked.get("commercial_readiness") != {
+            "contract_verified": True, "status": "blocked", "reason": "backup_restore",
+            "blocker_count": 1, "warning_count": 0, "production_ready": False,
+            "beta_ready": False, "can_accept_real_customers": False,
+            "public_charging_allowed": True,
+        }:
+            failures.append("deployed receipt must preserve the commercial backup hold and charging configuration")
+    except ValueError as exc:
+        failures.append(f"valid blocked deployment receipt rejected:{exc}")
+    for broken in (
+        apply_output.replace(commercial_report_fixture("ready"), ""),
+        blocked_output + "\nCOMMERCIAL_READINESS_STATUS=blocked",
+        blocked_output + "\nCOMMERCIAL_UNKNOWN=synthetic",
+        blocked_output.replace("COMMERCIAL_BLOCKER_COUNT=1", "COMMERCIAL_BLOCKER_COUNT=true"),
+        blocked_output.replace("COMMERCIAL_PRODUCTION_READY=false", "COMMERCIAL_PRODUCTION_READY=true"),
+        blocked_output.replace("COMMERCIAL_PUBLIC_CHARGING_ALLOWED=true", "COMMERCIAL_PUBLIC_CHARGING_ALLOWED=false"),
+        blocked_output.replace("COMMERCIAL_READINESS_REASON=backup_restore", "COMMERCIAL_READINESS_REASON=unknown"),
+    ):
+        try:
+            module.parse_remote_stdout_contract(broken, "apply", source_sha)
+        except ValueError:
+            continue
+        failures.append("missing, conflicting or unknown commercial receipt was accepted")
+    try:
+        module.parse_remote_stdout_contract(dry_output + "\n" + commercial_report_fixture("ready"), "dry_run", source_sha)
+    except ValueError:
+        pass
+    else:
+        failures.append("dry-run must not claim a commercial readiness observation")
     try:
         module.parse_remote_stdout_contract(
             apply_output.replace("JIEJING_PRODUCTION_DEPLOY_APPLIED=1\n", ""),
@@ -1473,6 +1507,114 @@ rm -rf --one-file-system -- "$resolved"
         temp,
         name,
     )
+
+
+def commercial_report_fixture(outcome: str) -> str:
+    states = {
+        "ready": ("ready", "none", "0", "0", "true", "true", "true", "true"),
+        "backup_restore": ("blocked", "backup_restore", "1", "0", "false", "false", "false", "true"),
+        "billing_quota": ("blocked", "billing_quota", "0", "1", "false", "true", "false", "false"),
+    }
+    fields = ("COMMERCIAL_READINESS_STATUS", "COMMERCIAL_READINESS_REASON",
+              "COMMERCIAL_BLOCKER_COUNT", "COMMERCIAL_WARNING_COUNT",
+              "COMMERCIAL_PRODUCTION_READY", "COMMERCIAL_BETA_READY",
+              "COMMERCIAL_CAN_ACCEPT_REAL_CUSTOMERS", "COMMERCIAL_PUBLIC_CHARGING_ALLOWED")
+    return "PUBLIC_READINESS_CONTRACT_STATUS=verified\n" + "\n".join(
+        f"{key}={value}" for key, value in zip(fields, states[outcome], strict=True)
+    )
+
+
+def evidence_journal_fixture(outcome: str) -> str:
+    return "\n".join((
+        "LIVE_RELEASE_GUARD_STATUS=ready", "COS_PROBE_STATUS=verified",
+        "PROVIDER_ALARM_STATUS=verified", "CLS_PROBE_STATUS=verified",
+        "RUNTIME_EVIDENCE_SNAPSHOT_STATUS=verified",
+        "API_RUNTIME_STATUS=unchanged", "WORKER_RUNTIME_STATUS=unchanged",
+        "API_RUNTIME_STATUS=unchanged", "WORKER_RUNTIME_STATUS=unchanged",
+        commercial_report_fixture(outcome),
+        "JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success", "SECRET_EXPOSED=false",
+    ))
+
+
+def run_first_oneshot_fixture(apply: str, journal: str, *, start_rc: int = 0,
+                              result: str = "success", status: str = "0",
+                              after_id: str = "b" * 32) -> subprocess.CompletedProcess[str]:
+    names = ["verify_first_evidence_refresh_oneshot"]
+    if "verify_evidence_refresh_journal()" in apply:
+        names.insert(0, "verify_evidence_refresh_journal")
+    functions = extract_bash_functions(apply, tuple(names))
+    script = f'''set -euo pipefail
+{functions}
+EVIDENCE_REFRESH_SERVICE=fixture.service
+STARTED=0
+JOURNAL={shlex.quote(journal)}
+systemctl() {{
+  if [[ "$1" == start ]]; then STARTED=1; return {start_rc}; fi
+  case "$*" in
+    *InvocationID*) if [[ "$STARTED" == 0 ]]; then printf '%s\\n' {'a' * 32}; else printf '%s\\n' {shlex.quote(after_id)}; fi ;;
+    *ExecMainStatus*) printf '%s\\n' {shlex.quote(status)} ;;
+    *Result*) printf '%s\\n' {shlex.quote(result)} ;;
+    *) return 91 ;;
+  esac
+}}
+journalctl() {{
+  [[ "$1" == '_SYSTEMD_INVOCATION_ID={after_id}' ]] || return 92
+  printf '%s\\n' "$JOURNAL"
+}}
+sleep() {{ :; }}
+verify_first_evidence_refresh_oneshot
+printf '%s\\n' "${{FIRST_ONESHOT_READINESS_REPORT:-}}"
+'''
+    completed = subprocess.run([require_bash_contract(), "-s"], cwd=ROOT,
+                               input=script.encode("utf-8"), capture_output=True,
+                               check=False, timeout=30)
+    return subprocess.CompletedProcess(
+        completed.args, completed.returncode,
+        completed.stdout.decode("utf-8", errors="replace"),
+        completed.stderr.decode("utf-8", errors="replace"),
+    )
+
+
+def validate_first_oneshot_classification(apply: str) -> list[str]:
+    failures = []
+    legacy_journal = "JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success\nSECRET_EXPOSED=false"
+    missing = run_first_oneshot_fixture(apply, legacy_journal)
+    if missing.returncode == 0:
+        return ["first oneshot must reject success without a verified commercial classification"]
+    for outcome in ("ready", "backup_restore", "billing_quota"):
+        accepted = run_first_oneshot_fixture(apply, evidence_journal_fixture(outcome))
+        if accepted.returncode != 0 or accepted.stdout.strip() != commercial_report_fixture(outcome):
+            failures.append(f"first oneshot must preserve verified {outcome}: exit_{accepted.returncode}")
+    valid = evidence_journal_fixture("backup_restore")
+    invalid = [
+        ("missing collection", valid.replace("COS_PROBE_STATUS=verified\n", "")),
+        ("missing snapshot", valid.replace("RUNTIME_EVIDENCE_SNAPSHOT_STATUS=verified\n", "")),
+        ("missing final runtime", valid.replace("API_RUNTIME_STATUS=unchanged\n", "", 1)),
+        ("duplicate success", valid + "\nJIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success"),
+        ("skipped", valid + "\nJIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=skipped"),
+        ("refresh failure", valid + "\nJIEJING_PRODUCTION_EVIDENCE_REFRESH_BLOCKER=runtime_identity_changed"),
+        ("duplicate classification", valid + "\nCOMMERCIAL_READINESS_STATUS=blocked"),
+        ("unknown classification", valid.replace("COMMERCIAL_READINESS_REASON=backup_restore", "COMMERCIAL_READINESS_REASON=unknown")),
+        ("false admission", valid.replace("COMMERCIAL_PRODUCTION_READY=false", "COMMERCIAL_PRODUCTION_READY=true")),
+        ("wrong count", valid.replace("COMMERCIAL_BLOCKER_COUNT=1", "COMMERCIAL_BLOCKER_COUNT=0")),
+        ("missing safety", valid.replace("SECRET_EXPOSED=false", "")),
+        ("unsafe marker", valid + "\nSECRET_EXPOSED=true"),
+        ("unknown commercial field", valid + "\nCOMMERCIAL_UNKNOWN=synthetic"),
+    ]
+    for label, journal in invalid:
+        rejected = run_first_oneshot_fixture(apply, journal)
+        if rejected.returncode == 0 or rejected.stdout.strip():
+            failures.append(f"first oneshot must silently reject {label}")
+    for label, kwargs in (
+        ("service start failed", {"start_rc": 2}),
+        ("exit two", {"status": "2", "result": "exit-code"}),
+        ("failed result", {"result": "failed"}),
+        ("same invocation", {"after_id": "a" * 32}),
+        ("invalid invocation", {"after_id": "unknown"}),
+    ):
+        if run_first_oneshot_fixture(apply, valid, **kwargs).returncode == 0:
+            failures.append(f"first oneshot must reject {label}")
+    return failures
 
 
 def validate_bash_runtime_fixture(apply: str) -> list[str]:
@@ -2332,6 +2474,9 @@ def main(
     stdout_contract_failures = validate_remote_stdout_contract()
     if stdout_contract_failures:
         return fail("; ".join(stdout_contract_failures))
+    oneshot_failures = validate_first_oneshot_classification(apply)
+    if oneshot_failures:
+        return fail("; ".join(oneshot_failures))
     private_env_failures = validate_private_env_runtime_fixture(apply)
     if private_env_failures:
         return fail("; ".join(private_env_failures))

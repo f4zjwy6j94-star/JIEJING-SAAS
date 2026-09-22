@@ -260,9 +260,10 @@ raise SystemExit(0 if ready else 2)
 
 public_readiness_ready() {
   local body
+  PUBLIC_READINESS_REPORT=""
   body="$(curl -fsS --max-time 20 -A 'Mozilla/5.0 JiejingProductionEvidenceRefresh/1.0' \
     "$PUBLIC_BASE_URL/readiness/product-saas" 2>/dev/null)" || return 1
-  python3 -c '
+  PUBLIC_READINESS_REPORT="$(python3 -c '
 import json
 import sys
 
@@ -382,7 +383,7 @@ if not isinstance(readiness, dict) or set(readiness) != READINESS_PUBLIC_FIELDS:
     raise SystemExit(2)
 if has_unapproved_sensitive_field(payload):
     raise SystemExit(2)
-items = readiness.get("items") or []
+items = readiness.get("items")
 if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
     raise SystemExit(2)
 item_by_key = {}
@@ -505,10 +506,22 @@ top_level_contract_ready = (
     readiness.get("readiness_version") == "2026-05-15-product-saas"
     and readiness.get("authenticated_summary") is False
 )
+backup_item = item_by_key.get("backup_restore") or {}
+# This is an admission hold, not proof of its underlying cause or a restore drill.
+# Other backup statuses, provider failures and unknown public items stay rejected.
+public_backup_hold = (
+    public_launch_mode
+    and set(item_by_key) == {"backup_restore"}
+    and backup_item.get("label") == "Backup and restore"
+    and backup_item.get("status") == "blocked_backup_restore_not_ready"
+    and backup_item.get("severity") == "blocker"
+    and strict_text(backup_item.get("detail"))
+    and strict_text(backup_item.get("next_action"))
+)
 item_contract_ready = (
     (
         public_launch_mode
-        and item_by_key == {}
+        and (item_by_key == {} or public_backup_hold)
     )
     or (
         not public_launch_mode
@@ -737,7 +750,7 @@ billing_safety_ready = (
     )
 )
 item_payment_projection_ready = (
-    (public_launch_mode and item_by_key == {})
+    (public_launch_mode and (item_by_key == {} or public_backup_hold))
     or (
         billing_item.get("status") == "private_beta_ready_paid_launch_pending"
         and billing.get("payment_path_status") in private_beta_payment_statuses
@@ -769,11 +782,11 @@ owner_verified_order_ready = (
 readiness_projection_ready = (
     (
         public_launch_mode
-        and set(item_by_key) == set()
+        and (set(item_by_key) == set() or public_backup_hold)
         and warning_count == 0
-        and readiness.get("production_ready") is True
-        and readiness.get("beta_ready") is True
-        and readiness.get("can_accept_real_customers") is True
+        and readiness.get("production_ready") is (not public_backup_hold)
+        and readiness.get("beta_ready") is (not public_backup_hold)
+        and readiness.get("can_accept_real_customers") is (not public_backup_hold)
         and billing.get("billing_ready_for_paid_launch") is True
         and billing.get("public_charging_allowed") is True
         and billing.get("charge_now_allowed") is True
@@ -811,7 +824,7 @@ ready = (
     and readiness.get("internal_detail_required") is True
     and readiness.get("environment") == "production"
     and type(blocker_count) is int
-    and blocker_count == len(blockers) == 0
+    and blocker_count == len(blockers) == (1 if public_backup_hold else 0)
     and type(warning_count) is int
     and warning_count == len(warnings)
     and readiness_projection_ready
@@ -820,7 +833,7 @@ ready = (
     and readiness.get("secret_exposed") is False
     and product_evidence.get("latest_ebay_packet_status") == "packet_cached_sanitized"
     and model_value.get("status") == "ready"
-    and "backup_restore" not in item_by_key
+    and (public_backup_hold or "backup_restore" not in item_by_key)
     and "monitoring_alerting" not in item_by_key
     and "backup" not in providers
     and billing.get("billing_ready_for_private_beta") is True
@@ -844,8 +857,23 @@ ready = (
     and item_payment_projection_ready
     and owner_verified_order_ready
 )
-raise SystemExit(0 if ready else 2)
-' <<<"$body" >/dev/null 2>&1
+if not ready:
+    raise SystemExit(2)
+commercial_ready = public_launch_mode and not public_backup_hold
+report = {
+    "PUBLIC_READINESS_CONTRACT_STATUS": "verified",
+    "COMMERCIAL_READINESS_STATUS": "ready" if commercial_ready else "blocked",
+    "COMMERCIAL_READINESS_REASON": "backup_restore" if public_backup_hold else "none" if commercial_ready else "billing_quota",
+    "COMMERCIAL_BLOCKER_COUNT": blocker_count,
+    "COMMERCIAL_WARNING_COUNT": warning_count,
+    "COMMERCIAL_PRODUCTION_READY": readiness["production_ready"],
+    "COMMERCIAL_BETA_READY": readiness["beta_ready"],
+    "COMMERCIAL_CAN_ACCEPT_REAL_CUSTOMERS": readiness["can_accept_real_customers"],
+    "COMMERCIAL_PUBLIC_CHARGING_ALLOWED": billing["public_charging_allowed"],
+}
+for key, value in report.items():
+    print(f"{key}={str(value).lower()}")
+' <<<"$body" 2>/dev/null)" || { PUBLIC_READINESS_REPORT=""; return 2; }
 }
 
 wait_for_public_readiness() {
@@ -1249,7 +1277,7 @@ run_refresh_phases || fail_closed "${LAST_BLOCKER:-refresh_phase_failed}"
 
 wait_for_public_readiness || fail_closed "public_readiness_contract_failed"
 verify_unchanged_runtime || fail_closed "${LAST_BLOCKER:-runtime_identity_changed}"
-printf '%s\n' "READINESS_STATUS=verified"
+printf '%s\n' "$PUBLIC_READINESS_REPORT"
 printf '%s\n' "JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success"
 }
 
