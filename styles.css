@@ -45581,6 +45581,31 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai .saas-
 }
 
 /* 2026-06-24 bulk/media low-learning-cost polish. */
+body.saas-public-mvp #view-media .saas-media-usage-guide {
+  min-width: 0;
+  padding-block: 12px;
+  border-block: 1px solid var(--jiejing-line);
+  color: var(--jiejing-muted);
+}
+
+body.saas-public-mvp #view-media .saas-media-usage-guide > summary {
+  width: fit-content;
+  padding: 4px 0;
+  cursor: pointer;
+  color: var(--jiejing-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+body.saas-public-mvp #view-media .saas-media-usage-guide > summary:focus-visible {
+  outline: 2px solid var(--jiejing-teal);
+  outline-offset: 4px;
+}
+
+body.saas-public-mvp #view-media .saas-media-usage-guide[open] > div {
+  margin-top: 12px;
+}
+
 body.saas-public-mvp #view-media .media-studio-panel,
 body.saas-public-mvp #view-bulk .bulk-clean-board {
   gap: 14px;

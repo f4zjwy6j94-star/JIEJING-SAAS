@@ -196,7 +196,15 @@ def build_merchant_project_status(
     fact_packet = _fact_packet(latest_fact_report)
     unknown_facts = _string_list(fact_packet.get("unknown_facts"))
     fact_blockers = _string_list(fact_packet.get("blocked_by"))
-    fact_gap_count = max(len(unknown_facts), len(fact_blockers))
+    # Count distinct missing fields, not review rules. Source attestation may
+    # have both a field blocker and a rule blocker; simulation is not a field.
+    fact_gap_keys = set(unknown_facts)
+    for reason in fact_blockers:
+        for prefix in ("merchant_product_fact_missing:", "product_fact_missing:"):
+            if reason.startswith(prefix) and reason[len(prefix):].strip():
+                fact_gap_keys.add(reason[len(prefix):].strip())
+    fact_gap_count = len(fact_gap_keys)
+    facts_simulation_only = "simulation_only_product_facts" in fact_blockers
     research_ready = any(
         str(item.get("report_type") or "") in {"ai_ceo.market_research", "market.report", "market.data_packet"}
         for item in matching_reports
@@ -284,10 +292,12 @@ def build_merchant_project_status(
         current_stage = "facts"
         blocker = _blocker(
             "product_facts_missing",
-            "商品事实还没有补齐",
-            f"还有 {fact_gap_count} 项商品资料待商家确认。",
+            "商品事实还没有补齐" if fact_gap_count else "演练商品不能用于发布" if facts_simulation_only else "商品资料仍需核对",
+            f"还有 {fact_gap_count} 项商品资料待商家确认。" if fact_gap_count else
+            "资料已填写，但当前商品仅供演练。真实上架请使用可销售商品并核对来源。" if facts_simulation_only else
+            "资料已填写，但来源、内容或审核条件尚未满足。请检查商品资料中的提示。",
         )
-        next_action = _next_action("complete_product_facts", "补齐商品资料", "product")
+        next_action = _next_action("complete_product_facts", "补齐商品资料" if fact_gap_count else "核对商品资料", "product")
         overall_status = "blocked"
     elif not downstream_platform_ready and media_failed:
         current_stage = "media"
@@ -324,7 +334,7 @@ def build_merchant_project_status(
             if facts_ready
             else "未发布草稿已保存，早期事实快照保留在记录中"
             if downstream_platform_ready
-            else f"{fact_gap_count} 项待补"
+            else (f"{fact_gap_count} 项待补" if fact_gap_count else "仅供演练" if facts_simulation_only else "资料待核对")
             if latest_fact_report
             else "等待商品事实"
         ),

@@ -739,7 +739,7 @@ async function main() {
           has_settings_one_glance: sectionHas(".saas-settings-one-glance") && text.includes("本页只看三件事"),
           settings_one_glance_count: sectionCount(".saas-settings-one-glance-grid article"),
           has_media_tabs: Boolean(document.querySelector("#mediaProjectTabs, .media-project-tabs, [data-media-project-tab]")),
-          has_media_simple_headline: text.includes("把商品图变成可用素材包"),
+          has_media_simple_headline: text.includes("商品图片与素材"),
           has_media_simple_flow:
             text.includes("来源") &&
             text.includes("成品") &&

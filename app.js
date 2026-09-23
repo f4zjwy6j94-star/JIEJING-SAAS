@@ -5295,17 +5295,17 @@ function ensureSaasMediaFirstRunStrip() {
       {
         label: "输入",
         title: "商品草稿或来源图",
-        copy: "没有商品或来源图时，不展示旧样例。",
+        copy: "导入商品草稿，或上传可使用的来源图。",
       },
       {
         label: "审核",
         title: "授权和实物一致",
-        copy: "不清楚就停在待补资料。",
+        copy: "核对商品外观、参数与图片使用权。",
       },
       {
         label: "去向",
         title: "只回写草稿",
-        copy: "发布、广告和承诺仍要确认。",
+        copy: "审核通过后回写草稿，发布仍需确认。",
       },
     ],
     "saas-media-first-run-strip",
@@ -5319,6 +5319,20 @@ function ensureSaasMediaFirstRunStrip() {
   if (!anchor) return null;
   insertJiejingTrustedHtml(anchor, "afterend", trustedJiejingHtml(mediaFirstRunHtml, "media.first_run_strip"));
   return view.querySelector(".saas-media-first-run-strip");
+}
+
+function placeSaasMediaResultPanels() {
+  const view = document.querySelector("#view-media");
+  let anchor = view?.querySelector(".media-heading");
+  if (!anchor) return;
+  // Results and actionable status always precede optional help, including
+  // after refreshes that replace panels. Never collapse review controls.
+  for (const selector of [".saas-media-generated-assets", ".saas-media-generation-readiness", ".saas-media-asset-jobs"]) {
+    const panel = view.querySelector(selector);
+    if (!panel) continue;
+    if (anchor.nextElementSibling !== panel) anchor.after(panel);
+    anchor = panel;
+  }
 }
 
 function renderSaasMediaStudioStatus() {
@@ -5377,6 +5391,7 @@ function renderSaasMediaStudioStatus() {
       trustedJiejingHtml(renderSaasMediaAssetJobsPanel(ctx), "media.asset_jobs"),
     );
   }
+  placeSaasMediaResultPanels();
   tabs.innerHTML = reports.length
     ? reports
         .map((report, index) => `
@@ -10201,7 +10216,7 @@ function renderSaasListingPublishFeedbackPanel(
   const backendChecks = Array.isArray(readiness.checks) ? readiness.checks : [];
   const backendBlocked = backendChecks.filter((item) => item && item.blocking).length;
   const latestPreflight = (state.saasPreflightResults || []).find((item) => item && typeof item === "object") || null;
-  const confirmation = saasLatestPublishConfirmation() || pendingConfirmations.find((item) => item.action_type === "publish_listing") || null;
+  const confirmation = saasListingConfirmationsForCurrentProject().find((item) => item.action_type === "publish_listing") || null;
   const execution = confirmation?.confirmation_id ? saasExecutionResultForConfirmation(confirmation.confirmation_id, "publish_listing") : null;
   const hasBackendReadiness = backendChecks.length > 0 || Boolean(latestPreflight);
   const canOpenConfirm = Boolean(confirmation?.confirmation_id);
@@ -10291,7 +10306,7 @@ function renderSaasListingVisiblePublishBridge(
   const backendChecks = Array.isArray(readiness.checks) ? readiness.checks : [];
   const backendBlocked = backendChecks.filter((item) => item && item.blocking).length;
   const latestPreflight = (state.saasPreflightResults || []).find((item) => item && typeof item === "object") || null;
-  const confirmation = saasLatestPublishConfirmation() || pendingConfirmations.find((item) => item.action_type === "publish_listing") || null;
+  const confirmation = saasListingConfirmationsForCurrentProject().find((item) => item.action_type === "publish_listing") || null;
   const execution = confirmation?.confirmation_id ? saasExecutionResultForConfirmation(confirmation.confirmation_id, "publish_listing") : null;
   const hasBackendReadiness = backendChecks.length > 0 || Boolean(latestPreflight);
   const canOpenConfirm = Boolean(confirmation?.confirmation_id);
@@ -10388,13 +10403,14 @@ function renderSaasListingGapAndRiskPanel(draft = state.saasListingComposerDraft
 
 function renderSaasListingNextActionPanel(draft = state.saasListingComposerDraft, ctx = saasMerchantWorkbenchContext(), pendingConfirmations = []) {
   if (!draft) return "";
+  pendingConfirmations = saasListingConfirmationsForCurrentProject(pendingConfirmations).filter((item) => item.status === "pending");
   const localSummary = saasListingDraftPreflightSummary(draft, ctx, pendingConfirmations);
   const coverage = saasListingEbayFieldCoverage(draft, ctx);
   const assetCheck = localSummary.checks.find((item) => item.key === "assets") || {};
-  const confirmation = saasLatestPublishConfirmation() || pendingConfirmations[0] || null;
+  const confirmation = saasListingConfirmationsForCurrentProject().find((item) => item.action_type === "publish_listing") || null;
   const execution = confirmation?.confirmation_id ? saasExecutionResultForConfirmation(confirmation.confirmation_id, "publish_listing") : null;
   const executionStatus = execution?.status || execution?.result?.status || "";
-  const hasConfirmation = Boolean(confirmation?.confirmation_id);
+  const hasConfirmation = Boolean(confirmation?.confirmation_id || pendingConfirmations.some((item) => item.confirmation_id));
   const confirmationApproved = confirmation?.status === "approved";
   const hasExecution = Boolean(execution);
   const primary =
@@ -10473,7 +10489,7 @@ function renderSaasListingNextActionPanel(draft = state.saasListingComposerDraft
             : confirmationApproved
               ? "已确认，等待回执"
               : pendingConfirmations.length
-                ? `${pendingConfirmations.length} 个确认项`
+                ? `本商品 ${pendingConfirmations.length} 个待确认操作`
                 : localSummary.readyForConfirmation
                   ? "可生成确认单"
                   : "等待资料完整",
@@ -10928,7 +10944,7 @@ function renderSaasProductListingCenter(view) {
     ? listingReport
     : null;
   const marketReport = latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
-  const pendingConfirmations = (state.saasConfirmations || []).filter((item) => item.status === "pending");
+  const pendingConfirmations = saasListingConfirmationsForCurrentProject().filter((item) => item.status === "pending");
   const activeStore = activeSaasStore();
   const activeConnection = saasConnectionForStore(activeStore);
   const storeName = saasStoreDisplayName(activeStore, activeConnection);
@@ -21899,6 +21915,32 @@ function saasExecutionResultForConfirmation(confirmationId = "", actionType = "p
     );
   });
   return matched || null;
+}
+
+// Single-product displays must not inherit other products' account-wide work.
+// This filters presentation only; the confirmation center keeps all records.
+function saasListingConfirmationsForCurrentProject(confirmations = state.saasConfirmations || []) {
+  if (!Array.isArray(confirmations) || !confirmations.length) return [];
+  const identity = saasCurrentListingProjectIdentity();
+  const sku = String(saasListingDraftAuthoritativeSku() || "").trim();
+  const offerId = String(saasCurrentUnpublishedDraftReceipt()?.offerId || "").trim();
+  const storeId = String(activeSaasStore()?.store_id || "").trim();
+  if (!storeId || (!identity?.key && !sku && !offerId)) return [];
+  return confirmations.filter((card) => {
+    if (!card || !["publish_listing", "save_ebay_listing_draft"].includes(card.action_type)) return false;
+    if (String(card.store_id || "").trim() !== storeId) return false;
+    const item = card.item || {};
+    const cardIdentity = saasNormalizeListingProjectIdentity(
+      item.listing_project_identity || item.publish_payload?.listing?.listing_project_identity || card.listing_project_identity,
+    );
+    // An explicit foreign project must not match via a reused SKU or Offer.
+    if (identity?.key && cardIdentity?.key && (
+      cardIdentity.key !== identity.key ||
+      cardIdentity.source_report_id !== String(identity.source_report_id || identity.source_id || "") ||
+      cardIdentity.candidate_id !== String(identity.candidate_id || "")
+    )) return false;
+    return saasConfirmationMatchesActiveListingContext(card, { identity, sku, offer_id: offerId });
+  });
 }
 
 function saasLatestPublishConfirmation(confirmationId = "") {

@@ -1900,6 +1900,7 @@ test("all Listing confirmation entrances share real draft readiness while local 
       "saasPreTestPayloadText", "saasPreTestDuplicateSignal", "saasPreTestFormSummary", "saasPreTestCheckRows",
       "saasPublishHealthSummary", "saasAccountHealthSnapshot", "saasAccountHealthTone",
       "saasLatestExecutionResult", "saasExecutionResultForConfirmation", "saasLatestPublishConfirmation",
+      "saasListingConfirmationsForCurrentProject",
       "saasLatestProductWorkflowTask", "saasReportsForDisplay", "latestSaasReportByTypes",
       "saasMerchantVisiblePublishCode", "saasListingPublishLoopSteps", "renderSaasListingPublishLoopTracker",
     ].map(extractFunction).join("\n\n") });

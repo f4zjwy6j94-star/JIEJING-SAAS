@@ -466,8 +466,10 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(app_html, "等待生成三类候选", "bulk result preview empty heading")
     require(app_html, "先分组，再决定", "bulk static first-run copy")
 
-    require(app_html, "把商品图变成可用素材包", "media simple headline")
-    require(app_html, "选来源、选素材包、看预览、回写 Listing 草稿", "media simple workflow copy")
+    require(app_html, "商品图片与素材", "media simple headline")
+    require(app_html, "查看生成结果，审核后用于 Listing 草稿", "media result-first workflow copy")
+    require(app_html, '<details class="saas-media-usage-guide">', "media help collapsed by default")
+    require(app_js, "placeSaasMediaResultPanels();", "media results remain outside optional help")
     require(app_html, "商品草稿 / 上传图片", "media source choice")
     require(app_html, "选择要做图的商品", "media draft selector copy")
     require(app_html, "先选要做什么图", "media package selection copy")
@@ -477,7 +479,7 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(app_js, "function saasMediaTaskLabel", "media merchant-facing task labels")
     require(app_js, "等待商品草稿", "media waiting state copy")
     require(app_js, "saas-media-first-run-strip", "media first-run assurance strip")
-    require(app_js, "没有商品或来源图时，不展示旧样例", "media no fake sample copy")
+    require(app_js, "没有真实输入时不展示旧样例图", "media no fake sample copy")
     require(app_js, "素材工坊只接商品草稿、图片需求或商家上传图", "media source boundary copy")
     require(app_js, "商家只需要看三件事：这张图用在哪里、能不能用、还缺什么", "media result readability copy")
     require(app_js, "先看草稿，再决定是否回写 Listing", "media quality board simple copy")
@@ -844,7 +846,7 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     next_action_end = app_js.index("function renderSaasListingWorkflowProofPanel", next_action_start)
     next_action_body = app_js[next_action_start:next_action_end]
     for receipt_marker in (
-        "saasLatestPublishConfirmation()",
+        "saasListingConfirmationsForCurrentProject()",
         "saasExecutionResultForConfirmation",
         "查看发布回执",
         "已记录安全交接",
