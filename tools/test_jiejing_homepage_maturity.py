@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
 from html import unescape
 from pathlib import Path
@@ -17,8 +18,14 @@ def assert_premium_surface_contract() -> None:
     asset = "assets/jiejing-premium-surfaces.css"
     css = (ROOT / asset).read_text(encoding="utf-8")
     app = (ROOT / "app.html").read_text(encoding="utf-8")
+    css_digest = hashlib.sha256(css.encode("utf-8")).hexdigest()[:12]
+    versions = []
     for entry in (INDEX, app):
-        assert entry.count(f'href="./{asset}?v=20260924-motion-v3"') == 1
+        matches = re.findall(rf'href="\./{re.escape(asset)}\?v=([A-Za-z0-9._-]+)"', entry)
+        assert len(matches) == 1, "load exactly one version of the shared visual layer"
+        assert matches[0].endswith(css_digest), "visual-layer cache version must match the current CSS content"
+        versions.append(matches[0])
+    assert versions[0] == versions[1], "homepage and workbench must load the same visual layer"
     assert app.index(asset) < app.index('id="jiejing-cockpit-layout-guard"')
     assert f'"{asset}"' in (ROOT / "deploy/apply-staging-patch.sh").read_text(encoding="utf-8")
     assert "prefers-reduced-motion: reduce" in css
