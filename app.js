@@ -21215,7 +21215,7 @@ function saasConfirmationImpactRows(card = {}) {
   const actionType = card.action_type || item.action_type || "";
   const platformWrite = ["publish_listing", "cleanup_test_listing", "create_ebay_inventory_location", "change_price", "change_inventory", "policy_edit"].includes(actionType);
   const money = ["refund", "partial_refund", "procurement_payment", "ad_budget", "store_subscription"].includes(actionType);
-  const buyerPromise = ["buyer_message_send", "sensitive_buyer_commitment"].includes(actionType);
+  const buyerPromise = ["buyer_message_send", "sensitive_buyer_commitment", "send_customer_reply", "sensitive_customer_reply"].includes(actionType);
   const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
   const title = payload.title || item.title || card.title || saasWorkbenchActionLabel(actionType);
   const exactReadOnlyOAuth = isSaasReadOnlyOAuthSensitiveConfirmation(card);
@@ -21278,7 +21278,7 @@ function saasConfirmationRollbackPlan(card = {}) {
   if (["change_price", "change_inventory", "policy_edit"].includes(actionType)) {
     return "平台配置变更必须记录前后值；如需恢复，生成新的反向确认单，不直接静默回滚。";
   }
-  if (["buyer_message_send", "sensitive_buyer_commitment"].includes(actionType)) {
+  if (["buyer_message_send", "sensitive_buyer_commitment", "send_customer_reply", "sensitive_customer_reply"].includes(actionType)) {
     return "买家沟通发送前必须复核事实依据；未确认时只保存草稿，不形成真实承诺。";
   }
   return "默认先暂停；需要继续时由 AI CEO 带证据重新生成确认或拆成低风险任务。";
@@ -22719,6 +22719,23 @@ function saasDecisionCenterHeadline(productLabel = "", pendingCount = 0) {
   return `${product} 有 ${count} 个待确认动作`;
 }
 
+function saasConfirmationCardProductLabel(card = {}, fallback = "") {
+  if (isSaasDomesticBillingRefundConfirmation(card)) return "";
+  const action = String(card.action_type || card.item?.action_type || "");
+  const productActions = new Set(["publish_listing", "bulk_publish_listing", "revise_listing", "change_price", "change_inventory", "save_ebay_listing_draft", "cleanup_test_listing"]);
+  if (productActions.has(action)) return saasProductLabelForConfirmation(card) || fallback;
+  // Account, payment and service actions must not inherit an unrelated active product.
+  return [card.item?.product, card.item?.product_name, card.product, card.product_name]
+    .find((value) => typeof value === "string" && value.trim()) || "";
+}
+
+function renderSaasConfirmationReplyPreview(card = {}) {
+  if (!["buyer_message_send", "sensitive_buyer_commitment", "send_customer_reply", "sensitive_customer_reply"].includes(String(card.action_type || card.item?.action_type || ""))) return "";
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  const reply = typeof item.message_draft === "string" ? item.message_draft : typeof item.reply_text === "string" ? item.reply_text : "";
+  return `<section class="saas-confirm-card-decision" aria-label="客服回复内容"><span>本次回复草稿</span><p>${escapeHtml(publicRuntimeText(reply.trim() || "尚未提供回复正文，请返回补充后再确认。"))}</p><small>${item.order_id ? `关联订单：${escapeHtml(publicRuntimeText(String(item.order_id)))}` : "关联订单尚未提供，请核对处理对象。"}</small></section>`;
+}
+
 function renderSaasConfirmPanel() {
   const anchor = document.querySelector("#confirmGrid");
   if (!anchor) return;
@@ -22745,70 +22762,61 @@ function renderSaasConfirmPanel() {
     saasWorkflowProductLabel(latestTask) ||
     saasModelValueProductLabel();
   const realWritesEnabled = state.saasEbayWriteAdapter?.real_platform_writes_enabled === true;
+  const pendingProducts = [...new Set(pending.map((card) => saasConfirmationCardProductLabel(card, productLabel)))];
+  const headlineProduct = pendingProducts.length === 1 && pendingProducts[0] ? pendingProducts[0] : "当前账号";
   panel.innerHTML = `
     <section class="saas-readable-page-head saas-confirm-readable-head" aria-label="确认中心说明">
       <div>
-        <span>确认中心</span>
-        <strong>只让你处理真正要拍板的事</strong>
-        <p>没有重要动作时，这里保持安静。AI 继续整理草稿、素材和报告；发布、付款、退款、广告和客服承诺必须等你点头。</p>
+        <strong role="heading" aria-level="2">${escapeHtml(saasDecisionCenterHeadline(headlineProduct, allPendingCount))}</strong>
+        <p>核对本次操作的对象、内容与影响，再决定是否批准。缺少资料时可返回补充。</p>
       </div>
       <div class="saas-page-next-action">
-        <b>${allPendingCount ? `${allPendingCount} 个待确认` : "当前无待确认"}</b>
-        <small>${realWritesEnabled ? "真实动作先确认" : "受控交接"}</small>
+        <small>${realWritesEnabled ? "平台操作仍需单独确认" : "eBay 正式发布暂未开放"}</small>
+        <button class="secondary-action" type="button" data-saas-action="refresh">刷新待办</button>
       </div>
     </section>
     ${renderSaasModuleAiGoalStrip("confirm")}
-    <div class="runtime-confirm-head saas-confirm-simple-head">
-      <div>
-        <span class="pill ${state.saasConnected ? "green" : "neutral"}">确认中心</span>
-        <strong>${escapeHtml(saasDecisionCenterHeadline(productLabel, allPendingCount))}</strong>
-        <p>这里只做三种选择：同意、稍后、回去补资料。其他记录和复盘放在设置里，不打扰当前任务。</p>
-      </div>
-      <button class="secondary-action" type="button" data-saas-action="refresh">刷新待办</button>
-    </div>
     <div class="saas-confirm-summary saas-confirm-simple-summary">
       <article>
         <span>待确认</span>
         <strong>${pending.length}</strong>
-        <small>你没点头前不执行</small>
+        <small>等待有权限的成员确认</small>
       </article>
       <article>
         <span>已批准</span>
         <strong>${approved.length}</strong>
-        <small>${realWritesEnabled ? "仍按安全规则执行" : "只记录安全交接"}</small>
+        <small>批准不代表已执行，以操作结果为准</small>
       </article>
       <article>
-        <span>阻塞/拒绝</span>
+        <span>未执行或未完成</span>
         <strong>${blocked.length}</strong>
-        <small>保留记录，不继续执行</small>
+        <small>已拒绝、已取消或执行失败</small>
       </article>
     </div>
-    ${visible.length ? `<section class="saas-confirm-action-model" aria-label="确认中心处理边界">
+    ${visible.length ? `<details class="saas-confirm-safety-detail"><summary>哪些操作需要确认？</summary><section class="saas-confirm-action-model" aria-label="确认中心处理边界">
       <article>
         <span>现在只看</span>
-        <strong>待你点头的事</strong>
-        <p>没有需要判断的动作时，这里保持空白，不占用日常经营注意力。</p>
+        <strong>本次操作与影响</strong>
+        <p>确认单只针对列出的操作，不代表允许后续同类操作自动执行。</p>
       </article>
       <article>
-        <span>AI 继续</span>
+        <span>日常工作</span>
         <strong>草稿、素材、普通记录</strong>
-        <p>这些不会影响账号、资金或买家承诺，AI 可以先整理。</p>
+        <p>对话、报告、Listing 版本和素材记录保留在对应业务页面。</p>
       </article>
       <article>
         <span>必须确认</span>
         <strong>发布、付款、退款、广告、客服承诺</strong>
-        <p>这些动作会先停住。你没点头前不会执行。</p>
+        <p>确认后仍需通过账号权限、资料完整性和平台规则检查。</p>
       </article>
-    </section>` : ""}
+    </section></details>` : ""}
     ${
       visible.length
         ? `<div class="runtime-confirm-grid saas-confirm-grid">
             ${visible
               .map((card) => {
                 const status = card.status || "pending";
-                const cardProduct = isSaasDomesticBillingRefundConfirmation(card)
-                  ? ""
-                  : saasProductLabelForConfirmation(card) || productLabel;
+                const cardProduct = saasConfirmationCardProductLabel(card, productLabel);
                 return `
                   <article class="runtime-confirm-card saas-confirm-card">
                     <div class="saas-confirm-card-top">
@@ -22817,19 +22825,20 @@ function renderSaasConfirmPanel() {
                     </div>
                     <strong>${escapeHtml(saasTitleWithProduct(saasWorkbenchConfirmationTitle(card) || card.title, cardProduct))}</strong>
                     <p>${escapeHtml(saasWorkbenchConfirmationReason(card))}</p>
-                    ${renderSaasConfirmationMerchantBrief(card, cardProduct)}
+                    ${renderSaasConfirmationReplyPreview(card)}
                     <div class="saas-confirm-meta">
                       <small>${escapeHtml(saasWorkbenchDefaultActionLabel(card.default_action))}</small>
                       <small>${card.high_risk ? "重要动作" : "普通确认"}</small>
                       <small>${escapeHtml(saasTimestampLabel(card.created_at))}</small>
                     </div>
-                    <div class="saas-confirm-card-decision">
-                      <span>你要判断</span>
+                    ${status === "pending" ? `<div class="saas-confirm-card-decision">
+                      <span>本次确认</span>
                       <strong>${card.high_risk ? "是否允许这次高风险动作" : "是否按建议继续"}</strong>
-                      <p>不同意就先停住；缺资料就回去补资料。你没点头前不会执行。</p>
-                    </div>
+                      <p>${escapeHtml(saasConfirmationAfterApprovalText(card))} 未确认不会执行。</p>
+                    </div>` : ""}
                     <details class="saas-confirm-safety-detail">
-                      <summary>为什么停住</summary>
+                      <summary>操作影响与执行条件</summary>
+                      ${status === "pending" ? renderSaasConfirmationMerchantBrief(card, cardProduct) : ""}
                       ${saasWorkbenchApprovalBriefMarkup(card)}
                     </details>
                     <details class="confirm-detail">
@@ -22875,7 +22884,7 @@ function renderSaasConfirmPanel() {
               })
               .join("")}
           </div>`
-        : `<article class="runtime-confirm-empty"><strong>现在没有需要你拍板的事</strong><p>AI 可以继续整理草稿、素材和报告；一旦涉及发布、付款、退款、广告或客服承诺，会回到这里。</p></article>`
+        : `<article class="runtime-confirm-empty"><strong>可以继续准备商品</strong><p>当前没有待确认事项不代表已经发布。完成商品资料、文案和素材审核后，再提交相应操作。</p><button class="secondary-action" type="button" data-global-flow-view="product">继续处理商品</button></article>`
     }
   `;
   bindSaasExactReadOnlyOAuthConfirmationButtons(panel, visible, allCards);
@@ -28198,8 +28207,8 @@ function renderSaasMerchantPermissionPanel() {
       <div class="saas-merchant-path-head">
         <div>
           <span>团队权限</span>
-          <strong>用岗位权限替代所有人共用老板账号</strong>
-          <p>权限围绕捷境确认中心设计。发布、退款、广告预算、采购付款和敏感承诺只能由有权限的人确认。</p>
+          <strong>查看当前角色与操作权限</strong>
+          <p>发布、退款、广告预算、采购付款和敏感承诺需由具备相应权限的成员确认。</p>
         </div>
         <em>当前角色：${escapeHtml(currentRoleRow.label || currentRole)}</em>
       </div>
@@ -28218,7 +28227,7 @@ function renderSaasMerchantPermissionPanel() {
           ${otherRoles.map((role) => renderRoleCard(role)).join("")}
         </div>
       </details>
-      <p class="saas-merchant-path-note">这里不是让团队直接操作平台后台，而是把关键经营动作先停到捷境确认中心，再按岗位权限放行。</p>
+      <p class="saas-merchant-path-note">角色权限不替代单次操作确认，也不改变 eBay 账号的实际可用权限。</p>
     </section>
   `;
 }
@@ -39731,9 +39740,9 @@ function renderSaasMerchantMediaCreditsPanel() {
         <div>
           <span>素材点</span>
           <strong>素材点余额 ${pointsLabel(available)}</strong>
-          <p>当前素材点用于图片生成：套餐内、已购买和活动赠送额度分开计算。生成前预估，完成后按实际结算；失败、超时或门禁未通过会返还。</p>
+          <p>素材点用于图片生成。套餐内点数优先使用，已购买点数不随套餐到期；生成前显示预计用量，完成后按实际结算，失败、超时或生成前检查未通过会返还。</p>
         </div>
-        <em>${summaryReady ? purchaseOpen ? "可购买" : "购买入口准备中" : "购买状态暂未获取"}</em>
+        <em>${summaryReady ? purchaseOpen ? "可购买" : "素材点加购暂未开放" : "购买状态暂未获取"}</em>
       </div>
       <div class="saas-media-credit-balance-grid">
         <article class="is-green">
@@ -39858,7 +39867,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
   const checkoutPlan = planDetails[checkoutPlanKey] || planDetails.starter;
   const entitlementActive = Boolean(billing.entitlementActive);
   const activeUntil = String(subscription.active_until || "").trim();
-  const activeUntilLabel = activeUntil ? String(activeUntil).slice(0, 10) : "当前套餐有效期以订阅状态为准";
+  const activeUntilLabel = activeUntil ? String(activeUntil).slice(0, 10) : "到期时间暂未提供";
   const paymentOrders = (Array.isArray(state.saasDomesticBillingOrders) ? state.saasDomesticBillingOrders : []).filter(
     (item) => item?.purchase_type !== "media_points",
   );
@@ -39880,9 +39889,9 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
   const actionDisabled = state.saasLoading || entitlementActive || Boolean(pendingTrial) ? "disabled" : "";
   const actionLabel = entitlementActive ? "套餐已开通" : pendingTrial ? "试用申请已提交" : "申请免费试用";
   const rows = [
-    ["当前状态", status, online ? (entitlementActive ? `当前套餐有效期至 ${activeUntilLabel}。` : "微信扫码付款，到账后自动开通套餐和额度。") : "当前不会自动扣款，也不会生成可付款二维码。"],
+    ["当前状态", status, online ? (entitlementActive ? (activeUntil ? `当前套餐有效期至 ${activeUntilLabel}。` : "套餐权益已生效，到期时间暂未提供；如需核对请联系支持。") : "微信扫码付款，到账后自动开通套餐和额度。") : "当前不会自动扣款，也不会生成可付款二维码。"],
     [legacyTeamEntitlement ? "历史团队套餐" : checkoutPlan.title, legacyTeamEntitlement ? "继续保留现有权益" : checkoutPlan.price, legacyTeamEntitlement ? "历史权益不会被降级；续购时需要明确选择当前公开套餐。" : "单次购买 30 天，不会自动续费；再次购买前会重新确认。"],
-    ["生效时间", online ? "付款成功后自动开通" : "试用资格确认后开通", online ? "系统只以微信支付签名回调或安全查单结果为准。" : "当前不会创建付款二维码，也不会自动扣费。"],
+    ["生效时间", online ? "付款成功后自动开通" : "试用资格确认后开通", online ? "以微信支付确认结果为准；付款后可刷新订单状态。" : "当前不会创建付款二维码，也不会自动扣费。"],
   ];
   const orderMarkup = paymentOrders.slice(0, 5).map((order) => {
     const orderStatus = String(order?.status || "");
@@ -39918,8 +39927,8 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
       <div class="saas-settings-card-head">
         <div>
           <span>订阅开通</span>
-          <strong>${escapeHtml(online ? "微信扫码开通，付款成功后自动生效" : "先使用试用套餐，在线付款开放后可微信扫码")}</strong>
-          <p>${escapeHtml(online ? "捷境只接收支付结果，不保存银行卡、身份证或支付密钥；未付款订单可以随时取消。" : "当前不会自动扣款。在线付款开放后，付款成功并经后台确认，所选软件套餐权益会自动生效。")}</p>
+          <strong>${escapeHtml(online ? entitlementActive ? "当前套餐与续购" : "微信扫码开通，付款成功后自动生效" : "先使用试用套餐，在线付款开放后可微信扫码")}</strong>
+          <p>${escapeHtml(online ? "付款由微信支付处理；捷境展示订单与到账结果。未付款订单可以取消，不会自动扣款。" : "当前不会自动扣款。在线付款开放后，付款成功并经后台确认，所选软件套餐权益会自动生效。")}</p>
         </div>
         <em>${escapeHtml(status)}</em>
       </div>
@@ -43465,7 +43474,7 @@ function saasServiceTraceStateLabel(stateKey = "") {
 }
 
 function saasServiceTraceRecords() {
-  const buyerActions = new Set(["buyer_message_send", "sensitive_buyer_commitment", "send_customer_reply"]);
+  const buyerActions = new Set(["buyer_message_send", "sensitive_buyer_commitment", "send_customer_reply", "sensitive_customer_reply"]);
   const confirmations = (Array.isArray(state.saasConfirmations) ? state.saasConfirmations : [])
     .filter((card) => buyerActions.has(String(card?.action_type || card?.item?.action_type || "")))
     .map((card) => {
@@ -43476,7 +43485,7 @@ function saasServiceTraceRecords() {
         recordId: String(card.confirmation_id || "").replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 160),
         stateKey,
         title: publicRuntimeText(card.title || item.title || "买家回复草稿").slice(0, 160),
-        summary: publicRuntimeText(item.reply_text || item.message || card.summary || "发送前等待商家核对事实和承诺。").slice(0, 320),
+        summary: publicRuntimeText(item.message_draft || item.reply_text || item.message || card.summary || "发送前等待商家核对事实和承诺。").slice(0, 320),
         occurredAt: publicRuntimeText(card.updated_at || card.created_at || "").slice(0, 80),
         targetView: "confirm",
       };
@@ -43513,19 +43522,17 @@ function renderSaasServiceTrace(records = saasServiceTraceRecords()) {
     <section class="saas-activity-simple-list saas-service-trace" data-service-trace-contract="customer_service_trace_v1" aria-label="客服消息状态记录">
       <div class="saas-activity-simple-head">
         <div>
-          <span>消息状态</span>
-          <strong>原消息、建议、修改和发送结果分开记录</strong>
-          <p>订单数据不等于买家消息；没有接入官方消息时保持空状态，也不会把 AI 草稿或演练记录标成已发送。</p>
+          <strong role="heading" aria-level="3">回复记录</strong>
+          <p>草稿与发送结果分别保留。只有平台确认发送成功，才会显示“已发送”。</p>
         </div>
       </div>
       ${
         items.length
-          ? `<div class="saas-service-lane-grid" aria-label="客服消息五种状态">
+          ? `<details class="saas-confirm-safety-detail"><summary>回复状态说明</summary><div class="saas-service-lane-grid" aria-label="客服消息五种状态">
               ${states
                 .map(
-                  (stateKey, index) => `
+                  (stateKey) => `
                     <article>
-                      <span>${index + 1}</span>
                       <strong>${escapeHtml(saasServiceTraceStateLabel(stateKey))}</strong>
                       <p>${escapeHtml({
                         buyer_message: "从官方消息来源读取的买家原文。",
@@ -43538,7 +43545,7 @@ function renderSaasServiceTrace(records = saasServiceTraceRecords()) {
                   `,
                 )
                 .join("")}
-            </div>`
+            </div></details>`
           : ""
       }
       <div class="saas-activity-simple-grid">
@@ -43556,21 +43563,27 @@ function renderSaasServiceTrace(records = saasServiceTraceRecords()) {
                   `,
                 )
                 .join("")
-            : `<article class="is-empty"><span>真实空状态</span><strong>当前没有买家消息或回复记录</strong><p>没有官方消息、确认草稿或发送证据时，这里不显示虚构会话。</p></article>`
+            : `<article class="is-empty"><strong>还没有回复记录</strong><p>买家消息暂未接入。可先在 AI CEO 中整理回复草稿，核对后再处理；草稿不会自动发送。</p></article>`
         }
       </div>
     </section>
   `;
 }
 
+function saasPendingServiceConfirmations(cards = state.saasConfirmations || []) {
+  const actions = new Set([
+    "refund", "partial_refund", "refund_order", "replacement", "compensation",
+    "buyer_message_send", "sensitive_buyer_commitment", "send_customer_reply", "sensitive_customer_reply",
+  ]);
+  return saasConfirmationsForDisplay(cards).filter((card) =>
+    card.status === "pending" && actions.has(String(card.action_type || card.item?.action_type || "")),
+  );
+}
+
 function renderSaasServiceCenter(view = document.querySelector("#view-service")) {
   if (!view) return;
   const ctx = saasMerchantWorkbenchContext();
-  const pendingServiceConfirmations = (state.saasConfirmations || []).filter((item) =>
-    /refund|return|replacement|compensation|customer|buyer|message|shipping|logistics|delivery|address/i.test(
-      `${item.action_type || ""} ${item.title || ""} ${item.summary || ""}`,
-    ),
-  );
+  const pendingServiceConfirmations = saasPendingServiceConfirmations();
   const opsSnapshot = saasEbayOperationsSnapshot(ctx.packetBody || {});
   const hasOfficialOrders = ctx.presentKeys.includes("orders_and_fulfillment") && opsSnapshot.orderCount > 0;
   const hasListings = ctx.presentKeys.includes("inventory_and_offers") && opsSnapshot.listingCount > 0;
@@ -43579,22 +43592,16 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
   const serviceNextAction = !ctx.connection
     ? "连接店铺后可查看官方订单；买家消息暂未接入，当前可整理回复草稿并由你审核。"
     : hasOfficialOrders
-      ? "先处理订单履约；买家消息需等待官方消息来源"
-      : "当前没有待处理订单";
+      ? "已有订单快照，可核对履约资料"
+      : ctx.presentKeys.includes("orders_and_fulfillment") ? "最近同步未包含订单" : "订单数据尚未读取";
   const serviceActionButtons = (() => {
     if (!ctx.connection) {
       return '<button class="primary-action" type="button" data-global-flow-view="connect">连接 eBay 店铺</button>';
     }
     if (pendingServiceConfirmations.length) {
-      return '<button class="primary-action" type="button" data-global-flow-view="confirm">处理需要确认的回复</button>';
+      return `<button class="primary-action" type="button" data-global-flow-view="confirm">查看 ${pendingServiceConfirmations.length} 项待确认</button>`;
     }
-    if (!hasListings) {
-      return '<button class="secondary-action" type="button" data-global-flow-view="product">先补 Listing 商品档案</button>';
-    }
-    if (!hasOfficialOrders) {
-      return '<span class="saas-service-waiting-note">当前没有待处理订单，页面保持安静。</span>';
-    }
-    return '<button class="primary-action" type="button" data-global-flow-view="confirm">查看需要确认的回复</button>';
+    return '<button class="secondary-action" type="button" data-global-flow-view="cockpit">前往 AI CEO 起草回复</button>';
   })();
   view.innerHTML = jiejingTrustedTemplate("service.order_center")`
       <section class="panel full saas-real-service-center" data-saas-service-daily-workbench="service_order_plain_workbench_v2" aria-label="客服与订单工作台">
@@ -43609,27 +43616,26 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
 
       <section class="saas-readable-page-head saas-service-readable-head" aria-label="客服与订单说明">
         <div>
-          <span>今日处理台</span>
-          <strong>客服、物流和售后放在一页</strong>
-          <p>能从商品档案和订单状态回答的，AI 先整理成草稿；涉及钱、重发、地址修改、明确到货日和敏感承诺，直接停到确认中心。</p>
+          <strong role="heading" aria-level="2">客服与订单</strong>
+          <p>依据商品资料和订单状态准备回复。退款、补偿、重发、地址修改、明确到货日和敏感承诺需单独确认。</p>
         </div>
         <div class="saas-page-next-action">
           <b>${escapeHtml(serviceNextAction)}</b>
-          <small>没有真实订单时不显示虚构买家</small>
+          <small>${ctx.lastSync ? `最近同步：${escapeHtml(saasTimestampLabel(ctx.lastSync))}` : "尚无同步时间"} · 买家消息暂未接入</small>
         </div>
       </section>
       ${renderSaasModuleAiGoalStrip("service")}
 
       <section class="saas-service-simple-workspace" aria-label="客服与订单工作区">
         <article class="${hasOfficialOrders ? "is-green" : "is-empty"}">
-          <span>订单状态</span>
-          <strong>${hasOfficialOrders ? "可以核对履约" : "当前没有待处理内容"}</strong>
-          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · ${escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "按订单状态核对"))}` : "没有真实订单时不显示虚构买家或虚构物流。"}</p>
+          <span>订单快照</span>
+          <strong>${hasOfficialOrders ? "可查看已同步订单资料" : ctx.presentKeys.includes("orders_and_fulfillment") ? "最近同步没有订单" : "尚无订单数据"}</strong>
+          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · ${escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "按订单状态核对"))}` : "订单以最近一次同步为准，不代表当前待回复数量。"}</p>
         </article>
         <article class="${hasListings ? "is-green" : "is-amber"}">
           <span>回复草稿</span>
-          <strong>${hasListings ? "可按商品档案起草" : "等待 Listing 商品档案"}</strong>
-          <p>只引用商品档案、订单状态和你保存的商家规则；不能把 AI 猜测说成事实。</p>
+          <strong>${hasListings ? "商品档案可供参考" : "先准备商品与订单信息"}</strong>
+          <p>在 AI CEO 中提供买家问题并整理草稿。发送前请核对商品事实、订单情况与承诺。</p>
         </article>
         <article class="${pendingServiceConfirmations.length ? "is-amber" : "is-green"}">
           <span>确认事项</span>
@@ -43641,7 +43647,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
       ${renderSaasServiceTrace(serviceTraceRecords)}
 
       <div class="saas-service-action-strip">
-        <strong>当前重点</strong>
+        <strong>下一步</strong>
         <div>
           ${serviceActionButtons}
         </div>
@@ -45107,9 +45113,8 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
     <section class="saas-settings-card">
       <div class="saas-settings-card-head">
         <div>
-          <span>数据</span>
-          <strong>店铺数据、来源记录和同步缺口</strong>
-          <p>显示经营资料的同步情况和待补信息。缺少资料时会明确提示，不会用旧商品或旧素材代替。</p>
+          <strong>已同步的店铺资料</strong>
+          <p>以下为最近一次同步结果，不代表实时状态。更新数据不会修改 eBay 商品或订单。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected || !connectionReady ? "disabled" : ""}>${connectionReady ? "更新 eBay 数据" : "连接店铺后更新"}</button>
       </div>
@@ -45122,12 +45127,12 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
         <article>
           <span>最后同步</span>
           <strong>${escapeHtml(saasTimestampLabel(ctx.lastSync))}</strong>
-          <small>${escapeHtml(saasLatestSyncLabel(ctx.latestPacket, getLatestSaasEbaySyncSummary()))}</small>
+          <small>${ctx.lastSync ? "下方资料以此时间为准" : "尚未取得同步时间"}</small>
         </article>
         <article>
-          <span>缺口</span>
-          <strong>${ctx.hasPacket && ctx.presentCount >= ctx.coverageTotal ? "无核心缺口" : ctx.missingKeys.length ? `${ctx.missingKeys.length} 项` : "等待店铺同步"}</strong>
-          <small>${escapeHtml(ctx.hasPacket && ctx.presentCount >= ctx.coverageTotal ? "官方只读资料已读取" : ctx.missingKeys.join(" / ") || "连接 eBay 后读取商品、订单、政策和费用资料")}</small>
+          <span>待读取资料</span>
+          <strong>${ctx.hasPacket && ctx.presentCount >= ctx.coverageTotal ? "资料类别齐全" : ctx.missingKeys.length ? `${ctx.missingKeys.length} 类` : "等待店铺同步"}</strong>
+          <small>${escapeHtml(ctx.hasPacket && ctx.presentCount >= ctx.coverageTotal ? "不代表商品资料已完整或账号可发布" : ctx.missingKeys.map(saasEbayResourceLabel).join(" / ") || "连接 eBay 后读取商品、订单、政策和费用资料")}</small>
         </article>
       </div>
       <div class="saas-settings-resource-list">
@@ -45139,8 +45144,8 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
                   (row) => `
                     <article>
                       <span>${escapeHtml(row.label)}</span>
-                      <strong>${escapeHtml(row.status === "present" ? "已读取" : row.status || "等待")}</strong>
-                    <small>${escapeHtml(row.summary || row.detail || "店铺资料资源")}</small>
+                      <strong>${row.status === "present" ? "已读取" : "待读取"}</strong>
+                      <small>${row.summary === "official_api" ? "eBay 官方来源" : row.status === "present" ? "最近同步已保存" : "本次同步尚未取得完整资料"}</small>
                     </article>
                   `,
                 )
@@ -45765,7 +45770,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "AI 与素材",
       detail: "模型 / 素材",
       title: "AI 与素材",
-      intro: "管理 AI 可用状态、素材生成入口和费用口径。",
+      intro: "管理文字 AI、图片识别、联网搜索和素材生成连接。",
       panels: [
         renderSaasMerchantModelProviderPanel(ctx),
       ],
@@ -45785,7 +45790,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "团队权限",
       detail: "角色 / 审批",
       title: "团队权限",
-      intro: "设置发布、退款、广告、采购付款和敏感客服承诺的确认权限。",
+      intro: "查看当前角色及各岗位的操作与确认权限。",
       panels: [
         renderSaasMerchantPermissionPanel(),
       ],
@@ -45797,12 +45802,17 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "套餐与付款",
       intro: "查看免费体验、软件套餐、微信付款、素材点、订单和停用规则。",
       panels: [
-        renderSaasMerchantBillingPlainSummaryPanel(ctx),
-        renderSaasMerchantMediaCreditsPanel(),
         renderSaasMerchantDomesticPaymentPanel(ctx),
+        renderSaasMerchantMediaCreditsPanel(),
         renderSaasSettingsSectionGroup({
-          title: "计费与安全说明",
-          detail: "需要了解额度发放、续费停用、退款客服和凭证安全时再展开。",
+          title: "费用与额度说明",
+          detail: "查看套餐权益、AI 费用、素材点扣点及到期规则。",
+          badge: "按需查看",
+          panels: [renderSaasMerchantBillingPlainSummaryPanel(ctx)],
+        }),
+        renderSaasSettingsSectionGroup({
+          title: "退款、停用与安全说明",
+          detail: "查看权益发放、退款申请、账号停用和凭证安全说明。",
           badge: "按需查看",
           panels: [
             renderSaasMerchantBillingEntitlementPathPanel(ctx),

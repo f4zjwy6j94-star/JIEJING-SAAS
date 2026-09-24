@@ -105,6 +105,21 @@ def check_media_balance_browser(app: str) -> None:
             assert page.get_by_role("button", name="购买素材点").is_disabled()
             usage_status["http"] = 503
             assert page.evaluate("async () => (await fetchSaasMerchantBillingUsage()).billing_usage") is None, "missing Billing usage must remain missing for subscription consumers"
+            page.evaluate("""() => {
+                state.saasBillingUsage = {subscription: {status:'active', entitlement_active:true, plan_key:'starter'}};
+                state.saasDomesticBillingContract = {provider:'wechat_pay_native', real_checkout_ready:true, charge_now_allowed:true};
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel();
+            }""")
+            payment_text = page.locator('#billing-test').inner_text()
+            assert "到期时间暂未提供" in payment_text
+            assert "当前套餐有效期至 当前套餐" not in payment_text
+            assert page.get_by_role('button', name='续购当前套餐').is_enabled()
+            page.evaluate("""() => {
+                state.saasBillingUsage.subscription.active_until = '2026-10-24T00:00:00Z';
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel();
+            }""")
+            assert "当前套餐有效期至 2026-10-24。" in page.locator('#billing-test').inner_text()
+            assert "到期时间暂未提供" not in page.locator('#billing-test').inner_text()
             assert errors == []
         finally:
             browser.close()
@@ -169,7 +184,7 @@ def main() -> int:
         'item?.purchase_type !== "media_points"',
         "到账后素材点会自动进入当前账号空间",
         "不会改变软件套餐，也不会自动续费",
-        "生成前预估，完成后按实际结算",
+        "生成前显示预计用量，完成后按实际结算",
         "商家自带模型",
         "不消耗素材点",
         "1 个店铺 · 2 个席位 · 100 个经营任务",

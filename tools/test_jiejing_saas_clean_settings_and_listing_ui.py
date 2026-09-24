@@ -762,8 +762,9 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     require(app_html, "全部待办", "decision center non-technical secondary filter")
     require(app_html, "saas-confirm-action-model", "decision center light action model")
     require(app_html, "你没点头前不会执行", "decision center no-action-without-approval promise")
-    require(app_js, "只让你处理真正要拍板的事", "rendered decision center low-learning-cost headline")
-    require(app_js, "这里只做三种选择：同意、稍后、回去补资料。", "rendered decision center simple action copy")
+    require(app_js, "saasDecisionCenterHeadline(headlineProduct, allPendingCount)", "rendered decision center current pending headline")
+    require(app_js, "核对本次操作的对象、内容与影响", "rendered decision center action guidance")
+    require(app_js, "批准不代表已执行", "approval must not be presented as execution")
     require(app_js, "刷新待办", "rendered decision center non-technical refresh copy")
     require(app_js, "saas-confirm-card-decision", "rendered decision card frontloads merchant choice")
     require(app_js, "saas-confirm-safety-detail", "rendered decision card folds backend evidence")
@@ -780,13 +781,13 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     require(app_js, "在这里管理账号、店铺数据、AI、团队权限、套餐与付款", "settings home low-learning-cost copy")
     require(app_js, "商品和订单工作回到对应工作台继续", "settings home keeps business work in its workbench")
     require(app_js, "商品、订单、政策、费用等来源可追溯", "settings status merchant-facing data copy")
-    require(app_js, "店铺数据、来源记录和同步缺口", "settings data panel merchant-facing title")
+    require(app_js, "已同步的店铺资料", "settings data panel merchant-facing title")
     require(app_js, "什么时候需要打开设置", "settings usage-rule section")
     if "主理人高级区" in app_js:
         return fail("merchant app must not contain the owner-only advanced settings surface")
     for account_connection_copy in ["连接与权限", "读取店铺数据", "保存未发布草稿", "验证当前连接"]:
         require(app_js, account_connection_copy, "account settings distinguishes existing connection capabilities in merchant language")
-    require(app_js, "权限围绕捷境确认中心设计", "governance settings uses Jiejing-owned permission copy")
+    require(app_js, "角色权限不替代单次操作确认", "governance settings preserves per-action confirmation")
     require(app_js, "AI 与素材", "merchant-friendly model settings title")
     require(app_js, "账号 AI 已连接", "model settings uses merchant-facing AI connection copy")
     require(app_js, "文字分析", "model settings exposes text analysis capability")
@@ -1026,7 +1027,8 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     billing_tab_start = settings_def_body.index('id: "billing"')
     billing_tab_body = settings_def_body[billing_tab_start:]
     for required_marker in [
-        'title: "计费与安全说明"',
+        'title: "费用与额度说明"',
+        'title: "退款、停用与安全说明"',
         'badge: "按需查看"',
     ]:
         require(billing_tab_body, required_marker, "merchant billing keeps secondary explanations collapsed")
@@ -1126,7 +1128,7 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
         "function renderSaasMerchantMediaCreditsPanel",
         "merchant_media_points_v2",
         "素材点余额",
-        "失败、超时或门禁未通过会返还",
+        "失败、超时或生成前检查未通过会返还",
         "function renderSaasMerchantDomesticPaymentPanel",
         "微信扫码付款",
         "付款、取消和退款状态会保留在当前账号",
@@ -1359,16 +1361,16 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
         "service_order_plain_workbench_v2",
         "customer_service_trace_v1",
         "今日客服与订单",
-        "客服、物流和售后放在一页",
-        "订单数据不等于买家消息",
+        "依据商品资料和订单状态准备回复",
+        "订单以最近一次同步为准，不代表当前待回复数量。",
         "买家原消息",
         "AI 建议",
         "商家已修改",
         "已发送",
         "演练记录",
-        "没有真实订单时不显示虚构买家",
-        "当前没有待处理订单",
-        "当前没有待处理内容",
+        "买家消息暂未接入",
+        "最近同步没有订单",
+        "尚无订单数据",
     ]:
         require(service_html + service_dynamic_body, expected, f"Service simple daily copy: {expected}")
     for internal_marker in [

@@ -121,6 +121,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("recent_product_tasks_browser", ["node", "tools/test_jiejing_recent_product_tasks.js"]),
     ("listing_product_fact_confirmation_ui", ["node", "tools/test_jiejing_listing_product_fact_confirmation_ui.js"]),
     ("listing_confirmation_display_scope", ["node", "tools/test_jiejing_listing_confirmation_display_scope.js"]),
+    ("merchant_content_workspace", ["node", "--test", "tools/test_jiejing_merchant_content_workspace.js"]),
     ("media_result_hierarchy", ["node", "tools/test_jiejing_media_result_hierarchy.js"]),
     ("listing_concrete_product_gate", [sys.executable, "tools/test_jiejing_listing_concrete_product_gate.py"]),
     ("ai_ceo_product_label_extraction", [sys.executable, "tools/test_jiejing_ai_ceo_product_label_extraction.py"]),
