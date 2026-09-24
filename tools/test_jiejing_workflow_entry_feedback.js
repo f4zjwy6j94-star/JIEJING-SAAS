@@ -207,10 +207,39 @@ test("explicit clearing, accepted submission and logout never resurrect an old c
   });
 });
 
+async function clickSettingsTool(page, action) {
+  const tools = page.locator("details.saas-model-more-tools");
+  assert.equal(await tools.count(), 1, "Settings exposes one secondary tools group");
+  if (!await tools.evaluate((node) => node.open)) {
+    await tools.locator(":scope > summary").click();
+  }
+  const button = tools.locator(`[data-saas-action="${action}"]`);
+  assert.equal(await button.isVisible(), true, "merchant can reach the tool before invoking it");
+  await button.click();
+}
+
+test("Settings secondary tools expand by keyboard without submitting an action", async () => {
+  await withMerchantPage(async (page, requests) => {
+    await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
+    const tools = page.locator("details.saas-model-more-tools");
+    const summary = tools.locator(":scope > summary");
+    const button = tools.locator('[data-saas-action="refresh-merchant-memory"]');
+    assert.equal(await tools.evaluate((node) => node.open), false);
+    assert.equal(await button.isVisible(), false);
+    await summary.focus();
+    await summary.press("Enter");
+    assert.equal(await button.isVisible(), true);
+    assert.equal(await tools.locator('[data-saas-action="run-model-value-rehearsal"]').isVisible(), true);
+    await summary.press("Enter");
+    assert.equal(await button.isVisible(), false);
+    assert.equal(requests.filter((request) => request.method !== "GET").length, 0);
+  });
+});
+
 test("Settings memory refresh failure gives a merchant recovery step without backend diagnostics", async () => {
   await withMerchantPage(async (page, requests) => {
     await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
-    await page.locator('[data-saas-action="refresh-merchant-memory"]').click();
+    await clickSettingsTool(page, "refresh-merchant-memory");
     await page.waitForFunction(() => !state.saasLoading);
     const feedback = await page.evaluate(() => ({ toast: document.querySelector("#actionToast").textContent, error: state.saasError }));
     assert.match(feedback.toast, /重试|稍后/);
@@ -224,7 +253,7 @@ test("Settings memory refresh failure gives a merchant recovery step without bac
 test("Settings report generation unknown failure does not expose operational proof or raw diagnostics", async () => {
   await withMerchantPage(async (page, requests) => {
     await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
-    await page.locator('[data-saas-action="run-model-value-rehearsal"]').click();
+    await clickSettingsTool(page, "run-model-value-rehearsal");
     await page.waitForFunction(() => !state.saasLoading);
     const feedback = await page.evaluate(() => ({ toast: document.querySelector("#actionToast").textContent, error: state.saasError }));
     assert.match(feedback.toast, /报告|上架资料/);
@@ -238,7 +267,7 @@ test("Settings report generation unknown failure does not expose operational pro
 test("Settings memory refresh success describes the updated merchant records and keeps the action usable", async () => {
   await withMerchantPage(async (page) => {
     await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
-    await page.locator('[data-saas-action="refresh-merchant-memory"]').click();
+    await clickSettingsTool(page, "refresh-merchant-memory");
     await page.waitForFunction(() => !state.saasLoading);
     assert.match(await page.locator("#actionToast").textContent(), /已更新 3 条经营记录/);
     assert.doesNotMatch(await page.locator("#actionToast").textContent(), /回填|后端|日志/);
@@ -254,7 +283,7 @@ test("Settings report generation explains known blockers and safely handles unkn
   ]) {
     await withMerchantPage(async (page, requests) => {
       await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
-      await page.locator('[data-saas-action="run-model-value-rehearsal"]').click();
+      await clickSettingsTool(page, "run-model-value-rehearsal");
       await page.waitForFunction(() => !state.saasLoading);
       const feedback = await page.locator("#actionToast").textContent();
       assert.match(feedback, scenario.expected);
@@ -269,7 +298,7 @@ test("Settings report generation explains known blockers and safely handles unkn
 test("Settings report generation success names the saved merchant outputs rather than an internal proof", async () => {
   await withMerchantPage(async (page) => {
     await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
-    await page.locator('[data-saas-action="run-model-value-rehearsal"]').click();
+    await clickSettingsTool(page, "run-model-value-rehearsal");
     await page.waitForFunction(() => !state.saasLoading);
     const feedback = await page.locator("#actionToast").textContent();
     assert.match(feedback, /报告和上架资料已生成/);
@@ -291,7 +320,7 @@ test("Settings report generation cannot claim success from an empty or unrecogni
   ]) {
     await withMerchantPage(async (page, requests) => {
       await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
-      await page.locator('[data-saas-action="run-model-value-rehearsal"]').click();
+      await clickSettingsTool(page, "run-model-value-rehearsal");
       await page.waitForFunction(() => !state.saasLoading);
       const feedback = await page.locator("#actionToast").textContent();
       assert.match(feedback, /未能确认.*完成/);
@@ -310,7 +339,7 @@ test("Settings memory refresh cannot invent a count from an incomplete or invali
   ]) {
     await withMerchantPage(async (page, requests) => {
       await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
-      await page.locator('[data-saas-action="refresh-merchant-memory"]').click();
+      await clickSettingsTool(page, "refresh-merchant-memory");
       await page.waitForFunction(() => !state.saasLoading);
       const feedback = await page.locator("#actionToast").textContent();
       assert.match(feedback, /未能确认.*完成/);
@@ -332,7 +361,7 @@ test("late Settings responses cannot overwrite the next store action or terminat
       });
       await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
       const oldStarted = page.waitForRequest((request) => request.method() === "POST");
-      await page.locator(`[data-saas-action="${oldAction}"]`).click();
+      await clickSettingsTool(page, oldAction);
       await oldStarted;
       assert.equal(pending.length, 1);
       await page.evaluate(({ store, connection, packet, modelSettings }) => {
@@ -347,7 +376,7 @@ test("late Settings responses cannot overwrite the next store action or terminat
         showActionToast("New store feedback"); renderSaasBackendPanel();
       }, { store, connection, packet, modelSettings });
       const nextStarted = page.waitForRequest((request) => request.method() === "POST" && request.url().includes("entry-next-store"));
-      await page.locator('[data-saas-action="refresh-merchant-memory"]').click();
+      await clickSettingsTool(page, "refresh-merchant-memory");
       await nextStarted;
       assert.equal(pending.length, 2);
       const oldResponse = page.waitForResponse((response) => response.url() === pending[0].request().url());
@@ -377,7 +406,7 @@ test("Settings requests remain invalid after leaving and returning to the same a
         });
         await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
         const oldStarted = page.waitForRequest((request) => request.method() === "POST");
-        await page.locator(`[data-saas-action="${oldAction}"]`).click();
+        await clickSettingsTool(page, oldAction);
         await oldStarted;
         await page.locator(`[data-saas-action="${oldAction}"]`).dispatchEvent("click");
         assert.equal(pending.length, 1, "a duplicate click cannot submit another costly action");
@@ -408,7 +437,7 @@ test("Settings requests remain invalid after leaving and returning to the same a
           shell: appShell.className, identity: state.saasIdentity?.user_id, user: state.saasUser?.user_id,
         }))));
         const newStarted = page.waitForRequest((request) => request.method() === "POST");
-        await page.locator('[data-saas-action="refresh-merchant-memory"]').click();
+        await clickSettingsTool(page, "refresh-merchant-memory");
         await newStarted;
         assert.equal(pending.length, 2);
         const oldResponse = page.waitForResponse((response) => response.url() === pending[0].request().url());
@@ -432,7 +461,7 @@ test("Settings requests remain invalid after leaving and returning to the same a
 test("Settings memory refresh accepts an explicit zero without inventing newly updated records", async () => {
   await withMerchantPage(async (page) => {
     await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
-    await page.locator('[data-saas-action="refresh-merchant-memory"]').click();
+    await clickSettingsTool(page, "refresh-merchant-memory");
     await page.waitForFunction(() => !state.saasLoading);
     assert.match(await page.locator("#actionToast").textContent(), /已更新 0 条经营记录/);
   }, { respond: (endpoint, method) => method === "POST" && endpoint.endsWith("/merchant-memory/refresh")
@@ -446,7 +475,7 @@ test("an older Settings failure cannot replace a newer refresh feedback or relea
     await page.route("**/api/me", () => {});
     await page.evaluate(() => { state.saasSettingsTab = "model"; setView("connect"); });
     const actionStarted = page.waitForRequest((request) => request.method() === "POST");
-    await page.locator('[data-saas-action="refresh-merchant-memory"]').click();
+    await clickSettingsTool(page, "refresh-merchant-memory");
     await actionStarted;
     const refreshStarted = page.waitForRequest((request) => request.url().endsWith("/api/me"));
     await page.evaluate(() => { void refreshSaasState({ silent: true }); });
