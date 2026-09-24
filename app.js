@@ -28821,41 +28821,38 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
   const mediaState = saasMediaGenerationState();
   const connectionAttempt = saasModelConnectionAttemptState();
   const recoveryRequired = connectionAttempt.state === "storage_recovery_required";
+  const connectionReady = merchantModelConfigured && connectionAttempt.state === "ready";
+  const capabilityRows = `
+      <div class="saas-model-capability-list" data-ai-media-capability-grid="merchant_ai_media_capabilities_v1">
+        <details class="is-${escapeHtml(textAiState.tone)}" data-ai-media-capability="text_analysis">
+          <summary><span>文字分析</span><strong>${escapeHtml(textAiState.title || textAiState.value)}</strong></summary>
+          <p>${escapeHtml(textAiState.detail)}</p>
+        </details>
+        <details class="is-${escapeHtml(visionState.tone)}" data-ai-media-capability="image_recognition">
+          <summary><span>图片识别</span><strong>${escapeHtml(visionState.title)}</strong></summary>
+          <p>${escapeHtml(visionState.detail)}</p>
+          <p class="saas-settings-capability-boundary">不支持图片的模型不会被要求猜图，图片先由支持视觉的服务提取事实，再交给 AI CEO 分析与填写 Listing。</p>
+        </details>
+        <details class="is-${escapeHtml(searchState.tone)}" data-ai-media-capability="web_search">
+          <summary><span>联网搜索</span><strong>${escapeHtml(searchState.title)}</strong></summary>
+          <p>${escapeHtml(searchState.detail)}</p>
+        </details>
+        <details class="is-${escapeHtml(mediaState.tone)}" data-ai-media-capability="image_generation">
+          <summary><span>图片生成</span><strong>${escapeHtml(mediaState.title)}</strong></summary>
+          <p>${escapeHtml(mediaState.detail)}</p>
+        </details>
+      </div>`;
   return `
-    <section class="saas-merchant-evidence-panel saas-model-provider-panel" aria-label="AI 连接">
-      <div class="saas-merchant-path-head">
+    <section class="saas-merchant-evidence-panel saas-model-provider-panel saas-model-settings-workspace" aria-label="AI 连接">
+      <header class="saas-model-overview">
+        <h3>${merchantModelConfigured ? "账号 AI 已连接" : platformTrial.allowed === true ? "可先试用，再连接账号自己的 AI" : "连接一次，当前账号下的店铺都能使用"}</h3>
+        ${active?.model ? `<p class="saas-model-current-model">${escapeHtml(active.model)}</p>` : ""}
+        <p>${merchantModelConfigured ? "AI CEO、市场报告与上架文案优先使用账号 AI，不消耗捷境试用额度。" : "连接账号 AI 后，用于对话、市场报告与上架文案；未配置时，可用的捷境试用 AI 会消耗试用额度。"}图片和视频仍由素材工坊生成并审核，单独计量。</p>
+      </header>
+      <details class="saas-model-connection-details" ${connectionReady ? "" : "open"}>
+        <summary>连接检测详情</summary>
+        <div class="saas-model-connection-progress is-${escapeHtml(connectionAttempt.tone)}" data-model-connection-state="${escapeHtml(connectionAttempt.state)}">
         <div>
-          <span>账号 AI</span>
-          <strong>${merchantModelConfigured ? "账号 AI 已连接" : platformTrial.allowed === true ? "可先试用，再连接账号自己的 AI" : "连接一次，当前账号下的店铺都能使用"}</strong>
-          <p>保存商家自己的 DeepSeek 或 OpenAI 连接后，AI CEO 对话、市场报告和上架文案都优先使用它；不会消耗捷境试用额度。图片和视频仍由素材工坊生成并审核。</p>
-        </div>
-      </div>
-      <div class="saas-merchant-evidence-grid" data-ai-media-capability-grid="merchant_ai_media_capabilities_v1">
-        <article class="is-${escapeHtml(textAiState.tone)}" data-ai-media-capability="text_analysis">
-          <span>文字分析</span>
-          <strong>${escapeHtml(textAiState.title || textAiState.value)}</strong>
-          <small>${escapeHtml(textAiState.detail)}</small>
-        </article>
-        <article class="is-${escapeHtml(visionState.tone)}" data-ai-media-capability="image_recognition">
-          <span>图片识别</span>
-          <strong>${escapeHtml(visionState.title)}</strong>
-          <small>${escapeHtml(visionState.detail)}</small>
-        </article>
-        <article class="is-${escapeHtml(searchState.tone)}" data-ai-media-capability="web_search">
-          <span>联网搜索</span>
-          <strong>${escapeHtml(searchState.title)}</strong>
-          <small>${escapeHtml(searchState.detail)}</small>
-        </article>
-        <article class="is-${escapeHtml(mediaState.tone)}" data-ai-media-capability="image_generation">
-          <span>图片生成</span>
-          <strong>${escapeHtml(mediaState.title)}</strong>
-          <small>${escapeHtml(mediaState.detail)}</small>
-        </article>
-      </div>
-      <p class="saas-settings-capability-boundary">不支持图片的模型不会被要求猜图，图片先由支持视觉的服务提取事实，再交给 AI CEO 分析与填写 Listing。</p>
-      <div class="saas-model-connection-progress is-${escapeHtml(connectionAttempt.tone)}" data-model-connection-state="${escapeHtml(connectionAttempt.state)}">
-        <div>
-          <span>当前账号 AI</span>
           <strong>${escapeHtml(connectionAttempt.title)}</strong>
           <p>${escapeHtml(connectionAttempt.detail)}</p>
         </div>
@@ -28869,11 +28866,8 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
             ? `<button class="secondary-action" type="button" data-saas-action="verify-model-connection" ${state.saasLoading || !ctx.store ? "disabled" : ""}>重新检测连接</button>`
             : ""
         }
-      </div>
-      <div class="runtime-bridge-actions saas-model-live-actions">
-        <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelAvailable ? "disabled" : ""}>生成报告和上架资料</button>
-        <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" ${state.saasLoading || !ctx.store ? "disabled" : ""}>更新经营记录</button>
-      </div>
+        </div>
+      </details>
       <details class="saas-model-config-details" ${recoveryRequired || (merchantModelConfigured && connectionAttempt.state === "ready") ? "" : "open"}>
         <summary>
           <strong>${recoveryRequired ? "重新配置账号 AI" : merchantModelConfigured ? "调整账号 AI" : "配置账号 AI"}</strong>
@@ -28916,6 +28910,17 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
           <div class="runtime-bridge-actions">
             <button class="primary-action" type="button" data-saas-action="save-model-api-key" ${state.saasLoading || !ctx.store ? "disabled" : ""}>保存并检测 AI 连接</button>
           </div>
+        </div>
+      </details>
+      <section class="saas-model-capabilities" aria-label="AI 与素材能力">
+        <h3>可用能力</h3>
+        ${capabilityRows}
+      </section>
+      <details class="saas-model-more-tools">
+        <summary>更多 AI 工具</summary>
+        <div class="runtime-bridge-actions saas-model-live-actions">
+          <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelAvailable ? "disabled" : ""}>生成报告和上架资料</button>
+          <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" ${state.saasLoading || !ctx.store ? "disabled" : ""}>更新经营记录</button>
         </div>
       </details>
     </section>

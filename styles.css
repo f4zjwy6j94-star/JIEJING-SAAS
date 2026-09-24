@@ -41391,6 +41391,120 @@ body.saas-public-mvp .saas-model-provider-panel .saas-sync-failure-box {
   overflow-wrap: anywhere;
 }
 
+/* Account AI: one overview, actionable configuration, then compact capability rows. */
+body.saas-public-mvp #appShell .saas-model-settings-workspace {
+  --model-line: #dbe3df;
+  --model-muted: #53635d;
+  display: grid;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.saas-public-mvp #appShell .saas-model-settings-workspace h3 {
+  margin: 0;
+  color: #1e302b;
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+body.saas-public-mvp #appShell .saas-model-overview {
+  display: grid;
+  gap: 8px;
+  padding: 0 0 16px;
+}
+
+body.saas-public-mvp #appShell .saas-model-overview p {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--model-muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+body.saas-public-mvp #appShell .saas-model-overview .saas-model-current-model {
+  color: #126b5d;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp #appShell .saas-model-settings-workspace > details {
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--model-line);
+  border-radius: 0;
+  background: transparent;
+}
+
+body.saas-public-mvp #appShell .saas-model-settings-workspace summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-height: 48px;
+  padding: 12px 0;
+  color: #243b33;
+  font-size: 14px;
+  line-height: 1.6;
+  cursor: pointer;
+  list-style: none;
+}
+
+body.saas-public-mvp #appShell .saas-model-settings-workspace summary::-webkit-details-marker { display: none; }
+body.saas-public-mvp #appShell .saas-model-settings-workspace summary::after {
+  content: "";
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  margin-right: 4px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(-45deg);
+}
+body.saas-public-mvp #appShell .saas-model-settings-workspace details[open] > summary::after { transform: rotate(45deg); }
+body.saas-public-mvp #appShell .saas-model-settings-workspace summary:hover { color: #08766e; }
+body.saas-public-mvp #appShell .saas-model-settings-workspace summary:focus-visible {
+  outline: 2px solid #08766e;
+  outline-offset: 3px;
+}
+body.saas-public-mvp #appShell .saas-model-settings-workspace summary small { color: var(--model-muted); }
+body.saas-public-mvp #appShell .saas-model-settings-workspace .saas-model-connection-progress { margin: 0 0 16px; }
+body.saas-public-mvp #appShell .saas-model-settings-workspace .saas-sync-failure-box { margin: 0 0 16px; }
+
+body.saas-public-mvp #appShell .saas-model-capabilities { padding-top: 28px; }
+body.saas-public-mvp #appShell .saas-model-capabilities h3 { margin-bottom: 8px; font-size: 17px; }
+body.saas-public-mvp #appShell .saas-model-capability-list > details { border-bottom: 1px solid var(--model-line); }
+body.saas-public-mvp #appShell .saas-model-capability-list summary { flex-wrap: nowrap; }
+body.saas-public-mvp #appShell .saas-model-capability-list summary > span { flex: 0 0 88px; }
+body.saas-public-mvp #appShell .saas-model-capability-list summary strong {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+body.saas-public-mvp #appShell .saas-model-capability-list .is-green summary strong { color: #126b5d; }
+body.saas-public-mvp #appShell .saas-model-capability-list .is-amber summary strong { color: #80591b; }
+body.saas-public-mvp #appShell .saas-model-capability-list .is-red summary strong { color: #a3342b; }
+body.saas-public-mvp #appShell .saas-model-capability-list p {
+  margin: 0 0 12px;
+  max-width: 68ch;
+  color: var(--model-muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+body.saas-public-mvp #appShell .saas-model-settings-workspace .saas-model-more-tools { margin-top: 24px; }
+body.saas-public-mvp #appShell .saas-model-more-tools .runtime-bridge-actions { margin: 0 0 16px; }
+
+@media (max-width: 600px) {
+  body.saas-public-mvp #appShell .saas-model-config-details summary small { flex-basis: 100%; order: 1; }
+  body.saas-public-mvp #appShell .saas-model-capability-list summary > span { flex-basis: 72px; }
+}
+
 body.saas-public-mvp .saas-settings-one-glance {
   display: grid;
   gap: 10px;

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,7 @@ def main() -> None:
     if 'merchantModelConfigured ? "账号 AI 已连接"' not in panel:
         raise AssertionError("AI settings summary needs one truthful connected label")
 
+    subprocess.run(["node", str(ROOT / "tools/test_jiejing_ai_settings_hierarchy.js")], cwd=ROOT, check=True)
     print("PASS jiejing_ai_settings_tenant_scope")
 
 
