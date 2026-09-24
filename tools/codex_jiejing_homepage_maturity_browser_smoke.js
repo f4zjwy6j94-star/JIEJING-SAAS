@@ -230,6 +230,8 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
   await page.goto(`${base}/index.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForSelector('[data-home-workflow="merchant-loop-v1"]', { timeout: 20000 });
   const initialWorkflow = await workflowSnapshot(page);
+  await page.locator('[data-home-workflow-jump="media"]').click();
+  const showcaseWorkflow = await workflowSnapshot(page);
   await page.locator('button[data-home-workflow-step="media"]').click();
   const mediaWorkflow = await workflowSnapshot(page);
   await page.waitForSelector('[data-home-material-studio="listing-media-v3"]', { timeout: 20000 });
@@ -280,6 +282,11 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
       hero_node_aria_labels: heroNodes.map((node) => node.getAttribute("aria-label") || ""),
       hero_nodes_keyboard_ready: heroNodes.every((node) => node.tagName === "BUTTON" && node.hasAttribute("aria-pressed")),
       hero_nodes_visible: heroNodes.every((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden"),
+      hero_nodes_clear_of_core: heroNodes.every((node) => {
+        const core = heroScope.querySelector('[data-home-ai-ceo-core]')?.getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        return core && !(box.left < core.right && box.right > core.left && box.top < core.bottom && box.bottom > core.top);
+      }),
       hero_node_mappings_ready: heroNodes.every((node) => Boolean(
         node.dataset.homeAiCeoResultCopy?.trim() &&
         (node.textContent.trim() || node.getAttribute("aria-label")?.trim())
@@ -302,6 +309,7 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
       legacy_hero_container_count: heroScope?.querySelectorAll("#signalCanvas, .home-command-steps").length || 0,
       hero_result_visible: heroScope?.querySelector('[data-home-ai-ceo-result="active-result"]')?.getClientRects().length > 0,
       login_is_text: Boolean(login?.classList.contains("button-text")),
+      login_visible: Boolean(login?.getClientRects().length && getComputedStyle(login).visibility !== "hidden"),
       work_record_marketing_count: homepageText.includes("工作记录") ? 1 : 0,
       workflow_contract_count: workflowScope?.querySelectorAll('[data-home-workflow="merchant-loop-v1"]').length || 0,
       workflow_step_order: workflowSteps.map((step) => step.dataset.homeWorkflowStep),
@@ -359,6 +367,7 @@ async function inspectViewport(browser, viewport, name, reducedMotion = "no-pref
     };
   });
   state.workflow_default_goal = initialWorkflow.synchronized && initialWorkflow.active_step === "goal";
+  state.showcase_opens_media = showcaseWorkflow.synchronized && showcaseWorkflow.active_step === "media";
   state.workflow_pointer_switch = mediaWorkflow.synchronized && mediaWorkflow.active_step === "media";
   if (name !== "reduced-motion") {
     await page.screenshot({ path: path.join("output", "browser-smoke", `homepage-maturity-${name}.png`), fullPage: true });
@@ -720,6 +729,7 @@ async function main() {
         JSON.stringify(item.hero_node_order) === JSON.stringify(approvedHeroNodes) &&
         item.hero_nodes_keyboard_ready &&
         item.hero_nodes_visible &&
+        item.hero_nodes_clear_of_core &&
         item.hero_node_mappings_ready &&
         item.hero_node_texts.every((text, index) => text.includes(approvedHeroLabels[index]) || item.hero_node_aria_labels[index].includes(approvedHeroLabels[index])) &&
         item.hero_initial_active_node_count === 1 &&
@@ -734,6 +744,7 @@ async function main() {
         item.unmarked_hero_flow_line_count === 0 &&
         item.legacy_hero_container_count === 0 &&
         item.login_is_text &&
+        item.login_visible &&
         item.work_record_marketing_count === 0 &&
         item.workflow_contract_count === 1 &&
         item.workflow_step_count === 6 &&
@@ -746,6 +757,7 @@ async function main() {
         item.workflow_live_ready &&
         item.workflow_workspace_cta_count === 1 &&
         item.workflow_default_goal &&
+        item.showcase_opens_media &&
         item.workflow_pointer_switch &&
         JSON.stringify(item.material_stage_order) === JSON.stringify(["input", "generation", "review", "listing"]) &&
         JSON.stringify(item.material_task_order) === JSON.stringify(["main", "scene", "selling-points", "detail"]) &&

@@ -13,6 +13,36 @@ ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "index.html").read_text(encoding="utf-8")
 
 
+def assert_premium_surface_contract() -> None:
+    asset = "assets/jiejing-premium-surfaces.css"
+    css = (ROOT / asset).read_text(encoding="utf-8")
+    app = (ROOT / "app.html").read_text(encoding="utf-8")
+    for entry in (INDEX, app):
+        assert entry.count(f'href="./{asset}?v=20260924-pine-v2"') == 1
+    assert app.index(asset) < app.index('id="jiejing-cockpit-layout-guard"')
+    assert f'"{asset}"' in (ROOT / "deploy/apply-staging-patch.sh").read_text(encoding="utf-8")
+    assert "prefers-reduced-motion: reduce" in css
+    assert "@import" not in css and "url(" not in css, "no new external design dependencies"
+    for protected in ("app-start-requested", "app-shell-empty", "saas-ai-ceo-chatgpt-shell", "#ceoInput", "!important"):
+        assert protected not in css, f"visual layer must not override functional guard: {protected}"
+    assert INDEX.count('data-home-workflow-jump="media"') == 1
+    assert 'setActiveStep(link.dataset.homeWorkflowJump || "goal", { focus: true })' in INDEX
+    assert "交互示例 · 使用旅行收纳袋展示" in INDEX
+    assert "home-product-showcase" in INDEX and "home-product-showcase" in css
+    # Read actual palette tokens so later color edits cannot silently reduce
+    # body-copy contrast on the dark hero. Rendered-state checks remain separate.
+    palette = dict(re.findall(r"(--home-[\w-]+):\s*(#[0-9a-fA-F]{6})\s*;", css))
+
+    def luminance(color: str) -> float:
+        channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4 for value in channels]
+        return sum(value * weight for value, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+    for text_token in ("--home-on-pine", "--home-on-pine-muted"):
+        light, dark = sorted((luminance(palette[text_token]), luminance(palette["--home-pine"])), reverse=True)
+        assert (light + 0.05) / (dark + 0.05) >= 4.5, f"insufficient hero text contrast: {text_token}"
+
+
 def visible_text_blocks(source: str) -> list[str]:
     block_closed = re.sub(
         r"</(?:p|li|article|section|aside|header|footer|div|figure)\s*>",
@@ -264,4 +294,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    assert_premium_surface_contract()
     main()

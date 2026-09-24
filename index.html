@@ -5436,6 +5436,7 @@
         }
       }
     </style>
+    <link rel="stylesheet" href="./assets/jiejing-premium-surfaces.css?v=20260924-pine-v2" />
   </head>
   <body class="public-home-v3" data-home-version="premium-v3">
     <div class="scroll-progress" aria-hidden="true"><span></span></div>
@@ -5462,7 +5463,7 @@
         <p class="eyebrow">捷境 JIEJING / eBay AI 经营工作台</p>
           <h1><span>让 eBay 经营</span><span>少一点重复，</span><span>多一点自动推进。</span></h1>
         <p class="lead">
-          捷境把市场判断、商品资料、Listing、素材和客服任务组织进一个 AI CEO 工作台。AI 负责生成、预填和推进；需要授权或真正影响店铺的动作，由商家确认后执行。
+          从选品调研到 Listing、商品图片与客服回复，在一个工作台里完成。让 AI 整理资料、生成草稿，把经营判断留给你。
         </p>
         <div class="hero-actions">
           <button class="button" type="button" id="heroWorkbenchLogin" data-home-primary-cta="jiejing_ai_ceo_workspace_v2">进入 AI CEO 工作台</button>
@@ -5485,12 +5486,12 @@
           <path data-home-ai-ceo-line="finance" d="M320 330 C430 500 470 520 510 560"></path>
         </svg>
         <div class="ceo-core" data-home-ai-ceo-core="merchant-goal-router-v3">
-          <div><strong>AI CEO</strong><span>接目标 · 排队列<br />留记录 · 等确认</span></div>
+          <div><strong>AI CEO</strong><span>理解目标 · 整理资料<br />协同推进 · 由你确认</span></div>
         </div>
         <div class="hero-ops-board" aria-label="AI CEO 推进方式">
-          <article class="is-active"><span>01</span><strong>接收目标</strong><small>一句话进入经营流</small></article>
+          <article class="is-active"><span>01</span><strong>接收目标</strong><small>从你的经营需求开始</small></article>
           <article><span>02</span><strong>整理与生成</strong><small>资料、报告、草稿</small></article>
-          <article><span>03</span><strong>确认执行</strong><small>关键动作先停住</small></article>
+          <article><span>03</span><strong>确认执行</strong><small>重要操作由你决定</small></article>
         </div>
         <button class="role-node node-market" type="button" data-home-ai-ceo-node="market" data-home-ai-ceo-result-copy="整理需求、竞品、价格带、退货风险和供货可行性。" aria-label="市场与货源：查看商家结果" aria-pressed="true"><strong>市场与货源</strong><span>需求、竞品、价格带与供货可行性。</span></button>
         <button class="role-node node-listing" type="button" data-home-ai-ceo-node="listing" data-home-ai-ceo-result-copy="依据商品事实生成标题、类目、属性和描述草稿。" aria-label="Listing 草稿：查看商家结果" aria-pressed="false"><strong>Listing 草稿</strong><span>标题、类目、参数与描述。</span></button>
@@ -5532,6 +5533,25 @@
           <small>发布、退款、预算、采购付款等动作不会静默越权。</small>
         </article>
       </div>
+      <div class="home-product-showcase" aria-label="商品素材工作流展示">
+        <div class="home-product-showcase-copy">
+          <p class="eyebrow">把商品的优势，展示出来</p>
+          <h3>一份商品资料。<br />不止一种表达。</h3>
+          <p>白底主图讲清商品，场景图呈现用途，细节图回答买家疑问。在同一份资料基础上生成、比较，再选入 Listing。</p>
+          <a class="home-showcase-link" href="#workflow" data-home-workflow-jump="media">体验素材工作流 <span aria-hidden="true">↗</span></a>
+          <small>交互示例 · 使用旅行收纳袋展示</small>
+        </div>
+        <div class="home-product-showcase-images">
+          <figure class="home-showcase-main">
+            <img src="assets/travel-compression-scene-v2.webp" alt="旅行收纳袋的场景图示例：展示商品与行李收纳的关系" width="1024" height="1024" loading="lazy" decoding="async" />
+            <figcaption>场景图 <span>让用途一目了然</span></figcaption>
+          </figure>
+          <figure class="home-showcase-detail">
+            <img src="assets/travel-compression-detail-v2.webp" alt="旅行收纳袋面料与拉链的细节图示例" width="1024" height="1024" loading="lazy" decoding="async" />
+            <figcaption>细节图 <span>把细节交给买家核对</span></figcaption>
+          </figure>
+        </div>
+      </div>
     </section>
 
     <main>
@@ -5541,7 +5561,7 @@
             <p class="eyebrow">捷境能做什么</p>
             <h2>从市场判断到店铺经营，围绕同一份商品事实推进。</h2>
           </div>
-          <p>AI CEO 负责理解目标并组织任务，业务页面负责让商家核对资料和结果。复杂连接、模型与账单设置统一留在设置中心。</p>
+          <p>从发现机会到准备上架，不必在多个工具间反复搬运资料。每一步的来源、草稿和待办，都能接着用。</p>
         </div>
         <div class="home-capability-grid">
           <article><span>01 / 市场调研</span><strong>判断机会与风险</strong><p>整理需求、竞品、价格带和候选方向，说明依据与尚未确认的假设。</p></article>
@@ -6821,6 +6841,11 @@
         });
 
         workspaceCta?.addEventListener("click", () => openWorkbenchOrAuth());
+        document.querySelectorAll("[data-home-workflow-jump]").forEach((link) => {
+          link.addEventListener("click", () => {
+            setActiveStep(link.dataset.homeWorkflowJump || "goal", { focus: true });
+          });
+        });
         const initial = steps.find((step) => step.getAttribute("aria-pressed") === "true") || steps[0];
         setActiveStep(initial.dataset.homeWorkflowStep || "goal", { announce: false });
       }

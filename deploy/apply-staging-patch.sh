@@ -132,6 +132,7 @@ FILES=(
   "assets/jiejing-first-party-analytics.js"
   "assets/jiejing-ops-panels.js"
   "assets/jiejing-settings-panels.js"
+  "assets/jiejing-premium-surfaces.css"
   "assets/travel-compression-main-v2.webp"
   "assets/travel-compression-scene-v2.webp"
   "assets/travel-compression-feature-v2.webp"
