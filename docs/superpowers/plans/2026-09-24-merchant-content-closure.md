@@ -27,3 +27,10 @@ No OAuth, sync, model/image generation, payment/refund, eBay write, account clea
 - Offline renderer regressions reproduce old counter error (red before change); new tests cover scope, aliases, records, missing data, escaping and action preservation. Added to deployment gate as `merchant_content_workspace` (catalog now 242; no full gate run for this candidate yet).
 - Local real render inspection at 1440 and 820: empty/pending/approved confirmation, service history and count, Settings tabs and disclosure; no horizontal document overflow. Approval buttons absent for approved history; replies visible before confirmation; expansion controls work. Local page console error/warn empty. These are synthetic fixtures, not new merchant or eBay execution evidence.
 - Visual theme/CSS unchanged. Production remains the preceding release until separately approved deployment.
+
+## Deployment preflight correction (09-25)
+
+- First clean 19303b4 gate passed 241/242; `merchant_project_status_browser` timed out at 180 seconds. The smoke test still waited for retired service empty-state copy, and its browser only closed on the success path, masking the actual 20-second assertion timeout.
+- Added `withOwnedBrowser` with unconditional finally cleanup and injected-launch unit coverage (red, then green for success/failure). With only cleanup changed, the original browser test reproduced the old-copy timeout and exited normally with failure instead of hanging.
+- Updated the smoke expectation to the approved empty state, including both buyer-message unavailability and no automatic draft sending. The complete isolated browser flow then passed desktop/tablet/mobile and project reload checks with no page errors or bad responses. No product/runtime change or timeout increase was needed.
+- Content tests now include 11 cases; gate catalog remains 242. The final committed candidate still needs its own complete gate, bundle, dry-run, apply and live acceptance. Never merge the earlier failed report into a claimed pass.

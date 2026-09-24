@@ -5,6 +5,22 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const test = require("node:test");
+const { withOwnedBrowser } = require("./codex_jiejing_merchant_project_status_browser_smoke");
+
+test("browser smoke closes its owned browser when an assertion fails", async () => {
+  const failure = new Error("expected isolated assertion failure");
+  let closes = 0;
+  const owned = { close: async () => { closes += 1; } };
+  await assert.rejects(withOwnedBrowser(async () => { throw failure; }, async () => owned), (error) => error === failure);
+  assert.equal(closes, 1);
+});
+
+test("browser smoke closes its owned browser on success", async () => {
+  let closes = 0;
+  const owned = { close: async () => { closes += 1; } };
+  assert.equal(await withOwnedBrowser(async (browser) => browser === owned, async () => owned), true);
+  assert.equal(closes, 1);
+});
 const source = fs.readFileSync(path.join(__dirname, "../app.js"), "utf8");
 function extract(name) {
   const start = source.indexOf(`function ${name}(`);

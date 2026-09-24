@@ -8,7 +8,6 @@ const net = require("net");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
-const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
 const { assertSafeMutationBase } = require("./jiejing_browser_smoke_mutation_guard");
 
 let base = process.env.JIEJING_TEST_BASE || "";
@@ -153,6 +152,15 @@ function contentTypeFor(filePath) {
   return "application/octet-stream";
 }
 
+async function withOwnedBrowser(run, launch = () => require("../output/codex-playwright-deps/node_modules/playwright-core").chromium.launch({ channel: browserChannel, headless: true })) {
+  const browser = await launch();
+  try {
+    return await run(browser);
+  } finally {
+    await browser.close();
+  }
+}
+
 async function runSmoke() {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const email = `codex-project-status-${suffix}@local.invalid`;
@@ -246,7 +254,7 @@ async function runSmoke() {
     );
   }
 
-  const browser = await chromium.launch({ channel: browserChannel, headless: true });
+  return withOwnedBrowser(async (browser) => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
   const baseUrl = new URL(base);
   await context.addCookies([
@@ -360,11 +368,9 @@ async function runSmoke() {
     };
   });
   if (initialDiagnostic.snapshot_version !== "merchant_project_status_v1") {
-    await browser.close();
     throw new Error(`merchant project snapshot did not load in browser: ${JSON.stringify(initialDiagnostic)}`);
   }
   if (initialDiagnostic.current_view !== "product" || initialDiagnostic.strip_count < 1) {
-    await browser.close();
     throw new Error(`merchant project strip did not mount: ${JSON.stringify(initialDiagnostic)}`);
   }
   await page.waitForSelector('#view-product.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 60000 });
@@ -515,8 +521,9 @@ async function runSmoke() {
       );
       return (
         labels.length === 0 &&
-        root?.textContent?.includes("当前没有买家消息或回复记录") === true &&
-        root?.textContent?.includes("订单数据不等于买家消息") === true
+        root?.textContent?.includes("还没有回复记录") === true &&
+        root?.textContent?.includes("买家消息暂未接入") === true &&
+        root?.textContent?.includes("草稿不会自动发送") === true
       );
     },
     null,
@@ -528,8 +535,9 @@ async function runSmoke() {
       present: Boolean(root),
       state_labels: Array.from(root?.querySelectorAll(".saas-service-lane-grid article strong") || []).map((item) => item.textContent.trim()),
       record_count: root?.querySelectorAll("[data-service-trace-id]").length || 0,
-      empty_state: root?.textContent?.includes("当前没有买家消息或回复记录") === true,
-      honest_order_boundary: root?.textContent?.includes("订单数据不等于买家消息") === true,
+      empty_state: root?.textContent?.includes("还没有回复记录") === true,
+      honest_order_boundary: root?.textContent?.includes("买家消息暂未接入") === true,
+      drafts_not_auto_sent: root?.textContent?.includes("草稿不会自动发送") === true,
     };
   });
 
@@ -621,7 +629,6 @@ async function runSmoke() {
   await page.evaluate(() => setView("product"));
   await page.waitForSelector('#view-product.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 20000 });
   await page.screenshot({ path: path.join("output", "browser-smoke", "merchant-project-status-phase4.png"), fullPage: true });
-  await browser.close();
 
   const viewChecksPass = Object.values(viewResults).every(
     (item) => item.strip_present && item.stage_count === 8 && item.current_count === 1 && item.project_match,
@@ -686,6 +693,7 @@ async function runSmoke() {
     serviceTraceUi.record_count === 0 &&
     serviceTraceUi.empty_state &&
     serviceTraceUi.honest_order_boundary &&
+    serviceTraceUi.drafts_not_auto_sent &&
     serviceTraceUi.state_labels.length === 0 &&
     pageErrors.length === 0 &&
     badResponses.length === 0;
@@ -706,6 +714,7 @@ async function runSmoke() {
     service_trace_root: serviceTraceUi.present,
     service_trace_empty: serviceTraceUi.record_count === 0 && serviceTraceUi.empty_state,
     service_trace_order_boundary: serviceTraceUi.honest_order_boundary,
+    service_trace_drafts_not_sent: serviceTraceUi.drafts_not_auto_sent,
     service_trace_empty_labels_suppressed: serviceTraceUi.state_labels.length === 0,
     page_errors: pageErrors.length === 0,
     bad_responses: badResponses.length === 0,
@@ -740,6 +749,7 @@ async function runSmoke() {
   };
   console.log(JSON.stringify(result, null, 2));
   if (!ok) process.exitCode = 1;
+  });
 }
 
 async function main() {
@@ -757,6 +767,8 @@ async function main() {
     await stopOwnedBackend(ownedBackend);
   }
 }
+
+module.exports = { withOwnedBrowser };
 
 if (require.main === module) {
   main().catch((error) => {
