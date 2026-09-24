@@ -5096,8 +5096,10 @@ function saasMediaAssetJobCanRework(job = {}) {
 
 function renderSaasMediaAssetJobsPanel(ctx = saasMerchantWorkbenchContext()) {
   const jobs = saasMediaAssetJobsForDisplay();
-  const waitingReviewCount = jobs.filter((job) => ["waiting_review", "provider_returned"].includes(String(job.status || ""))).length;
-  const approvedCount = jobs.filter((job) => String(job.status || "") === "approved_for_listing").length;
+  const listingJobs = jobs.filter((job) => !saasMediaAssetJobIsConceptOnly(job));
+  const conceptCount = jobs.length - listingJobs.length;
+  const waitingReviewCount = listingJobs.filter((job) => ["waiting_review", "provider_returned"].includes(String(job.status || ""))).length;
+  const approvedCount = listingJobs.filter((job) => String(job.status || "") === "approved_for_listing").length;
   const blockedCount = jobs.filter((job) => ["validation_failed", "needs_rework"].includes(String(job.status || ""))).length;
   const missingText = ctx.missingKeys.length ? ctx.missingKeys.slice(0, 4).join("、") : "实物一致性、图片权利、平台规则";
   return `
@@ -5105,12 +5107,13 @@ function renderSaasMediaAssetJobsPanel(ctx = saasMerchantWorkbenchContext()) {
       <div class="media-quality-head">
         <div>
           <span>素材任务记录</span>
-          <strong>${jobs.length ? "素材清单正在等待审核" : "等待商品草稿或来源图"}</strong>
+          <strong>${jobs.length ? "素材版本与审核" : "等待商品草稿或来源图"}</strong>
           <p>图片、详情页和视频脚本统一进入素材清单后再审核；没有完整清单就不能用于 Listing。</p>
         </div>
         <em>${jobs.length ? `${jobs.length} 个记录` : "未生成"}</em>
       </div>
       <div class="saas-media-asset-summary">
+        ${conceptCount ? `<article><span>概念参考</span><strong>${conceptCount}</strong><p>不可审核为刊登素材。</p></article>` : ""}
         <article><span>待审核</span><strong>${waitingReviewCount}</strong><p>先看实物一致和权利。</p></article>
         <article><span>可回写</span><strong>${approvedCount}</strong><p>只回写草稿，不直接发布。</p></article>
         <article><span>需处理</span><strong>${blockedCount || "待补资料"}</strong><p>${blockedCount ? "按失败原因补资料或重做。" : escapeHtml(missingText)}</p></article>
@@ -5154,7 +5157,7 @@ function renderSaasMediaAssetJobsPanel(ctx = saasMerchantWorkbenchContext()) {
   `;
 }
 
-function renderSaasMediaGenerationReadinessPanel() {
+function renderSaasMediaGenerationReadinessPanel({ expanded = false } = {}) {
   const mediaState = saasMediaGenerationState();
   const imageReady = mediaState.liveReady === true;
   const videoReady = mediaState.videoReady === true;
@@ -5174,6 +5177,8 @@ function renderSaasMediaGenerationReadinessPanel() {
         </div>
         <em>${escapeHtml(mediaState.liveReady ? "可生成，先审核" : "先演练，不消耗额度")}</em>
       </div>
+      <details class="saas-media-service-details"${imageReady && !expanded ? "" : " open"}>
+        <summary>生成服务与用量说明</summary>
       <div class="saas-media-generation-readiness-grid">
         <article class="${imageReady ? "is-green" : "is-amber"}">
           <span>图片</span>
@@ -5191,6 +5196,7 @@ function renderSaasMediaGenerationReadinessPanel() {
           <p>不会自动发布、投广告或把未审核素材写进正式上架。</p>
         </article>
       </div>
+      </details>
     </section>
   `;
 }
@@ -5369,7 +5375,9 @@ function renderSaasMediaStudioStatus() {
   if (mediaGenerationReadinessPanel) {
     replaceJiejingTrustedHtml(
       mediaGenerationReadinessPanel,
-      trustedJiejingHtml(renderSaasMediaGenerationReadinessPanel(), "media.generation_readiness"),
+      trustedJiejingHtml(renderSaasMediaGenerationReadinessPanel({
+        expanded: mediaGenerationReadinessPanel.querySelector(".saas-media-service-details")?.open === true,
+      }), "media.generation_readiness"),
     );
   } else {
     const generatedAssetsAnchor = document.querySelector("#view-media .saas-media-generated-assets");
@@ -9658,7 +9666,7 @@ function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
         <div>
           <span>Listing 草稿</span>
           <strong>${escapeHtml(draft.title || "新商品 Listing 草稿")}</strong>
-          <p>先改买家最先看到的标题、卖点和描述；参数线索在右侧补齐，真实发布仍要进确认中心。</p>
+          <p>先改买家最先看到的标题、卖点和描述；其余信息在辅助参数中补齐，真实发布仍要进确认中心。</p>
         </div>
         <span class="pill green">草稿</span>
       </div>
@@ -10807,6 +10815,7 @@ function renderSaasListingComposerWorkspace({
   const ceoHandoff = state.saasListingCeoHandoff || null;
   const draft = state.saasListingComposerDraft;
   const opportunity = saasListingOpportunityFromDraft(draft, marketReport, listingReport);
+  const hasBuyerCopy = Boolean(String(draft?.fields?.description || draft?.fields?.selling_points || "").trim());
   const statusLabel = draft ? "上架项目已生成" : reportsReady ? "可导入结论" : "开始录入";
   const showOpportunity = Boolean(draft || reportsReady);
   const inputChips = [
@@ -10842,10 +10851,11 @@ function renderSaasListingComposerWorkspace({
             : ""
         }
         ${draft ? renderSaasListingSourceIntake({ draft, inputValue, inputChips, marketReport, listingReport, syncedRows }) : renderSaasListingSourceIntake({ draft: null, inputValue, inputChips, marketReport, listingReport, syncedRows })}
-        ${renderSaasMerchantProductFactsModule(draft)}
+        ${!hasBuyerCopy ? renderSaasMerchantProductFactsModule(draft) : ""}
         ${renderSaasListingDraftEditor(draft)}
         ${renderSaasListingMediaWritebackPanel(draft)}
         ${draft ? renderSaasListingNextActionPanel(draft, ctx, pendingConfirmations) : ""}
+        ${hasBuyerCopy ? renderSaasMerchantProductFactsModule(draft) : ""}
         ${draft ? renderSaasListingUnpublishedDraftReceipt(draft) : ""}
         ${draft ? renderSaasListingAdvancedWorkDetails(draft, ctx, pendingConfirmations, opportunity, marketReport, listingReport) : ""}
       </div>

@@ -334,6 +334,43 @@ body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1
   .public-home-v3 .home-ai-ceo-orbit .ceo-core { top: 49%; }
   .public-home-v3 .home-ai-ceo-orbit :is(.node-media, .node-ads) { top: 126px; }
 }
+/* Result-first workflow: keep service detail secondary, not review controls. */
+body.saas-public-mvp #view-media .saas-media-service-details > summary {
+  padding-block: 10px;
+  color: var(--jiejing-ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+body.saas-public-mvp #view-media .saas-media-service-details > summary:focus-visible {
+  outline: 2px solid var(--jiejing-teal);
+  outline-offset: 3px;
+}
+body.saas-public-mvp #view-media .saas-media-service-details[open] > .saas-media-generation-readiness-grid {
+  margin-top: 10px;
+}
+body.saas-public-mvp #view-media .saas-media-asset-summary {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+@media (max-width: 1024px) {
+  body.saas-public-mvp #view-product .saas-listing-v2-draft-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  body.saas-public-mvp #view-product .saas-listing-v2-draft-side {
+    padding: 12px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--jiejing-line);
+  }
+  body.saas-public-mvp #view-product .saas-product-facts-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  body.saas-public-mvp #view-product .saas-product-facts-footer > .button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .public-home-v3 :is(.button, .button-ghost, .role-node, .ceo-core, .home-showcase-link span),
   .public-home-v3 .home-ai-ceo-orbit.is-engaged .flow-line path.is-active { transition: none; animation: none; }

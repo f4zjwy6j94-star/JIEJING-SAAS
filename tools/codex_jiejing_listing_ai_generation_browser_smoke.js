@@ -1004,11 +1004,35 @@ async function runSmoke() {
       .filter((item) => {
         const rect = item.getBoundingClientRect();
         return rect.width > 0 && (rect.left < -2 || rect.right > window.innerWidth + 2);
-      }).length,
+      }).map((item) => ({
+        tag: item.tagName, action: item.dataset.saasAction || "", field: item.dataset.saasListingDraftField || "",
+        left: item.getBoundingClientRect().left, right: item.getBoundingClientRect().right,
+      })),
   }));
-  if (layout.scroll_width > layout.viewport_width + 2 || layout.clipped_controls) {
+  if (layout.scroll_width > layout.viewport_width + 2 || layout.clipped_controls.length) {
+    const overflowScreenshotPath = path.join(os.tmpdir(), `jiejing-listing-overflow-${layout.viewport_width}-${Date.now()}.png`);
+    await page.screenshot({ path: overflowScreenshotPath, fullPage: false });
+    console.error(`Layout failure screenshot: ${overflowScreenshotPath}`);
     throw new Error(`Listing AI workflow overflows the viewport: ${JSON.stringify(layout)}`);
   }
+  const savedCopyLayout = await page.evaluate(() => {
+    const editor = document.querySelector(".saas-listing-v2-draft-editor");
+    const facts = document.querySelector(".saas-product-facts-module");
+    const primaryRect = editor.querySelector('.saas-listing-v2-draft-primary').getBoundingClientRect();
+    const sideRect = editor.querySelector('.saas-listing-v2-draft-side').getBoundingClientRect();
+    return {
+      editor_before_facts: Boolean(editor && facts && (editor.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      facts_count: document.querySelectorAll(".saas-product-facts-module").length,
+      title_count: document.querySelectorAll('[data-saas-listing-draft-field="title"]').length,
+      tablet_stacked: innerWidth > 1024 || sideRect.top >= primaryRect.bottom,
+    };
+  });
+  if (!savedCopyLayout.editor_before_facts || savedCopyLayout.facts_count !== 1 || savedCopyLayout.title_count !== 1 || !savedCopyLayout.tablet_stacked) {
+    throw new Error(`Saved Listing must remain ahead of the complete fact form: ${JSON.stringify(savedCopyLayout)}`);
+  }
+  await page.locator(".saas-listing-v2-draft-editor").scrollIntoViewIfNeeded();
+  const savedCopyScreenshotPath = path.join(os.tmpdir(), `jiejing-listing-result-first-${layout.viewport_width}-${Date.now()}.png`);
+  await page.screenshot({ path: savedCopyScreenshotPath, fullPage: false });
 
   // Exercise the actual store selector while a real app handler awaits its
   // model response. Only the external generation response is delayed/mocked.
@@ -1707,6 +1731,8 @@ async function runSmoke() {
     task_id: savedTrace.task.task_id,
     restored_title: restoredTitle,
     viewport_width: layout.viewport_width,
+    saved_copy_layout: savedCopyLayout,
+    saved_copy_screenshot_path: savedCopyScreenshotPath,
     no_real_platform_writes_triggered: true,
     no_charge_or_refund_triggered: true,
     mocked_operation_result_gets: resultReadCount,
