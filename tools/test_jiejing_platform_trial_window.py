@@ -70,7 +70,9 @@ for (const [name,quota,byok,label,available] of cases) {
   assert.equal(text.configured,available,name);
   assert(text.title.includes(label),`${name}: ${text.title}`);
   assert.equal(text.tone,available?'green':'amber',name);
-  const card=html.match(/<article[^>]*data-ai-media-capability="text_analysis"[\s\S]*?<\/article>/)[0];
+  const capabilityMatches=[...html.matchAll(/<(article|details)\b[^>]*data-ai-media-capability="text_analysis"[\s\S]*?<\/\1>/g)];
+  assert.equal(capabilityMatches.length,1,`${name}: one text capability state must be rendered`);
+  const card=capabilityMatches[0][0];
   assert(card.includes(label),name);
   if (!available) {
     assert(!trial.quotaLabel.includes('次可用'),name);
