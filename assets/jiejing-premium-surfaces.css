@@ -71,6 +71,7 @@
   font-size: 14px;
   font-weight: 600;
   box-shadow: none;
+  transition: transform 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
 }
 .public-home-v3 .button { background: #173e33; border-color: #173e33; color: #fff; }
 .public-home-v3 .button:hover { background: #245847; box-shadow: 0 4px 10px #182c2712; transform: translateY(-1px); }
@@ -87,9 +88,22 @@
   box-shadow: none;
   overflow: hidden;
 }
-.public-home-v3 .home-ai-ceo-orbit::before,
 .public-home-v3 .home-ai-ceo-orbit::after,
 .public-home-v3 .home-ai-ceo-orbit .role-node::after { display: none; }
+.public-home-v3 .home-ai-ceo-orbit::before {
+  content: "";
+  display: block;
+  position: absolute;
+  inset: 0;
+  border: 0;
+  border-radius: inherit;
+  background: radial-gradient(240px circle at var(--sx, 50%) var(--sy, 50%), #dce7b81c, transparent 75%);
+  opacity: 0;
+  transform: none;
+  animation: none;
+  pointer-events: none;
+  transition: opacity 240ms ease;
+}
 .public-home-v3 .home-ai-ceo-orbit .ceo-core {
   width: 148px;
   min-height: 148px;
@@ -100,9 +114,12 @@
   border: 0;
   box-shadow: 0 8px 24px #071f1826;
   transform: translate(-50%, -50%);
+  transition: box-shadow 240ms ease;
 }
 .public-home-v3 .home-ai-ceo-orbit .ceo-core strong { font-size: 28px; letter-spacing: -.035em; }
 .public-home-v3 .home-ai-ceo-orbit .ceo-core span { font-size: 11px; font-weight: 400; color: #365444; }
+.public-home-v3 .home-ai-ceo-orbit .ceo-core [data-home-ai-ceo-focus] { font-weight: 650; margin-top: 6px; }
+.public-home-v3 .home-ai-ceo-orbit:focus-within .ceo-core { box-shadow: 0 0 0 8px #e1eaba14, 0 8px 28px #071f183d; }
 .public-home-v3 .home-ai-ceo-orbit .role-node {
   width: 140px;
   padding: 13px;
@@ -111,7 +128,7 @@
   background: #2b5545;
   color: #f6f5e9;
   box-shadow: none;
-  transition: border-color 160ms ease, background-color 160ms ease;
+  transition: border-color 160ms ease, background-color 160ms ease, transform 200ms ease, box-shadow 200ms ease;
 }
 .public-home-v3 .home-ai-ceo-orbit .role-node strong { font-size: 14px; font-weight: 600; }
 .public-home-v3 .home-ai-ceo-orbit .role-node span { font-size: 12px; color: #d0e0d0; }
@@ -142,6 +159,16 @@
 .public-home-v3 .home-ai-ceo-orbit .flow-line { width: 100%; height: 92%; opacity: 1; }
 .public-home-v3 .home-ai-ceo-orbit .flow-line path { animation: none; stroke-dasharray: none; stroke: #789c82; }
 .public-home-v3 .home-ai-ceo-orbit .flow-line path.is-active { animation: none; stroke: #e1eaba; }
+.public-home-v3 .home-ai-ceo-orbit.is-engaged .flow-line path.is-active {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 0;
+  animation: jiejing-route-trace 650ms cubic-bezier(.22, 1, .36, 1) both;
+  animation-iteration-count: 1;
+}
+@keyframes jiejing-route-trace {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
 .public-home-v3 .home-ai-ceo-orbit .hero-ops-board {
   bottom: 14px;
   width: calc(100% - 32px);
@@ -231,11 +258,19 @@ body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1
 body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .nav-item.is-active { background: #fffefa; border-color: #a6b89e; color: #145340; }
 body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] ::selection { background: #dce7b8; color: #173e33; }
 body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.saas-readable-page-head, .product-manager-header, .section-heading) h2 { font-weight: 600; letter-spacing: -.025em; line-height: 1.4; }
-body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.primary-action, .secondary-action) { font-weight: 550; font-size: 14px; box-shadow: none; }
-body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.primary-action, .secondary-action):hover { transform: none; }
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.primary-action, .secondary-action) { font-weight: 550; font-size: 14px; box-shadow: none; transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease; }
 body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread { border-color: var(--jiejing-line); box-shadow: 0 4px 18px #152a2005; }
 body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-settings-section-group { box-shadow: none; }
 body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-settings-section-group > summary strong { font-weight: 600; }
+
+@media (hover: hover) and (pointer: fine) {
+  .public-home-v3 .home-ai-ceo-orbit:hover::before { opacity: 1; }
+  .public-home-v3 .home-ai-ceo-orbit:hover .ceo-core { box-shadow: 0 0 0 8px #e1eaba14, 0 8px 28px #071f183d; }
+  .public-home-v3 .home-ai-ceo-orbit .role-node:hover { transform: translateY(-3px); box-shadow: 0 10px 22px #0a281c40; }
+  body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.primary-action, .secondary-action):not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 4px 10px #152a2012; }
+}
+.public-home-v3 :is(.button, .button-ghost, .home-ai-ceo-orbit .role-node):not(:disabled):active,
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.primary-action, .secondary-action):not(:disabled):active { transform: translateY(1px); box-shadow: none; }
 
 @media (min-width: 1021px) and (max-width: 1199px) {
   .public-home-v3 .home-ai-ceo-orbit .ceo-core { width: 128px; min-height: 128px; padding: 12px; }
@@ -300,6 +335,9 @@ body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1
   .public-home-v3 .home-ai-ceo-orbit :is(.node-media, .node-ads) { top: 126px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .public-home-v3 :is(.button, .role-node, .ceo-core, .home-showcase-link span) { transition: none; animation: none; }
+  .public-home-v3 :is(.button, .button-ghost, .role-node, .ceo-core, .home-showcase-link span),
+  .public-home-v3 .home-ai-ceo-orbit.is-engaged .flow-line path.is-active { transition: none; animation: none; }
+  .public-home-v3 .home-ai-ceo-orbit::before { display: none; }
+  .public-home-v3 .home-ai-ceo-orbit .role-node:is(:hover, :active) { transform: none; }
   body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.primary-action, .secondary-action) { transition: none; }
 }

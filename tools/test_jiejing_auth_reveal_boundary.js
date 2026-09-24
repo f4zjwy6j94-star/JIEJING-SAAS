@@ -251,6 +251,52 @@ test("partial core failure cannot promote cold identity into a ready workbench",
   assert.equal(context.localStorage.getItem("session-hint"),"1");
 });
 
+for (const failure of ["503", "timeout"]) {
+  test(`real refresh distinguishes model-settings ${failure} and recovers without credential writes`, async () => {
+    const context = harness();
+    context.ensureSaasDemoStoreAndConnection = async () => ({store_id:"fixture-store-a"});
+    context.saasAiCeoHistoryRequestContext = () => ({});
+    context.syncSaasOnboardingCompletionFromBackend = () => {};
+    context.verifySaasUnpublishedDraftSaveConfirmations = async () => {
+      throw new Error("fixture-stop-after-real-core-assignment");
+    };
+    context.setTimeout = (callback, ms) => setTimeout(callback, Math.min(ms, 5));
+    context.clearTimeout = clearTimeout;
+    context.console = {warn() {}};
+    context.saasModelBlockedReasonText = () => "";
+    let connectionRecovered = false;
+    const requestMethods = [];
+    context.saasFetch = async (endpoint, options = {}) => {
+      requestMethods.push(options.method || "GET");
+      if (endpoint.endsWith("/model/settings")) {
+        if (connectionRecovered) return {model_settings:{configured:true,connection_state:"ready"}};
+        if (failure === "timeout") return new Promise(() => {});
+        const error = new Error("fixture model settings 503");
+        error.status = 503;
+        throw error;
+      }
+      if (endpoint === "/me") return {identity:{...context.state.saasIdentity},user:{...context.state.saasUser},company:{...context.state.saasCompany}};
+      if (endpoint === "/stores") return {stores:[{store_id:"fixture-store-a",company_id:"fixture-company-a"}]};
+      return {};
+    };
+    vm.runInContext(["recordOptionalSaasSoftTimeout", "optionalSaasFetchFast", "saasModelConnectionAttemptState"].map(name => extractFunction(name)).join("\n"), context);
+    await run(context, "refreshSaasState({silent:true})");
+    assert.equal(context.state.saasError, "工作台部分状态读取失败：fixture-stop-after-real-core-assignment", "the real core assignment was reached");
+    const status = run(context, "saasModelConnectionAttemptState()");
+    assert.equal(status.state, "read_failed");
+    assert.equal(status.requiresReentry, false);
+    assert.equal(status.canRetry, false, "retry must read state, not invoke a model verification");
+    assert.equal(context.state.saasModelSettings.configured, false, "unknown status must not grant AI availability");
+    connectionRecovered = true;
+    await run(context, "refreshSaasState({silent:true})");
+    const recovered = run(context, "saasModelConnectionAttemptState()");
+    assert.equal(recovered.state, "ready", "a fresh successful read clears the transient failure");
+    assert.equal(recovered.requiresReentry, false);
+    assert.equal(context.state.saasModelSettings.configured, true);
+    assert.ok(requestMethods.every(method => method === "GET"), "recovery never saves credentials or invokes model verification");
+  });
+}
+
 function cachedDraftHarness() {
   const context = harness();
   context.state.saasProtectedStateReady = false;

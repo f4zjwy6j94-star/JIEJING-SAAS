@@ -28667,6 +28667,15 @@ function saasImageRecognitionState() {
 }
 
 function saasPrimaryTextAiState() {
+  if (state.saasModelSettings?.connection_state === "read_failed") {
+    return {
+      configured: false,
+      tone: "amber",
+      title: "等待读取 AI 状态",
+      value: "待重新读取",
+      detail: "网络请求未完成，不代表连接已丢失。请先重新读取状态，无需重新填写连接凭证。",
+    };
+  }
   const active = saasActiveModelSecretRef();
   const platformTrial = saasPlatformTrialModelState();
   if (isSaasMerchantModelConfigured()) {
@@ -28711,6 +28720,20 @@ function saasModelConnectionAttemptState() {
   const blockedBy = Array.isArray(latest?.blocked_by) ? latest.blocked_by : [];
   const verificationError = String(latest?.verification_error_code || "").trim();
   const reason = saasModelBlockedReasonText(verificationError || blockedBy[0] || "");
+  if (connectionState === "read_failed") {
+    return {
+      tone: "amber",
+      state: "read_failed",
+      title: "AI 连接状态暂时无法读取",
+      detail: "网络请求未完成，不代表已保存的连接丢失。请先重新读取状态，无需重新填写连接凭证。",
+      storageReady: false,
+      verified: false,
+      accountDefault: false,
+      canRetry: false,
+      requiresReentry: false,
+      latest: null,
+    };
+  }
   if (connectionState === "ready" || connectionState === "ready_with_failed_update") {
     return {
       tone: "green",
@@ -28815,11 +28838,12 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
   const merchantModelConfigured = isSaasMerchantModelConfigured();
   const modelAvailable = isSaasModelConfigured();
   const platformTrial = saasPlatformTrialModelState();
+  const connectionAttempt = saasModelConnectionAttemptState();
+  const readFailed = connectionAttempt.state === "read_failed";
   const textAiState = saasPrimaryTextAiState();
   const visionState = saasImageRecognitionState();
   const searchState = saasPublicSearchState();
   const mediaState = saasMediaGenerationState();
-  const connectionAttempt = saasModelConnectionAttemptState();
   const recoveryRequired = connectionAttempt.state === "storage_recovery_required";
   const connectionReady = merchantModelConfigured && connectionAttempt.state === "ready";
   const capabilityRows = `
@@ -28845,9 +28869,9 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
   return `
     <section class="saas-merchant-evidence-panel saas-model-provider-panel saas-model-settings-workspace" aria-label="AI 连接">
       <header class="saas-model-overview">
-        <h3>${merchantModelConfigured ? "账号 AI 已连接" : platformTrial.allowed === true ? "可先试用，再连接账号自己的 AI" : "连接一次，当前账号下的店铺都能使用"}</h3>
+        <h3>${readFailed ? "AI 连接状态暂时无法读取" : merchantModelConfigured ? "账号 AI 已连接" : platformTrial.allowed === true ? "可先试用，再连接账号自己的 AI" : "连接一次，当前账号下的店铺都能使用"}</h3>
         ${active?.model ? `<p class="saas-model-current-model">${escapeHtml(active.model)}</p>` : ""}
-        <p>${merchantModelConfigured ? "AI CEO、市场报告与上架文案优先使用账号 AI，不消耗捷境试用额度。" : "连接账号 AI 后，用于对话、市场报告与上架文案；未配置时，可用的捷境试用 AI 会消耗试用额度。"}图片和视频仍由素材工坊生成并审核，单独计量。</p>
+        <p>${readFailed ? "暂时无法确认当前连接状态，已有商品资料和生成结果仍会保留。" : merchantModelConfigured ? "AI CEO、市场报告与上架文案优先使用账号 AI，不消耗捷境试用额度。" : "连接账号 AI 后，用于对话、市场报告与上架文案；未配置时，可用的捷境试用 AI 会消耗试用额度。"}图片和视频仍由素材工坊生成并审核，单独计量。</p>
       </header>
       <details class="saas-model-connection-details" ${connectionReady ? "" : "open"}>
         <summary>连接检测详情</summary>
@@ -28856,11 +28880,12 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
           <strong>${escapeHtml(connectionAttempt.title)}</strong>
           <p>${escapeHtml(connectionAttempt.detail)}</p>
         </div>
-        <ol aria-label="AI 连接进度">
+        ${readFailed ? "" : `<ol aria-label="AI 连接进度">
           <li class="${connectionAttempt.storageReady ? "is-done" : ""}"><span>1</span><strong>安全保存</strong></li>
           <li class="${connectionAttempt.verified ? "is-done" : ""}"><span>2</span><strong>服务商检测</strong></li>
           <li class="${connectionAttempt.accountDefault ? "is-done" : ""}"><span>3</span><strong>账号默认</strong></li>
-        </ol>
+        </ol>`}
+        ${readFailed ? `<button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>重新读取状态</button>` : ""}
         ${
           connectionAttempt.canRetry
             ? `<button class="secondary-action" type="button" data-saas-action="verify-model-connection" ${state.saasLoading || !ctx.store ? "disabled" : ""}>重新检测连接</button>`
@@ -28868,10 +28893,10 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
         }
         </div>
       </details>
-      <details class="saas-model-config-details" ${recoveryRequired || (merchantModelConfigured && connectionAttempt.state === "ready") ? "" : "open"}>
+      <details class="saas-model-config-details" ${readFailed || recoveryRequired || (merchantModelConfigured && connectionAttempt.state === "ready") ? "" : "open"}>
         <summary>
-          <strong>${recoveryRequired ? "重新配置账号 AI" : merchantModelConfigured ? "调整账号 AI" : "配置账号 AI"}</strong>
-          <small>${recoveryRequired ? "仅在确认原连接无法恢复，或需要更换时使用。" : merchantModelConfigured ? "更换服务商或模型时再打开。" : "选择服务商，粘贴连接信息，然后保存并检测。"}</small>
+          <strong>${readFailed ? "AI 配置选项" : recoveryRequired ? "重新配置账号 AI" : merchantModelConfigured ? "调整账号 AI" : "配置账号 AI"}</strong>
+          <small>${readFailed ? "请先重新读取状态，不必重新输入凭证。" : recoveryRequired ? "仅在确认原连接无法恢复，或需要更换时使用。" : merchantModelConfigured ? "更换服务商或模型时再打开。" : "选择服务商，粘贴连接信息，然后保存并检测。"}</small>
         </summary>
         <div class="saas-sync-failure-box">
           <strong>连接当前账号的 AI</strong>
@@ -28908,7 +28933,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
             </label>
           </div>
           <div class="runtime-bridge-actions">
-            <button class="primary-action" type="button" data-saas-action="save-model-api-key" ${state.saasLoading || !ctx.store ? "disabled" : ""}>保存并检测 AI 连接</button>
+            <button class="primary-action" type="button" data-saas-action="save-model-api-key" ${readFailed || state.saasLoading || !ctx.store ? "disabled" : ""}>保存并检测 AI 连接</button>
           </div>
         </div>
       </details>
@@ -29967,7 +29992,9 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/ebay-write/adapter/status", { ebay_write_adapter: null }, 10000),
       optionalSaasFetchFast("/execution-results?limit=20", { execution_results: [] }, 10000),
       optionalSaasFetchFast(`/secret-refs?store_id=${encodeURIComponent(store.store_id)}`, { secret_refs: [] }, 10000),
-      optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/model/settings`, { model_settings: null }, 10000),
+      optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/model/settings`, {
+        model_settings: { connection_state: "read_failed", configured: false },
+      }, 10000),
       optionalSaasFetchFast(`/data-packets?platform=ebay&limit=5`, { data_packets: [] }, 12000),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/merchant-ceo/commands/latest`, {
         merchant_ceo_command: null,

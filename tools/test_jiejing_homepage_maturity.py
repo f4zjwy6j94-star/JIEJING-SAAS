@@ -18,7 +18,7 @@ def assert_premium_surface_contract() -> None:
     css = (ROOT / asset).read_text(encoding="utf-8")
     app = (ROOT / "app.html").read_text(encoding="utf-8")
     for entry in (INDEX, app):
-        assert entry.count(f'href="./{asset}?v=20260924-pine-v2"') == 1
+        assert entry.count(f'href="./{asset}?v=20260924-motion-v3"') == 1
     assert app.index(asset) < app.index('id="jiejing-cockpit-layout-guard"')
     assert f'"{asset}"' in (ROOT / "deploy/apply-staging-patch.sh").read_text(encoding="utf-8")
     assert "prefers-reduced-motion: reduce" in css
@@ -143,6 +143,16 @@ def main() -> None:
     assert 'data-home-ai-ceo-result="active-result"' in hero_source
     assert 'data-home-ai-ceo-result-key=' in hero_source
     assert 'data-home-ai-ceo-layout="classic-orbit-v1"' in hero_source
+    assert 'data-home-ai-ceo-focus' in hero_source
+    assert 'focusLabel.textContent' in INDEX
+    surface_css = (ROOT / "assets/jiejing-premium-surfaces.css").read_text(encoding="utf-8")
+    assert "@keyframes jiejing-route-trace" in surface_css
+    assert ".is-engaged .flow-line path.is-active" in surface_css
+    assert "jiejing-route-trace 650ms" in surface_css
+    assert "animation-iteration-count: 1" in surface_css
+    assert "(hover: hover) and (pointer: fine)" in surface_css
+    reduced = surface_css[surface_css.rindex("@media (prefers-reduced-motion: reduce)"):]
+    assert ".flow-line path.is-active" in reduced and "animation: none" in reduced
     assert "hero-ops-board" in hero_source
     for legacy_marker in ("home-command-steps", "home-command-step", "signalCanvas"):
         assert legacy_marker not in hero_source

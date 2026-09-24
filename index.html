@@ -14,8 +14,8 @@
     <meta name="twitter:title" content="捷境 · eBay AI CEO 自动化工作台" />
     <meta name="twitter:description" content="捷境是 eBay 商家的 AI 经营工作台：整理商品资料、生成草稿，重要操作由商家确认。" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260924-ai-settings-v1-8bf774739e43" as="script" />
-    <link rel="prefetch" href="./styles.css?v=20260924-ai-settings-v1-07a69db4fb67" as="style" />
+    <link rel="prefetch" href="./app.js?v=20260924-read-recovery-v1-62361e1551a8" as="script" />
+    <link rel="prefetch" href="./styles.css?v=20260924-read-recovery-v1-07a69db4fb67" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
     <style>
@@ -5436,7 +5436,7 @@
         }
       }
     </style>
-    <link rel="stylesheet" href="./assets/jiejing-premium-surfaces.css?v=20260924-pine-v2" />
+    <link rel="stylesheet" href="./assets/jiejing-premium-surfaces.css?v=20260924-motion-v3" />
   </head>
   <body class="public-home-v3" data-home-version="premium-v3">
     <div class="scroll-progress" aria-hidden="true"><span></span></div>
@@ -5486,7 +5486,7 @@
           <path data-home-ai-ceo-line="finance" d="M320 330 C430 500 470 520 510 560"></path>
         </svg>
         <div class="ceo-core" data-home-ai-ceo-core="merchant-goal-router-v3">
-          <div><strong>AI CEO</strong><span>理解目标 · 整理资料<br />协同推进 · 由你确认</span></div>
+          <div><strong>AI CEO</strong><span data-home-ai-ceo-focus>市场与货源</span><span>关键动作由你确认</span></div>
         </div>
         <div class="hero-ops-board" aria-label="AI CEO 推进方式">
           <article class="is-active"><span>01</span><strong>接收目标</strong><small>从你的经营需求开始</small></article>
@@ -5886,7 +5886,7 @@
 
     <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
     <script>
-      const JIEJING_SITE_VERSION = "20260924-ai-settings-v1-07a69db4fb67";
+      const JIEJING_SITE_VERSION = "20260924-read-recovery-v1-07a69db4fb67";
 
       (function routeOfficialEntryToApp() {
         const params = new URLSearchParams(window.location.search);
@@ -5900,8 +5900,8 @@
       function warmWorkspaceAssets() {
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
-          ["preload", "./app.js?v=20260924-ai-settings-v1-8bf774739e43", "script"],
-          ["preload", "./styles.css?v=20260924-ai-settings-v1-07a69db4fb67", "style"],
+          ["preload", "./app.js?v=20260924-read-recovery-v1-62361e1551a8", "script"],
+          ["preload", "./styles.css?v=20260924-read-recovery-v1-07a69db4fb67", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
           if (document.querySelector(`link[href="${href}"]`)) return;
@@ -6784,19 +6784,24 @@
         const nodes = Array.from(scope.querySelectorAll("button[data-home-ai-ceo-node]"));
         const lines = Array.from(scope.querySelectorAll("path[data-home-ai-ceo-line]"));
         const result = scope.querySelector('[data-home-ai-ceo-result="active-result"]');
+        const orbit = scope.querySelector(".home-ai-ceo-orbit");
+        const focusLabel = scope.querySelector("[data-home-ai-ceo-focus]");
         if (!nodes.length || !lines.length || !result) return;
+        lines.forEach((line) => line.setAttribute("pathLength", "100"));
 
-        const setActiveNode = (key) => {
+        const setActiveNode = (key, engaged = false) => {
           const target = nodes.find((node) => node.dataset.homeAiCeoNode === key);
           if (!target) return;
+          if (engaged && orbit) orbit.classList.add("is-engaged");
           nodes.forEach((node) => node.setAttribute("aria-pressed", String(node === target)));
           lines.forEach((line) => line.classList.toggle("is-active", line.dataset.homeAiCeoLine === key));
+          if (focusLabel) focusLabel.textContent = target.querySelector("strong")?.textContent || "整理经营目标";
           result.dataset.homeAiCeoResultKey = key;
           result.textContent = target.dataset.homeAiCeoResultCopy || "";
         };
 
         nodes.forEach((node) => {
-          const activate = () => setActiveNode(node.dataset.homeAiCeoNode || "market");
+          const activate = () => setActiveNode(node.dataset.homeAiCeoNode || "market", true);
           node.addEventListener("pointerenter", activate);
           node.addEventListener("pointerdown", activate);
           node.addEventListener("focus", activate);

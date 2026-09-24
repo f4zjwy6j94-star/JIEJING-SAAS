@@ -14,7 +14,7 @@ function extract(name) {
   const end = tail.search(/\n(?:async )?function /);
   return end < 0 ? tail : tail.slice(0, end);
 }
-const states = ["ready", "not_configured", "storage_recovery_required", "saved_needs_verification", "ready_with_failed_update", "save_failed", "long", "loading"];
+const states = ["ready", "not_configured", "read_failed", "storage_recovery_required", "saved_needs_verification", "ready_with_failed_update", "save_failed", "long", "loading"];
 function renderFixture(mode = "ready") {
   assert.ok(states.includes(mode));
   const configured = ["ready", "ready_with_failed_update", "long", "loading"].includes(mode);
@@ -32,7 +32,6 @@ function renderFixture(mode = "ready") {
     isSaasModelConfigured: () => configured,
     saasMerchantWorkbenchContext: () => ctx,
     saasPlatformTrialModelState: () => ({ allowed: !configured }),
-    saasPrimaryTextAiState: () => configured ? readyState("账号 AI 已保存") : ({ tone: "amber", title: "等待连接", detail: "请先配置账号 AI。" }),
     saasImageRecognitionState: () => readyState("图片识别服务已连接"),
     saasPublicSearchState: () => ({ tone: "amber", title: "联网搜索暂不可用", detail: "暂时无法访问搜索服务，请稍后重试。" }),
     saasMediaGenerationState: () => readyState("图片和视频已接入"),
@@ -40,7 +39,8 @@ function renderFixture(mode = "ready") {
     fetch: () => { throw new Error("UI renderer must not send requests"); },
   };
   vm.createContext(sandbox);
-  vm.runInContext(extract("saasModelConnectionAttemptState") + "\n" + extract("renderSaasMerchantModelProviderPanel"), sandbox);
+  vm.runInContext(extract("saasPrimaryTextAiState") + "\n" + extract("saasModelConnectionAttemptState") + "\n" + extract("renderSaasMerchantModelProviderPanel"), sandbox);
+  const primary = vm.runInContext("saasPrimaryTextAiState()", sandbox);
   const panel = vm.runInContext("renderSaasMerchantModelProviderPanel()", sandbox);
   sandbox.saasSettingsTabDefinitions = () => [
     { id: "account", label: "账号与店铺", title: "账号与店铺", panels: [] },
@@ -53,14 +53,14 @@ function renderFixture(mode = "ready") {
   const layout = vm.runInContext("renderSaasSettingsCleanLayout()", sandbox);
   const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI 设置 · 本地布局预览</title><link rel="stylesheet" href="/styles.css"></head>
   <body class="saas-public-mvp" data-view="connect"><div class="app-shell" id="appShell" data-ui-generation="premium-merchant-workbench-v1"><aside class="sidebar"><strong>捷境</strong><p>本地预览</p><p>合成数据</p></aside><main class="main"><section class="view is-active" id="view-connect">${layout}</section></main></div></body></html>`;
-  return { panel, html };
+  return { panel, html, primary };
 }
 function test() {
   for (const mode of states) {
-    const { panel } = renderFixture(mode);
+    const { panel, primary } = renderFixture(mode);
     const isReady = ["ready", "long", "loading"].includes(mode);
     assert.equal(/class="saas-model-connection-details" open/.test(panel), !isReady, `${mode}: connection issues stay expanded`);
-    assert.equal(/class="saas-model-config-details" open/.test(panel), !["ready", "long", "loading", "storage_recovery_required"].includes(mode), `${mode}: preserve safe form defaults`);
+    assert.equal(/class="saas-model-config-details" open/.test(panel), !["ready", "long", "loading", "storage_recovery_required", "read_failed"].includes(mode), `${mode}: preserve safe form defaults`);
     assert.match(panel, /id="saas-model-api-key" type="password" value=""/);
     assert.equal((panel.match(/data-ai-media-capability="/g) || []).length, 4);
     assert.match(panel, /联网搜索暂不可用/);
@@ -70,6 +70,15 @@ function test() {
     if (mode === "not_configured") assert.match(panel, /会消耗试用额度/);
     if (mode === "saved_needs_verification") assert.match(panel, /data-saas-action="verify-model-connection"/);
     if (mode === "storage_recovery_required") assert.match(panel, /请联系支持检查恢复/);
+    if (mode === "read_failed") {
+      assert.equal(primary.title, "等待读取 AI 状态", "all shared capability cards must distinguish a failed read from missing credentials");
+      assert.equal(primary.configured, false);
+      assert.match(panel, /AI 连接状态暂时无法读取/);
+      assert.match(panel, /不代表已保存的连接丢失/);
+      assert.match(panel, /data-saas-action="refresh"[^>]*>重新读取状态/);
+      assert.match(panel, /data-saas-action="save-model-api-key" disabled/);
+      assert.doesNotMatch(panel, /还没有账号 AI 连接|data-saas-action="verify-model-connection"/);
+    }
     if (mode === "long") { assert.doesNotMatch(panel, /<unsafe>/); assert.match(panel, /&lt;unsafe&gt;/); }
     if (mode === "loading") assert.match(panel, /data-saas-action="save-model-api-key" disabled/);
   }
