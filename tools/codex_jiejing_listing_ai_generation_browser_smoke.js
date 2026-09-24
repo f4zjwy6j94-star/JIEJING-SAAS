@@ -398,7 +398,78 @@ function generatedPayload(requestBody, storeId) {
   };
 }
 
-async function runListingFocusSmoke() {
+async function verifyListingGapNavigation(page) {
+  const before = await page.evaluate(() => ({
+    source: document.querySelector('#saasListingComposerInput')?.value || '',
+    fields: [...document.querySelectorAll('[data-saas-product-fact-field]')].map(field => [field.dataset.saasProductFactField, field.value, field.checked]),
+  }));
+  await page.locator('.saas-listing-next-action-questions').getByRole('button', { name: /SKU/ }).first().click();
+  const after = await page.evaluate(() => ({
+    source: document.querySelector('#saasListingComposerInput')?.value || '',
+    focused: document.activeElement?.dataset?.saasProductFactField || '',
+    fields: [...document.querySelectorAll('[data-saas-product-fact-field]')].map(field => [field.dataset.saasProductFactField, field.value, field.checked]),
+  }));
+  if (after.focused !== 'sku' || before.source !== after.source || !isDeepStrictEqual(before.fields, after.fields)) {
+    throw new Error(`SKU gap must focus its fact field without changing source or facts: ${JSON.stringify({focused:after.focused, sourceChanged:before.source !== after.source, factsChanged:!isDeepStrictEqual(before.fields, after.fields)})}`);
+  }
+  await page.locator('[data-listing-advanced-checks] > summary').click();
+  await page.locator('.saas-listing-ebay-field-questions').getByRole('button', { name: /SKU/ }).first().click();
+  if (await page.evaluate(() => document.activeElement?.dataset?.saasProductFactField) !== 'sku') {
+    throw new Error('advanced field checklist did not navigate to the same SKU field');
+  }
+  // These are synthetic local labels passed through the real delegated click
+  // handler, not user facts or platform operations. Cover every target family.
+  const cases = [
+    ['自有商品归属确认', 'merchant_owned_product_confirmed', 'fact'],
+    ['图片商业使用权', 'image_rights_confirmed', 'fact'],
+    ['图片 URL', 'image_urls', 'fact'], ['实际发货地', 'item_location', 'fact'],
+    ['标题', 'title', 'draft'], ['类目', 'category', 'draft'],
+    ['Item specifics', 'item_specifics', 'draft'],
+    ['库存位置', 'merchant_location_key', 'publish'],
+    ['Fulfillment policy', 'fulfillment_policy_id', 'publish'],
+    ['费用预留', 'shipping_cost', 'publish'],
+  ];
+  const caseButtons = await page.evaluate(cases => {
+    const host = document.createElement('div');
+    host.dataset.localGapNavigationFixture = 'true';
+    for (const [label] of cases) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.textContent = label;
+      button.dataset.saasListingGapLabel = label;
+      host.append(button);
+    }
+    document.querySelector('#view-product').append(host);
+    return host.querySelectorAll('button').length;
+  }, cases);
+  if (caseButtons !== cases.length) throw new Error('gap test fixture did not render');
+  for (const [label, key, family] of cases) {
+    await page.locator('[data-local-gap-navigation-fixture]').getByRole('button', { name: label, exact: true }).click();
+    const result = await page.evaluate(() => {
+      const field = document.activeElement;
+      return { fact: field?.dataset?.saasProductFactField, draft: field?.dataset?.saasListingDraftField,
+        publish: field?.closest('#saasPublishIntakeForm') ? field.name : '',
+        visible: !!field?.getClientRects().length,
+        checked: field?.type === 'checkbox' ? field.checked : false };
+    });
+    if (result[family] !== key || !result.visible || result.checked) {
+      throw new Error(`gap ${label} must reveal and focus its field without confirming a checkbox: ${JSON.stringify(result)}`);
+    }
+  }
+  await page.evaluate(() => document.querySelector('[data-local-gap-navigation-fixture]').remove());
+  const preserved = await page.evaluate(() => ({
+    source: document.querySelector('#saasListingComposerInput')?.value || '',
+    fields: [...document.querySelectorAll('[data-saas-product-fact-field]')].map(field => [field.dataset.saasProductFactField, field.value, field.checked]),
+  }));
+  if (!isDeepStrictEqual(before, preserved)) throw new Error('gap navigation changed source or product facts');
+  // Capture the actual merchant path, with test-only controls already removed.
+  await page.locator('.saas-listing-next-action-questions').getByRole('button', { name: /SKU/ }).first().click();
+  const screenshotPath = path.join(os.tmpdir(), `jiejing-listing-gap-${viewportWidth}-${Date.now()}.png`);
+  await page.screenshot({ path: screenshotPath, fullPage: false });
+  console.log(JSON.stringify({ listing_gap_navigation_cases: cases.length + 2, viewport: viewportWidth, screenshot_path: screenshotPath }));
+  console.log('PASS listing_gap_opens_sku_without_mutating_source_or_facts');
+}
+
+async function runListingFocusSmoke(options = {}) {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const registered = await api("/auth/register", {
     method: "POST",
@@ -510,6 +581,14 @@ async function runListingFocusSmoke() {
     console.log("PASS manual_save_refresh_releases_only_owned_busy_state_without_applying_stale_response");
     await page.waitForSelector('[data-saas-listing-draft-field="title"]');
     await page.evaluate(async () => { await refreshSaasState({ silent: true }); await saasListingCloudRecord()?.read; });
+
+    await verifyListingGapNavigation(page);
+    if (options.gapOnly === true) {
+      if (externalRequests.length || unsafeRequests.length || pageErrors.length) {
+        throw new Error(`gap navigation crossed its isolated boundary: ${JSON.stringify({externalRequests, unsafeRequests, pageErrors})}`);
+      }
+      return;
+    }
 
     for (const field of ["title", "description"]) {
       reportsReady = new Promise((resolve) => { markReportsReady = resolve; });
@@ -1758,8 +1837,8 @@ async function main(options = {}) {
       ownedBackend = await startOwnedBackend();
       base = assertLoopbackMutationBase(ownedBackend.backendBase);
     }
-    await runListingFocusSmoke();
-    if (options.focusOnly !== true) await runSmoke();
+    await runListingFocusSmoke(options);
+    if (options.focusOnly !== true && options.gapOnly !== true) await runSmoke();
   } finally {
     await stopOwnedBackend(ownedBackend);
   }

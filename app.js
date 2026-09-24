@@ -10093,7 +10093,7 @@ function renderSaasListingEbayFieldCoveragePanel(draft = state.saasListingCompos
           ? `<div class="saas-listing-ebay-field-questions" aria-label="下一步补资料问题">
               <span>下一步补资料</span>
               ${coverage.missingQuestions
-                .map((item) => `<button type="button" data-saas-listing-input-chip="${escapeHtml(item.prompt)}">${escapeHtml(item.group)}：${escapeHtml(item.prompt)}</button>`)
+                .map((item) => `<button type="button" data-saas-listing-gap-label="${escapeHtml(item.label)}" data-saas-listing-gap-prompt="${escapeHtml(item.prompt)}">${escapeHtml(item.group)}：${escapeHtml(item.prompt)}</button>`)
                 .join("")}
             </div>`
           : ""
@@ -10531,7 +10531,7 @@ function renderSaasListingNextActionPanel(draft = state.saasListingComposerDraft
         missingQuestions.length
           ? `<div class="saas-listing-next-action-questions" aria-label="需要补充的资料">
               ${missingQuestions
-                .map((item) => `<button type="button" data-saas-listing-input-chip="${escapeHtml(item.prompt)}">${escapeHtml(questionLabel(item))}</button>`)
+                .map((item) => `<button type="button" data-saas-listing-gap-label="${escapeHtml(item.label)}" data-saas-listing-gap-prompt="${escapeHtml(item.prompt)}">${escapeHtml(questionLabel(item))}</button>`)
                 .join("")}
             </div>`
           : ""
@@ -36217,6 +36217,45 @@ async function startSaasListingBackendWorkflow() {
   }
 }
 
+function focusSaasListingGapField(label = "", prompt = "") {
+  // Only known labels/keys select DOM fields. Report prose must never become a
+  // selector or get appended to the merchant's original source input.
+  const labels = [String(label).trim(), String(prompt).trim()];
+  const definition = saasMerchantProductFactDefinitions().flatMap((group) => group.fields)
+    .find(([key, fieldLabel]) => labels.includes(key) || labels.includes(fieldLabel));
+  const aliases = {
+    "标题": ["draft", "title"], "卖点": ["draft", "selling_points"],
+    "描述": ["draft", "description"], "类目": ["draft", "category"],
+    "Item specifics": ["draft", "item_specifics"], "图片用途": ["draft", "images"],
+    "Condition": ["fact", "condition"], "数量": ["fact", "quantity"],
+    "售价": ["fact", "selling_price"], "成本": ["fact", "unit_cost"],
+    "素材授权": ["fact", "image_rights_confirmed"], "发货地": ["fact", "item_location"],
+    "重量": ["fact", "package_weight_g"], "尺寸": ["fact", "package_length_cm"],
+    "库存位置": ["publish", "merchant_location_key"], "费用预留": ["publish", "shipping_cost"],
+    "Fulfillment policy": ["publish", "fulfillment_policy_id"],
+    "Payment policy": ["publish", "payment_policy_id"],
+    "Return policy": ["publish", "return_policy_id"],
+  };
+  const target = definition ? ["fact", definition[0]]
+    : labels.map((value) => Object.prototype.hasOwnProperty.call(aliases, value) ? aliases[value] : null).find(Boolean);
+  const view = document.querySelector("#view-product");
+  const selector = !target ? "" : target[0] === "fact"
+    ? `[data-saas-product-fact-field="${target[1]}"]`
+    : target[0] === "draft" ? `[data-saas-listing-draft-field="${target[1]}"]`
+      : `#saasPublishIntakeForm [name="${target[1]}"]`;
+  const field = selector && view?.querySelector(selector);
+  if (!field) {
+    focusSaasPublishIntakeForm();
+    return;
+  }
+  for (let parent = field.parentElement; parent && parent !== view; parent = parent.parentElement) {
+    if (parent.tagName === "DETAILS") parent.open = true;
+  }
+  field.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+  if (!field.disabled) field.focus({ preventScroll: true });
+  showActionToast(field.disabled ? "资料正在保存，完成后可继续填写。" : "已定位到对应字段；填写后保存，不会重新调用 AI 或发布商品。");
+}
+
 function focusSaasPublishIntakeForm() {
   captureSaasListingComposerInput();
   captureSaasListingDraftEditor();
@@ -47830,6 +47869,12 @@ function bindEvents() {
     if (listingCandidateButton) {
       event.preventDefault();
       selectSaasListingMarketCandidate(listingCandidateButton.dataset.saasListingCandidateId || "");
+      return;
+    }
+    const listingGapButton = event.target.closest("[data-saas-listing-gap-label]");
+    if (listingGapButton) {
+      event.preventDefault();
+      focusSaasListingGapField(listingGapButton.dataset.saasListingGapLabel || "", listingGapButton.dataset.saasListingGapPrompt || "");
       return;
     }
     const listingInputChip = event.target.closest("[data-saas-listing-input-chip]");
