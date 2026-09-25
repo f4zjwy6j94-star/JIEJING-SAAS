@@ -79,6 +79,64 @@ def check_media_balance_browser(app: str) -> None:
             assert "累计使用" not in page.locator(".saas-media-credit-balance-grid").inner_text()
             assert "最近素材点记录" not in page.locator("#billing-test").inner_text()
             assert seen.count("/billing/media-credits") == 1
+            safe['usage'] = {
+                'contract_version':'2026-09-25-merchant-media-usage-v1', 'status':'ready',
+                'held_points':80, 'has_more':False, 'incomplete':False,
+                'scope':'recent_image_reservations',
+                'items':[
+                    {'activity_id':'1234567890abcdef','state':'settled','estimated_points':240,'spent_points':80,'released_points':160,'created_at':'2026-09-25T08:00:00Z','updated_at':'2026-09-25T08:01:00Z'},
+                    {'activity_id':'abcdef1234567890','state':'released','estimated_points':80,'spent_points':0,'released_points':80,'created_at':'2026-09-25T08:00:00Z','updated_at':'2026-09-25T08:02:00Z'},
+                    {'activity_id':'aabbccddeeff0011','state':'reserved','estimated_points':80,'spent_points':None,'released_points':0,'created_at':'2026-09-25T08:03:00Z','updated_at':'2026-09-25T08:03:00Z'},
+                ],
+            }
+            page.evaluate("""async () => {
+                state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+            }""")
+            history = page.locator('[data-media-usage-contract]')
+            assert history.count() == 1, 'merchant usage disclosure missing'
+            assert not history.get_attribute('open')
+            history.locator('summary').click()
+            assert '实际消耗 80 点' in history.inner_text()
+            assert '解除占用 160 点' in history.inner_text()
+            assert '处理中' in history.inner_text()
+            assert '未扣点' in history.inner_text()
+            assert '不等于现金退款' in history.inner_text()
+            assert history.locator('article').count() == 3
+            history.locator('summary').click()
+            assert not history.get_attribute('open')
+            safe['usage']['items'] = []
+            page.evaluate("""async () => {
+                state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+            }""")
+            page.locator('[data-media-usage-contract] summary').click()
+            assert '没有可核对的图片点数记录' in page.locator('#billing-test').inner_text()
+            safe['usage']['incomplete'] = True
+            safe['usage']['has_more'] = True
+            page.evaluate("""async () => {
+                state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+            }""")
+            page.locator('[data-media-usage-contract] summary').click()
+            assert '部分历史记录暂时无法核对' in page.locator('#billing-test').inner_text()
+            assert '不代表完整历史' in page.locator('#billing-test').inner_text()
+            safe['usage']['held_points'] = None
+            page.evaluate("""async () => {
+                state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+            }""")
+            assert page.locator('[data-media-usage-contract]').count() == 0
+            assert '使用明细暂未提供' in page.locator('#billing-test').inner_text()
+            safe['usage']['held_points'] = 0
+            safe['usage']['items'] = [{'activity_id':'<img src=x onerror=alert(1)>','state':'released',
+                'estimated_points':80,'spent_points':0,'released_points':80}]
+            page.evaluate("""async () => {
+                state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+            }""")
+            assert page.locator('[data-media-usage-contract]').count() == 0
+            assert page.locator('#billing-test img').count() == 0
             summary_status["http"] = 503
             page.evaluate("""async () => {
                 state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;

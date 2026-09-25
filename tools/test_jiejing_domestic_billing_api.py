@@ -90,6 +90,28 @@ def main() -> int:
         if not token or not other_token:
             return fail("test accounts should receive bearer tokens")
 
+        # Read-only point usage is authenticated and cannot be redirected by a company query.
+        media_status, _ = _get_json_expect_error(f"{base}/billing/media-credits")
+        if media_status != 401:
+            return fail("media usage must require authentication")
+        media_company = str(owner['company']['company_id'])
+        media_repository = SaaSRepository(OUT / "saas.sqlite")
+        media_repository.apply_media_credit_operation(company_id=media_company, user_id=None,
+            operation_type='grant', points=80, idempotency_key='http-media-grant-fixture',
+            reference_type='billing_order', reference_id='fixture-media-order', details={'credit_source':'purchased'})
+        media_repository.apply_media_credit_operation(company_id=media_company, user_id=None,
+            operation_type='reserve', points=80, idempotency_key='http-media-reserve-fixture',
+            reference_type='media_job', reference_id='fixture-media-job')
+        media_usage = _get_json(f"{base}/billing/media-credits", token=token)['media_credits']['usage']
+        if media_usage['held_points'] != 80 or len(media_usage['items']) != 1:
+            return fail("authenticated usage must match the owner's reservation")
+        isolated = _get_json(f"{base}/billing/media-credits?company_id={media_company}", token=other_token)['media_credits']['usage']
+        if isolated['held_points'] or isolated['items']:
+            return fail("media usage must ignore foreign company query parameters")
+        quota_usage = _get_json(f"{base}/billing/usage", token=token)['billing_usage']['media_credits']
+        if 'usage' in quota_usage:
+            return fail("quota checks must not load media history again")
+
         contract = _get_json(f"{base}/billing/domestic/contract", token=token).get("domestic_billing", {})
         if contract.get("status") != "not_open" or contract.get("real_checkout_ready") is not False:
             return fail(f"merchant contract must honestly stay not open: {contract}")

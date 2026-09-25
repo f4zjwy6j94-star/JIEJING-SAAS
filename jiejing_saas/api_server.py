@@ -3095,6 +3095,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         self.repository,
                         company_id=identity["company_id"],
                         limit=_query_limit(query, default=30, maximum=100) or 30,
+                        include_usage=True,
                     )
                 }
             )

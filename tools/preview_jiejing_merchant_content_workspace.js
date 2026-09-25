@@ -22,6 +22,14 @@ const setup = `
   if(['owner-preview','free-trial'].includes(previewCase)) { const kind = previewCase.replace('-','_'); state.saasBillingUsage.subscription = {provider:kind,access_kind:kind,status:kind+'_active',entitlement_active:true,plan_key:kind==='free_trial'?'free':'starter',test_mode:kind==='owner_preview',active_until:kind==='free_trial'?'2099-10-24T00:00:00Z':''}; state.saasBillingUsage.media_credits.available_points=0; state.saasBillingUsage.media_credits.included_points=0; }
   if(previewCase === 'paid-term') state.saasBillingUsage.subscription.active_until = '2099-10-24T00:00:00Z';
   if(previewCase === 'payment-unavailable') state.saasBillingUsage.media_credits.purchase.unavailable_reason = 'payment_unavailable';
+  if(previewCase === 'media-usage') state.saasBillingUsage.media_credits.usage = {
+    contract_version:'2026-09-25-merchant-media-usage-v1',status:'ready',held_points:80,has_more:false,incomplete:false,scope:'recent_image_reservations',
+    items:[
+      {activity_id:'1122334455667788',media_job_id:'media_job_preview_pending',state:'reserved',estimated_points:80,spent_points:null,released_points:0,updated_at:'2026-09-25T08:03:00Z'},
+      {activity_id:'2233445566778899',media_job_id:'media_job_preview_partial',state:'settled',estimated_points:240,spent_points:80,released_points:160,updated_at:'2026-09-25T08:02:00Z'},
+      {activity_id:'3344556677889900',media_job_id:'media_job_preview_failed',state:'released',estimated_points:80,spent_points:0,released_points:80,updated_at:'2026-09-25T08:01:00Z'}
+    ]
+  };
   state.saasDomesticBillingOrders = [];
   state.saasDomesticBillingContract = {provider:'wechat_pay_native',real_checkout_ready:true,charge_now_allowed:true};
   state.saasSettingsTab = 'billing';

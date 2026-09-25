@@ -574,16 +574,16 @@ def build_merchant_media_credit_summary(
     *,
     company_id: str,
     limit: int = 30,
+    include_usage: bool = False,
 ) -> dict[str, Any]:
     """Return a merchant-safe media-points summary from positive allowlists.
 
     Controlled acceptance and owner-testing buckets are operational evidence,
     not merchant entitlement.  The merchant contract therefore derives its
     total only from plan, purchase and explicitly merchant-facing promotional
-    buckets and never reads or returns the internal ledger.
+    buckets. Usage is a separate sanitized projection, never raw ledger rows.
     """
 
-    del limit  # Kept for a stable caller interface; merchant summaries do not expose ledger rows.
     account = repository.get_media_credit_account(company_id=company_id)
 
     def safe_points(key: str) -> int:
@@ -609,6 +609,7 @@ def build_merchant_media_credit_summary(
         "included_points": included_points,
         "purchased_points": purchased_points,
         "promotional_points": promotional_points,
+        **({"usage": repository.get_merchant_media_credit_usage(company_id=company_id, limit=limit)} if include_usage else {}),
         "packs": [dict(item) for item in MEDIA_CREDIT_PACKS],
         "purchase": {
             "status": "available" if purchase_enabled else "not_open",

@@ -12056,6 +12056,13 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def get_merchant_media_credit_usage(self, *, company_id: str, limit: int = 30) -> dict[str, Any]:
+        from .media_credit_activity import read_merchant_media_credit_usage
+
+        self.initialize()
+        with self._connect() as conn:
+            return read_merchant_media_credit_usage(conn, company_id=company_id, limit=limit)
+
     def list_media_credit_ledger(self, *, company_id: str, limit: int = 30) -> list[dict[str, Any]]:
         self.initialize()
         safe_limit = min(max(int(limit), 1), 100)

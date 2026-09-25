@@ -1128,7 +1128,7 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
         "function renderSaasMerchantMediaCreditsPanel",
         "merchant_media_points_v2",
         "素材点余额",
-        "失败、超时或生成前检查未通过会返还",
+        "失败、超时或生成前检查未通过时解除占用",
         "function renderSaasMerchantDomesticPaymentPanel",
         "微信扫码付款",
         "付款、取消和退款状态会保留在当前账号",

@@ -39716,6 +39716,43 @@ async function fetchSaasMerchantBillingUsage() {
   };
 }
 
+function renderSaasMerchantMediaUsage(usage) {
+  const unavailable = `<p class="saas-empty-note">使用明细暂未提供：暂时无法获取占用点数和任务结算记录，请稍后刷新；这不表示没有发生使用。</p>`;
+  const points = (value) => Number.isSafeInteger(value) && value >= 0;
+  const labels = { reserved: "处理中", settled: "已结算", released: "已结束 · 未扣点", needs_review: "结算待核对" };
+  if (!usage || usage.contract_version !== "2026-09-25-merchant-media-usage-v1" || usage.status !== "ready" ||
+      !points(usage.held_points) || !Array.isArray(usage.items) || usage.items.length > 100 ||
+      typeof usage.has_more !== "boolean" || typeof usage.incomplete !== "boolean") return unavailable;
+  const valid = usage.items.every((item) => item && /^[a-f0-9]{16}$/.test(item.activity_id || "") &&
+    Object.hasOwn(labels, item.state) && points(item.estimated_points) && item.estimated_points > 0 &&
+    points(item.released_points) && item.released_points <= item.estimated_points &&
+    (item.state === "settled" ? points(item.spent_points) && item.spent_points > 0 && item.spent_points + item.released_points === item.estimated_points :
+      item.state === "released" ? item.spent_points === 0 && item.released_points === item.estimated_points :
+        item.spent_points === null && item.released_points === 0));
+  if (!valid) return unavailable;
+  return `<details class="saas-media-credit-history" data-media-usage-contract="merchant_media_usage_v1">
+    <summary>素材点使用明细 · 暂时占用 ${usage.held_points.toLocaleString("zh-CN")} 点 · 最近 ${usage.items.length} 条</summary>
+    <p class="saas-empty-note">暂时占用包含尚未结算的生成任务及退款审核冻结，未计为实际消耗。解除占用不等于现金退款；点数若已到期或撤销，不会恢复为可用余额。</p>
+    ${usage.has_more ? `<p class="saas-empty-note">这里只展示最近可核对的记录，不代表完整历史或累计使用量。</p>` : ""}
+    ${usage.incomplete ? `<p class="saas-empty-note">部分历史记录暂时无法核对，未计入以下明细；请勿据此判断没有扣点。</p>` : ""}
+    <div class="saas-settings-row-list">
+      ${usage.items.length ? usage.items.map((item) => `<article class="${item.state === "needs_review" ? "is-amber" : ""}">
+        <div>
+          <span>${labels[item.state]}</span>
+          <strong>图片生成 · ${escapeHtml(item.activity_id.slice(-8))}</strong>
+          <small>${escapeHtml(saasDomesticBillingDateLabel(item.updated_at || item.created_at) || "时间暂未提供")}</small>
+          ${/^media_job_[a-zA-Z0-9_-]{1,64}$/.test(item.media_job_id || "") ? `<small>任务编号：${escapeHtml(item.media_job_id)}</small>` : ""}
+        </div>
+        <div>
+          <span>预计 ${item.estimated_points.toLocaleString("zh-CN")} 点</span>
+          <strong>${item.spent_points === null ? (item.state === "reserved" ? "尚未结算" : "实际消耗待核对") : `实际消耗 ${item.spent_points.toLocaleString("zh-CN")} 点`}</strong>
+          <small>${item.state === "needs_review" ? "返还结果待核对" : item.state === "reserved" ? "完成后按实际结果结算" : `解除占用 ${item.released_points.toLocaleString("zh-CN")} 点`}</small>
+        </div>
+      </article>`).join("") : `<p class="saas-empty-note">当前范围内没有可核对的图片点数记录。</p>`}
+    </div>
+  </details>`;
+}
+
 function renderSaasMerchantMediaCreditsPanel() {
   const usage = state.saasBillingUsage && typeof state.saasBillingUsage === "object" ? state.saasBillingUsage : {};
   const mediaCredits = usage.media_credits && typeof usage.media_credits === "object" ? usage.media_credits : {};
@@ -39746,7 +39783,7 @@ function renderSaasMerchantMediaCreditsPanel() {
         <div>
           <span>素材点</span>
           <strong>素材点余额 ${pointsLabel(available)}</strong>
-          <p>素材点用于图片生成。套餐内点数优先使用，已购买点数不随套餐到期；生成前显示预计用量，完成后按实际结算，失败、超时或生成前检查未通过会返还。</p>
+          <p>素材点用于图片生成。套餐内点数优先使用，已购买点数不随套餐到期；生成前显示预计用量，完成后按实际结算。失败、超时或生成前检查未通过时解除占用；点数到期与撤销规则仍然适用。</p>
         </div>
         <em>${purchaseStatusLabel}</em>
       </div>
@@ -39774,7 +39811,7 @@ function renderSaasMerchantMediaCreditsPanel() {
             </article>`
           : ""}
       </div>
-      <p class="saas-empty-note">使用明细暂未提供：本页暂不展示处理中点数、累计使用和任务结算记录；这不表示没有发生使用。</p>
+      ${renderSaasMerchantMediaUsage(summaryReady ? mediaCredits.usage : null)}
       <div class="saas-media-credit-pack-list" aria-label="素材点固定充值包">
         ${packs.length
           ? packs

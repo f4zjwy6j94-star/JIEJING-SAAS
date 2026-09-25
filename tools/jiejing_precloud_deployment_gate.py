@@ -175,6 +175,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("team_seat_quota", [sys.executable, "tools/test_jiejing_team_seat_quota.py"]),
     ("commercial_entitlements", [sys.executable, "tools/test_jiejing_commercial_entitlements.py"]),
     ("media_credit_purchase", [sys.executable, "tools/test_jiejing_media_credit_purchase.py"]),
+    ("merchant_media_usage", [sys.executable, "tools/test_jiejing_merchant_media_usage.py"]),
     ("billing_entitlement_projection", [sys.executable, "tools/test_jiejing_billing_entitlement_projection.py"]),
     ("operations_metering", [sys.executable, "tools/test_jiejing_operations_metering.py"]),
     ("platform_operations_overview", [sys.executable, "tools/test_jiejing_platform_operations_overview.py"]),
