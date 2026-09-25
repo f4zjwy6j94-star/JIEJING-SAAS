@@ -15,6 +15,27 @@ def require(text: str, needle: str, label: str) -> None:
         raise AssertionError(f"missing {label}: {needle}")
 
 
+def assert_homepage_auth_copy(script: str) -> None:
+    # Protocol property names are not merchant copy. Keep checking string and
+    # template literals; the registration behavior test also checks actual UI sinks.
+    literals = re.findall(r'''(["'`])((?:\\.|(?!\1)[^\\])*)\1''', script, re.S)
+    for _, literal in literals:
+        for marker in ["后端没有返回登录凭证", "登录凭证", "HTTP 401", "provider", "quota", "模型 key"]:
+            if marker in literal:
+                raise AssertionError(f"homepage auth script should keep failure copy merchant-facing: {marker}")
+
+
+def assert_homepage_auth_copy_guard() -> None:
+    assert_homepage_auth_copy('const challenge = { provider: "turnstile" }; showToast("正在完成注册安全验证");')
+    for quote in ('"', "'", "`"):
+        for marker in ("登录凭证", "HTTP 401", "provider", "quota", "模型 key"):
+            try:
+                assert_homepage_auth_copy(f"showToast({quote}注册失败：{marker}{quote});")
+            except AssertionError:
+                continue
+            raise AssertionError("merchant-copy guard accepted an internal term in visible copy")
+
+
 def assert_model_disabled_button_style(styles: str) -> None:
     selector = "body.saas-public-mvp #appShell .saas-model-provider-panel button:disabled"
     matching = re.search(re.escape(selector) + r"\s*,\s*" + re.escape(selector + ":hover") + r"\s*,\s*" + re.escape(selector + ":active") + r"\s*\{([^}]+)\}", styles)
@@ -212,9 +233,8 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
             "homepage login must accept an HttpOnly cookie session without exposing a token: "
             f"{cookie_session_result.stderr.strip()}"
         )
-    for internal_marker in ["后端没有返回登录凭证", "登录凭证", "HTTP 401", "provider", "quota", "模型 key"]:
-        if internal_marker in index_auth_script_body:
-            raise AssertionError(f"homepage auth script should keep failure copy merchant-facing: {internal_marker}")
+    assert_homepage_auth_copy_guard()
+    assert_homepage_auth_copy(index_auth_script_body)
     for required_copy in [
         "敏感凭证只在后端安全保存",
         "不接触原始平台凭证",

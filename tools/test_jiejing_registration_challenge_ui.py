@@ -15,7 +15,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const html = fs.readFileSync('index.html', 'utf8');
 const source = html.slice(html.indexOf('let entryChallengeScriptPromise = null;'), html.indexOf('function showEntryLogin()'));
-async function scenario(kind) {
+async function scenario(kind, testedSource = source) {
   let callbacks, calls = [], tokens = 0, removed = 0, toast = [];
   const config = { required:true, verification_ready:kind!=='missing', site_key:'fixture-public-site', action:'jiejing_register' };
   const api = {
@@ -45,12 +45,12 @@ async function scenario(kind) {
       return {ok:kind!=='auth-reject',json:async()=>({platform_trial_activation:{platform_trial_allowed:!!body.trial_activation_challenge?.token}})};
     },
     readEntryAuthCredentials:()=>({email:'new@example.test',password:'synthetic-password',company:''}),
-    isValidEntryEmail:()=>true, setEntryAuthPending(){},setEntryAuthStatus(){},
+    isValidEntryEmail:()=>true, setEntryAuthPending(){},setEntryAuthStatus:m=>toast.push(m),
     showToast:m=>toast.push(m),entryAuthErrorMessage:()=> 'fixture-rejected',
     saveEntryAuthSession(){},warmWorkspaceAssets(){},continueAfterLogin:async()=>{},
   };
   if(kind==='script-error') c.window.turnstile=null;
-  vm.createContext(c);vm.runInContext(source,c);
+  vm.createContext(c);vm.runInContext(testedSource,c);
   if(kind==='duplicate')await Promise.all([c.submitEntryAuth('register'),c.submitEntryAuth('register')]);
   else await c.submitEntryAuth(kind==='login'?'login':'register');
   let bodies=calls.filter(x=>typeof x==='object');assert.equal(bodies.length,1);
@@ -70,8 +70,15 @@ async function scenario(kind) {
     assert.equal(bodies[1].trial_activation_challenge.token,'synthetic-token-2');
     assert.equal(removed,2);
   }
+  for(const message of toast) assert(!/provider|quota|HTTP 401|登录凭证|模型 key/.test(message), 'internal term reached merchant UI');
 }
-(async()=>{for(const kind of ['success','duplicate','login','missing','network-error','script-error','provider-error','expired','timeout','auth-reject'])await scenario(kind);console.log('PASS homepage registration behavior 10/10');})().catch(()=>{console.error('FAIL homepage registration behavior');process.exitCode=1;});
+(async()=>{
+  for(const kind of ['success','duplicate','login','missing','network-error','script-error','provider-error','expired','timeout','auth-reject'])await scenario(kind);
+  const leakedCopy = source.replace('正在完成注册安全验证...', 'provider 验证');
+  assert.notEqual(leakedCopy, source);
+  await assert.rejects(()=>scenario('success', leakedCopy), /internal term reached merchant UI/);
+  console.log('PASS homepage registration behavior 10/10 and merchant-copy rejection');
+})().catch(()=>{console.error('FAIL homepage registration behavior');process.exitCode=1;});
 '''
 
 
