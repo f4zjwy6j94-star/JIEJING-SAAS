@@ -220,10 +220,17 @@ def upload_provider_monitoring_aggregate_to_cls(
     access_key: str,
     client_factory: Any = None,
     message_factory: Any = None,
+    probe_marker: str | None = None,
 ) -> bool:
     """Upload one allowlisted aggregate through Tencent CloudAPI UploadLog."""
 
     if set(event) != PROVIDER_MONITOR_AGGREGATE_KEYS or event.get("event_type") != PROVIDER_MONITOR_EVENT_TYPE:
+        return False
+    if probe_marker is not None and (
+        event.get("probe") is not True
+        or not isinstance(probe_marker, str)
+        or not re.fullmatch(r"jiejing-provider-probe-[0-9a-f]{32}", probe_marker)
+    ):
         return False
     if not re.fullmatch(r"[a-z0-9-]{3,64}", str(region or "")) or not all(
         str(value or "").strip() for value in (topic_id, access_id, access_key)
@@ -238,6 +245,8 @@ def upload_provider_monitoring_aggregate_to_cls(
             message_factory = LogGroupList
         packet = message_factory()
         group = packet.logGroupList.add()
+        if probe_marker is not None:
+            group.filename = probe_marker
         log = group.logs.add()
         log.time = int(time.time() * 1_000_000)
         for key in sorted(PROVIDER_MONITOR_AGGREGATE_KEYS):

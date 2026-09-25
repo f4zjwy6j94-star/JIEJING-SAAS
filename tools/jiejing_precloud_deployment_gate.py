@@ -242,6 +242,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("infrastructure_drivers", [sys.executable, "tools/test_jiejing_infrastructure_drivers.py"]),
     ("managed_infra_readiness_cutover", [sys.executable, "tools/test_jiejing_managed_infra_readiness_cutover.py"]),
     ("tencent_cloud_integrations", [sys.executable, "tools/test_jiejing_tencent_cloud_integrations.py"]),
+    ("tencent_runtime_env", [sys.executable, "tools/test_jiejing_configure_tencent_runtime_env.py"]),
     ("postgres_repository_cutover", [sys.executable, "tools/test_jiejing_postgres_repository_cutover.py"]),
     ("redis_worker_cutover", [sys.executable, "tools/test_jiejing_redis_worker_cutover.py"]),
     ("worker_cli_contract", [sys.executable, "tools/test_jiejing_worker_cli_contract.py"]),

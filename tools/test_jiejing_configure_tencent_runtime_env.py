@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -11,6 +13,8 @@ import tempfile
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +43,10 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
+    for check in (_test_provider_probe_readback, _test_provider_probe_upload_boundary, _test_provider_probe_cli_evidence):
+        probe_contract_error = check()
+        if probe_contract_error:
+            return fail(probe_contract_error)
     index_contract_error = _test_provider_index_operator()
     if index_contract_error:
         return fail(index_contract_error)
@@ -979,11 +987,15 @@ def _test_provider_alarm_operator() -> str:
     if provider_alarm_verification_updates(failed_readback):
         return "failed alarm readback must never produce verification timestamps"
 
-    probe_client = _FakeClsClient(index=_provider_index(), search_results=[{"private": "ignored"}])
+    probe_client = _FakeClsClient(index=_provider_index())
     captured_probe: dict[str, object] = {}
 
-    def _probe_uploader(event: dict[str, object]) -> bool:
+    def _probe_uploader(event: dict[str, object], *, probe_marker: str) -> bool:
         captured_probe.update(deepcopy(event))
+        probe_client.search_results = [{
+            "Time": 1_750_000_000_000, "TopicId": topic_id, "FileName": probe_marker,
+            "LogJson": json.dumps({key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in event.items()}),
+        }]
         return True
 
     probe = verify_provider_cls_probe(
@@ -1011,6 +1023,190 @@ def _test_provider_alarm_operator() -> str:
     for forbidden in (topic_id, logset_id, notice_id, "private"):
         if forbidden in probe_dump:
             return f"provider probe status exposed cloud/log result data: {forbidden}"
+    return ""
+
+
+def _test_provider_probe_readback() -> str:
+    client = _FakeClsClient(index={}, search_results=[{"private": "unrelated-old-log"}])
+    result = verify_provider_cls_probe(
+        client=client,
+        request_factory=_request_factory,
+        uploader=lambda _event, **_metadata: True,
+        topic_id="fixture-topic",
+        environment="test",
+        now_epoch_ms=1_750_000_000_000,
+        waiter=lambda _seconds: None,
+    )
+    if result.get("status") != "blocked" or result.get("probe_searchable") is not False:
+        return "unrelated non-empty CLS search results must not verify this probe"
+    delayed, trace = _probe_readback_case(ready_on=4)
+    if delayed.get("status") != "verified" or trace["reads"] != 4 or trace["uploads"] != 1:
+        return "valid current CLS probe arriving on the fourth read must verify without re-upload"
+    last, last_trace = _probe_readback_case(ready_on=13)
+    if last.get("status") != "verified" or sum(last_trace["waits"]) != 60:
+        return "CLS readback must cover a full minute of indexing delay with one upload"
+    exhausted, exhausted_trace = _probe_readback_case(ready_on=14, search_attempts=999)
+    if exhausted.get("status") != "blocked" or exhausted_trace["reads"] != 13 or sum(exhausted_trace["waits"]) != 60:
+        return "CLS retries must be bounded and must not verify missing evidence"
+    failed_upload, failed_trace = _probe_readback_case(upload_ok=False)
+    if failed_upload.get("status") != "blocked" or failed_trace["reads"] or failed_trace["waits"]:
+        return "failed upload must never search or wait"
+    immediate, immediate_trace = _probe_readback_case()
+    if immediate.get("status") != "verified" or immediate_trace["waits"]:
+        return "immediately searchable current probe must not add a wait"
+    if immediate.get("event_field_count") != 12 or immediate.get("event_allowlist_exact") is not True:
+        return "correlation metadata must not expand the 12-field aggregate contract"
+    for label, changes in (
+        ("other run", {"FileName": "jiejing-provider-probe-" + "0" * 32}),
+        ("other topic", {"TopicId": "other-topic"}),
+        ("old timestamp", {"Time": 1_749_999_999_999}),
+        ("future timestamp", {"Time": 1_750_000_060_001}),
+        ("invalid timestamp", {"Time": True}),
+        ("invalid JSON", {"LogJson": "not json"}),
+        ("oversized JSON", {"LogJson": " " * 8193}),
+        ("partial event", {"LogJson": '{"probe":"true"}'}),
+        ("array event", {"LogJson": "[]"}),
+    ):
+        rejected, _ = _probe_readback_case(mutate=lambda rows, changes=changes: [dict(rows[0], **changes)], search_attempts=1)
+        if rejected.get("status") != "blocked":
+            return f"CLS must reject {label} readback"
+    def wrong_environment(rows):
+        payload = json.loads(rows[0]["LogJson"])
+        payload["environment"] = "production"
+        return [dict(rows[0], LogJson=json.dumps(payload))]
+    rejected, _ = _probe_readback_case(mutate=wrong_environment, search_attempts=1)
+    if rejected.get("status") != "blocked":
+        return "current filename with different aggregate content must not verify"
+    ordered, ordered_trace = _probe_readback_case(mutate=lambda rows: [None, {"FileName": "other"}, *rows])
+    if ordered.get("status") != "verified" or ordered_trace["reads"] != 1:
+        return "valid current probe must be found among unrelated result rows"
+    elapsed = [0.0]
+    def slow_search(rows):
+        elapsed[0] += 30
+        return []
+    bounded, bounded_trace = _probe_readback_case(mutate=slow_search, monotonic=lambda: elapsed[0])
+    if bounded.get("status") != "blocked" or bounded_trace["reads"] != 3:
+        return "a slow search must stop retries at the monotonic deadline"
+    safe_dump = json.dumps(ordered)
+    if any(value in safe_dump for value in ("fixture-topic", ordered_trace["record"]["FileName"], "LogJson")):
+        return "CLS verification result must not expose correlation marker, topic or log body"
+    print("PASS CLS identity, delay, bounds and malformed-readback regressions")
+    return ""
+
+
+def _probe_readback_case(*, ready_on: int = 1, mutate=None, upload_ok: bool = True, **options):
+    trace = {"reads": 0, "uploads": 0, "waits": [], "requests": [], "record": {}}
+    client = _FakeClsClient(index={})
+
+    def upload(event, *, probe_marker):
+        trace["uploads"] += 1
+        trace["record"] = {
+            "Time": 1_750_000_000_000, "TopicId": "fixture-topic", "FileName": probe_marker,
+            "LogJson": json.dumps({key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in event.items()}),
+        }
+        return upload_ok
+
+    def search(request):
+        trace["reads"] += 1
+        trace["requests"].append(deepcopy(request))
+        rows = [deepcopy(trace["record"])] if trace["reads"] >= ready_on else []
+        return {"Results": mutate(rows) if mutate else rows}
+
+    client.SearchLog = search
+    result = verify_provider_cls_probe(
+        client=client, request_factory=_request_factory, uploader=upload,
+        topic_id="fixture-topic", environment="test", now_epoch_ms=1_750_000_000_000,
+        waiter=trace["waits"].append, **options,
+    )
+    return result, trace
+
+
+def _test_provider_probe_upload_boundary() -> str:
+    from jiejing_saas.cls_log_pb2 import LogGroupList
+    from jiejing_saas.monitoring import upload_provider_monitoring_aggregate_to_cls
+    from jiejing_saas.operations_metering import build_provider_monitoring_aggregate_event
+
+    event = build_provider_monitoring_aggregate_event(reliability_summary={}, cost_summary={}, environment="test", probe=True)
+    marker = "jiejing-provider-probe-" + "a" * 32
+    packets = []
+
+    class UploadClient:
+        def put_log_raw(self, _topic, packet):
+            decoded = LogGroupList()
+            decoded.ParseFromString(packet.SerializeToString())
+            packets.append(decoded)
+
+    def upload(value, marker_value):
+        return upload_provider_monitoring_aggregate_to_cls(
+            value, region="ap-guangzhou", topic_id="fixture-topic", access_id="fixture-id", access_key="fixture-value",
+            probe_marker=marker_value, client_factory=lambda *_args: UploadClient(),
+        )
+
+    if not upload(event, marker) or len(packets) != 1:
+        return "probe adapter must upload exactly one real protobuf packet"
+    group = packets[0].logGroupList[0]
+    content = {item.key: item.value for item in group.logs[0].contents}
+    if group.filename != marker or set(content) != set(event) or content.get("probe") != "true":
+        return "probe marker must survive protobuf as filename metadata, not an aggregate field"
+    for invalid in ("untrusted-file", "../private", marker.upper(), "", 123):
+        if upload(event, invalid):
+            return "arbitrary probe filename metadata must be rejected before upload"
+    if upload(dict(event, probe=False), marker) or len(packets) != 1:
+        return "passive monitoring and invalid markers must not upload correlation metadata"
+    if not upload(dict(event, probe=False), None) or packets[-1].logGroupList[0].filename:
+        return "ordinary passive monitoring upload must stay unchanged"
+    print("PASS CLS real protobuf and upload metadata boundary")
+    return ""
+
+
+def _test_provider_probe_cli_evidence() -> str:
+    import tools.jiejing_configure_tencent_runtime_env as configurator
+
+    with tempfile.TemporaryDirectory(prefix="jiejing-cls-readback-") as directory:
+        path = Path(directory) / "synthetic.env"
+        existing = {
+            "JIEJING_CLS_TOPIC_ID": "fixture-topic", "JIEJING_TENCENT_SECRET_ID": "fixture-id",
+            "JIEJING_TENCENT_SECRET_KEY": "fixture-credential", "JIEJING_SAAS_ENV": "test",
+            "JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT": "2026-01-01T00:00:00+00:00",
+        }
+        original = "\n".join(f"{key}={value}" for key, value in existing.items()) + "\n"
+        client = _FakeClsClient(index={})
+        marker_used = []
+        mode = ["upload_failed"]
+
+        def upload(event, _values, *, probe_marker):
+            marker_used.append(probe_marker)
+            if mode[0] == "upload_failed":
+                return False
+            client.search_results = [{
+                "Time": int(datetime.now(timezone.utc).timestamp() * 1000), "TopicId": "fixture-topic", "FileName": probe_marker,
+                "LogJson": json.dumps({key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in event.items()}),
+            }]
+            return True
+
+        def search(request):
+            if mode[0] == "query_failed":
+                raise RuntimeError("fixture-credential must never appear in output")
+            return {"Results": deepcopy(client.search_results)}
+
+        client.SearchLog = search
+        for selected in ("upload_failed", "query_failed", "success"):
+            mode[0] = selected
+            path.write_text(original, encoding="utf-8")
+            before = path.read_bytes()
+            stdout = io.StringIO()
+            with patch.object(configurator, "_build_cls_control_client", return_value=client), \
+                 patch.object(configurator, "_cls_request_factory", side_effect=_request_factory), \
+                 patch.object(configurator, "_upload_provider_probe_to_cls", side_effect=upload), contextlib.redirect_stdout(stdout):
+                code = configurator._run_provider_probe_cli(args=SimpleNamespace(apply=True), env_file=path, existing=existing, lines=original.splitlines())
+            payload = json.loads(stdout.getvalue())
+            if selected != "success" and (code != 2 or path.read_bytes() != before or payload.get("status") != "blocked"):
+                return "failed CLI probe must leave all previous evidence bytes unchanged"
+            if selected == "success" and (code != 0 or path.read_bytes() == before or payload.get("verification_evidence_recorded") is not True):
+                return "only verified current CLI probe may record new evidence"
+            if any(value in stdout.getvalue() for value in ("fixture-credential", "fixture-topic", *marker_used)):
+                return "CLI must never print credential, topic, marker or raw query errors"
+    print("PASS CLS CLI success-only evidence write and sanitized failures")
     return ""
 
 

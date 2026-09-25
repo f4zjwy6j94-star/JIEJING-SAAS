@@ -20,6 +20,7 @@ import re
 import stat
 import sys
 import time
+import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1432,8 +1433,9 @@ def verify_provider_cls_probe(
     topic_id: str,
     environment: str,
     now_epoch_ms: int | None = None,
-    search_attempts: int = 3,
+    search_attempts: int = 13,
     waiter: Any = time.sleep,
+    monotonic: Any = time.monotonic,
 ) -> dict[str, Any]:
     """Upload one safe probe and prove it is searchable without matching either alarm."""
 
@@ -1452,35 +1454,41 @@ def verify_provider_cls_probe(
         'probe:"false"' in spec["AlarmTargets"][0]["Query"]
         for spec in provider_alarm_specs(logset_id="private", topic_id="private").values()
     )
-    uploaded = bool(alarm_queries_exclude_probe and uploader(event))
+    current_ms = int(now_epoch_ms if now_epoch_ms is not None else time.time() * 1000)
+    probe_marker = "jiejing-provider-probe-" + uuid.uuid4().hex
+    uploaded = bool(alarm_queries_exclude_probe and uploader(event, probe_marker=probe_marker))
     searchable = False
     if uploaded:
-        current_ms = int(now_epoch_ms if now_epoch_ms is not None else time.time() * 1000)
+        deadline = monotonic() + 75
+        attempts = max(1, min(13, int(search_attempts)))
         query = (
             f'event_type:"{PROVIDER_MONITOR_EVENT_TYPE}" AND '
             f'contract_version:"{PROVIDER_MONITOR_CONTRACT_VERSION}" AND probe:"true"'
         )
-        for attempt in range(max(1, min(5, int(search_attempts)))):
+        for attempt in range(attempts):
+            if monotonic() >= deadline:
+                break
             request = request_factory(
                 "SearchLogRequest",
                 {
                     "TopicId": topic_id,
-                    "From": current_ms - 600_000,
+                    "From": current_ms,
                     "To": current_ms + 60_000,
                     "QueryString": query,
                     "QuerySyntax": 1,
-                    "Limit": 1,
+                    "Limit": 20,
                     "Sort": "desc",
                     "HighLight": False,
                 },
             )
             response = _plain_response(client.SearchLog(request))
             results = response.get("Results") if isinstance(response.get("Results"), list) else []
-            if results:
+            if any(_provider_probe_result_matches(row, event, probe_marker, topic_id, current_ms) for row in results):
                 searchable = True
                 break
-            if attempt + 1 < max(1, min(5, int(search_attempts))):
-                waiter(2)
+            remaining = deadline - monotonic()
+            if attempt + 1 < attempts and remaining > 0:
+                waiter(min(5, remaining))
     return {
         "status": "verified" if uploaded and searchable and alarm_queries_exclude_probe else "blocked",
         "probe_uploaded": uploaded,
@@ -1494,7 +1502,31 @@ def verify_provider_cls_probe(
     }
 
 
-def _upload_provider_probe_to_cls(event: dict[str, Any], values: dict[str, str]) -> bool:
+def _provider_probe_result_matches(
+    row: Any, event: dict[str, Any], probe_marker: str, topic_id: str, started_ms: int,
+) -> bool:
+    """Inspect bounded readback in memory; never return raw log/resource data."""
+    if not isinstance(row, dict) or row.get("FileName") != probe_marker or row.get("TopicId") != topic_id:
+        return False
+    timestamp = row.get("Time")
+    if type(timestamp) not in (int, str) or not re.fullmatch(r"[0-9]{1,16}", str(timestamp)):
+        return False
+    if not started_ms <= int(timestamp) <= started_ms + 60_000:
+        return False
+    raw = row.get("LogJson")
+    if not isinstance(raw, str) or len(raw) > 8192:
+        return False
+    try:
+        content = json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(content, dict):
+        return False
+    serialized = lambda value: str(value).lower() if isinstance(value, bool) else str(value)
+    return all(key in content and serialized(content[key]) == serialized(value) for key, value in event.items())
+
+
+def _upload_provider_probe_to_cls(event: dict[str, Any], values: dict[str, str], *, probe_marker: str) -> bool:
     try:
         from jiejing_saas.monitoring import upload_provider_monitoring_aggregate_to_cls
 
@@ -1512,6 +1544,7 @@ def _upload_provider_probe_to_cls(event: dict[str, Any], values: dict[str, str])
             topic_id=topic_id,
             access_id=secret_id,
             access_key=secret_key,
+            probe_marker=probe_marker,
         )
     except Exception:
         return False
@@ -1539,7 +1572,7 @@ def _run_provider_probe_cli(
         result = verify_provider_cls_probe(
             client=_build_cls_control_client(control),
             request_factory=_cls_request_factory,
-            uploader=lambda event: _upload_provider_probe_to_cls(event, control),
+            uploader=lambda event, **metadata: _upload_provider_probe_to_cls(event, control, **metadata),
             topic_id=control["JIEJING_CLS_TOPIC_ID"],
             environment=control.get("JIEJING_SAAS_ENV") or "staging",
         )

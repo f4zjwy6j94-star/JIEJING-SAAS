@@ -489,6 +489,7 @@ FILES=(
   "tools/test_jiejing_merchant_media_usage.py"
   "docs/superpowers/specs/2026-09-25-merchant-media-usage-design.md"
   "docs/superpowers/plans/2026-09-25-merchant-media-usage.md"
+  "docs/superpowers/specs/2026-09-25-cls-probe-readback-design.md"
   "tools/test_jiejing_wechat_pay_refund_provider.py"
   "tools/test_jiejing_session_revocation.py"
   "tools/test_jiejing_rotating_browser_sessions.py"

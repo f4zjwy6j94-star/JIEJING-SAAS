@@ -682,6 +682,12 @@ def main() -> int:
     media_usage_gate = '("merchant_media_usage", [sys.executable, "tools/test_jiejing_merchant_media_usage.py"])'
     if precloud_gate.count(media_usage_gate) != 1:
         return fail("merchant media usage regression must run exactly once in precloud gate")
+    probe_spec = "docs/superpowers/specs/2026-09-25-cls-probe-readback-design.md"
+    if whitelist_entries.count(f'"{probe_spec}"') != 1 or not (ROOT / probe_spec).is_file():
+        return fail("CLS probe readback design must ship exactly once")
+    probe_gate = '("tencent_runtime_env", [sys.executable, "tools/test_jiejing_configure_tencent_runtime_env.py"])'
+    if precloud_gate.count(probe_gate) != 1:
+        return fail("CLS probe readback regression must run exactly once in precloud gate")
     for marker in [
         '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',
