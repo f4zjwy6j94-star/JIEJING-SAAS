@@ -613,6 +613,7 @@ def build_merchant_media_credit_summary(
         "purchase": {
             "status": "available" if purchase_enabled else "not_open",
             "purchase_enabled": purchase_enabled,
+            "unavailable_reason": "" if purchase_enabled else ("not_open" if not purchase_requested else "payment_unavailable"),
             "backend_payment_confirmation_required": True,
             "frontend_can_grant_points": False,
             "triggers_real_charge": False,

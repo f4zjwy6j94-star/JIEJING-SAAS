@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .config import SaaSSettings
@@ -1236,15 +1236,21 @@ def _compact_billing_evidence(**values: Any) -> str:
 def build_billing_usage(settings: SaaSSettings, repository: SaaSRepository, *, company_id: str) -> dict[str, Any]:
     """Return merchant-visible usage and quota status without payment secrets."""
 
-    subscription = repository.get_billing_subscription(company_id=company_id)
-    provider = _provider()
-    entitlement_active = _entitlement_active(provider=provider, subscription=subscription)
-    plan_key = _selected_plan_key(subscription=subscription, entitlement_active=entitlement_active)
+    subscription, provider, entitlement_active, plan_key = resolve_subscription_entitlement(
+        environment=settings.environment, company_id=company_id,
+        subscription=repository.get_billing_subscription(company_id=company_id),
+    )
+    if settings.environment == "production" and subscription is None:
+        # Software trial and platform-funded model quota are different gates.
+        # This grants no calls, credits or write permission; those retain their own checks.
+        provider = "free_trial"
+        subscription = _free_trial_subscription(repository, company_id=company_id)
+        entitlement_active = bool(subscription["entitlement_active"])
     plan = _plan_by_key(plan_key)
     usage = _company_usage(repository, company_id=company_id)
     quota_status = _quota_status(plan=plan, usage=usage)
     public_subscription = _public_subscription(subscription=subscription, provider=provider, entitlement_active=entitlement_active)
-    from .media_credits import build_media_credit_summary
+    from .media_credits import build_merchant_media_credit_summary
 
     return {
         "contract_version": "2026-05-19-billing-usage-quota",
@@ -1268,7 +1274,7 @@ def build_billing_usage(settings: SaaSSettings, repository: SaaSRepository, *, c
         "usage": usage,
         "quota_status": quota_status,
         "blocked_units": [item["unit"] for item in quota_status if item["would_block_next_unit"]],
-        "media_credits": build_media_credit_summary(repository, company_id=company_id),
+        "media_credits": build_merchant_media_credit_summary(repository, company_id=company_id),
         "subscription_quota_shutdown_state": _build_subscription_quota_shutdown_state(
             subscription=public_subscription,
             quota_enforcement_enabled=_env_bool("JIEJING_QUOTA_ENFORCEMENT_ENABLED"),
@@ -1455,12 +1461,15 @@ def _plan_catalog_with_provider_ids() -> list[dict[str, Any]]:
     return enriched
 
 
-def _selected_plan_key(*, subscription: dict[str, Any] | None = None, entitlement_active: bool = False) -> str:
+def _selected_plan_key(*, subscription: dict[str, Any] | None = None, entitlement_active: bool = False,
+    allow_env_default: bool = True) -> str:
     entitlement_plan_keys = {item["key"] for item in PLAN_CATALOG} | set(LEGACY_PLAN_CATALOG)
     if entitlement_active and subscription:
         value = str(subscription.get("plan_key") or "").strip().lower()
         if value in entitlement_plan_keys:
             return value
+    if not allow_env_default:
+        return "free"
     value = os.environ.get("JIEJING_DEFAULT_PLAN_KEY", "free").strip().lower() or "free"
     return value if value in {item["key"] for item in PLAN_CATALOG} else "free"
 
@@ -1499,7 +1508,59 @@ def _canonical_provider(raw: str) -> str:
     return aliases.get(text, text)
 
 
-def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None) -> bool:
+def resolve_subscription_entitlement(*, environment: str, company_id: str,
+    subscription: dict[str, Any] | None) -> tuple[dict[str, Any] | None, str, bool, str]:
+    """One source for usage and transactional seat admission; no reads or grants."""
+    production = environment == "production"
+    provider = _provider()
+    if production:
+        # Checkout configuration is not evidence that this tenant has paid.
+        provider = _canonical_provider((subscription or {}).get("provider") or "")
+        if provider not in {"stripe", "paddle", "lemon_squeezy", "wechat_pay_native"}:
+            provider = "not_selected"
+    active = _entitlement_active(provider=provider, subscription=subscription, require_paid_term=production)
+    if production and not active and _owner_preview_allowed(company_id):
+        # A server-owned, exact tenant grant; never rewrite a payment/refund record.
+        provider = "owner_preview"
+        subscription = {
+            "provider": provider, "status": "owner_preview_active", "plan_key": "starter",
+            "entitlement_active": True, "payment_attention_required": False,
+            "subscription": {"access_kind": "owner_preview"},
+        }
+        active = True
+    plan_key = _selected_plan_key(subscription=subscription, entitlement_active=active,
+        allow_env_default=not production)
+    return subscription, provider, active, plan_key
+
+
+def _owner_preview_allowed(company_id: str) -> bool:
+    allowed = {value.strip() for value in os.environ.get("JIEJING_BILLING_PREVIEW_COMPANY_ALLOWLIST", "").split(",")}
+    return bool(company_id) and company_id != "*" and company_id in allowed
+
+
+def _free_trial_subscription(repository: SaaSRepository, *, company_id: str) -> dict[str, Any]:
+    company = repository.get_company(company_id) or {}
+    activation = repository.get_platform_trial_activation(company_id=company_id) or {}
+    started = str(activation.get("activated_at") or company.get("created_at") or "")
+    expires_at = None
+    active = False
+    try:
+        start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        expires_at = start + timedelta(days=int(_plan_by_key("free")["duration_days"]))
+        active = start <= datetime.now(timezone.utc) < expires_at
+    except (ValueError, OverflowError):
+        pass
+    return {
+        "provider": "free_trial", "status": "free_trial_active" if active else "free_trial_expired",
+        "plan_key": "free", "entitlement_active": active, "payment_attention_required": False,
+        "subscription": {"access_kind": "free_trial", "active_until": expires_at.isoformat() if expires_at else ""},
+    }
+
+
+def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None,
+    require_paid_term: bool = False) -> bool:
     if provider == "manual_seed":
         return True
     if provider not in {"stripe", "paddle", "lemon_squeezy", "wechat_pay_native"} and provider not in TEST_BILLING_PROVIDERS and provider not in PRIVATE_BETA_BILLING_PROVIDERS:
@@ -1508,6 +1569,11 @@ def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None) -
         return False
     details = subscription.get("subscription") if isinstance(subscription.get("subscription"), dict) else {}
     active_until = str(details.get("active_until") or "").strip()
+    if require_paid_term and (
+        not active_until or subscription.get("status") not in {"active", "trialing"}
+        or subscription.get("plan_key") not in ({item["key"] for item in PLAN_CATALOG if item["amount_minor"]} | set(LEGACY_PLAN_CATALOG))
+    ):
+        return False
     if active_until:
         try:
             expires_at = datetime.fromisoformat(active_until.replace("Z", "+00:00"))
@@ -1521,6 +1587,10 @@ def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None) -
 
 
 def _plan_source(*, provider: str, subscription: dict[str, Any] | None) -> str:
+    if provider == "owner_preview":
+        return "account_scoped_preview"
+    if provider == "free_trial":
+        return "account_free_trial"
     if provider == "manual_seed":
         return "env_default_private_beta"
     if provider in PRIVATE_BETA_BILLING_PROVIDERS:
@@ -1591,8 +1661,9 @@ def _public_subscription(*, subscription: dict[str, Any] | None, provider: str, 
         "active_until": subscription_json.get("active_until") or "",
         "manual_reconciliation_required": bool(subscription_json.get("manual_reconciliation_required")),
         "private_beta_only": bool(subscription_json.get("private_beta_only")),
+        "access_kind": subscription_json.get("access_kind") if provider in {"owner_preview", "free_trial"} else "subscription",
         "block_reason": "" if entitlement_active else "billing_subscription_not_active",
-        "test_mode": provider in TEST_BILLING_PROVIDERS or subscription.get("provider") in TEST_BILLING_PROVIDERS,
+        "test_mode": provider == "owner_preview" or provider in TEST_BILLING_PROVIDERS or subscription.get("provider") in TEST_BILLING_PROVIDERS,
         "creates_real_charge": False,
         "frontend_gets_payment_secret": False,
         "secret_exposed": False,

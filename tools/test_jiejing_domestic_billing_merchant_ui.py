@@ -96,6 +96,13 @@ def check_media_balance_browser(app: str) -> None:
             }""")
             assert page.locator(".saas-merchant-media-credits .saas-settings-card-head strong").inner_text() == "素材点余额 0"
             assert page.get_by_role("button", name="购买素材点").is_enabled()
+            safe['purchase'] = {'status':'not_open', 'purchase_enabled':False, 'unavailable_reason':'payment_unavailable'}
+            page.evaluate("""async () => {
+                state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantMediaCreditsPanel();
+            }""")
+            assert '素材点支付暂不可用' in page.locator('#billing-test').inner_text()
+            assert page.get_by_role('button', name='购买素材点').is_disabled()
             safe["available_points"] = None
             page.evaluate("""async () => {
                 state.saasBillingUsage = (await fetchSaasMerchantBillingUsage()).billing_usage;
@@ -106,6 +113,29 @@ def check_media_balance_browser(app: str) -> None:
             usage_status["http"] = 503
             assert page.evaluate("async () => (await fetchSaasMerchantBillingUsage()).billing_usage") is None, "missing Billing usage must remain missing for subscription consumers"
             page.evaluate("""() => {
+                state.saasBillingUsage = {subscription: {provider:'manual_seed', status:'private_beta_manual_seed', entitlement_active:true}};
+                state.saasDomesticBillingContract = {provider:'wechat_pay_native', real_checkout_ready:true, charge_now_allowed:true};
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel();
+            }""")
+            preview_text = page.locator('#billing-test').inner_text()
+            assert '体验权益可用' in preview_text
+            assert '到期时间暂未提供' not in preview_text
+            assert '顺延到现有有效期' not in preview_text
+            assert page.get_by_role('button', name='续购当前套餐').count() == 0
+            assert page.get_by_role('button', name='微信扫码开通 有店铺').is_enabled()
+            for kind in ('owner_preview', 'free_trial'):
+                page.evaluate("""(kind) => {
+                    state.saasBillingUsage = {subscription: {provider:kind, access_kind:kind,
+                        status:kind + '_active', entitlement_active:true, plan_key:kind === 'free_trial' ? 'free' : 'starter',
+                        test_mode:kind === 'owner_preview', active_until:kind === 'free_trial' ? '2099-10-24T00:00:00Z' : ''}};
+                    document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel();
+                }""", kind)
+                assert '体验权益可用' in page.locator('#billing-test').inner_text()
+                if kind == 'free_trial':
+                    assert '免费体验有效期至 2099-10-24' in page.locator('#billing-test').inner_text()
+                assert page.get_by_role('button', name='续购当前套餐').count() == 0
+                assert page.get_by_role('button', name='微信扫码开通 有店铺').is_enabled()
+            page.evaluate("""() => {
                 state.saasBillingUsage = {subscription: {status:'active', entitlement_active:true, plan_key:'starter'}};
                 state.saasDomesticBillingContract = {provider:'wechat_pay_native', real_checkout_ready:true, charge_now_allowed:true};
                 document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel();
@@ -113,13 +143,22 @@ def check_media_balance_browser(app: str) -> None:
             payment_text = page.locator('#billing-test').inner_text()
             assert "到期时间暂未提供" in payment_text
             assert "当前套餐有效期至 当前套餐" not in payment_text
-            assert page.get_by_role('button', name='续购当前套餐').is_enabled()
+            assert page.get_by_role('button', name='续购当前套餐').is_disabled()
+            assert '顺延到现有有效期' not in payment_text
             page.evaluate("""() => {
-                state.saasBillingUsage.subscription.active_until = '2026-10-24T00:00:00Z';
+                state.saasBillingUsage.subscription.active_until = '2099-10-24T00:00:00Z';
                 document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel();
             }""")
-            assert "当前套餐有效期至 2026-10-24。" in page.locator('#billing-test').inner_text()
+            assert "当前套餐有效期至 2099-10-24。" in page.locator('#billing-test').inner_text()
             assert "到期时间暂未提供" not in page.locator('#billing-test').inner_text()
+            assert page.get_by_role('button', name='续购当前套餐').is_enabled()
+            for expiry in ('not-a-date', '2020-01-01T00:00:00Z'):
+                page.evaluate("""(expiry) => {
+                    state.saasBillingUsage.subscription.active_until = expiry;
+                    document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel();
+                }""", expiry)
+                assert page.get_by_role('button', name='续购当前套餐').is_disabled()
+                assert '顺延到现有有效期' not in page.locator('#billing-test').inner_text()
             assert errors == []
         finally:
             browser.close()

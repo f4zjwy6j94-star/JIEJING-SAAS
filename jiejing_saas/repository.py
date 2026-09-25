@@ -3378,16 +3378,17 @@ class SaaSRepository:
     ) -> dict[str, Any]:
         """Use the existing billing catalog while holding the tenant admission lock."""
 
-        from .billing_plan import _entitlement_active, _plan_by_key, _provider, _selected_plan_key
+        from .billing_plan import _plan_by_key, resolve_subscription_entitlement
 
         subscription_row = conn.execute(
             "select * from billing_subscriptions where company_id = ?", (company_id,),
         ).fetchone()
         subscription = self._billing_subscription_row_to_dict(subscription_row) if subscription_row else None
-        plan = _plan_by_key(_selected_plan_key(
-            subscription=subscription,
-            entitlement_active=_entitlement_active(provider=_provider(), subscription=subscription),
-        ))
+        _subscription, _provider, _active, plan_key = resolve_subscription_entitlement(
+            environment=os.environ.get("JIEJING_SAAS_ENV", "local_dev").strip().lower(),
+            company_id=company_id, subscription=subscription,
+        )
+        plan = _plan_by_key(plan_key)
         member_count = int(conn.execute(
             "select count(*) as count from team_members where company_id = ?", (company_id,),
         ).fetchone()["count"])

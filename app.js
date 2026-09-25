@@ -39267,6 +39267,9 @@ function saasMerchantBillingGuardrailState() {
   const planKey = subscription.plan_key || usage.plan_key || plan.current_plan?.key || plan.default_plan_key || "private_beta";
   const subscriptionStatus = shutdown.subscription_status || subscription.status || "subscription_missing";
   const entitlementActive = Boolean(shutdown.entitlement_active || subscription.entitlement_active);
+  const previewEntitlement = entitlementActive && (subscription.provider === "manual_seed" ||
+    subscription.status === "private_beta_manual_seed" || subscription.test_mode === true ||
+    subscription.access_kind === "owner_preview" || subscription.access_kind === "free_trial");
   const paymentAttentionRequired = Boolean(shutdown.payment_attention_required || subscription.payment_attention_required);
   const quotaEnforcementEnabled = Boolean(shutdown.quota_enforcement_enabled || quota.enabled);
   const blocksInactive = Boolean(shutdown.blocks_metered_work_when_inactive);
@@ -39317,6 +39320,7 @@ function saasMerchantBillingGuardrailState() {
     planKey,
     subscriptionStatus,
     entitlementActive,
+    previewEntitlement,
     paymentAttentionRequired,
     quotaEnforcementEnabled,
     blocksInactive,
@@ -39727,6 +39731,8 @@ function renderSaasMerchantMediaCreditsPanel() {
   const purchased = Number(mediaCredits.purchased_points || 0);
   const promotional = Number(mediaCredits.promotional_points || 0);
   const purchaseOpen = summaryReady && purchase.purchase_enabled === true && purchase.status === "available";
+  const purchaseStatusLabel = !summaryReady ? "购买状态暂未获取" : purchaseOpen ? "可购买" :
+    purchase.unavailable_reason === "payment_unavailable" ? "素材点支付暂不可用" : "素材点加购暂未开放";
   const mediaOrders = (Array.isArray(state.saasDomesticBillingOrders) ? state.saasDomesticBillingOrders : []).filter(
     (item) => item?.purchase_type === "media_points",
   );
@@ -39742,7 +39748,7 @@ function renderSaasMerchantMediaCreditsPanel() {
           <strong>素材点余额 ${pointsLabel(available)}</strong>
           <p>素材点用于图片生成。套餐内点数优先使用，已购买点数不随套餐到期；生成前显示预计用量，完成后按实际结算，失败、超时或生成前检查未通过会返还。</p>
         </div>
-        <em>${summaryReady ? purchaseOpen ? "可购买" : "素材点加购暂未开放" : "购买状态暂未获取"}</em>
+        <em>${purchaseStatusLabel}</em>
       </div>
       <div class="saas-media-credit-balance-grid">
         <article class="is-green">
@@ -39861,13 +39867,19 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
   const selectedCheckoutPlanKey = ["starter", "operator"].includes(normalizePlanKey(state.selectedPlan))
     ? normalizePlanKey(state.selectedPlan)
     : "starter";
-  const checkoutPlanKey = billing.entitlementActive && ["starter", "operator"].includes(subscriptionPlanKey)
+  const checkoutPlanKey = billing.entitlementActive && !billing.previewEntitlement && ["starter", "operator"].includes(subscriptionPlanKey)
     ? subscriptionPlanKey
     : selectedCheckoutPlanKey;
   const checkoutPlan = planDetails[checkoutPlanKey] || planDetails.starter;
-  const entitlementActive = Boolean(billing.entitlementActive);
+  const previewEntitlement = billing.previewEntitlement === true;
+  const entitlementActive = Boolean(billing.entitlementActive) && !previewEntitlement;
   const activeUntil = String(subscription.active_until || "").trim();
-  const activeUntilLabel = activeUntil ? String(activeUntil).slice(0, 10) : "到期时间暂未提供";
+  const validActiveUntil = /^\d{4}-\d{2}-\d{2}T/.test(activeUntil) && Number.isFinite(Date.parse(activeUntil));
+  const renewalReady = entitlementActive && validActiveUntil && Date.parse(activeUntil) > Date.now();
+  const activeUntilLabel = validActiveUntil ? activeUntil.slice(0, 10) : "到期时间暂未提供";
+  const previewDescription = subscription.access_kind === "free_trial" && validActiveUntil
+    ? `免费体验有效期至 ${activeUntilLabel}，不会自动续费，不赠送生图素材点。`
+    : "当前为体验访问，不代表已购买付费套餐；体验访问不自动发放套餐素材点。";
   const paymentOrders = (Array.isArray(state.saasDomesticBillingOrders) ? state.saasDomesticBillingOrders : []).filter(
     (item) => item?.purchase_type !== "media_points",
   );
@@ -39877,7 +39889,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
   const checkout = state.saasDomesticBillingCheckout?.purchase_type !== "media_points" && state.saasDomesticBillingCheckout?.qr_image_data_url
     ? state.saasDomesticBillingCheckout
     : null;
-  const status = entitlementActive
+  const status = previewEntitlement ? "体验权益可用" : entitlementActive
     ? legacyTeamEntitlement ? "历史套餐可用" : "套餐可用"
     : checkout || pendingPayment
       ? "等待微信付款"
@@ -39889,7 +39901,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
   const actionDisabled = state.saasLoading || entitlementActive || Boolean(pendingTrial) ? "disabled" : "";
   const actionLabel = entitlementActive ? "套餐已开通" : pendingTrial ? "试用申请已提交" : "申请免费试用";
   const rows = [
-    ["当前状态", status, online ? (entitlementActive ? (activeUntil ? `当前套餐有效期至 ${activeUntilLabel}。` : "套餐权益已生效，到期时间暂未提供；如需核对请联系支持。") : "微信扫码付款，到账后自动开通套餐和额度。") : "当前不会自动扣款，也不会生成可付款二维码。"],
+    ["当前状态", status, previewEntitlement ? previewDescription : online ? (entitlementActive ? (validActiveUntil ? `当前套餐有效期至 ${activeUntilLabel}。` : "套餐期限待核对，暂不提供续购；现有权益与历史记录保留，请联系支持。") : "微信扫码付款，到账后自动开通套餐和额度。") : "当前不会自动扣款，也不会生成可付款二维码。"],
     [legacyTeamEntitlement ? "历史团队套餐" : checkoutPlan.title, legacyTeamEntitlement ? "继续保留现有权益" : checkoutPlan.price, legacyTeamEntitlement ? "历史权益不会被降级；续购时需要明确选择当前公开套餐。" : "单次购买 30 天，不会自动续费；再次购买前会重新确认。"],
     ["生效时间", online ? "付款成功后自动开通" : "试用资格确认后开通", online ? "以微信支付确认结果为准；付款后可刷新订单状态。" : "当前不会创建付款二维码，也不会自动扣费。"],
   ];
@@ -40002,9 +40014,9 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
           <div class="saas-domestic-checkout-copy">
             <span>当前套餐有效期</span>
             <strong>${escapeHtml(activeUntilLabel)}</strong>
-            <p>续购当前套餐会把新的 30 天顺延到现有有效期之后，不覆盖剩余天数；每次仍需主动扫码确认，不会自动扣款。</p>
+            <p>${renewalReady ? "续购当前套餐会把新的 30 天顺延到现有有效期之后，不覆盖剩余天数；每次仍需主动扫码确认，不会自动扣款。" : "套餐期限待核对，暂不提供续购；请刷新套餐状态，仍未恢复时联系支持。"}</p>
             <div class="saas-domestic-order-actions">
-              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="${escapeHtml(checkoutPlanKey)}" ${state.saasLoading ? "disabled" : ""}>续购当前套餐</button>
+              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="${escapeHtml(checkoutPlanKey)}" ${state.saasLoading || !renewalReady ? "disabled" : ""}>续购当前套餐</button>
             </div>
           </div>
         </div>

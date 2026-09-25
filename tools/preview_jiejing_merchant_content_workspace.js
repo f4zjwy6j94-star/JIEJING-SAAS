@@ -18,6 +18,10 @@ const setup = `
   if(['pending','approved'].includes(previewCase)) state.saasConfirmations = [{confirmation_id:'local-review-confirmation',company_id:'local-preview-company',status:previewCase,action_type:'sensitive_customer_reply',title:'本地合成：核对回复内容',summary:'请核对买家问题与回复草稿。',created_at:'2026-09-24T12:00:00Z',high_risk:true,item:{reply_text:'本地合成草稿，不会向买家发送。'}}];
   state.saasExecutionResults = [];
   state.saasBillingUsage = {subscription: {status:'active', entitlement_active:true, plan_key:'starter'}, plan:{key:'starter',amount_minor:9900}, media_credits:{contract_version:'2026-08-27-merchant-media-points-v1', available_points:80,included_points:80,purchased_points:0,promotional_points:0,packs:[{key:'pack_1000',points:1000,amount_minor:1000}],purchase:{purchase_enabled:false,status:'not_open'}}};
+  if(previewCase === 'preview-access') state.saasBillingUsage.subscription = {provider:'manual_seed',status:'private_beta_manual_seed',entitlement_active:true};
+  if(['owner-preview','free-trial'].includes(previewCase)) { const kind = previewCase.replace('-','_'); state.saasBillingUsage.subscription = {provider:kind,access_kind:kind,status:kind+'_active',entitlement_active:true,plan_key:kind==='free_trial'?'free':'starter',test_mode:kind==='owner_preview',active_until:kind==='free_trial'?'2099-10-24T00:00:00Z':''}; state.saasBillingUsage.media_credits.available_points=0; state.saasBillingUsage.media_credits.included_points=0; }
+  if(previewCase === 'paid-term') state.saasBillingUsage.subscription.active_until = '2099-10-24T00:00:00Z';
+  if(previewCase === 'payment-unavailable') state.saasBillingUsage.media_credits.purchase.unavailable_reason = 'payment_unavailable';
   state.saasDomesticBillingOrders = [];
   state.saasDomesticBillingContract = {provider:'wechat_pay_native',real_checkout_ready:true,charge_now_allowed:true};
   state.saasSettingsTab = 'billing';

@@ -106,7 +106,7 @@ def main() -> int:
         'PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT = 20',
         'PLATFORM_MODEL_TRIAL_DEFAULT_DURATION_DAYS = 7',
         '"platform_default_model_trial_expired"',
-        '"quota_source": "backend_task_audit_and_activation_window"',
+        '"quota_source": "backend_model_task_audit_and_atomic_reservations"',
         '"trial_quota_scope": "account_trial_window"',
         '"trial_request_limit": _strict_nonnegative_int(platform_model.get("trial_request_limit"))',
         '"trial_duration_days": _strict_nonnegative_int(platform_model.get("trial_duration_days"))',
