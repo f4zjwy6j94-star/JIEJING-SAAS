@@ -668,6 +668,20 @@ def main() -> int:
     auth_gate = f'("auth_reveal_boundary", ["node", "--test", "{auth_boundary}"])'
     if precloud_gate.count(auth_gate) != 1 or precloud_gate.count(auth_boundary) != 1:
         return fail("auth reveal boundary regression must run exactly once in precloud gate")
+    media_usage_dependencies = (
+        "jiejing_saas/media_credit_activity.py",
+        "tools/test_jiejing_merchant_media_usage.py",
+        "docs/superpowers/specs/2026-09-25-merchant-media-usage-design.md",
+        "docs/superpowers/plans/2026-09-25-merchant-media-usage.md",
+    )
+    for script_path in media_usage_dependencies:
+        if whitelist_entries.count(f'"{script_path}"') != 1 or not (ROOT / script_path).is_file():
+            return fail(f"merchant media usage dependency must ship exactly once: {script_path}")
+        if script_path.endswith(".py") and python_compile_block.split().count(script_path) != 1:
+            return fail(f"merchant media usage dependency must receive a Python syntax check: {script_path}")
+    media_usage_gate = '("merchant_media_usage", [sys.executable, "tools/test_jiejing_merchant_media_usage.py"])'
+    if precloud_gate.count(media_usage_gate) != 1:
+        return fail("merchant media usage regression must run exactly once in precloud gate")
     for marker in [
         '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',

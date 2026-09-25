@@ -198,6 +198,7 @@ FILES=(
   "jiejing_saas/post_publish_cockpit.py"
   "jiejing_saas/media_asset_pipeline.py"
   "jiejing_saas/media_credits.py"
+  "jiejing_saas/media_credit_activity.py"
   "jiejing_saas/media_source_assets.py"
   "jiejing_saas/product_vision.py"
   "jiejing_saas/provider_job_runner.py"
@@ -485,6 +486,9 @@ FILES=(
   "tools/test_jiejing_domestic_billing_production_completion.py"
   "tools/test_jiejing_domestic_billing_operations.py"
   "tools/test_jiejing_media_credit_purchase.py"
+  "tools/test_jiejing_merchant_media_usage.py"
+  "docs/superpowers/specs/2026-09-25-merchant-media-usage-design.md"
+  "docs/superpowers/plans/2026-09-25-merchant-media-usage.md"
   "tools/test_jiejing_wechat_pay_refund_provider.py"
   "tools/test_jiejing_session_revocation.py"
   "tools/test_jiejing_rotating_browser_sessions.py"
@@ -675,6 +679,7 @@ python3 -m py_compile \
   jiejing_saas/post_publish_cockpit.py \
   jiejing_saas/media_asset_pipeline.py \
   jiejing_saas/media_credits.py \
+  jiejing_saas/media_credit_activity.py \
   jiejing_saas/media_source_assets.py \
   jiejing_saas/product_vision.py \
   jiejing_saas/sensitive_text.py \
@@ -873,6 +878,7 @@ python3 -m py_compile \
   tools/test_jiejing_domestic_billing_production_completion.py \
   tools/test_jiejing_domestic_billing_operations.py \
   tools/test_jiejing_media_credit_purchase.py \
+  tools/test_jiejing_merchant_media_usage.py \
   tools/test_jiejing_wechat_pay_refund_provider.py \
   tools/test_jiejing_session_revocation.py \
   tools/test_jiejing_rotating_browser_sessions.py \
