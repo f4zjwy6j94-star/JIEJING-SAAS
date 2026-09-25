@@ -46,3 +46,24 @@ loading, and the actual registration outcome where owner interaction permits.
 Do not use Cloudflare test keys in production or disable activation protection.
 The final code change requires its own same-source gate and controlled release;
 the previous 245-check release is not evidence for this addition.
+
+## Actual new-merchant entry follow-up (2026-09-26 Beijing)
+
+The owner completed the real registration challenge. The backend recorded one
+ordinary-merchant registration and one verified activation. Selecting the live
+free-trial card then failed with `unsupported current_step_key`: the homepage
+submitted `trialStart`, absent from the backend's bounded step allowlist. The
+old tests checked the UI and backend independently, missing this contract gap.
+
+Permit only this existing free-entry step; retain all other input validation
+and external-action gates. Restore `trialStart` as the trial path, not the paid
+single-store guide sharing the same `store_opened` backend path. This does not
+grant a subscription, connect eBay, invoke AI, or change pricing/permissions.
+
+Regression evidence executes the real homepage catalog and serializer for all
+three public paths and every step, validates their payloads, and restores the
+same path/step. The actual trial payload also traverses the isolated HTTP API,
+persists once, reloads unchanged, keeps external writes false and leaves the
+other tenant unchanged. Both defects were observed RED before their minimal
+fixes. Real acceptance must resume the same registered account after release;
+do not register again or replace browser evidence with a direct database write.

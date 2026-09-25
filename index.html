@@ -7296,7 +7296,7 @@
         if (!model || typeof model !== "object") return;
         entryMerchantOnboarding = model;
         const progress = model.progress && typeof model.progress === "object" ? model.progress : {};
-        const restoredPath = entryPathNames[progress.path_key];
+        const restoredPath = progress.current_step_key === "trialStart" ? "trial" : entryPathNames[progress.path_key];
         if (restoredPath && guideData[restoredPath]) activePath = restoredPath;
         const guide = guideData[activePath] || guideData.newbie;
         guideAnswers = { ...guide.answers };

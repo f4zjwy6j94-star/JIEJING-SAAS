@@ -48,6 +48,7 @@ ALLOWED_STEP_KEYS = {
     "storeApiMap",
     "storeMap",
     "teamPermission",
+    "trialStart",
 }
 AUTHORIZED_CONNECTION_STATUSES = {"read_only_authorized", "draft_save_authorized", "publish_authorized", "authorized", "connected"}
 ACCOUNT_REVIEW_STATUSES = {"unknown", "restricted", "suspended", "payout_hold", "quota_limited"}
