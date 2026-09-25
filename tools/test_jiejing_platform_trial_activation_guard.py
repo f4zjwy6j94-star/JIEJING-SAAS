@@ -17,6 +17,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +31,7 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
+    _readiness_contract_checks()
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -42,6 +45,9 @@ def main() -> int:
         return fail(f"withheld Jiejing trial must not block merchant BYOK: {withheld}")
     if withheld.get("welcome_media_points_granted") != 0:
         return fail(f"withheld trial must not grant provider-funded media points: {withheld}")
+    readiness_item = withheld.get("readiness_item") if isinstance(withheld.get("readiness_item"), dict) else {}
+    if readiness_item.get("status") != "blocked_platform_trial_activation_challenge_not_ready":
+        return fail(f"readiness must expose a missing registration verifier: {readiness_item}")
 
     activated = _run_scenario("server-verified", verifier_configured=True)
     challenge_config = activated.get("challenge_config") if isinstance(activated.get("challenge_config"), dict) else {}
@@ -49,6 +55,11 @@ def main() -> int:
         return fail(f"public challenge config should expose a usable non-secret contract: {challenge_config}")
     if challenge_config.get("site_key") != "test-site-key" or challenge_config.get("action") != "jiejing_register":
         return fail(f"public challenge config should expose only the client contract: {challenge_config}")
+    ready_item = activated.get("readiness_item") or {}
+    # The anonymous readiness contract intentionally includes warnings/blockers
+    # only. A ready verifier must disappear from that list, not expose internals.
+    if ready_item:
+        return fail("a configured registration verifier must not remain a readiness blocker")
     missing = activated.get("missing") if isinstance(activated.get("missing"), dict) else {}
     invalid = activated.get("invalid") if isinstance(activated.get("invalid"), dict) else {}
     wrong_action = activated.get("wrong_action") if isinstance(activated.get("wrong_action"), dict) else {}
@@ -94,6 +105,35 @@ def main() -> int:
 
     print("PASS jiejing_platform_trial_activation_guard")
     return 0
+
+
+def _readiness_contract_checks() -> None:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from jiejing_saas.readiness import _registration_challenge_item
+
+    env = {
+        "JIEJING_PLATFORM_TRIAL_ACTIVATION_REQUIRED": "true",
+        "JIEJING_TURNSTILE_OR_CHALLENGE_ENABLED": "true",
+        "JIEJING_TURNSTILE_SITE_KEY": "fixture-site",
+        "JIEJING_TURNSTILE_SECRET_KEY": "fixture-verifier",
+        "JIEJING_TURNSTILE_ALLOWED_HOSTNAMES": "app.jiejing.shop",
+        "JIEJING_TARGET_APP_HOST": "",
+    }
+    settings = SimpleNamespace(environment="production", is_production_like=True)
+    with patch.dict(os.environ, env):
+        ready = _registration_challenge_item(settings)
+        assert (ready.status, ready.severity) == ("ready", "info")
+        for key in ("JIEJING_TURNSTILE_SITE_KEY", "JIEJING_TURNSTILE_SECRET_KEY",
+                    "JIEJING_TURNSTILE_ALLOWED_HOSTNAMES", "JIEJING_TURNSTILE_OR_CHALLENGE_ENABLED"):
+            with patch.dict(os.environ, {key: ""}):
+                item = _registration_challenge_item(settings)
+                assert item.status == "blocked_platform_trial_activation_challenge_not_ready"
+                assert item.severity == "blocker"
+                assert "fixture-verifier" not in json.dumps(item.to_dict())
+        with patch.dict(os.environ, {"JIEJING_PLATFORM_TRIAL_ACTIVATION_REQUIRED": "false"}):
+            item = _registration_challenge_item(settings)
+            assert (item.status, item.severity) == ("not_required", "info")
 
 
 def _run_scenario(name: str, *, verifier_configured: bool) -> dict[str, Any]:
@@ -151,6 +191,12 @@ def _run_scenario(name: str, *, verifier_configured: bool) -> dict[str, Any]:
         challenge_config = _fetch_json(f"{base_url}/auth/challenge-config", ip="203.0.113.40").get(
             "registration_challenge", {}
         )
+        readiness = _fetch_json(f"{base_url}/readiness/product-saas", ip="203.0.113.40").get("readiness", {})
+        readiness_items = readiness.get("items") if isinstance(readiness.get("items"), list) else []
+        readiness_item = next(
+            (item for item in readiness_items if item.get("key") == "registration_trial_challenge"),
+            {},
+        )
         if not verifier_configured:
             registered = _register(base_url, "missing@example.test", ip="203.0.113.40", challenge_token="valid-missing")
             activation = _activation(registered)
@@ -171,7 +217,7 @@ def _run_scenario(name: str, *, verifier_configured: bool) -> dict[str, Any]:
             quota = settings.get("platform_trial_quota") if isinstance(settings.get("platform_trial_quota"), dict) else {}
             if quota.get("allowed") is not False or quota.get("activation_status") != "verification_required":
                 raise RuntimeError(f"platform-managed model quota must honor trial activation: {quota}")
-            return {**activation, "challenge_config": challenge_config}
+            return {**activation, "challenge_config": challenge_config, "readiness_item": readiness_item}
 
         missing_record = _register(base_url, "missing@example.test", ip="203.0.113.40")
         invalid_record = _register(base_url, "invalid@example.test", ip="203.0.113.41", challenge_token="invalid-token")
@@ -193,6 +239,7 @@ def _run_scenario(name: str, *, verifier_configured: bool) -> dict[str, Any]:
         third_record = _register(base_url, "third@example.test", ip="203.0.113.51", challenge_token="valid-third")
         return {
             "challenge_config": challenge_config,
+            "readiness_item": readiness_item,
             "missing": _activation(missing_record),
             "invalid": _activation(invalid_record),
             "wrong_action": _activation(wrong_action_record),

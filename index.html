@@ -5855,6 +5855,7 @@
                 <input id="entryAuthPassword" type="password" autocomplete="current-password" placeholder="输入账号密码" />
               </label>
               <p class="entry-auth-status" id="entryAuthStatus" role="status" aria-live="polite" hidden></p>
+              <div id="entryChallengeWidget" aria-label="注册安全验证"></div>
               <div class="entry-login-actions">
                 <button class="button login-choice" type="button" id="entryLoginSubmit">
                   <span>登录</span>
@@ -7414,6 +7415,67 @@
         renderGuide();
       }
 
+      let entryChallengeScriptPromise = null;
+
+      async function requestEntryRegistrationChallenge() {
+        const fallback = { provider: "turnstile", action: "jiejing_register", token: "" };
+        let widgetId = null;
+        try {
+          const response = await fetch(entrySaasApiUrl("/auth/challenge-config"), {
+            credentials: "include", signal: AbortSignal.timeout(10000),
+          });
+          if (!response.ok) return fallback;
+          const config = (await response.json()).registration_challenge || {};
+          if (config.required === false) return null;
+          fallback.action = config.action || "jiejing_register";
+          if (config.verification_ready !== true || !config.site_key) return fallback;
+          if (!window.turnstile?.render) {
+            if (!entryChallengeScriptPromise) {
+              entryChallengeScriptPromise = new Promise((resolve, reject) => {
+                const script = document.createElement("script");
+                const timeout = window.setTimeout(() => { script.remove(); reject(new Error("challenge_load_timeout")); }, 10000);
+                script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+                script.async = true;
+                script.addEventListener("load", () => { window.clearTimeout(timeout); resolve(); }, { once: true });
+                script.addEventListener("error", () => { window.clearTimeout(timeout); script.remove(); reject(new Error("challenge_load_failed")); }, { once: true });
+                document.head.appendChild(script);
+              }).catch((error) => { entryChallengeScriptPromise = null; throw error; });
+            }
+            await entryChallengeScriptPromise;
+          }
+          if (!window.turnstile?.render) return fallback;
+          setEntryAuthStatus("正在完成注册安全验证...", "info");
+          const token = await new Promise((resolve) => {
+            let settled = false;
+            const timer = window.setTimeout(() => finish(""), 30000);
+            function finish(value) {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timer);
+              resolve(String(value || ""));
+            }
+            try {
+              widgetId = window.turnstile.render(document.querySelector("#entryChallengeWidget"), {
+                sitekey: config.site_key, action: fallback.action,
+                appearance: "interaction-only", execution: "execute",
+                callback: finish,
+                "error-callback": () => { finish(""); return true; },
+                "expired-callback": () => finish(""),
+                "timeout-callback": () => finish(""),
+              });
+              window.turnstile.execute(widgetId);
+            } catch (error) { finish(""); }
+          });
+          return { ...fallback, token };
+        } catch (error) {
+          return fallback;
+        } finally {
+          if (widgetId !== null) {
+            try { window.turnstile.reset(widgetId); window.turnstile.remove(widgetId); } catch (error) { /* No token is retained. */ }
+          }
+        }
+      }
+
       async function submitEntryAuth(mode) {
         if (window.__jiejingEntryAuthPending) return;
         const { email, password, company } = readEntryAuthCredentials();
@@ -7440,6 +7502,9 @@
         try {
           window.__jiejingEntryAuthPending = true;
           setEntryAuthPending(true, mode);
+          if (mode === "register") {
+            payload.trial_activation_challenge = await requestEntryRegistrationChallenge();
+          }
           setEntryAuthStatus(mode === "register" ? "正在创建捷境账号..." : "正在登录捷境账号...", "info");
           const response = await fetch(entrySaasApiUrl(endpoint), {
             method: "POST",
@@ -7455,7 +7520,10 @@
           if (passwordInput) passwordInput.value = "";
           setEntryAuthStatus(mode === "register" ? "账号已创建。请选择当前商家身份。" : "登录成功。正在恢复上次工作台。", "success");
           showToast(mode === "register" ? "捷境账号已创建，请选择商家身份。" : "已登录捷境，正在恢复上次工作台。");
-          continueAfterLogin(mode, email);
+          await continueAfterLogin(mode, email);
+          if (mode === "register" && data.platform_trial_activation?.platform_trial_allowed === false) {
+            showToast("账号已创建，但体验额度未激活。可在设置中连接自己的 AI 服务。");
+          }
         } catch (error) {
           const message = `${mode === "register" ? "注册" : "登录"}失败：${error.message || error}`;
           setEntryAuthStatus(message, "error");

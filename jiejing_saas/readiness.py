@@ -30,6 +30,7 @@ from .platform_registry import registry_summary
 from .platform_model_status import build_platform_default_model_status
 from .queue_adapter import build_queue_adapter_contract
 from .queue_plan import build_queue_plan
+from .registration_challenge import public_registration_challenge_config
 from .repository import SaaSRepository
 from .vault_adapter import build_vault_adapter_contract
 
@@ -173,6 +174,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
         _environment_item(settings),
         _session_secret_item(settings),
         _cors_item(settings),
+        _registration_challenge_item(settings),
         _team_permission_item(counts),
         _database_item(settings),
         _database_adapter_item(settings),
@@ -347,6 +349,33 @@ def _platform_registry_item() -> ReadinessItem:
         "info",
         "The backend exposes eBay-first plus reserved domestic and international connector contracts without live calls.",
         "Next implement live adapters one by one behind Vault, queue, audit, and confirmation center.",
+    )
+
+
+def _registration_challenge_item(settings: SaaSSettings) -> ReadinessItem:
+    config = public_registration_challenge_config(environment=settings.environment)
+    required = config.get("required") is True
+    verification_ready = config.get("verification_ready") is True
+    if required and not verification_ready:
+        return ReadinessItem(
+            "registration_trial_challenge",
+            "Free-trial registration verification",
+            "blocked_platform_trial_activation_challenge_not_ready",
+            "blocker" if settings.is_production_like else "warning",
+            "Account registration can continue, but Jiejing-funded AI trial activation is unavailable because the registration verification chain is not ready.",
+            "Configure and verify the public Turnstile site key, backend-only verification secret, allowed hostname and challenge switch before advertising or accepting free-trial users.",
+        )
+    return ReadinessItem(
+        "registration_trial_challenge",
+        "Free-trial registration verification",
+        "ready" if required else "not_required",
+        "info",
+        (
+            "Registration verification is ready for controlled activation of Jiejing-funded AI trial usage."
+            if required
+            else "Platform-funded trial activation does not require a registration challenge in this environment."
+        ),
+        "Keep trial activation budgets, hostname checks and backend-only verification secrets in the release gate.",
     )
 
 

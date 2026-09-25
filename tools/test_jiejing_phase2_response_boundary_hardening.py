@@ -175,6 +175,7 @@ def isolated_product_readiness(plan: dict[str, Any]) -> dict[str, Any]:
         "_environment_item",
         "_session_secret_item",
         "_cors_item",
+        "_registration_challenge_item",
         "_team_permission_item",
         "_database_item",
         "_database_adapter_item",
