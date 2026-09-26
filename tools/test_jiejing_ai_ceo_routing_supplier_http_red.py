@@ -164,7 +164,9 @@ def isolated_backend_env(*, port: int, hook_root: Path) -> dict[str, str]:
             "JIEJING_BILLING_PROVIDER": "stripe_test_mock",
             "JIEJING_QUOTA_ENFORCEMENT_ENABLED": "1",
             "JIEJING_AI_CEO_PLATFORM_MODEL_ENABLED": "0",
-            "JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED": "0",
+            # Exercise source-backed research with the hermetic context below.
+            # A disabled master switch must not be expected to produce sources.
+            "JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED": "1",
             "JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED": "0",
             "JIEJING_PUBLIC_SEARCH_LIVE_ENABLED": "0",
             "JIEJING_VAULT_ENABLED": "false",
@@ -256,6 +258,11 @@ def _source_backed_context(*, route, message):
 _api.SaaSBackendHandler._resolve_model_client_for_store = _resolved_model
 _api.SaaSBackendHandler._require_quota = lambda self, *args, **kwargs: True
 _chat._run_default_web_context_search = _source_backed_context
+
+def _reject_external_request(*args, **kwargs):
+    raise AssertionError("supplier fact fixture must not issue external requests")
+
+_chat.urllib.request.urlopen = _reject_external_request
 
 _real_run_ai_ceo_chat = _api.run_ai_ceo_chat
 def _model_self_reporting_chat(**kwargs):

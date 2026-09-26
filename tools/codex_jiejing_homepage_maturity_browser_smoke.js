@@ -628,11 +628,19 @@ async function inspectExpiredSessionHint(browser) {
     deviceScaleFactor: 1,
   });
   await installStaticRoute(context);
-  await context.route(`${base}/merchant-onboarding/primary-ebay`, (route) => route.fulfill({
-    status: 401,
-    contentType: "application/json",
-    body: JSON.stringify({ error: "login_required" }),
-  }));
+  const sessionRequests = [];
+  // A revoked session includes an explicit refresh rejection. An unmocked
+  // network failure is retryable and must not erase the merchant's session hint.
+  for (const endpoint of ["/merchant-onboarding/primary-ebay", "/me", "/auth/refresh"]) {
+    await context.route(`${base}${endpoint}`, (route) => {
+      sessionRequests.push(`${route.request().method()}:${endpoint}`);
+      return route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: endpoint === "/auth/refresh" ? "session_refresh_invalid" : "login_required" }),
+      });
+    });
+  }
   await context.addInitScript(() => {
     localStorage.setItem("jiejing_saas_backend_session_hint", "1");
   });
@@ -652,9 +660,11 @@ async function inspectExpiredSessionHint(browser) {
   await context.close();
   return {
     ...state,
+    session_requests: sessionRequests,
     page_errors: pageErrors,
     ok: state.login_form_visible && state.mode_area_hidden && state.modal_title === "进入捷境账号。" &&
-      state.auth_status.includes("登录状态已过期") && state.stale_hint_cleared && pageErrors.length === 0,
+      state.auth_status.includes("登录状态已过期") && state.stale_hint_cleared && pageErrors.length === 0 &&
+      JSON.stringify(sessionRequests) === JSON.stringify(["GET:/merchant-onboarding/primary-ebay", "GET:/me", "POST:/auth/refresh"]),
   };
 }
 
