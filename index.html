@@ -14,7 +14,7 @@
     <meta name="twitter:title" content="捷境 · eBay AI CEO 自动化工作台" />
     <meta name="twitter:description" content="捷境是 eBay 商家的 AI 经营工作台：整理商品资料、生成草稿，重要操作由商家确认。" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260924-read-recovery-v1-6d174041fb76" as="script" />
+    <link rel="prefetch" href="./app.js?v=20260924-read-recovery-v1-195796d0074d" as="script" />
     <link rel="prefetch" href="./styles.css?v=20260924-read-recovery-v1-07a69db4fb67" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
@@ -5901,7 +5901,7 @@
       function warmWorkspaceAssets() {
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
-          ["preload", "./app.js?v=20260924-read-recovery-v1-6d174041fb76", "script"],
+          ["preload", "./app.js?v=20260924-read-recovery-v1-195796d0074d", "script"],
           ["preload", "./styles.css?v=20260924-read-recovery-v1-07a69db4fb67", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
@@ -7196,7 +7196,7 @@
 
       function isEntrySessionAuthError(error) {
         const status = Number(error?.status || 0);
-        return status === 401 || status === 403 || /login_required|unauthorized|未登录|登录状态/i.test(String(error?.message || ""));
+        return status === 401 || (!status && /^(login_required|unauthorized|session_refresh_invalid)$/.test(String(error?.message || "")));
       }
 
       function setEntryAuthStatus(message = "", tone = "info") {
@@ -7233,10 +7233,16 @@
       }
 
       function entrySaasApiBase() {
+        // Public login credentials must stay on this origin. API overrides are
+        // only a local development aid, never authority supplied by a URL.
+        const localDevelopment = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(window.location.hostname);
+        if (!localDevelopment) return window.location.origin;
+        let storedBase = "";
+        try { storedBase = localStorage.getItem("jiejing_saas_api_base") || ""; } catch { /* Storage can be unavailable. */ }
         const sources = [
           new URLSearchParams(window.location.search).get("saasApiBase") || "",
           document.querySelector('meta[name="jiejing-saas-api-base"]')?.content || "",
-          localStorage.getItem("jiejing_saas_api_base") || "",
+          storedBase,
           window.location.origin,
         ];
         for (const source of sources) {
@@ -7245,7 +7251,7 @@
           try {
             const url = new URL(value, window.location.origin);
             if (url.protocol !== "http:" && url.protocol !== "https:") continue;
-            if (url.search || url.hash) continue;
+            if (url.search || url.hash || url.username || url.password) continue;
             return url.origin + url.pathname.replace(/\/+$/, "");
           } catch (error) {
             // Try the next configured source.
@@ -7316,13 +7322,56 @@
         if (restoredStep >= 0) activeGuideStep = restoredStep;
       }
 
-      async function loadEntryMerchantOnboarding() {
-        const response = await fetch(entrySaasApiUrl(ENTRY_MERCHANT_ONBOARDING_PATH), {
-          method: "GET",
-          headers: { accept: "application/json" },
+      let entryBrowserSessionRefreshPromise = null;
+
+      async function entrySessionFetch(path, options = {}) {
+        return fetch(entrySaasApiUrl(path), {
+          ...options,
           credentials: "include",
           cache: "no-store",
+          signal: AbortSignal.timeout(10000),
         });
+      }
+
+      async function refreshEntryBrowserSession() {
+        if (entryBrowserSessionRefreshPromise) return entryBrowserSessionRefreshPromise;
+        const insideLock = async () => {
+          // Recheck after acquiring the same lock as the workbench. Another tab
+          // may already have rotated the cookie; never replay a refresh token.
+          const probe = await entrySessionFetch("/me", { method: "GET" });
+          if (probe.ok) return true;
+          if (probe.status !== 401) throw new Error("暂时无法核对登录状态，请稍后重试。");
+          const response = await entrySessionFetch("/auth/refresh", {
+            method: "POST",
+            headers: { accept: "application/json", "content-type": "application/json" },
+          });
+          if (response.status === 401) return false;
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || payload.ok !== true || payload.session_refreshed !== true || payload.secret_exposed !== false) {
+            throw new Error("暂时无法恢复登录状态，请稍后重试。");
+          }
+          return true;
+        };
+        const pending = (async () => {
+          if (typeof navigator !== "undefined" && navigator.locks?.request) {
+            return navigator.locks.request("jiejing-browser-session-refresh-v1", insideLock);
+          }
+          return insideLock();
+        })();
+        entryBrowserSessionRefreshPromise = pending;
+        try { return await pending; }
+        finally { if (entryBrowserSessionRefreshPromise === pending) entryBrowserSessionRefreshPromise = null; }
+      }
+
+      async function loadEntryMerchantOnboarding() {
+        const options = {
+          method: "GET",
+          headers: { accept: "application/json" },
+        };
+        let response = await entrySessionFetch(ENTRY_MERCHANT_ONBOARDING_PATH, options);
+        if (response.status === 401 && await refreshEntryBrowserSession()) {
+          response = await entrySessionFetch(ENTRY_MERCHANT_ONBOARDING_PATH, options);
+        }
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
           const error = new Error(entryAuthErrorMessage(data, `HTTP ${response.status}`));
@@ -7732,7 +7781,7 @@
         if (session.expired) {
           setEntryAuthStatus("登录状态已过期，请重新输入账号和密码。", "info");
         } else if (session.error) {
-          setEntryAuthStatus("暂时无法验证登录状态，请重新登录。", "error");
+          setEntryAuthStatus("暂时无法验证登录状态，请稍后重试；无需重新注册。", "error");
         }
       }
 
@@ -7751,7 +7800,7 @@
         if (session.expired) {
           setEntryAuthStatus("登录状态已过期，请重新输入账号和密码。", "info");
         } else if (session.error) {
-          setEntryAuthStatus("暂时无法验证登录状态，请重新登录。", "error");
+          setEntryAuthStatus("暂时无法验证登录状态，请稍后重试；无需重新注册。", "error");
         }
       }
 

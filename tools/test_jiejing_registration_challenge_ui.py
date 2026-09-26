@@ -132,6 +132,10 @@ def main() -> int:
     if behavior.returncode:
         return fail("homepage registration behavior regression")
     print(behavior.stdout.strip())
+    boundary = subprocess.run(["node", "tools/test_jiejing_homepage_auth_boundary.js"], cwd=ROOT, capture_output=True, text=True, timeout=30)
+    if boundary.returncode:
+        return fail("homepage API origin boundary regression: " + boundary.stderr)
+    print(boundary.stdout.strip())
     print("PASS jiejing_registration_challenge_ui")
     return 0
 

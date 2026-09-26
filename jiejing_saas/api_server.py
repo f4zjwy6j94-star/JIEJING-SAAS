@@ -34,6 +34,7 @@ from .ai_ceo_chat import (
     _explicit_new_listing_project_request,
     ai_ceo_route_metadata,
     build_ai_ceo_turn_plan,
+    build_public_search_capability_status,
     run_ai_ceo_chat,
     run_ai_ceo_fast_turn,
 )
@@ -2694,6 +2695,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "media_capabilities": {
                         "product_image_recognition": build_product_vision_capability_status(),
                         "image_generation": build_media_generation_capability_status(),
+                        "public_search": build_public_search_capability_status(),
                         "secret_exposed": False,
                     }
                 }

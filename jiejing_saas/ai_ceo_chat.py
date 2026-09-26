@@ -1656,6 +1656,8 @@ def _default_web_context_enabled(
     message: str,
     turn_plan: dict[str, Any] | None = None,
 ) -> bool:
+    if not _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True):
+        return False
     if not _env_enabled("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED", default=True):
         return False
     if route not in {AI_CEO_ROUTE_GENERAL, AI_CEO_ROUTE_EBAY_WORKFLOW}:
@@ -2062,6 +2064,31 @@ def _platform_model_default_context() -> dict[str, Any]:
     }
 
 
+def build_public_search_capability_status() -> dict[str, Any]:
+    """Safe configuration projection; no live request or credential metadata."""
+    enabled = _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True)
+    fallback_enabled = enabled and _env_enabled("JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED", default=True)
+    configured = bool(enabled and PublicSearchProbeAdapter().provider_status(_public_search_provider()).get("configured"))
+    return {
+        "enabled": enabled,
+        "configured": configured,
+        "fallback_enabled": fallback_enabled,
+        "available": enabled and (configured or fallback_enabled),
+        "status": "disabled" if not enabled else "configured" if configured else "fallback_only" if fallback_enabled else "not_configured",
+        "live_probe_performed": False,
+        "secret_exposed": False,
+    }
+
+
+def _public_search_provider() -> str:
+    return _safe_text(
+        os.environ.get("JIEJING_AI_CEO_SEARCH_PROVIDER")
+        or os.environ.get("JIEJING_PUBLIC_SEARCH_PROVIDER")
+        or "tavily",
+        limit=60,
+    )
+
+
 def _ai_ceo_capability_answer(model_context: dict[str, Any], model_connection: dict[str, Any] | None = None) -> str:
     provider = _safe_text(model_context.get("provider_label") or model_context.get("provider_key") or model_context.get("name") or "AI", limit=80) or "AI"
     model = _safe_text(model_context.get("model") or "", limit=80)
@@ -2077,15 +2104,15 @@ def _ai_ceo_capability_answer(model_context: dict[str, Any], model_connection: d
     else:
         connection_ready = True
         ai_label = f"{provider} / {model}" if model else provider
-    search_status = PublicSearchProbeAdapter().provider_status("tavily")
-    generic_search_ready = bool(search_status.get("configured")) and _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True)
-    builtin_web_ready = _env_enabled("JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED", default=True)
-    if generic_search_ready:
-        search_line = "通用实时搜索已接入：最新新闻、网页资料、公开市场信息会先查来源，再给结论。"
-    elif builtin_web_ready:
-        search_line = "实时联网兜底已启用：通用网页、新闻 RSS 和公开股票报价会走后端公共来源检索，前端不会拿到任何搜索 key。"
+    search_status = build_public_search_capability_status()
+    if search_status["status"] == "configured":
+        search_line = "通用实时搜索已配置：需要最新信息时会尝试查找公开来源；能否取得结果以当次检索为准。"
+    elif search_status["status"] == "fallback_only":
+        search_line = "基础实时搜索已启用：可检索公开网页与资讯；覆盖范围和时效以当次可核对的来源为准。"
+    elif search_status["status"] == "disabled":
+        search_line = "实时搜索已暂停；不会发出联网搜索请求，也不会把已有知识当成最新事实。"
     else:
-        search_line = "通用实时搜索 provider 还没配置；需要最新网页信息时我会说明缺口，不会编。"
+        search_line = "实时搜索尚未配置；需要最新信息时会说明缺口，不会编造检索结果。"
     if not connection_ready:
         model_line = "当前账号还没有可用的 AI 连接；捷境不会跨商家、跨账号使用别人的模型连接。到「设置 -> AI 与素材」查看当前账号连接状态。"
     elif model_connection.get("scope") == "account":
@@ -2236,12 +2263,7 @@ def _run_realtime_search(
     max_results: int | None = None,
     search_depth: str | None = None,
 ) -> dict[str, Any]:
-    provider = _safe_text(
-        os.environ.get("JIEJING_AI_CEO_SEARCH_PROVIDER")
-        or os.environ.get("JIEJING_PUBLIC_SEARCH_PROVIDER")
-        or "tavily",
-        limit=60,
-    )
+    provider = _public_search_provider()
     adapter = PublicSearchProbeAdapter()
     query = _realtime_search_query(kind=kind, message=message)
     timeout_seconds = (
@@ -2262,6 +2284,20 @@ def _run_realtime_search(
     )
     live_enabled = _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True)
     captured_at = now_iso()
+    # This switch covers every provider, the public fallback, and cached context.
+    # Do not resolve credentials or transmit the query when it is disabled.
+    if not live_enabled:
+        return {
+            "status": "blocked",
+            "blocked_by": ["public_search_disabled"],
+            "provider": provider,
+            "query": query,
+            "captured_at": captured_at,
+            "source_records": [],
+            **budget_fields,
+            "frontend_gets_search_api_key": False,
+            "secret_exposed": False,
+        }
     status = adapter.provider_status(provider)
     if not status.get("configured"):
         builtin = _run_builtin_public_realtime_source(
@@ -2820,8 +2856,12 @@ def _normalize_public_search_url(value: Any) -> str:
         return ""
     if url.startswith("//"):
         url = "https:" + url
-    parsed = urllib.parse.urlparse(url)
-    if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return ""
+    host = str(parsed.hostname or "").lower()
+    if (host == "duckduckgo.com" or host.endswith(".duckduckgo.com")) and parsed.path.startswith("/l/"):
         target = urllib.parse.parse_qs(parsed.query).get("uddg", [""])[0]
         if target:
             return urllib.parse.unquote(target)
@@ -3000,17 +3040,34 @@ def _realtime_answer_needs_repair(
 def _domain_from_url(url: str) -> str:
     if not url:
         return ""
-    return urlparse(url if "://" in url else f"https://{url}").netloc.lower().removeprefix("www.")
+    try:
+        return str(urlparse(url if "://" in url else f"https://{url}").hostname or "").lower().removeprefix("www.")
+    except ValueError:
+        return ""
+
+
+def _public_source_http_url(value: str) -> str:
+    """Only attributable HTTP(S) links may become evidence for an AI answer."""
+    try:
+        safe_url = _normalize_public_search_url(value)
+        if not safe_url or re.search(r"[\x00-\x20\x7f\\]", safe_url):
+            return ""
+        parsed = urlparse(safe_url)
+        if parsed.scheme.lower() not in {"https", "http"} or not parsed.hostname:
+            return ""
+        if parsed.username is not None or parsed.password is not None:
+            return ""
+        _ = parsed.port  # Reject malformed port values before rendering/ranking.
+    except ValueError:
+        return ""
+    return safe_url
 
 
 def _canonical_public_source_url(url: str) -> str:
-    safe_url = _normalize_public_search_url(url)
+    safe_url = _public_source_http_url(url)
     if not safe_url:
         return ""
-    try:
-        parsed = urlparse(safe_url)
-    except ValueError:
-        return ""
+    parsed = urlparse(safe_url)
     host = parsed.netloc.lower().removeprefix("www.")
     path = re.sub(r"/{2,}", "/", parsed.path or "/").rstrip("/") or "/"
     return f"{parsed.scheme.lower()}://{host}{path}"
@@ -3055,7 +3112,7 @@ def _public_source_trust(domain: str, query: str) -> tuple[int, str]:
         return 95, "official_or_primary"
     if any(host == item or host.endswith(f".{item}") for item in established_hosts):
         return 82, "established_publication"
-    if "ebay" in _normalized_text(query) and (host.endswith("ebayinc.com") or host.endswith("ebaystatic.com")):
+    if "ebay" in _normalized_text(query) and any(host == item or host.endswith(f".{item}") for item in ("ebayinc.com", "ebaystatic.com")):
         return 90, "official_marketplace"
     return 60, "public_reference"
 
@@ -3077,6 +3134,8 @@ def _public_source_freshness(published_at: str) -> tuple[int, str]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     age = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+    if age < -timedelta(minutes=5):
+        return 45, "unknown"
     if age <= timedelta(days=2):
         return 100, "current"
     if age <= timedelta(days=30):
@@ -3100,8 +3159,11 @@ def _rank_and_dedupe_public_sources(
         if not isinstance(raw, dict):
             continue
         title, title_instruction_removed = _sanitize_untrusted_source_text(raw.get("title") or "", limit=180)
-        url = _safe_text(raw.get("url") or "", limit=500)
-        domain = _safe_text(raw.get("domain") or _domain_from_url(url), limit=160)
+        url = _public_source_http_url(_safe_text(raw.get("url") or "", limit=500))
+        if not url:
+            continue
+        # Search-provider metadata is untrusted; the actual URL owns identity.
+        domain = str(urlparse(url).hostname or "").lower().removeprefix("www.")
         snippet, snippet_instruction_removed = _sanitize_untrusted_source_text(raw.get("snippet") or "", limit=520)
         canonical_url = _canonical_public_source_url(url)
         title_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())[:160]

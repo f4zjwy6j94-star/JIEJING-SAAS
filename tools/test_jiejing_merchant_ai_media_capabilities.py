@@ -4,7 +4,12 @@
 from __future__ import annotations
 
 import re
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +74,59 @@ def main() -> None:
         raise AssertionError("商家端不能读取内部独立运行与部署诊断")
     if '"/media/capabilities"' not in app_js:
         raise AssertionError("商家端没有读取最小图片识别与生成能力投影")
+
+    sys.path.insert(0, str(ROOT))
+    from jiejing_saas import ai_ceo_chat
+    for enabled in (False, True):
+        for configured in (False, True):
+            for fallback in (False, True):
+                environment = {
+                    "JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED": str(enabled),
+                    "JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED": str(fallback),
+                    "JIEJING_AI_CEO_SEARCH_PROVIDER": "fixture-provider",
+                }
+                with patch.dict(os.environ, environment), patch.object(
+                    ai_ceo_chat.PublicSearchProbeAdapter, "provider_status",
+                    return_value={"configured": configured, "credential_source": "private-fixture"},
+                ) as provider_status, patch.object(ai_ceo_chat.urllib.request, "urlopen", side_effect=AssertionError("no live probe")):
+                    capability = ai_ceo_chat.build_public_search_capability_status()
+                    expected = "disabled" if not enabled else "configured" if configured else "fallback_only" if fallback else "not_configured"
+                    assert capability["status"] == expected
+                    assert capability["available"] is (enabled and (configured or fallback))
+                    assert capability["live_probe_performed"] is False
+                    assert capability["secret_exposed"] is False
+                    assert "credential" not in json.dumps(capability) and "private-fixture" not in json.dumps(capability)
+                    if enabled:
+                        provider_status.assert_called_once_with("fixture-provider")
+                    else:
+                        provider_status.assert_not_called()
+                        answer = ai_ceo_chat._ai_ceo_capability_answer({})
+                        assert "实时搜索已暂停" in answer and "兜底已启用" not in answer
+
+    search = function_scope(app_js, "saasPublicSearchState", "saasMediaGenerationState")
+    behavior = r'''
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const sandbox = {state: {saasLastPublicSearchHandoff: {status:'success',result_count:99}, saasAiCeoThread:[{source_records:[{url:'https://example.invalid'}]}]}};
+vm.runInNewContext(SOURCE + ';this.readSearch = saasPublicSearchState;', sandbox);
+for (const [status, available, label] of [
+ ['configured',true,'联网搜索已配置'], ['fallback_only',true,'基础联网搜索已启用'],
+ ['disabled',false,'联网搜索已暂停'], ['not_configured',false,'联网搜索未配置']]) {
+ sandbox.state.saasMediaCapabilities = {public_search:{status,available,enabled:status!=='disabled'}};
+ const result = sandbox.readSearch();
+ assert.equal(result.title,label); assert.equal(result.configured,available);
+}
+for (const capability of [null, {}, {status:'configured'}, {status:'future-unknown',available:true}]) {
+ sandbox.state.saasMediaCapabilities={public_search:capability};
+ assert.equal(sandbox.readSearch().title,'联网搜索状态待确认');
+ assert.equal(sandbox.readSearch().configured,false);
+}
+console.log('PASS merchant search capability 8 UI states; history cannot imply current readiness');
+'''.replace("SOURCE", json.dumps(search))
+    result = subprocess.run(["node", "-e", behavior], cwd=ROOT, capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        raise AssertionError(result.stderr)
+    print(result.stdout.strip())
 
     capability_markup = panel[panel.index('data-ai-media-capability-grid="') : panel.index('</div>', panel.index('data-ai-media-capability-grid="'))]
     for forbidden in ("provider_cost", "secret_ref", "contract_version", "api_key", "美元", "USD"):

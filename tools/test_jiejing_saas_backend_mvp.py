@@ -657,6 +657,11 @@ def main() -> int:
             return fail("owner permissions should include team management and high-risk approval")
         media_capabilities = fetch_json(f"{base_url}/media/capabilities", token=token).get("media_capabilities", {})
         image_recognition = media_capabilities.get("product_image_recognition", {})
+        search_capability = media_capabilities.get("public_search", {})
+        if search_capability.get("status") not in {"disabled", "configured", "fallback_only", "not_configured"}:
+            return fail("merchant search capability must expose a bounded configuration status")
+        if not isinstance(search_capability.get("available"), bool) or search_capability.get("live_probe_performed") is not False:
+            return fail("search configuration must not masquerade as a live health probe")
         if not isinstance(image_recognition.get("configured"), bool):
             return fail("merchant media capabilities must expose a boolean image-recognition state")
         if image_recognition.get("status") not in {"ready", "not_configured"}:

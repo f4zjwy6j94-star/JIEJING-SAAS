@@ -472,6 +472,8 @@ FILES=(
   "tools/test_jiejing_expensive_api_rate_limit.py"
   "tools/test_jiejing_platform_trial_activation_guard.py"
   "tools/test_jiejing_registration_challenge_ui.py"
+  "tools/test_jiejing_homepage_auth_boundary.js"
+  "tools/test_jiejing_homepage_session_refresh.js"
   "tools/test_jiejing_ai_ceo_scroll_retention.py"
   "tools/test_jiejing_ai_ceo_history_pagination.py"
   "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js"

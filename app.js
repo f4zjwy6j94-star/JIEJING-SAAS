@@ -28591,18 +28591,25 @@ function saasPlatformTrialModelState() {
 }
 
 function saasPublicSearchState() {
-  const handoff = state.saasLastPublicSearchHandoff && typeof state.saasLastPublicSearchHandoff === "object" ? state.saasLastPublicSearchHandoff : {};
-  const observedInConversation = [state.saasAiCeoLatestTurn, ...(Array.isArray(state.saasAiCeoThread) ? state.saasAiCeoThread.slice(-10) : [])]
-    .filter(Boolean)
-    .some((turn) => normalizeSaasAiCeoSourceRecords(turn?.source_records || []).length > 0);
-  const configured = observedInConversation || Number(handoff.result_count || 0) > 0 || ["ready", "completed", "success"].includes(String(handoff.status || "").toLowerCase());
+  const capability = state.saasMediaCapabilities?.public_search;
+  const labels = {
+    configured: "联网搜索已配置",
+    fallback_only: "基础联网搜索已启用",
+    disabled: "联网搜索已暂停",
+    not_configured: "联网搜索未配置",
+  };
+  const known = Boolean(capability && typeof capability.available === "boolean"
+    && Object.prototype.hasOwnProperty.call(labels, capability.status));
+  const configured = known && capability.available === true && ["configured", "fallback_only"].includes(capability.status);
   return {
     configured,
     tone: configured ? "green" : "amber",
-    title: configured ? "联网搜索已接入" : "联网搜索待恢复",
-    detail: configured
-      ? "普通问答和 eBay 经营问题会先查公开来源；有可用 AI 时再组织成完整回答。"
-      : "实时行情、新闻和平台政策暂时不能保证最新；恢复后会显示来源。",
+    title: known ? labels[capability.status] : "联网搜索状态待确认",
+    detail: !known
+      ? "暂未取得当前搜索能力状态。已有报告仍可查看；需要最新信息时请以当次检索结果为准。"
+      : configured
+        ? "已启用公开来源检索；配置状态不代表每次都能取得结果，回答中的来源和检索时间可供核对。"
+        : "当前不会进行联网搜索；实时行情、新闻和平台政策不能作为已核验的最新信息。",
   };
 }
 
