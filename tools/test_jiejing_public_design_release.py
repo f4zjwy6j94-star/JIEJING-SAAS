@@ -2,6 +2,7 @@
 from pathlib import Path
 import re
 import unittest
+import jiejing_prepare_public_staging_bundle as bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,7 +25,7 @@ class PublicDesignRelease(unittest.TestCase):
         demo = ROOT / 'assets/workbench-demo'
         self.assertIn('./assets/workbench-demo/index.html', home)
         self.assertNotIn('workbench-demo', app)
-        for name in ['demo-state.js', 'workbench.js', 'media-data.js']:
+        for name in ['workbench-state.js', 'workbench.js', 'media-data.js']:
             source = (demo / name).read_text(encoding='utf-8')
             for unsafe in ['fetch(', 'XMLHttpRequest', 'sendBeacon(', 'sessionStorage', 'localStorage']:
                 self.assertNotIn(unsafe, source)
@@ -37,6 +38,20 @@ class PublicDesignRelease(unittest.TestCase):
         self.assertIn('href="../../#workflow"', html)
         self.assertIn('href="../../#plans"', html)
         self.assertNotIn('href="./#', html)
+
+    def test_every_whitelisted_file_passes_bundle_filter(self):
+        whitelist = bundle._parse_apply_patch_file_list(
+            (ROOT / 'deploy/apply-staging-patch.sh').read_text(encoding='utf-8'))
+        actual = [path.relative_to(ROOT).as_posix()
+                  for path in bundle._iter_bundle_files(whitelist)]
+        self.assertEqual(actual, whitelist)
+        self.assertIn('assets/workbench-demo/workbench-state.js', actual)
+        html = (ROOT / 'assets/workbench-demo/index.html').read_text(encoding='utf-8')
+        for name in re.findall(r'<script\s+src="\./([^"?]+)', html):
+            self.assertIn(f'assets/workbench-demo/{name}', actual)
+        self.assertTrue(bundle._is_excluded(ROOT / 'assets/demo-private-data.js'))
+        self.assertTrue(bundle._is_excluded(ROOT / '.env'))
+        self.assertTrue(bundle._is_excluded(ROOT / 'output/private.json'))
 
     def test_fonts_and_all_responsive_images_ship(self):
         whitelist = (ROOT / 'deploy/apply-staging-patch.sh').read_text(encoding='utf-8')

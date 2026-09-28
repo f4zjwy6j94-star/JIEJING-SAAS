@@ -142,7 +142,7 @@ FILES=(
   "assets/workbench-demo/workbench.css"
   "assets/workbench-demo/workbench.js"
   "assets/workbench-demo/media-data.js"
-  "assets/workbench-demo/demo-state.js"
+  "assets/workbench-demo/workbench-state.js"
   "assets/jiejing-sans-20260928.woff2"
   "assets/jiejing-serif-20260928.woff2"
   "assets/noto-sans-sc-OFL.txt"
@@ -946,7 +946,7 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check assets/homepage-media-data.js
 "$NODE_BIN" --check assets/workbench-demo/workbench.js
 "$NODE_BIN" --check assets/workbench-demo/media-data.js
-"$NODE_BIN" --check assets/workbench-demo/demo-state.js
+"$NODE_BIN" --check assets/workbench-demo/workbench-state.js
 "$NODE_BIN" --check tools/codex_jiejing_operations_console_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_listing_media_writeback_persistence.js
 "$NODE_BIN" --check tools/codex_jiejing_product_feedback_smoke.js
