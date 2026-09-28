@@ -125,7 +125,15 @@ class WorkbenchFinishContract(unittest.TestCase):
             "overflow", "overflow-x", "overflow-y", "height", "max-height",
             "grid-template-columns", "grid-template-rows", "flex", "order",
         }
-        self.assertNotIn("!important", CSS)
+        # Only the scoped mobile clearance may override the older fixed-chat
+        # padding. No hide/reveal, navigation or positioning rule gains priority.
+        mobile_clearance = 'body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chatgpt-layout.has-task-context .saas-ai-ceo-thread'
+        important_rules = [(selector, declarations) for selector, declarations in rules(CSS) if "!important" in declarations]
+        self.assertEqual(len(important_rules), 2)
+        self.assertEqual(important_rules[0][0], mobile_clearance)
+        self.assertEqual(important_rules[0][1].strip(), "padding-bottom: calc(6.5rem + env(safe-area-inset-bottom, 0px)) !important;")
+        self.assertEqual(important_rules[1][0], 'body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chat-stream:empty')
+        self.assertEqual(important_rules[1][1].strip(), "min-height: 0 !important;")
         for selector, declarations in rules(CSS):
             with self.subTest(selector=selector):
                 if selector == "@font-face":

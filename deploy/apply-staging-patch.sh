@@ -507,6 +507,7 @@ FILES=(
   "tools/test_jiejing_homepage_session_refresh.js"
   "tools/test_jiejing_public_design_release.py"
   "tools/test_jiejing_workbench_finish.py"
+  "tools/codex_jiejing_workbench_finish_browser_smoke.js"
   "tools/test_jiejing_ai_ceo_scroll_retention.py"
   "tools/test_jiejing_ai_ceo_history_pagination.py"
   "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js"
@@ -952,6 +953,7 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check tools/codex_jiejing_rotating_browser_session_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_listing_ai_generation_browser_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_homepage_maturity_browser_smoke.js
+"$NODE_BIN" --check tools/codex_jiejing_workbench_finish_browser_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_listing_backend_restore.js
 "$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_frontend.js
 "$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js

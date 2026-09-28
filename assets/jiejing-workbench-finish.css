@@ -302,6 +302,17 @@ body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-
 }
 
 @media (max-width: 700px) {
+  /* The fixed three-line task summary needs more room than the legacy 72px
+     reserve. Keep both the composer and its send target above that summary. */
+  body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chatgpt-layout.has-task-context .saas-ai-ceo-thread {
+    padding-bottom: calc(6.5rem + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  /* Let the empty conversation spacer yield before clipping composer controls. */
+  body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chat-stream:empty {
+    min-height: 0 !important;
+  }
+
   body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.topbar h1, .saas-readable-page-head h2, .product-manager-header h2, .section-heading h2) {
     font-size: 25px;
   }
