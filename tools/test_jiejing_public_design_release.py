@@ -34,6 +34,9 @@ class PublicDesignRelease(unittest.TestCase):
         self.assertIn('disabled', html)
         self.assertNotIn('srcset="assets/', html)
         self.assertIn('href="../../"', html)
+        self.assertIn('href="../../#workflow"', html)
+        self.assertIn('href="../../#plans"', html)
+        self.assertNotIn('href="./#', html)
 
     def test_fonts_and_all_responsive_images_ship(self):
         whitelist = (ROOT / 'deploy/apply-staging-patch.sh').read_text(encoding='utf-8')
