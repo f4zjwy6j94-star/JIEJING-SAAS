@@ -113,6 +113,13 @@ async function verifyActualChatLayout(browser, base) {
       const composerControls = await assertComposerControls(visual, `${variant} ${width}`);
       const taskStates = [];
       if (variant.startsWith("project")) {
+        const speaker = await visual.locator('#ceoChat .message.ai > span').first().evaluate((node) => {
+          const style = getComputedStyle(node);
+          return { color: style.color, whiteSpace: style.whiteSpace, width: node.clientWidth, contentWidth: node.scrollWidth };
+        });
+        assert.equal(speaker.color, 'rgb(255, 255, 255)', 'assistant badge must contrast with its dark background on every viewport');
+        assert.equal(speaker.whiteSpace, 'nowrap');
+        assert(speaker.contentWidth <= speaker.width, 'JV AI badge must not wrap or clip');
         for (let transition = 0; transition < 3; transition += 1) {
           const taskGeometry = await visual.evaluate(() => {
             const task = document.querySelector("[data-ai-ceo-task-context]");

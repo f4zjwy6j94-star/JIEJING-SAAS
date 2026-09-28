@@ -264,6 +264,9 @@ body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-
 body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread .message.ai > span {
   border-color: var(--jiejing-accent);
   background: var(--jiejing-accent);
+  color: #ffffff;
+  padding: 0;
+  white-space: nowrap;
 }
 
 body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chat-stream {
