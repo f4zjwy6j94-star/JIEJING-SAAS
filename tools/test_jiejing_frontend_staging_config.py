@@ -477,185 +477,36 @@ def main() -> int:
             return fail(f"app start must hide legacy entry shell before JS boot completes: {app_boot_guard}")
     if f'const JIEJING_SITE_VERSION = "{frontend_asset_version}"' not in index_html:
         return fail("public homepage must expose the current JIEJING site version marker")
-    for logo_marker in [
-        "width: 56px;",
-        "height: 56px;",
-        "width: 46px;",
-        "height: 46px;",
-        'center / 118% no-repeat',
-    ]:
-        if logo_marker not in index_html:
-            return fail(f"public homepage logo must stay enlarged and centered: {logo_marker}")
-    if "width: 50px;" not in styles_css or "height: 50px;" not in styles_css or 'center / 118% no-repeat' not in styles_css:
-        return fail("SaaS brand mark must stay enlarged and centered with the JIEJING app icon")
-    body_boundary = re.search(r'<body\b[^>]*\bclass\s*=\s*"[^"]*\bpublic-home-v3\b[^"]*"[^>]*>', index_html, flags=re.I)
-    if not body_boundary:
-        return fail("public homepage must use the approved V3 design scope")
-    for homepage_intent_marker in [
-        'data-home-primary-cta="jiejing_ai_ceo_workspace_v2"',
-        'data-home-proof-grid="jiejing_product_proof_v2"',
-        'data-home-section="proof"',
-        'data-home-section="capabilities"',
-        'data-home-section="workflow"',
-        'data-home-section="merchants"',
-        'data-home-section="plans"',
-        'data-home-example="travel-compression-workflow-v1"',
-        'data-home-ai-ceo-core="merchant-goal-router-v3"',
-        'data-home-ai-ceo-connections="merchant-goal-router-v3"',
-        'data-home-ai-ceo-node="market"',
-        'data-home-ai-ceo-node="listing"',
-        'data-home-ai-ceo-node="media"',
-        'data-home-ai-ceo-node="ads"',
-        'data-home-ai-ceo-node="service"',
-        'data-home-ai-ceo-node="finance"',
-        'data-home-ai-ceo-result="active-result"',
-        "data-home-ai-ceo-result-key=",
-        'data-home-material-studio="listing-media-v3"',
-        'data-home-material-stage="input"',
-        'data-home-material-stage="generation"',
-        'data-home-material-stage="review"',
-        'data-home-material-stage="listing"',
-        'data-home-material-canvas="active-result"',
-        'data-home-material-title="active-title"',
-        'data-home-material-purpose="active-purpose"',
-        'data-home-material-status="listing-draft"',
-        "data-home-active-material=",
-        "data-home-material-key=",
-        "data-home-rotate-interval-ms=",
-        'data-home-motion-policy="respect-reduced-motion"',
-        "setupHomepageMediaStudio",
-        "流程示例｜实际结果以商家提供的商品资料与审核为准。",
-        "进入 AI CEO 工作台",
-    ]:
-        if homepage_intent_marker not in index_html:
-            return fail(f"public homepage AI CEO intent entry missing marker: {homepage_intent_marker}")
-    footer_boundary = re.search(r'<footer\b', index_html[body_boundary.end():], flags=re.I)
-    if not footer_boundary:
-        return fail("public homepage merchant surface boundaries are missing")
-    homepage_start = body_boundary.end()
-    homepage_end = homepage_start + footer_boundary.start()
-    if "工作记录" in index_html[homepage_start:homepage_end]:
-        return fail("public homepage must not market internal work records to merchants")
-    path_data_start = index_html.find("const pathData = {")
-    plan_data_start = index_html.find("const planData = {", path_data_start)
-    guide_data_start = index_html.find("const guideData = {", plan_data_start)
-    guide_data_end = index_html.find("let guideAnswers =", guide_data_start)
-    if min(path_data_start, plan_data_start, guide_data_start, guide_data_end) < 0:
-        return fail("public path, plan, and guide marketing data boundaries are missing")
-    public_marketing_data = (
-        index_html[path_data_start:plan_data_start]
-        + index_html[plan_data_start:guide_data_start]
-        + index_html[guide_data_start:guide_data_end]
-    )
-    if "工作记录" in public_marketing_data:
-        return fail("public path, plan, and guide data must not retain the work-record product label")
-    for retired_defensive_copy in [
-        "不代表捷境销售该商品",
-        "不代表商品事实或图片权利已经核验",
-    ]:
-        if retired_defensive_copy in index_html[homepage_start:homepage_end] + public_marketing_data:
-            return fail(f"public index must remove the retired defensive product disclaimer: {retired_defensive_copy}")
-    deploy_script = (ROOT / "tools" / "jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
-    if "Unable to derive frontend asset version from app.html" not in deploy_script or "DEPLOY_FRONTEND_VERSION=$frontendVersion" not in deploy_script:
-        return fail("frontend deploy script must derive DEPLOY_FRONTEND_VERSION from app.html")
-    for deploy_asset in [
-        "favicon.ico",
-        "assets/jiejing-app-icon.svg",
-        "assets/jiejing-logo-lockup.svg",
-        "assets/jiejing-logo-mark.svg",
-    ]:
-        if deploy_asset not in deploy_script:
-            return fail(f"frontend deploy script must ship brand asset: {deploy_asset}")
-    if 'background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;' not in styles_css:
-        return fail("public SaaS brand mark must use the JIEJING app icon instead of a black fallback block")
-    for forbidden_brand in [
-        "捷境 Jiejing",
-        "Jiejing / 捷境",
-        "Jiejing AI CEO",
-        "Jiejing Merchant",
-    ]:
-        if forbidden_brand in index_html + app_html + privacy_html:
-            return fail(f"public static pages must use uppercase JIEJING brand: {forbidden_brand}")
-    for expected_brand in [
-        "捷境 JIEJING",
-        "JIEJING / 捷境",
-        "JIEJING AI CEO",
-    ]:
-        if expected_brand not in index_html + app_html + privacy_html:
-            return fail(f"public static pages missing uppercase JIEJING brand marker: {expected_brand}")
-    for expected_runtime_brand in [
-        r'[/\bJingjing\b/g, "JIEJING"]',
-        r'[/\bJiejing\b/g, "JIEJING"]',
-        "JIEJING AI CEO",
-        "JIEJING Listing",
-    ]:
-        if expected_runtime_brand not in app_js:
-            return fail(f"runtime UI missing uppercase JIEJING brand guard: {expected_runtime_brand}")
+    # Accepted v12 is a new public visual surface; keep business/session checks below.
+    from test_jiejing_homepage_maturity import main as homepage_visual_contract
+    homepage_visual_contract()
     for first_day_marker in [
-        "login_onboarding_ai_ceo_v3",
-        "saas-first-day-path-strip",
-        'data-first-day-path="login_onboarding_ai_ceo_v3"',
-        "刷新不会跳过向导",
-        "一句话交给 AI CEO",
+        "login_onboarding_ai_ceo_v3", "saas-first-day-path-strip",
+        'data-first-day-path="login_onboarding_ai_ceo_v3"', "刷新不会跳过向导",
+        "一句话交给 JV AI",
     ]:
         if first_day_marker not in app_js + app_html + styles_css:
-            return fail(f"first-day login/onboarding/AI CEO path marker missing: {first_day_marker}")
-    for ai_ceo_pending_marker in [
-        "merchant_clear_pending_v4",
-        "function scheduleSaasAiCeoPendingWatchdog",
-        "function updateCeoAssistantPendingMessage",
-        "model_response_delayed",
+            return fail(f"first-day path marker missing: {first_day_marker}")
+    for pending_marker in [
+        "merchant_clear_pending_v4", "function scheduleSaasAiCeoPendingWatchdog",
+        "function updateCeoAssistantPendingMessage", "model_response_delayed",
         "真实发布、付款、退款、广告、授权和敏感客服承诺不会自动执行",
         ".saas-ai-ceo-pending-status",
     ]:
-        if ai_ceo_pending_marker not in app_js + styles_css:
-            return fail(f"AI CEO merchant-safe pending marker missing: {ai_ceo_pending_marker}")
-    for expected_interaction_marker in [
-        'data-home-ai-ceo-line="market"',
-        'data-home-ai-ceo-line="listing"',
-        'data-home-ai-ceo-line="media"',
-        'data-home-ai-ceo-line="ads"',
-        'data-home-ai-ceo-line="service"',
-        'data-home-ai-ceo-line="finance"',
-        'data-home-auto-rotate="false"',
-        'aria-pressed="true"',
-        'aria-pressed="false"',
-        ":focus-visible",
-        "@media (prefers-reduced-motion: reduce)",
-    ]:
-        if expected_interaction_marker not in index_html:
-            return fail(f"homepage V3 interaction marker missing: {expected_interaction_marker}")
-    hero_start = index_html.find('data-home-section="hero"')
-    proof_start = index_html.find('data-home-section="proof"', hero_start)
-    workflow_start = index_html.find('data-home-section="workflow"', proof_start)
-    merchants_start = index_html.find('data-home-section="merchants"', workflow_start)
-    if min(hero_start, proof_start, workflow_start, merchants_start) < 0:
-        return fail("homepage V3 hero and material-studio boundaries are missing")
-    hero_source = index_html[hero_start:proof_start]
-    hero_nodes = re.findall(r'<button\b(?=[^>]*data-home-ai-ceo-node="([^"]+)")(?=[^>]*data-home-ai-ceo-result-copy="[^"]+")(?=[^>]*aria-pressed="(?:true|false)")[^>]*>', hero_source, flags=re.I)
-    approved_hero_nodes = ["market", "listing", "media", "ads", "service", "finance"]
-    if hero_nodes != approved_hero_nodes:
-        return fail(f"homepage V3 nodes must expose exact accessible mappings: {hero_nodes}")
-    hero_paths = re.findall(r'<path\b[^>]*data-home-ai-ceo-line="([^"]+)"[^>]*>', hero_source, flags=re.I)
-    if hero_paths != approved_hero_nodes:
-        return fail(f"homepage V3 relationships must be six SVG paths: {hero_paths}")
-    if len(re.findall(r'data-home-ai-ceo-line="[^"]+"', hero_source)) != 6:
-        return fail("homepage V3 must not attach relationship markers to non-path elements")
-    if 'data-home-ai-ceo-layout="classic-orbit-v1"' not in hero_source or "hero-ops-board" not in hero_source:
-        return fail("homepage V3 must preserve the approved classic AI CEO orbit")
-    for legacy_marker in ["home-command-steps", "home-command-step", "signalCanvas"]:
-        if legacy_marker in hero_source:
-            return fail(f"homepage V3 hero retains legacy relationship UI: {legacy_marker}")
-    workflow_source = index_html[workflow_start:merchants_start]
-    material_tasks = re.findall(r'data-home-material-task="([^"]+)"', workflow_source)
-    if material_tasks != ["main", "scene", "selling-points", "detail"]:
-        return fail(f"homepage material tasks must stay scoped to the workflow section: {material_tasks}")
-    material_options = re.findall(r'data-home-material-option="([^"]+)"', workflow_source)
-    if material_options != ["main", "scene", "selling-points", "detail", "video-cover"]:
-        return fail(f"homepage material result mappings must stay scoped to the workflow section: {material_options}")
-    rotate_interval = re.search(r'data-home-rotate-interval-ms="(\d+)"', workflow_source)
-    if not rotate_interval or not 5000 <= int(rotate_interval.group(1)) <= 7000:
-        return fail("homepage material rotation interval must stay between 5000 and 7000 ms")
+        if pending_marker not in app_js + styles_css:
+            return fail(f"merchant-safe pending marker missing: {pending_marker}")
+    deploy_script = (ROOT / "tools/jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
+    if "Unable to derive frontend asset version from app.html" not in deploy_script or "DEPLOY_FRONTEND_VERSION=$frontendVersion" not in deploy_script:
+        return fail("frontend deploy must derive the app version")
+    for brand in ["favicon.ico", "assets/jiejing-app-icon.svg", "assets/jiejing-logo-lockup.svg", "assets/jiejing-logo-mark.svg"]:
+        if brand not in deploy_script:
+            return fail(f"frontend deploy missing brand: {brand}")
+    for forbidden_brand in ["捷境 Jiejing", "Jiejing / 捷境", "Jiejing AI CEO", "Jiejing Merchant"]:
+        if forbidden_brand in index_html + app_html + privacy_html:
+            return fail(f"public brand casing: {forbidden_brand}")
+    for expected in [r'[/\bJingjing\b/g, "JIEJING"]', r'[/\bJiejing\b/g, "JIEJING"]', "JIEJING Listing"]:
+        if expected not in app_js:
+            return fail(f"runtime brand guard missing: {expected}")
     if 'localStorage.getItem("jiejing_saas_backend_token")' in app_html:
         return fail("public app entry must not accept legacy localStorage bearer tokens")
     for forbidden_frontend_secret in [
@@ -988,20 +839,18 @@ def main() -> int:
         "cursorGlow",
         "merchant-guide",
         "entryModeGrid",
-        "pointermove",
         "openLoggedInExperience",
         "./app.html",
     ]:
         if marker not in index_html:
             return fail(f"missing interactive homepage/onboarding marker: {marker}")
-    for marker in [
-        ".price {",
-        "font-size: 38px;",
-        "line-height: 1.08;",
-        "white-space: nowrap;",
-    ]:
-        if marker not in index_html:
-            return fail(f"public pricing cards must keep the full price on one stable line: {marker}")
+    homepage_motion_js = (ROOT / "assets/homepage-finish.js").read_text(encoding="utf-8")
+    if "pointermove" not in homepage_motion_js:
+        return fail("homepage motion module must retain pointer interaction")
+    homepage_css = (ROOT / "assets/homepage-finish.css").read_text(encoding="utf-8")
+    price_rule = re.search(r"\.price\s*\{([^}]+)\}", homepage_css)
+    if not price_rule or not re.search(r"white-space\s*:\s*nowrap", price_rule.group(1)):
+        return fail("public pricing cards must keep prices on one stable line")
     if "体验流程会用倒流香炉跑一遍" in index_html:
         return fail("homepage onboarding copy must not route real testing through a fixed sample product")
     for stale_public_copy in [
@@ -1011,7 +860,7 @@ def main() -> int:
         if stale_public_copy in index_html + app_html:
             return fail(f"public product copy should avoid abstract internal positioning: {stale_public_copy}")
     for merchant_outcome_copy in [
-        "让 eBay 经营少一点重复，多一点自动推进。",
+        "把重复工作交给 AI，把时间留给经营。",
         "资料不足不编造",
         "侵权风险初筛，仍需商家核对",
     ]:

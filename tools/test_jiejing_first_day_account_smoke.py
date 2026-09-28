@@ -90,7 +90,7 @@ def check_static_first_day_contracts() -> int:
         (app_js, "function renderSaasFirstDayPathStrip", "login and protected app entry must share the same first-day path"),
         (app_js + index_html, "login_onboarding_ai_ceo_v3", "first-day path must make login, onboarding and AI CEO route visible"),
         (app_js, "刷新不会跳过向导", "first-day path must tell merchants refresh cannot skip onboarding"),
-        (app_js, "一句话交给 AI CEO", "first-day path must point users to the simple AI CEO entry"),
+        (app_js, "一句话交给 JV AI", "first-day path must point users to the simple JV AI entry"),
         (app_js, "function saasAiCeoMerchantSafeFailureText", "frontend model failures must be merchant-safe"),
         (app_js, "AI 额度或连接状态挡住了本次回复", "frontend model quota failure copy should be clear"),
         (app_js, "不要重复填写连接信息，除非页面明确提示连接已失效", "frontend model failure should not ask for repeated credential setup"),

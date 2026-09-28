@@ -79,7 +79,7 @@ def main() -> int:
         "图片、链接或规格",
         "捷境整理 Listing",
         "还没有货源",
-        "AI CEO 给选品建议",
+        "JV AI 给选品建议",
         "找到真实货源后补充商品事实",
     )
     for marker in required_source_path_copy:

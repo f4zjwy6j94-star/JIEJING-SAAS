@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>捷境 · 工作台互动演示</title>
+<link rel="icon" href="../jiejing-app-icon.svg"><link rel="stylesheet" href="./workbench.css">
+<script src="./media-data.js" defer></script><script src="./demo-state.js" defer></script><script src="./workbench.js" defer></script>
+</head>
+<body data-ui-revision="finish-review-v12">
+<a class="skip-link" href="#workspace">跳到工作区</a>
+<svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 4V6a2 2 0 0 1 2-2ZM7 9h10M7 13h6"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m7 12 3 3 7-7"/><rect x="3" y="3" width="18" height="18" rx="3"/></symbol>
+<symbol id="i-support" viewBox="0 0 24 24"><path d="M4 14v-3a8 8 0 0 1 16 0v3M20 16v2a3 3 0 0 1-3 3h-4"/><rect x="2" y="11" width="4" height="7" rx="2"/><rect x="18" y="11" width="4" height="7" rx="2"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="9" cy="18" r="2"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M20 12H5m6-6-6 6 6 6"/></symbol>
+</defs></svg>
+<div class="demo-shell">
+  <aside class="sidebar">
+    <a class="brand" href="../../"><img src="../jiejing-logo-mark.svg" width="35" height="35" alt=""><span><strong>捷境</strong><small>JIEJING</small></span></a>
+    <div class="project-switch"><span>示例商品</span><strong>旅行收纳袋套装</strong><small>在各模块中继续同一件商品</small></div>
+    <nav aria-label="工作台模块">
+      <a href="#cockpit" data-nav="cockpit" aria-current="page"><svg><use href="#i-chat"/></svg>JV AI</a>
+      <a href="#listing" data-nav="listing"><svg><use href="#i-list"/></svg>选品与上架</a>
+      <a href="#media" data-nav="media"><svg><use href="#i-image"/></svg>素材工坊</a>
+      <a href="#confirm" data-nav="confirm"><svg><use href="#i-check"/></svg>确认中心<span id="navMissing">待核对</span></a>
+      <a href="#support" data-nav="support"><svg><use href="#i-support"/></svg>客服与订单</a>
+      <a href="#settings" data-nav="settings"><svg><use href="#i-settings"/></svg>设置</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="avatar" aria-hidden="true">演</span><div><strong>演示账号</strong><small>未连接真实店铺</small></div></div>
+  </aside>
+  <div class="work-area">
+    <header class="work-header"><a class="back-link" href="./#workflow"><svg><use href="#i-back"/></svg>返回官网</a><p><span class="mode-dot"></span>互动演示<span class="header-note"> · 示例数据，不连接真实店铺</span></p><button type="button" class="quiet-button" id="resetDemo">重置演示</button></header>
+    <main id="workspace" tabindex="-1">
+      <section class="workspace-view" data-view="cockpit">
+        <div class="page-heading"><div><h1>JV AI</h1><p>管理经营需求、商品任务与结果。</p></div><span class="status-tag">预设任务演示</span></div>
+        <div class="cockpit-grid">
+          <div class="conversation">
+            <div class="conversation-scroll" id="conversation">
+              <article class="chat-user"><span>你的目标</span><p>我有一套旅行收纳袋。帮我整理商品资料、准备 Listing，再做几种用途的商品图。</p></article>
+              <article class="chat-answer"><div class="answer-title"><img src="../jiejing-logo-mark.svg" width="25" height="25" alt="">JV AI <span>示例回复</span></div><h2>商品资料与内容准备</h2><p>参考图与六件组合已整理为示例资料。尺寸、材质、重量和库存尚待补充，未知参数不会自动填入。</p><div class="answer-plan"><div><span>商品资料</span><strong>集中补充缺失参数</strong><a href="#facts">打开资料表</a></div><div><span>Listing</span><strong>标题与描述可以继续修改</strong><a href="#listing">查看草稿</a></div><div><span>商品图片</span><strong>四种不同构图的方案</strong><a href="#media">查看素材</a></div></div><button type="button" class="text-button" id="toggleReport" aria-expanded="false" aria-controls="sampleReport">查看调研报告示例</button><div id="sampleReport" class="sample-report" hidden><h3>旅行收纳袋：调研报告结构示例</h3><p>正式调研会整理来源、采集时间、需求场景、竞品与风险。这份演示不包含实时销量，不代表选品或盈利结论。</p><dl><div><dt>使用场景</dt><dd>旅行分装、箱内整理</dd></div><div><dt>需要验证</dt><dd>尺寸组合、买家反馈、可售价格区间</dd></div><div><dt>来源状态</dt><dd>演示未调用搜索；真实任务需附来源</dd></div></dl></div></article>
+              <div id="sampleResponses" aria-live="polite"></div>
+            </div>
+            <div class="demo-composer"><label for="sampleTask">选择演示任务</label><div><select id="sampleTask"><option value="listing">帮我准备 Listing 草稿</option><option value="media">帮我做几种用途的商品图</option><option value="confirm">查看发布前还缺什么</option></select><button class="primary-button" type="button" id="runSample">查看示例回复</button></div><small>本页不调用大模型；正式工作台可输入自己的需求。</small></div>
+          </div>
+          <aside class="context-panel"><h2>当前商品</h2><img src="../packing-collection-v6-360.webp" srcset="../packing-collection-v6-360.webp 360w, ../packing-collection-v6-720.webp 720w" sizes="(max-width: 920px) 110px, 238px" width="1448" height="1086" alt="旅行收纳袋套装 AI 生成示例" decoding="async" loading="lazy"><strong>旅行收纳袋套装</strong><p>同一份资料，贯穿文案、素材与确认。</p><dl><div><dt>商品资料</dt><dd id="contextFacts">待补充</dd></div><div><dt>Listing</dt><dd id="contextDraft">示例草稿</dd></div><div><dt>封面</dt><dd id="contextCover">尚未选用</dd></div></dl><a class="secondary-button" href="#facts">补充商品资料<svg><use href="#i-arrow"/></svg></a><p class="fine-print">AI 生成图片需核对商品一致性及使用权。</p></aside>
+        </div>
+      </section>
+
+      <section class="workspace-view" data-view="listing" hidden inert>
+        <div class="page-heading"><div><h1>选品与上架</h1><p>统一编辑商品资料、刊登内容与素材。</p></div><span class="status-tag" id="draftStatus">示例草稿</span></div>
+        <div class="section-tabs" role="tablist" aria-label="商品工作"><button role="tab" type="button" data-listing-tab="facts" aria-selected="false" aria-controls="listing-facts" id="tab-facts">商品资料</button><button role="tab" type="button" data-listing-tab="draft" aria-selected="true" aria-controls="listing-draft" id="tab-draft">Listing 草稿</button><button role="tab" type="button" data-listing-tab="bulk" aria-selected="false" aria-controls="listing-bulk" id="tab-bulk">批量铺货</button></div>
+        <section id="listing-facts" role="tabpanel" aria-labelledby="tab-facts" hidden inert><div class="editor-sheet"><div class="sheet-heading"><h2>商品资料与待补项目</h2><p>此处填写仅用于本页演示，不会写入商家账号。</p></div><div class="source-row"><img src="../travel-compression-source.webp" width="1200" height="900" alt="六件旅行收纳袋参考图" loading="lazy"><div><strong>旅行收纳袋套装</strong><p>六件组合 · 绿色、米色、炭灰色</p><small>参考图为演示来源；真实商品仍需商家核对。</small></div></div><form id="factsForm"><div class="field-grid"><label>材质<input name="material" maxlength="80" placeholder="按真实规格填写，例如面料成分"></label><label>尺寸<input name="dimensions" maxlength="100" placeholder="按每件商品的真实尺寸填写"></label><label>重量（克）<input name="weight" type="number" min="1" max="100000" step="1" placeholder="请输入实际重量"></label><label>库存数量<input name="quantity" type="number" min="1" max="999999" step="1" placeholder="请输入可售数量"></label></div><p class="inline-hint">不知道的资料可以留空。AI 不会将空白自动补成商品事实。</p><div class="form-actions"><button type="submit" class="primary-button">保存示例资料</button><a href="#listing" class="text-button">继续编辑 Listing</a></div></form></div></section>
+        <section id="listing-draft" role="tabpanel" aria-labelledby="tab-draft">
+          <div class="listing-grid">
+            <form id="listingForm" class="editor-sheet">
+              <div class="sheet-heading"><h2>Listing 草稿</h2><p>AI 生成初稿，商家可以逐项修改。</p></div>
+              <label>商品标题<span class="field-meta" id="titleCount">0 / 80</span><input id="listingTitle" name="title" maxlength="80" required></label>
+              <label>商品描述<textarea id="listingDescription" name="description" rows="7" maxlength="2000" required></textarea></label>
+              <div class="field-grid"><label>售价（USD）<input id="listingPrice" name="price" type="number" min="0.01" max="999999" step="0.01" placeholder="由商家确定"></label><label>类目建议<input value="旅行配件 / 收纳袋（待核对）" readonly></label></div>
+              <p class="inline-hint">类目与店铺政策将在真实流程中按平台要求预检。</p>
+              <div class="form-actions"><button class="primary-button" type="submit">保存示例草稿</button><a class="text-button" href="#preflight">查看发布前检查</a></div>
+              <p id="saveFeedback" class="inline-feedback" role="status"></p>
+            </form>
+            <aside class="listing-preview"><h2>封面预览</h2><img id="listingCover" sizes="(max-width: 650px) 300px, 360px" decoding="async" src="../travel-compression-source.webp" width="1200" height="900" alt="尚未选择生成图，当前显示商品参考图" loading="lazy"><strong id="listingPreviewTitle">Travel Packing Cube Set</strong><p id="coverStatus">当前为参考图。到素材工坊核对并选用一张生成示例。</p><a class="secondary-button" href="#media">挑选图片<svg><use href="#i-arrow"/></svg></a><div class="unsaved-note" id="unsavedNotice" hidden>你有尚未保存的示例修改。</div></aside>
+          </div>
+          <details class="demo-preflight" id="preflightPanel">
+            <summary>发布前检查演示<span>查看资料与素材缺项</span></summary>
+            <p>根据本页已保存的资料核对缺项；未保存的修改不计入。本演示不连接 eBay，不能替代真实平台预检。</p>
+            <ul class="review-list" id="preflightList"></ul>
+            <a class="text-button" href="#confirm">查看确认中心操作示例<svg><use href="#i-arrow"/></svg></a>
+          </details>
+        </section>
+        <section id="listing-bulk" role="tabpanel" aria-labelledby="tab-bulk" hidden inert><div class="editor-sheet"><div class="sheet-heading"><h2>批量处理，逐件核对。</h2><p>同批商品集中检查资料、Listing 与素材；不跳过单件确认。</p></div><div class="bulk-empty" id="bulkEmpty"><svg><use href="#i-list"/></svg><h3>还没有演示批次</h3><p>加载两条示例草稿，看看批量工作如何组织。</p><button class="primary-button" type="button" id="loadBatch">加载示例批次</button></div><div id="bulkLoaded" hidden><div class="table-scroll"><table><caption>演示批次 · 不提交 eBay</caption><thead><tr><th>商品</th><th>资料</th><th>素材</th><th>下一步</th></tr></thead><tbody><tr><td>旅行收纳袋套装</td><td id="bulkFacts">待补充</td><td id="bulkMedia">待核对</td><td><a href="#facts">补充资料</a></td></tr><tr><td>第二件示例商品</td><td>待导入</td><td>暂无图片</td><td>等待真实资料</td></tr></tbody></table></div><p class="inline-hint">正式工作台中，每件商品保留各自的资料与审核状态。</p></div></div></section>
+      </section>
+
+      <section class="workspace-view" data-view="media" hidden inert>
+        <div class="page-heading"><div><h1>素材工坊</h1><p>用同一份商品资料，准备不同用途的画面。</p></div><span class="status-tag">4 张生成示例</span></div>
+        <div class="media-workspace"><div class="media-canvas"><figure><img id="mediaImage" src="../packing-collection-v6-1448.webp" srcset="../packing-collection-v6-360.webp 360w, ../packing-collection-v6-720.webp 720w, ../packing-collection-v6-1080.webp 1080w, ../packing-collection-v6-1448.webp 1448w" sizes="(max-width: 650px) calc(100vw - 46px), (max-width: 920px) calc(100vw - 224px), (max-width: 1180px) calc(100vw - 504px), min(1054px, calc(100vw - 594px))" width="1448" height="1086" alt="六件鼠尾草绿、灰米色与炭灰收纳袋重新排布的生成示例" decoding="async" loading="lazy"><figcaption><strong id="mediaLabel">整套陈列</strong><span id="mediaNote">整套商品示例</span></figcaption></figure><div class="media-thumbs" role="group" aria-label="选择生成示例"><button type="button" data-media="collection" aria-pressed="true"><img src="../packing-collection-v6-360.webp" srcset="../packing-collection-v6-360.webp 360w, ../packing-collection-v6-720.webp 720w" sizes="(max-width: 700px) 22vw, 180px" width="1448" height="1086" alt="" loading="lazy" decoding="async"><span>整套陈列</span></button><button type="button" data-media="suitcase" aria-pressed="false"><img src="../packing-suitcase-v6-360.webp" srcset="../packing-suitcase-v6-360.webp 360w, ../packing-suitcase-v6-720.webp 720w" sizes="(max-width: 700px) 22vw, 180px" width="1448" height="1086" alt="" loading="lazy" decoding="async"><span>行李箱场景</span></button><button type="button" data-media="packing" aria-pressed="false"><img src="../packing-packing-v6-360.webp" srcset="../packing-packing-v6-360.webp 360w, ../packing-packing-v6-720.webp 720w" sizes="(max-width: 700px) 22vw, 180px" width="1448" height="1086" alt="" loading="lazy" decoding="async"><span>使用过程</span></button><button type="button" data-media="detail" aria-pressed="false"><img src="../packing-detail-v6-360.webp" srcset="../packing-detail-v6-360.webp 360w, ../packing-detail-v6-720.webp 720w" sizes="(max-width: 700px) 22vw, 180px" width="1448" height="1086" alt="" loading="lazy" decoding="async"><span>材质特写</span></button></div></div><aside class="media-inspector"><h2>画面需求</h2><p id="mediaPrompt">把这套收纳袋重新排成有层次的整套陈列，保留六件组合、配色和外观。</p><div class="inspector-divider"></div><h2>选用前核对</h2><p class="fine-print">勾选仅演示审核操作，不代表真实商品已经审核通过。</p><label class="check-row"><input type="checkbox" id="appearanceReview"><span>已在演示中检查外观、颜色与数量</span></label><label class="check-row"><input type="checkbox" id="rightsReview"><span>已了解真实使用前需要确认图片权利</span></label><label class="check-row"><input type="checkbox" id="platformReview"><span>已了解真实使用前需要检查平台图片要求</span></label><button type="button" class="primary-button" id="useMedia" disabled>选为示例封面</button><p id="mediaFeedback" class="inline-feedback" role="status">先完成这张图片的三项演示核对。</p><a href="#listing" class="text-button">回到 Listing 看效果</a><p class="inspector-note">预先生成的 AI 图片。不实时生成、不扣点，也不会进入你的真实账号。</p></aside></div>
+      </section>
+
+      <section class="workspace-view" data-view="confirm" hidden inert>
+        <div class="page-heading"><div><h1>确认中心</h1><p>核对最终内容，确认本次平台操作。</p></div><span class="status-tag">操作确认演示</span></div>
+        <div class="confirmation-grid"><div class="editor-sheet"><div class="sheet-heading"><h2>旅行收纳袋套装</h2><p>来自选品与上架的资料核对摘要。已保存的示例内容会同步显示。</p></div><ul class="review-list" id="reviewList"></ul><div class="confirm-summary"><span>示例标题</span><strong id="confirmTitle"></strong><span>示例售价</span><strong id="confirmPrice">尚未填写</strong></div></div><aside class="confirmation-action"><h2>平台操作与确认</h2><p>保存 eBay 未发布草稿与正式发布分别确认；平台执行还取决于账号状态和发布前检查。本页仅演示，不执行这两项操作。</p><button class="secondary-button" disabled type="button" aria-describedby="publishLimit">保存 eBay 未发布草稿</button><button class="primary-button" disabled type="button" aria-describedby="publishLimit">正式发布</button><small id="publishLimit">互动演示不提供发布功能</small><a class="secondary-button" href="#preflight">返回发布前检查</a></aside></div>
+      </section>
+
+      <section class="workspace-view" data-view="support" hidden inert>
+        <div class="page-heading"><div><h1>客服与订单</h1><p>结合商品与订单信息，准备可核对的回复。</p></div><span class="status-tag">示例会话</span></div>
+        <div class="support-grid"><aside class="inbox"><h2>买家消息</h2><button type="button" class="inbox-item" id="openConversation" aria-pressed="true"><strong>商品尺寸咨询</strong><span>这套收纳袋适合我的旅行箱吗？</span><small>示例买家 · 未发送回复</small></button><div class="order-note"><h3>关联订单</h3><p>售前咨询，暂无关联订单。</p></div></aside><div class="support-conversation"><div class="buyer-message"><span>买家 · 示例消息</span><p>这套收纳袋适合 20 英寸旅行箱吗？</p></div><div class="reply-tools"><h2>回复草稿</h2><p>资料不足时不承诺兼容性；先核对收纳袋和箱内尺寸。</p><button class="secondary-button" type="button" id="prepareReply">查看建议回复</button><label id="replyField" hidden>编辑回复草稿<textarea id="supportReply" rows="5" maxlength="1600"></textarea></label><div class="form-actions" id="replyActions" hidden><button class="primary-button" type="button" id="saveReply">保存示例回复</button><button class="quiet-button" type="button" disabled>发送给买家</button></div><p id="replyFeedback" class="inline-feedback" role="status">此演示不会联系任何真实买家。</p></div></div></div>
+      </section>
+
+      <section class="workspace-view" data-view="settings" hidden inert>
+        <div class="page-heading"><div><h1>设置</h1><p>按用途管理账号、店铺和服务。</p></div></div>
+        <div class="settings-layout"><nav class="settings-nav" aria-label="设置分类"><button type="button" data-settings="account" aria-pressed="true">账号与店铺</button><button type="button" data-settings="ai" aria-pressed="false">AI 与素材</button><button type="button" data-settings="billing" aria-pressed="false">套餐与付款</button><button type="button" data-settings="permissions" aria-pressed="false">操作与确认</button></nav><div class="settings-content">
+          <section data-settings-panel="account"><h2>账号与店铺</h2><div class="setting-row"><div><strong>捷境账号</strong><p>演示账号 · 不关联你的真实登录信息</p></div><span class="status-tag">仅演示</span></div><div class="setting-row"><div><strong>eBay 店铺</strong><p>尚未连接。正式使用时，通过官方授权连接。</p></div><button type="button" disabled class="secondary-button">连接店铺</button></div><p class="inline-hint">捷境账号与 eBay 店铺独立管理。店铺连接需要另行完成官方授权。</p></section>
+          <section data-settings-panel="ai" hidden inert><h2>AI 与素材</h2><div class="setting-row"><div><strong>AI 服务</strong><p>本演示展示预设内容，不调用模型。</p></div><span>未连接</span></div><div class="setting-row"><div><strong>素材生成</strong><p>仅展示预先生成的示例；不消耗素材点。</p></div><span>演示模式</span></div><p class="inline-hint">正式工作台可管理 AI 服务与素材用量。</p></section>
+          <section data-settings-panel="billing" hidden inert><h2>套餐与付款</h2><div class="setting-row"><div><strong>演示不需要购买</strong><p>这里不创建订单、不收款，也不触发退款。</p></div></div><a class="secondary-button" href="./#plans">返回官网查看套餐</a></section>
+          <section data-settings-panel="permissions" hidden inert><h2>操作与确认</h2><div class="setting-row"><div><strong>草稿编辑</strong><p>可以在捷境内整理资料、修改文案和审核素材。</p></div></div><div class="setting-row"><div><strong>影响店铺的动作</strong><p>真实发布、价格库存修改、退款与广告预算等，需要执行前确认。</p></div></div><p class="inline-hint">套餐权益与店铺操作授权独立管理，关键操作仍需确认。</p></section>
+        </div></div>
+      </section>
+    </main>
+    <div class="toast" id="demoToast" role="status" hidden></div>
+  </div>
+</div>
+<dialog id="resetDialog"><h2>重置这次演示？</h2><p>将清除本页的示例修改、封面选择与回复草稿。真实账号不受影响。</p><div class="form-actions"><button class="secondary-button" id="cancelReset" type="button">保留修改</button><button class="primary-button" id="confirmReset" type="button">重置演示</button></div></dialog>
+<noscript><div class="no-script">开启 JavaScript 后可体验模块切换。本页不连接真实账号。</div></noscript>
+</body></html>

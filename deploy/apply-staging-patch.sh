@@ -133,6 +133,37 @@ FILES=(
   "assets/jiejing-ops-panels.js"
   "assets/jiejing-settings-panels.js"
   "assets/jiejing-premium-surfaces.css"
+  "assets/homepage-finish.css"
+  "assets/homepage-finish.js"
+  "assets/jiejing-home-entry.css"
+  "assets/homepage-media-data.js"
+  "assets/jiejing-workbench-finish.css"
+  "assets/workbench-demo/index.html"
+  "assets/workbench-demo/workbench.css"
+  "assets/workbench-demo/workbench.js"
+  "assets/workbench-demo/media-data.js"
+  "assets/workbench-demo/demo-state.js"
+  "assets/jiejing-sans-20260928.woff2"
+  "assets/jiejing-serif-20260928.woff2"
+  "assets/noto-sans-sc-OFL.txt"
+  "assets/noto-serif-sc-OFL.txt"
+  "assets/travel-compression-source.webp"
+  "assets/packing-collection-v6-360.webp"
+  "assets/packing-collection-v6-720.webp"
+  "assets/packing-collection-v6-1080.webp"
+  "assets/packing-collection-v6-1448.webp"
+  "assets/packing-suitcase-v6-360.webp"
+  "assets/packing-suitcase-v6-720.webp"
+  "assets/packing-suitcase-v6-1080.webp"
+  "assets/packing-suitcase-v6-1448.webp"
+  "assets/packing-packing-v6-360.webp"
+  "assets/packing-packing-v6-720.webp"
+  "assets/packing-packing-v6-1080.webp"
+  "assets/packing-packing-v6-1448.webp"
+  "assets/packing-detail-v6-360.webp"
+  "assets/packing-detail-v6-720.webp"
+  "assets/packing-detail-v6-1080.webp"
+  "assets/packing-detail-v6-1448.webp"
   "assets/travel-compression-main-v2.webp"
   "assets/travel-compression-scene-v2.webp"
   "assets/travel-compression-feature-v2.webp"
@@ -474,6 +505,8 @@ FILES=(
   "tools/test_jiejing_registration_challenge_ui.py"
   "tools/test_jiejing_homepage_auth_boundary.js"
   "tools/test_jiejing_homepage_session_refresh.js"
+  "tools/test_jiejing_public_design_release.py"
+  "tools/test_jiejing_workbench_finish.py"
   "tools/test_jiejing_ai_ceo_scroll_retention.py"
   "tools/test_jiejing_ai_ceo_history_pagination.py"
   "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js"
@@ -869,6 +902,8 @@ python3 -m py_compile \
   tools/test_jiejing_expensive_api_rate_limit.py \
   tools/test_jiejing_platform_trial_activation_guard.py \
   tools/test_jiejing_registration_challenge_ui.py \
+  tools/test_jiejing_public_design_release.py \
+  tools/test_jiejing_workbench_finish.py \
   tools/test_jiejing_ai_ceo_scroll_retention.py \
   tools/test_jiejing_ai_ceo_history_pagination.py \
   tools/test_jiejing_billing_quota_guardrail.py \
@@ -906,6 +941,11 @@ bash -n deploy/jiejing-production-evidence-auto-refresh.sh
 NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check app.js
 "$NODE_BIN" --check ops.js
+"$NODE_BIN" --check assets/homepage-finish.js
+"$NODE_BIN" --check assets/homepage-media-data.js
+"$NODE_BIN" --check assets/workbench-demo/workbench.js
+"$NODE_BIN" --check assets/workbench-demo/media-data.js
+"$NODE_BIN" --check assets/workbench-demo/demo-state.js
 "$NODE_BIN" --check tools/codex_jiejing_operations_console_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_listing_media_writeback_persistence.js
 "$NODE_BIN" --check tools/codex_jiejing_product_feedback_smoke.js

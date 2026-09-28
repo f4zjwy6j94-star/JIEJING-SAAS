@@ -39063,12 +39063,12 @@ function renderSaasInactiveViewPlaceholder(viewId = "") {
     view.saasProductFactEditorBaseline.pendingEditor = captureSaasPendingProductFactEditor(view);
   }
   const labels = {
-    cockpit: ["AI CEO", "对话入口、真实账号状态和下一步会在打开本页时读取。"],
-    workflow: ["AI CEO", "岗位链路已归入 AI CEO 对话入口。"],
+    cockpit: ["JV AI", "对话与当前任务将在打开本页时读取。"],
+    workflow: ["JV AI", "经营任务可在 JV AI 对话中继续。"],
     product: ["Listing", "这里只接收店铺资料和模型输出，不用旧商品内容填空。"],
     media: ["素材工坊", "素材任务等待 Listing Package 和商家来源记录。"],
     bulk: ["批量铺货", "批量机会等待真实店铺资料和来源记录。"],
-    activity: ["AI CEO", "报告记录已归入 AI CEO 和对应业务模块。"],
+    activity: ["JV AI", "报告可在 JV AI 和对应业务模块查看。"],
     confirm: ["决策中心", "确认中心只承接高风险动作，不展示历史商品流程。"],
     service: ["客服与订单", "客服草稿等待当前账号商品档案和物流边界。"],
     connect: ["设置", "账号、安全、AI 连接、来源记录和确认边界会在打开本页时读取。"],
@@ -39094,15 +39094,15 @@ function renderSaasProtectedStateLoadingView(viewId = "") {
   const view = document.querySelector(`#view-${viewId}`);
   if (!view) return false;
   const labels = {
-    cockpit: "AI CEO",
+    cockpit: "JV AI",
     product: "Listing",
     bulk: "批量铺货",
     media: "素材工坊",
     confirm: "决策中心",
     service: "客服与订单",
     connect: "设置",
-    activity: "AI CEO 报告",
-    workflow: "AI CEO",
+    activity: "JV AI 报告",
+    workflow: "JV AI",
   };
   const title = labels[viewId] || "捷境工作台";
   view.innerHTML = jiejingTrustedTemplate("view.protected_loading")`
@@ -40742,19 +40742,19 @@ function renderSaasCockpitRealWorkbench() {
   const hasVisibleCeoChat = Boolean(visibleCommandChat.trim());
   const firstRunHandoff = hasVisibleCeoChat ? "" : renderSaasAiCeoFirstRunHandoff();
   const taskContextState = saasAiCeoTaskContextState();
-  cockpit.dataset.title = "AI CEO";
+  cockpit.dataset.title = "JV AI";
   const pageTitleNode = document.querySelector("#pageTitle");
   const moduleHintNode = document.querySelector("#moduleFlowHint");
-  if (pageTitleNode) pageTitleNode.textContent = "AI CEO";
+  if (pageTitleNode) pageTitleNode.textContent = "JV AI";
   if (moduleHintNode) moduleHintNode.textContent = "像聊天一样说出目标；连接、店铺资料、AI 和订阅状态集中到设置页。";
   cockpit.innerHTML = jiejingTrustedTemplate("ai_ceo.cockpit")`
-    <section class="saas-real-cockpit-shell saas-ai-ceo-workbench saas-ai-ceo-chatgpt-shell" data-ai-ceo-fixed-chat-viewport="ai_ceo_fixed_chat_viewport_v1" aria-label="AI CEO 对话工作台">
+    <section class="saas-real-cockpit-shell saas-ai-ceo-workbench saas-ai-ceo-chatgpt-shell" data-ai-ceo-fixed-chat-viewport="ai_ceo_fixed_chat_viewport_v1" aria-label="JV AI 对话工作台">
       <div class="saas-ai-ceo-cockpit-main">
         <div class="saas-ai-ceo-chatgpt-layout saas-ai-ceo-chatgpt-layout-clean ${taskContextState.visible ? "has-task-context" : ""} ${taskContextState.visible && !taskContextState.expanded ? "is-task-context-collapsed" : ""}">
-          <section class="ceo-panel cockpit-chat-panel saas-ai-ceo-chat saas-ai-ceo-thread" aria-label="AI CEO 对话窗口">
+          <section class="ceo-panel cockpit-chat-panel saas-ai-ceo-chat saas-ai-ceo-thread" aria-label="JV AI 对话窗口">
             <div class="saas-ai-ceo-thread-intro ${hasVisibleCeoChat ? "is-compact" : "is-empty"}">
-              <p class="eyebrow">JIEJING AI CEO</p>
-              <h2>${hasVisibleCeoChat ? "AI CEO" : "一句话交给 AI CEO"}</h2>
+              <p class="eyebrow">JIEJING · JV AI</p>
+              <h2>${hasVisibleCeoChat ? "JV AI" : "一句话交给 JV AI"}</h2>
               <p>${hasVisibleCeoChat ? "继续当前对话。" : "问问题直接答；说商品、链接、图片或订单，我会自动带到对应流程；真实发布、付款、退款和广告先问你。"}</p>
             </div>
             ${firstRunHandoff}
@@ -40765,8 +40765,8 @@ function renderSaasCockpitRealWorkbench() {
               <form class="chat-compose saas-ai-ceo-composer" id="ceoForm">
                 <button type="button" class="saas-ai-ceo-attachment-button" id="ceoAttachmentButton" aria-label="添加商品图片" title="添加商品图片">＋</button>
                 <input id="ceoAttachmentInput" class="saas-ai-ceo-attachment-input" type="file" multiple accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true" />
-                <input id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 AI CEO 的问题或商品任务" placeholder="比如：帮我调研这个商品，整理 Listing 草稿…" autocomplete="off" />
-                <button type="submit" class="primary-action" aria-label="发送给 AI CEO">发送</button>
+                <input id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 JV AI 的问题或商品任务" placeholder="比如：帮我调研这个商品，整理 Listing 草稿…" autocomplete="off" />
+                <button type="submit" class="primary-action" aria-label="发送给 JV AI">发送</button>
               </form>
               ${
                 hasVisibleCeoChat
@@ -47230,7 +47230,7 @@ function renderSaasAiCeoChatTurnMarkup(turn = {}, options = {}) {
     <article class="message ai${latest.pending ? " is-pending" : ""}${
       latest.pending && options.suppressPendingAssistant ? " is-superseded-pending" : ""
     }"${assistantId} data-status="${escapeHtml(latest.status)}">
-      <span>AI CEO</span>
+      <span>JV AI</span>
       <div class="saas-ai-ceo-message-body">
         ${
           latest.pending
@@ -47256,7 +47256,7 @@ function renderSaasAiCeoLatestReplyMarkup(turn = state.saasAiCeoLatestTurn) {
     <section class="saas-ai-ceo-latest-turn ${latest.pending ? "is-pending" : ""}" data-assistant-id="${escapeHtml(latest.assistant_id)}" data-status="${escapeHtml(latest.status)}">
       ${latest.user_text ? `<p class="saas-ai-ceo-latest-user">${escapeHtml(latest.user_text)}</p>` : ""}
       <article class="saas-ai-ceo-latest-answer">
-        <span>AI CEO</span>
+        <span>JV AI</span>
         <div>
           ${
             latest.pending

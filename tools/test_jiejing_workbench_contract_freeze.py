@@ -70,7 +70,7 @@ def main() -> None:
     nav_source = app_html[app_html.index('<nav class="nav-list"') : app_html.index("</nav>", app_html.index('<nav class="nav-list"'))]
     labels = re.findall(r'<button class="nav-item[^>]*data-view="([^"]+)"[^>]*>.*?<span>([^<]+)</span>\s*</button>', nav_source, flags=re.S)
     expected = [
-        ("cockpit", "AI CEO"),
+        ("cockpit", "JV AI"),
         ("product", "选品与上架"),
         ("media", "素材工坊"),
         ("confirm", "确认中心"),

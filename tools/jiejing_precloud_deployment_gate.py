@@ -56,6 +56,8 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("merchant_surface_isolation", [sys.executable, "tools/test_jiejing_merchant_surface_isolation.py"]),
     ("core_workflow_maturity", [sys.executable, "tools/test_jiejing_core_workflow_maturity.py"]),
     ("homepage_maturity", [sys.executable, "tools/test_jiejing_homepage_maturity.py"]),
+    ("public_design_release", [sys.executable, "tools/test_jiejing_public_design_release.py"]),
+    ("workbench_finish", [sys.executable, "tools/test_jiejing_workbench_finish.py"]),
     ("browser_homepage_maturity", ["node", "tools/codex_jiejing_homepage_maturity_browser_smoke.js"]),
     ("production_empty_state", [sys.executable, "tools/test_jiejing_production_empty_state.py"]),
     ("merchant_role_labels", [sys.executable, "tools/test_jiejing_merchant_role_labels.py"]),
