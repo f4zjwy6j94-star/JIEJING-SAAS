@@ -272,6 +272,8 @@ class ProductSearchEvidenceTests(unittest.TestCase):
         ]
         prefix = "候选商品 1：stainless steel measuring cups set\n"
         for claim in ("主商品价格为 $31.24 [S1]。", "两款均为无品牌通用款。",
+                      '| measuring cups | https://www.ebay.com/itm/123456789001 | $31.24（原价 $36.75） |',
+                      '本轮命中的两个量杯页面均为**无品牌通用款**。',
                       "来源 [S3] 已核实。", "[S1] https://www.ebay.com/itm/123456789002",
                       "[S1] https://www.ebay.com/itm/999999999999"):
             result = chat.validate_ai_ceo_answer_quality(message="调研1个候选商品，不创建 Listing。", route="ebay_workflow", answer=prefix+claim, source_records=sources)
@@ -279,6 +281,13 @@ class ProductSearchEvidenceTests(unittest.TestCase):
         valid = chat.validate_ai_ceo_answer_quality(message="调研1个候选商品，不创建 Listing。", route="ebay_workflow",
             answer=prefix+"片段含 $31.24 和其他价格，主商品价格未验证 [S1]。品牌状态未验证，不应认定为无品牌。", source_records=sources)
         self.assertTrue(valid["accepted"], valid)
+
+        # Preserve the live failure's link-only table and Markdown emphasis,
+        # rather than proving only an easier citation-tagged paraphrase.
+        valid_table = chat.validate_ai_ceo_answer_quality(message="调研1个候选商品，不创建 Listing。", route="ebay_workflow",
+            answer=prefix+'| measuring cups | https://www.ebay.com/itm/123456789001 | 片段含 $31.24；**主商品价格未验证** |\n'
+                +'不能认定两个页面均为**无品牌通用款**，品牌状态未验证。', source_records=sources)
+        self.assertTrue(valid_table["accepted"], valid_table)
 
     def test_cups_is_not_ups_but_unverified_shipping_remains_blocked(self):
         message = "帮我调研1个候选商品，不要编造商品事实。"

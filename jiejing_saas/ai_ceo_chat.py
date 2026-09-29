@@ -4546,30 +4546,37 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
     if not product_records:
         return []
     by_id = {str(s.get("citation_id")): s for s in records if isinstance(s, dict) and s.get("citation_id")}
-    allowed_urls = {_canonical_public_source_url(str(s.get("url") or "")) for s in records if isinstance(s, dict)}
+    by_url = {_canonical_public_source_url(str(s.get("url") or "")): s for s in records if isinstance(s, dict)}
+    allowed_urls = set(by_url)
     blocked = set()
     for line in answer.splitlines():
-        refs = re.findall(r"\[(S\d+)\]", line)
+        refs = list(dict.fromkeys(re.findall(r"\[(S\d+)\]", line)))
+        line_sources = {ref: by_id[ref] for ref in refs if ref in by_id}
         if any(ref not in by_id for ref in refs):
             blocked.add("research_citation_not_in_evidence")
         urls = re.findall(r"https?://[^\s\]<>|）)]+", line)
         for url in urls:
             canonical = _canonical_public_source_url(url.rstrip(".,;。；，"))
+            if canonical in by_url:
+                linked_source = by_url[canonical]
+                line_sources[str(linked_source.get("citation_id") or canonical)] = linked_source
             if re.search(r"ebay\.com/itm/", url) and canonical not in allowed_urls:
                 blocked.add("research_product_url_not_in_evidence")
             if len(refs) == 1 and refs[0] in by_id and canonical in allowed_urls:
                 if canonical != _canonical_public_source_url(str(by_id[refs[0]].get("url") or "")):
                     blocked.add("research_citation_url_mismatch")
-        for ref in refs:
-            source = by_id.get(ref, {})
+        # Model tables often use links without [S#]. Formatting must not bypass
+        # the same evidence checks applied to prose with citation labels.
+        claim_line = re.sub(r"[*_`]+", "", line)
+        for source in line_sources.values():
             prices = set(re.findall(r"(?:US\s*)?\$\s*(\d+(?:\.\d+)?)", str(source.get("snippet") or "")))
             uncertain = re.search(r"(?:主商品)?(?:价格|标价|报价|售价).{0,8}(?:未验证|未核实|不确定|无法确认)|"
-                                  r"(?:不能|无法).{0,20}(?:标价|报价|价格)|(?:not verified|unverified|not the item price)", line, re.I)
-            if len(prices) > 1 and re.search(r"\$\s*\d", line) and not uncertain:
+                                  r"(?:不能|无法).{0,20}(?:标价|报价|价格)|(?:not verified|unverified|not the item price)", claim_line, re.I)
+            if len(prices) > 1 and re.search(r"\$\s*\d", claim_line) and not uncertain:
                 blocked.add("research_ambiguous_main_item_price")
-        if re.search(r"(?:均为|都是|品牌(?:是|为|[:：]))\s*(?:unbranded|无品牌)|(?:是|为)无品牌通用款", line, re.I):
-            brand_sources = [by_id[ref] for ref in refs if ref in by_id] if refs else product_records
-            if not re.search(r"(?:不能|不应|不可|无法|未验证|未核实|不能认定|并非)", line) and not (brand_sources and all(
+        if re.search(r"(?:均为|都是|品牌(?:是|为|[:：]))\s*(?:unbranded|无品牌)|(?:是|为)无品牌通用款", claim_line, re.I):
+            brand_sources = list(line_sources.values()) if line_sources else product_records
+            if not re.search(r"(?:不能|不应|不可|无法|未验证|未核实|不能认定|并非)", claim_line) and not (brand_sources and all(
                 re.search(r"\bunbranded\b|品牌[:：]\s*无品牌", str(s.get("title") or "")+" "+str(s.get("snippet") or ""), re.I)
                 for s in brand_sources)):
                 blocked.add("research_unverified_unbranded_claim")
