@@ -200,6 +200,62 @@ class ProductSearchEvidenceTests(unittest.TestCase):
         self.assertNotIn("product research", query)
         self.assertNotIn("marketplace trends", query)
 
+    def test_revision_uses_owned_report_sources_without_searching_again(self):
+        message = "修订当前商品调研报告，本轮不要联网检索，沿用上一份报告来源。价格和品牌未验证，不创建 Listing。"
+        answer = "候选商品 1：stainless steel measuring spoons cups set\n[S1] 只能证明存在该商品页面；价格、品牌、销量和供应商资料未验证。"
+        class Model:
+            provider, model = "deepseek", "test-model"
+            calls = []
+            def generate_text(self, **kwargs):
+                self.calls.append(json.loads(kwargs["user_prompt"]))
+                if kwargs.get("on_text_delta"):
+                    kwargs["on_text_delta"]("尚未核对的价格片段")
+                return {"text": answer, "model_mode": "live_http_model_text", "model_configured": True}
+        with tempfile.TemporaryDirectory(prefix="jiejing-source-revision-", ignore_cleanup_errors=True) as folder:
+            repo = SaaSRepository(Path(folder) / "fixture.sqlite")
+            account = repo.create_user_with_company(email="revision@example.test", password="unit-test-only-password", company_name="Revision fixture")
+            identity = {"user_id": account["user"]["user_id"], "company_id": account["company"]["company_id"]}
+            store = repo.create_store(**identity, payload={"platform": "ebay", "marketplace": "EBAY_US"})
+            project = {"key": "listing-project-revision", "source_report_id": "seed", "candidate_id": "candidate-1"}
+            sources = [{"citation_id": "S1", "title": PRODUCTS[0], "url": "https://www.ebay.com/itm/123456789001", "snippet": "Price not verified.", "captured_at": "2026-09-29T10:00:00Z"}]
+            task = repo.create_task(**identity, store_id=store["store_id"], task_type="merchant_ceo_chat", title="Prior report", input_data={"message": "调研候选"})
+            report = repo.save_ai_ceo_market_research_report(task=task, message="调研1个候选商品", chat={"answer": answer, "route": "ebay_workflow", "status": "model_answered", "source_records": sources}, listing_project_identity=project)
+            history = [{"user_text": "调研1个候选商品", "assistant_text": answer, "route": "ebay_workflow", "market_report_id": report["report_id"]}]
+            model = Model()
+            streamed = []
+            with patch.object(chat, "PublicSearchProbeAdapter", FakeSearch):
+                result = chat.run_ai_ceo_chat(repository=repo, **identity, store_id=store["store_id"], message=message, model_client=model,
+                    conversation_history=history, on_text_delta=streamed.append, active_listing_context={"contract_version": "active_listing_context_v1", "listing_project_identity": project})
+            self.assertEqual([], streamed, "Evidence must be checked before sending model prose to the merchant")
+            self.assertEqual([], FakeSearch.calls, "An explicit no-search revision must never call a search provider")
+            self.assertEqual([sources[0]["url"]], [s["url"] for s in result["source_records"]])
+            self.assertEqual("S1", model.calls[0]["web_context"]["source_records"][0]["citation_id"])
+            self.assertEqual(sources[0]["captured_at"], result["source_records"][0]["captured_at"])
+            self.assertEqual("model_answered", result["status"], result.get("answer_quality"))
+            # A client cannot replace the retained evidence with raw snippets or
+            # a reference from another user, store, project, or company.
+            for change in ("missing", "project", "store", "user", "company"):
+                model.calls.clear()
+                call_identity = dict(identity)
+                call_store = store["store_id"]
+                call_project = dict(project)
+                call_history = history
+                if change == "missing":
+                    call_history = [{**history[0], "market_report_id": "report_missing", "source_records": sources}]
+                elif change == "project": call_project["key"] = "listing-project-unrelated"
+                elif change == "store": call_store = "store-unrelated"
+                elif change == "user": call_identity["user_id"] = "user-unrelated"
+                else: call_identity["company_id"] = "company-unrelated"
+                with patch.object(chat, "PublicSearchProbeAdapter", FakeSearch):
+                    invalid = chat.run_ai_ceo_chat(repository=repo, **call_identity, store_id=call_store,
+                        message=message, model_client=model, conversation_history=call_history,
+                        active_listing_context={"contract_version": "active_listing_context_v1", "listing_project_identity": call_project})
+                self.assertEqual([], model.calls, change)
+                self.assertEqual([], invalid["source_records"], change)
+                self.assertFalse(invalid["answer_quality"]["accepted"], change)
+            del repo
+            gc.collect()
+
     def test_metadata_headings_cannot_become_product_candidates(self):
         for heading in ("证据边界说明", "证据边界", "来源与限制", "sources and limitations"):
             result = chat.validate_ai_ceo_answer_quality(
@@ -208,6 +264,21 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             )
             self.assertFalse(result["accepted"], heading)
             self.assertIn("missing_concrete_product_candidates", result["blocked_by"])
+
+    def test_research_cannot_swap_citations_or_promote_ambiguous_prices_and_brands(self):
+        sources = [
+            {"citation_id": "S1", "title": "Chef Select measuring cups", "url": "https://www.ebay.com/itm/123456789001", "snippet": "Seller feedback. $31.24 previous price $36.75. Other items $64.39.", "market_evidence_role": "item_listing_reference"},
+            {"citation_id": "S2", "title": "Silicone spatula", "url": "https://www.ebay.com/itm/123456789002", "snippet": "No verified price", "market_evidence_role": "item_listing_reference"},
+        ]
+        prefix = "候选商品 1：stainless steel measuring cups set\n"
+        for claim in ("主商品价格为 $31.24 [S1]。", "两款均为无品牌通用款。",
+                      "来源 [S3] 已核实。", "[S1] https://www.ebay.com/itm/123456789002",
+                      "[S1] https://www.ebay.com/itm/999999999999"):
+            result = chat.validate_ai_ceo_answer_quality(message="调研1个候选商品，不创建 Listing。", route="ebay_workflow", answer=prefix+claim, source_records=sources)
+            self.assertFalse(result["accepted"], claim)
+        valid = chat.validate_ai_ceo_answer_quality(message="调研1个候选商品，不创建 Listing。", route="ebay_workflow",
+            answer=prefix+"片段含 $31.24 和其他价格，主商品价格未验证 [S1]。品牌状态未验证，不应认定为无品牌。", source_records=sources)
+        self.assertTrue(valid["accepted"], valid)
 
     def test_cups_is_not_ups_but_unverified_shipping_remains_blocked(self):
         message = "帮我调研1个候选商品，不要编造商品事实。"
@@ -240,6 +311,15 @@ class ProductSearchEvidenceTests(unittest.TestCase):
         )
         self.assertTrue(result["accepted"], result)
         self.assertEqual(2, result["candidate_count"])
+
+    def test_one_unbranded_source_cannot_establish_all_products_are_unbranded(self):
+        sources = [
+            {"citation_id": "S1", "title": "Unbranded measuring cups", "url": "https://www.ebay.com/itm/123456789001"},
+            {"citation_id": "S2", "title": "Chef Select measuring cups", "url": "https://www.ebay.com/itm/123456789002"},
+        ]
+        for claim in ("两款均为无品牌 [S1] [S2]", "这款品牌为无品牌 [S2]", "两款均为无品牌"):
+            self.assertIn("research_unverified_unbranded_claim", chat._research_source_answer_blockers(claim, sources), claim)
+        self.assertEqual([], chat._research_source_answer_blockers("这款品牌为无品牌 [S1]", sources))
 
     def test_guide_results_do_not_count_as_product_evidence(self):
         FakeSearch.guide_only = True

@@ -25921,6 +25921,9 @@ function saasAiCeoConversationHistoryForRequest() {
     .map((turn) => ({
       user_text: sanitizeSaasCeoCommandSourceText(turn.user_text).slice(0, 900),
       assistant_text: publicRuntimeText(turn.assistant_text).slice(0, 3200),
+      // Reference only: the server reloads evidence and checks owner/store/project.
+      market_report_id: /^report_[A-Za-z0-9_-]+$/.test(String(turn.market_report_id || ""))
+        ? String(turn.market_report_id).slice(0, 120) : "",
       route: ["general_chat", "ebay_workflow", "external_realtime", "confirmation_required", "merchant_rule_memory"].includes(turn.route)
         ? turn.route
         : "general_chat",
@@ -46631,6 +46634,8 @@ function saasAiCeoThreadTurnTimestamp(turn = {}) {
 }
 
 function compareSaasAiCeoThreadTurns(left = {}, right = {}) {
+  const unsettledDelta = Number(Boolean(left.pending || left.archive_pending)) - Number(Boolean(right.pending || right.archive_pending));
+  if (unsettledDelta) return unsettledDelta;
   const timestampDelta = saasAiCeoThreadTurnTimestamp(left) - saasAiCeoThreadTurnTimestamp(right);
   if (timestampDelta) return timestampDelta;
   return String(left?.assistant_id || left?.user_text || "").localeCompare(
@@ -47431,7 +47436,9 @@ function renderSaasAiCeoPerformanceSummaryMarkup(turn = {}) {
   const usedModel = Boolean(modelLatency && !performance.fallback_answer_used);
   if (!usedSearch && !usedModel) return "";
   const chips = [];
-  if (sourceCount) chips.push(`已查 ${sourceCount} 条公开来源`);
+  if (sourceCount) chips.push(cacheStatus === "report_reuse"
+    ? `沿用原报告 ${sourceCount} 条来源 · 本轮未联网`
+    : `已查 ${sourceCount} 条公开来源`);
   else if (usedSearch) chips.push("已尝试联网查证");
   if (cacheStatus === "hit") chips.push("复用近期来源");
   else if (cacheStatus === "hit_no_sources") chips.push("复用近期检查");

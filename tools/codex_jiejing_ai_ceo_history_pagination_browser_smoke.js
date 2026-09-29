@@ -15,6 +15,7 @@ const turns = Array.from({ length: 75 }, (_, index) => ({
   assistant_text: `本地历史回答 ${index + 1}。这段内容用于核对更早对话可见、顺序正确和滚动位置稳定。`,
   created_at: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(),
   status: "model_answered", route: "general_chat", store_id: "history-store",
+  market_report_id: `report_history_${index + 1}`,
 }));
 const counters = { get: 0, older: 0, sync: 0, expensive: 0, authProbe: 0, authRefresh: 0 };
 const archiveProtocol = { requests: [], syncBodies: [], turns: [], responseStatus: 200, loseFinal: false };
@@ -292,6 +293,19 @@ async function main() {
   const recentAfter = await page.evaluate(() => ({ context: saasAiCeoConversationHistoryForRequest(), sync: saasAiCeoThreadForBackendSync() }));
   assert.deepEqual(recentAfter, recentBefore, "archive display must not expand/change model context or sync payload");
   assert.equal(recentAfter.context.length, 8);
+  assert.equal(recentAfter.context[7].market_report_id, "report_history_75", "Model follow-up must carry only the report reference for server-side evidence resolution");
+  assert.equal(Object.hasOwn(recentAfter.context[7], "source_records"), false, "Browser snippets must not become authoritative report evidence");
+  const pendingOrder = await page.evaluate(() => [
+    { assistant_id: "server-future", created_at: "2026-09-29T12:04:00Z", pending: false },
+    { assistant_id: "local-pending", created_at: "2026-09-29T12:01:00Z", pending: true },
+  ].sort(compareSaasAiCeoThreadTurns).map((turn) => turn.assistant_id));
+  assert.deepEqual(pendingOrder, ["server-future", "local-pending"], "A new pending question must remain after completed history despite client/server clock skew");
+  const reusedSourceCopy = await page.evaluate(() => renderSaasAiCeoPerformanceSummaryMarkup({
+    assistant_text: "修订后的报告", status: "model_answered", route: "ebay_workflow",
+    performance: { search_cache_status: "report_reuse", source_record_count: 5 },
+  }));
+  assert.match(reusedSourceCopy, /沿用原报告 5 条来源 · 本轮未联网/);
+  assert.doesNotMatch(reusedSourceCopy, /已查|已尝试联网/);
   assert.equal(recentAfter.sync.length, 30);
   const beforeRefresh = await page.evaluate(() => {
     const chat = document.querySelector("#ceoChat");

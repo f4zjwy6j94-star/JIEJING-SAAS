@@ -218,11 +218,16 @@ def build_ai_ceo_turn_plan(
         route = AI_CEO_ROUTE_GENERAL
         response_mode = "direct_answer"
 
+    # An explicit offline revision must not silently refresh citations, even
+    # when the surrounding product/research words normally require search.
+    if _merchant_disallows_web_search(safe_message) or _merchant_reuses_report_sources(safe_message):
+        realtime_kind, required_tools, freshness_required, research_depth = "", [], False, "none"
+
     workflow_target = ""
     source_mode = ""
     blocked_by: list[str] = []
     if route == AI_CEO_ROUTE_EBAY_WORKFLOW:
-        workflow_target = "listing_draft" if explicit_listing_intake else "market_research" if product_selection_request else "ebay_operation"
+        workflow_target = "listing_draft" if explicit_listing_intake else "market_research" if product_selection_request or _merchant_reuses_report_sources(safe_message) else "ebay_operation"
         no_source_markers = (
             "没有货源",
             "无货源",
@@ -805,6 +810,21 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
     )
+    if _merchant_reuses_report_sources(safe_message):
+        default_web_search = _owned_report_source_context(
+            repository=repository, company_id=company_id, store_id=store_id, user_id=user_id,
+            history=safe_history, active_context=context["active_listing_context"],
+        )
+        if default_web_search["status"] != "ready":
+            return {"status": "model_answer_rejected", "context": context, "model_client": model_context,
+                    "answer": "没有找到当前商品可续用的原报告来源。本次未重新联网，也未补写商品事实；请打开原报告继续，或允许重新检索。",
+                    "source_records": [], "answer_quality": {"accepted": False,
+                        "quality_gate": "owned_report_source_continuity_v1",
+                        "blocked_by": ["previous_report_sources_unavailable"]},
+                    **route_meta, "frontend_gets_model_api_key": False, "secret_exposed": False}
+        # The archived report is the evidence anchor, not arbitrary historical
+        # assistant assertions or citation labels belonging to other reports.
+        safe_history = [item for item in safe_history if item.get("market_report_id") == default_web_search["source_report_id"]]
     prompt_context = _context_with_default_web_search(context, default_web_search)
     source_records = _source_records_from_default_web_context(default_web_search)
 
@@ -826,7 +846,9 @@ def run_ai_ceo_chat(
         user_prompt=user_prompt,
         route=route,
         realtime_kind=realtime_kind,
-        on_text_delta=on_text_delta,
+        # Product evidence is validated (and may be repaired/rejected) below.
+        # Do not expose an unreviewed attribution during streaming.
+        on_text_delta=None if route == AI_CEO_ROUTE_EBAY_WORKFLOW and source_records else on_text_delta,
     )
     if model_error is not None:  # pragma: no cover - provider dependent
         exc = model_error
@@ -1603,6 +1625,8 @@ def build_ai_ceo_chat_prompts(
         "response_rules": [
             "Use web_context.source_records for current/public facts when web_context.status is ready; do not invent latest facts when sources are missing.",
             "引用公开事实时使用 source_records.citation_id，例如 [S1]；quality_score 只用于排序，不代表官方背书。",
+            "修订报告时保持 web_context 中每个引用编号、标题、链接与原始日期的对应关系；其他历史回答中的同号引用不可复用。沿用已保存来源不等于今天重新检索。",
+            "片段若包含多个商品、卖家反馈或多个价格，不能把任意价格当作主商品标价；没有明确归属写主商品价格未验证。品牌缺失不能推断为无品牌。竞品规格不是商家的商品事实。",
             "涉及 eBay 规则、政策、图片或发布要求时，区分官方强制要求、平台建议和商家最佳实践。",
             "没有对应官方来源时，不得把建议写成‘必须’‘一律’‘绝对’‘禁止’或‘会被下架’。",
             "先回答用户当前问题，再给必要的下一步。",
@@ -1732,6 +1756,8 @@ def _default_web_context_enabled(
     message: str,
     turn_plan: dict[str, Any] | None = None,
 ) -> bool:
+    if _merchant_disallows_web_search(message) or _merchant_reuses_report_sources(message):
+        return False
     if not _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True):
         return False
     if not _env_enabled("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED", default=True):
@@ -3861,8 +3887,57 @@ def _sanitize_ai_ceo_conversation_history(value: Any) -> list[dict[str, Any]]:
             AI_CEO_ROUTE_MERCHANT_RULE,
         }:
             route = AI_CEO_ROUTE_GENERAL
-        history.append({"user_text": user_text, "assistant_text": assistant_text, "route": route})
+        report_id = _safe_text(item.get("market_report_id") or "", limit=120)
+        history.append({"user_text": user_text, "assistant_text": assistant_text, "route": route,
+                        **({"market_report_id": report_id} if re.fullmatch(r"report_[A-Za-z0-9_-]+", report_id) else {})})
     return history
+
+
+def _merchant_disallows_web_search(message: str) -> bool:
+    return bool(re.search(
+        r"(?:不要|不得|不允许|禁止|无需|无须|不用|不再|不)(?:重新|再次|继续)?(?:联网|上网|搜索|检索)|"
+        r"\b(?:do not|don't|without|no)\s+(?:(?:web|internet|online)\s+)?(?:search(?:ing)?|brows(?:e|ing))\b",
+        message, re.IGNORECASE,
+    ))
+
+
+def _merchant_reuses_report_sources(message: str) -> bool:
+    for clause in re.split(r"[。！？;；，,\n]", message):
+        reuse = re.search(r"(?:沿用|复用|只用|仅用).{0,24}(?:来源|证据)", clause)
+        if reuse and not re.search(r"(?:不|不要|不得|禁止)(?:再|继续|重新)?$", clause[:reuse.start()]):
+            return True
+    return _merchant_disallows_web_search(message) and bool(re.search(
+        r"(?:修订|修正|纠正|更正)[^。！？;；\n]{0,24}(?:报告|调研)|"
+        r"\b(?:revise|correct)\b.{0,30}\breport\b", message, re.IGNORECASE))
+
+
+def _owned_report_source_context(*, repository: Any, company_id: str, store_id: str,
+                                 user_id: str, history: list[dict[str, Any]],
+                                 active_context: dict[str, Any]) -> dict[str, Any]:
+    """Resolve one report server-side; never promote client-supplied snippets.
+
+    Citation IDs are local to that report. Do not merge different reports or
+    silently fall back to a different project/account if the reference fails.
+    """
+    empty = {"status": "blocked", "source_records": [], "provider": "saved_report",
+             "blocked_by": ["previous_report_sources_unavailable"], "search_latency_ms": 0,
+             "used_for_model_prompt": False, "secret_exposed": False}
+    project_key = (active_context.get("listing_project_identity") or {}).get("key")
+    report_id = next((item.get("market_report_id") for item in reversed(history) if item.get("market_report_id")), "")
+    if not project_key or not report_id or not hasattr(repository, "get_report_for_company"):
+        return empty
+    report = repository.get_report_for_company(company_id=company_id, report_id=report_id) or {}
+    body = report.get("report") if isinstance(report.get("report"), dict) else {}
+    task = repository.get_task(company_id=company_id, task_id=report["task_id"]) if report.get("task_id") else {}
+    if (report.get("store_id") != store_id or not task or task.get("user_id") != user_id
+            or (body.get("listing_project_identity") or {}).get("key") != project_key):
+        return empty
+    records = _source_records_for_model(body.get("source_records") or [])
+    if not records:
+        return empty
+    return {**empty, "status": "ready", "blocked_by": [], "source_records": records, "cache_status": "report_reuse",
+            "used_for_model_prompt": True, "source_report_id": report_id,
+            "summary": "沿用已保存报告的原始来源与原始检索日期，本轮未联网。历史回答不是新的事实证据。"}
 
 
 def _looks_like_contextual_followup(message: str) -> bool:
@@ -4393,6 +4468,10 @@ def validate_ai_ceo_answer_quality(
             "blocked_by": active_listing_blockers,
             "secret_exposed": False,
         }
+    research_source_blockers = _research_source_answer_blockers(answer, source_records or []) if route == AI_CEO_ROUTE_EBAY_WORKFLOW else []
+    if research_source_blockers:
+        return {"accepted": False, "quality_gate": "research_source_attribution_v1",
+                "blocked_by": research_source_blockers, "secret_exposed": False}
     source_quality = _platform_rule_answer_quality(
         message=message,
         route=route,
@@ -4453,6 +4532,48 @@ def validate_ai_ceo_answer_quality(
         "blocked_by": blocked_by or (["model_answer_not_grounded_to_request"] if not accepted else []),
         "secret_exposed": False,
     }
+
+
+def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]]) -> list[str]:
+    """Bound source references and reject known ambiguous product attributions.
+
+    This is not a general fact checker: it guards observable source mismatches.
+    A snippet with a single number still is not transaction/supplier evidence.
+    """
+    product_records = [s for s in records if isinstance(s, dict) and (
+        s.get("market_evidence_role") == "item_listing_reference"
+        or re.search(r"https://(?:www\.)?ebay\.com/itm/", str(s.get("url") or "")))]
+    if not product_records:
+        return []
+    by_id = {str(s.get("citation_id")): s for s in records if isinstance(s, dict) and s.get("citation_id")}
+    allowed_urls = {_canonical_public_source_url(str(s.get("url") or "")) for s in records if isinstance(s, dict)}
+    blocked = set()
+    for line in answer.splitlines():
+        refs = re.findall(r"\[(S\d+)\]", line)
+        if any(ref not in by_id for ref in refs):
+            blocked.add("research_citation_not_in_evidence")
+        urls = re.findall(r"https?://[^\s\]<>|）)]+", line)
+        for url in urls:
+            canonical = _canonical_public_source_url(url.rstrip(".,;。；，"))
+            if re.search(r"ebay\.com/itm/", url) and canonical not in allowed_urls:
+                blocked.add("research_product_url_not_in_evidence")
+            if len(refs) == 1 and refs[0] in by_id and canonical in allowed_urls:
+                if canonical != _canonical_public_source_url(str(by_id[refs[0]].get("url") or "")):
+                    blocked.add("research_citation_url_mismatch")
+        for ref in refs:
+            source = by_id.get(ref, {})
+            prices = set(re.findall(r"(?:US\s*)?\$\s*(\d+(?:\.\d+)?)", str(source.get("snippet") or "")))
+            uncertain = re.search(r"(?:主商品)?(?:价格|标价|报价|售价).{0,8}(?:未验证|未核实|不确定|无法确认)|"
+                                  r"(?:不能|无法).{0,20}(?:标价|报价|价格)|(?:not verified|unverified|not the item price)", line, re.I)
+            if len(prices) > 1 and re.search(r"\$\s*\d", line) and not uncertain:
+                blocked.add("research_ambiguous_main_item_price")
+        if re.search(r"(?:均为|都是|品牌(?:是|为|[:：]))\s*(?:unbranded|无品牌)|(?:是|为)无品牌通用款", line, re.I):
+            brand_sources = [by_id[ref] for ref in refs if ref in by_id] if refs else product_records
+            if not re.search(r"(?:不能|不应|不可|无法|未验证|未核实|不能认定|并非)", line) and not (brand_sources and all(
+                re.search(r"\bunbranded\b|品牌[:：]\s*无品牌", str(s.get("title") or "")+" "+str(s.get("snippet") or ""), re.I)
+                for s in brand_sources)):
+                blocked.add("research_unverified_unbranded_claim")
+    return sorted(blocked)
 
 
 def _selection_answer_constraint_violations(
