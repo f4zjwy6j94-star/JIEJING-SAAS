@@ -645,13 +645,13 @@ class MeteredModelClient:
     def __init__(self, client: Any, *, _shared_calls: list[dict[str, Any]] | None = None, _wrap_fallback: bool = True) -> None:
         self._client = client
         self._calls = _shared_calls if _shared_calls is not None else []
-        fallback_client = getattr(client, "jiejing_fallback_model_client", None)
-        if _wrap_fallback and fallback_client is not None:
-            self.jiejing_fallback_model_client = MeteredModelClient(
-                fallback_client,
-                _shared_calls=self._calls,
-                _wrap_fallback=False,
-            )
+        if _wrap_fallback:
+            for name in ("jiejing_fallback_model_client", "jiejing_empty_answer_model_client"):
+                fallback_client = getattr(client, name, None)
+                if fallback_client is not None:
+                    setattr(self, name, MeteredModelClient(
+                        fallback_client, _shared_calls=self._calls, _wrap_fallback=False,
+                    ))
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)

@@ -327,6 +327,21 @@ if _FAULT_MODE == "provider_execution_exception":
         return {{**resolved, "model_client": _FailingModelClient()}}
     _api.SaaSBackendHandler._resolve_model_client_for_store = _provider_failure_model
 
+if _FAULT_MODE == "provider_empty_answer":
+    class _EmptyModelClient:
+        name = "unit_empty_model_client"
+        model = "unit-model"
+        endpoint = ""
+
+        def generate_text(self, **kwargs):
+            return {{"text": "", "finish_reason": "length", "model_mode": "live_http_model_text",
+                "_usage": {{"input_tokens": 100, "output_tokens": 2400, "total_tokens": 2500}}}}
+
+    def _empty_private_model(self, **kwargs):
+        resolved = _resolved_model(self, **kwargs)
+        return {{**resolved, "model_client": _EmptyModelClient()}}
+    _api.SaaSBackendHandler._resolve_model_client_for_store = _empty_private_model
+
 if _FAULT_MODE == "pre_model_after_reservation_exception":
     def _fail_before_provider_entry(*args, **kwargs):
         raise RuntimeError(_SENTINEL)
@@ -534,6 +549,23 @@ class AiCeoBackendAuthorityRedTests(unittest.TestCase):
             expected_stage="model_provider",
             expected_error_type="model_network_or_timeout",
         )
+
+    def test_empty_answer_retains_precise_failure_without_requesting_new_credentials(self) -> None:
+        result = run_attempt_fault_fixture("provider_empty_answer")
+        response = result["response_payload"]
+        self.assertEqual(response["ai_ceo_chat"]["status"], "model_call_failed")
+        self.assertEqual(response["ai_ceo_chat"]["blocked_by"], ["empty_model_answer"])
+        self.assertIn("无需重新填写密钥", response["ai_ceo_chat"]["answer"])
+        self.assertIsNone(response.get("ai_ceo_market_report"))
+        self.assertEqual(len(result["attempts"]), 1)
+        attempt = result["attempts"][0]
+        self.assertEqual(attempt["output"]["failure_code"], "empty_model_answer")
+        self._assert_safe_attempt_failure_audit(result=result, attempt_id=attempt["task_id"],
+            expected_stage="model_provider", expected_error_type="empty_model_answer")
+        tasks = [row for row in result["tasks"] if row.get("task_type") == "merchant_ceo_chat"]
+        self.assertEqual(tasks[0]["output"]["ai_ceo_chat"]["blocked_by"], ["empty_model_answer"])
+        self.assertEqual(result["model_usage_rows"][0]["request_count"], 1)
+        self.assertEqual(int(result["platform_trial_quota"].get("used") or 0), 0)
 
     def test_pre_provider_failure_releases_trial_reservation(self) -> None:
         result = run_attempt_fault_fixture("pre_model_after_reservation_exception")

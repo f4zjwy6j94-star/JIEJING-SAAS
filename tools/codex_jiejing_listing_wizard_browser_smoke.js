@@ -136,6 +136,35 @@ async function screenshot(page, name) { const file = path.join(output, `${name}.
   assert((await taskContext.innerText()).includes("商品事实尚未完成核对"));
   await screenshot(page, "research-pending-desktop");
   checks.push("failed research stays pending even before backend status arrives; absent facts stay unverified");
+  await page.evaluate(() => {
+    const command = { id: "fixture-empty-answer", text: "请新建独立商品项目，调研轻小不带电商品。",
+      ai_reply_status: "model_call_failed", ai_reply: "模型没有返回可用正文，本次未生成调研报告或草稿。", route: "ebay_workflow" };
+    state.saasLastCeoCommand = command;
+    state.saasPendingNewListingProjectRequest = { commandId: command.id, phase: "failed", failureReason: "empty_model_answer" };
+    state.saasAiCeoLatestTurn = { assistant_id: "fixture-empty-reply", user_text: command.text,
+      assistant_text: command.ai_reply, status: "model_call_failed", route: "ebay_workflow", pending: false,
+      store_id: "wizard-store", blocked_by: ["empty_model_answer"], created_at: new Date().toISOString() };
+    state.saasAiCeoThread = [state.saasAiCeoLatestTurn];
+    setSaasAiCeoTaskContextState("active_product_task", true, { projectId: "", commandId: command.id });
+    renderSaasCockpitRealWorkbench();
+  });
+  for (const width of [1440, 820]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(() => { state.aiCeoTaskContextExpanded = true; refreshSaasAiCeoTaskContext(); });
+    const detail = page.locator("#saasAiCeoTaskContextDetail");
+    assert(await detail.isVisible());
+    assert((await detail.innerText()).includes("本次任务未完成"));
+    assert(!(await detail.innerText()).includes("正在建立商品任务"));
+    assert(!(await page.locator("#ceoChat").innerText()).includes("连接需要先恢复"));
+    assert((await page.getByRole("button", { name: "返回本次对话", exact: true }).boundingBox()).height <= 64,
+      "task recovery button must not stretch to fill the tablet drawer");
+    await screenshot(page, `model-failure-${width}`);
+    await page.getByRole("button", { name: "返回本次对话", exact: true }).click();
+    assert(!(await detail.isVisible()));
+    assert(await page.getByRole("textbox", { name: "交给 AI CEO 的问题或商品任务", exact: true }).isVisible());
+  }
+  checks.push("empty-answer failure terminates task panel and returns to preserved conversation on desktop and tablet");
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload(); await bootstrap(page, base, { startStep: 1 });
   await step(page, 1);
   assert.equal(await page.locator('[data-saas-listing-draft-field="title"]').count(), 0);

@@ -54,6 +54,32 @@ test("a task with no fact packet cannot claim there are no missing facts", () =>
   assert(!html.includes("没有新增资料缺口"));
   assert(html.includes("商品事实尚未完成核对"));
 });
+test("empty model output is not a disconnected credential and failed work stops pending UI", () => {
+  const command = { id: "failed-selection", text: "新建独立商品项目，调研轻小件", ai_reply_status: "model_call_failed",
+    ai_reply: "本次模型没有返回可用正文；未生成调研报告。" };
+  const state = { saasLastCeoCommand: command, aiCeoTaskContextCommandId: command.id, aiCeoTaskContextProjectId: "",
+    saasPendingNewListingProjectRequest: { commandId: command.id, phase: "failed", failureReason: "empty_model_answer" } };
+  const context = load(["shouldShowSaasAiCeoRecoveryHint", "renderSaasAiCeoRecoveryHintMarkup",
+    "saasAiCeoTaskContextProjection", "renderSaasAiCeoTaskContextMarkup", "saasAiCeoTurnStatusLabel"], {
+    state, escapeHtml: String, normalizeSaasCeoCommand: x => x, normalizeSaasAiCeoLatestTurn: x => x,
+    saasAiCeoTaskContextState: () => ({ visible: true, expanded: true }),
+  });
+  const turn = { status: "model_call_failed", route: "ebay_workflow", blocked_by: ["empty_model_answer"],
+    assistant_text: command.ai_reply };
+  const recovery = context.renderSaasAiCeoRecoveryHintMarkup(turn);
+  assert(!recovery.includes("连接需要先恢复"));
+  assert(!recovery.includes("去 AI 与素材"));
+  assert(recovery.includes("没有返回可用正文"));
+  assert.equal(context.saasAiCeoTurnStatusLabel(turn), "本次未完成");
+  const failed = context.renderSaasAiCeoTaskContextMarkup();
+  assert(!failed.includes("正在建立商品任务"));
+  assert(!failed.includes("当前任务已建立"));
+  assert(!failed.includes('data-global-flow-key="recent"'));
+  assert(failed.includes("返回本次对话"));
+  state.saasPendingNewListingProjectRequest.phase = "pending";
+  command.ai_reply_status = "";
+  assert(context.renderSaasAiCeoTaskContextMarkup().includes("正在建立商品任务"));
+});
 test("facts continue uses confirmed core facts, independent of publish gaps", () => {
   const context = load(["saasMerchantProductFactValuePresent", "saasListingWizardCoreMissing"], {
     saasMerchantProductFactPacket: draft => draft.merchant_product_fact_packet,

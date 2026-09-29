@@ -314,6 +314,7 @@ async function main() {
             ai_ceo_chat: {
               status: "model_call_failed",
               answer: "新商品项目暂时没有建立成功，请稍后重试。",
+              blocked_by: ["empty_model_answer"],
               route: "ebay_workflow",
               route_label: "AI CEO 市场调研",
               work_records: [],
@@ -1107,6 +1108,8 @@ async function main() {
       draftTitle: state.saasListingComposerDraft?.title || "",
       pendingPhase: state.saasPendingNewListingProjectRequest?.phase || "",
       previousProjectId: state.saasPendingNewListingProjectRequest?.previousProjectId || "",
+      contextHtml: renderSaasAiCeoTaskContextMarkup(),
+      recoveryHtml: renderSaasAiCeoRecoveryHintMarkup(state.saasAiCeoLatestTurn),
     }));
     if (
       failedNewProjectRequestBody.active_listing_context ||
@@ -1120,7 +1123,12 @@ async function main() {
       failedNewProjectState.draftProjectId !== "listing-project-unsaved-old" ||
       failedNewProjectState.draftTitle !== "旧款桌面平板支架本地未保存编辑" ||
       failedNewProjectState.pendingPhase !== "failed" ||
-      failedNewProjectState.previousProjectId !== "listing-project-unsaved-old"
+      failedNewProjectState.previousProjectId !== "listing-project-unsaved-old" ||
+      failedNewProjectState.contextHtml.includes("正在建立商品任务") ||
+      failedNewProjectState.contextHtml.includes("查看任务建立进度") ||
+      !failedNewProjectState.contextHtml.includes("返回本次对话") ||
+      !failedNewProjectState.recoveryHtml.includes("没有返回可用正文") ||
+      failedNewProjectState.recoveryHtml.includes("去 AI 与素材")
     ) {
       throw new Error(`failed new-project creation must preserve the previous draft and isolated retry boundary: ${JSON.stringify({
         request: failedNewProjectRequestBody,

@@ -47966,6 +47966,7 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-task-context-detail[hidde
 
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-task-context-detail {
   display: grid;
+  align-content: start;
   gap: 14px;
   max-height: calc(100dvh - 164px);
   padding: 4px 16px 16px;

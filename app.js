@@ -25101,6 +25101,19 @@ function saasAiCeoTaskContextProjection(command = state.saasLastCeoCommand) {
   const commandMatches = Boolean(currentCommand && boundCommandId && currentCommand.id === boundCommandId);
   if (!boundProjectId) {
     const commandLabel = publicRuntimeText(commandMatches ? currentCommand.text || saasCeoTaskGoalLabel(currentCommand) : "当前经营目标").slice(0, 96);
+    const pending = state.saasPendingNewListingProjectRequest;
+    const failed = (pending?.commandId === boundCommandId && pending.phase === "failed") ||
+      (commandMatches && ["model_call_failed", "model_answer_rejected", "internal_dependency_failed", "blocked_before_model_chat", "session_expired"].includes(currentCommand.ai_reply_status));
+    if (failed) return {
+      productLabel: commandLabel || "当前经营目标",
+      stageLabel: "本次任务未完成",
+      stageDetail: commandMatches && currentCommand.ai_reply
+        ? publicRuntimeText(currentCommand.ai_reply).slice(0, 240)
+        : "本次请求未完成，未建立新的商品项目。对话已保留，已有商品资料不受影响。",
+      completedItems: [], missingFacts: [], blockerTitle: "未生成新的调研报告",
+      attemptFailed: true,
+      nextView: "cockpit", nextLabel: "返回本次对话", nextKey: "cockpit",
+    };
     return {
       productLabel: commandLabel || "当前经营目标",
       stageLabel: "正在建立商品任务",
@@ -25183,7 +25196,9 @@ function renderSaasAiCeoTaskContextMarkup(options = {}) {
   const context = saasAiCeoTaskContextProjection(options.command || state.saasLastCeoCommand);
   const completedMarkup = context.completedItems.length
     ? context.completedItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
-    : "<li>当前任务已建立，等待第一项可核对结果。</li>";
+    : context.attemptFailed
+      ? "<li>本次尚无完成结果，对话已保留。</li>"
+      : "<li>等待第一项可核对结果。</li>";
   const missingMarkup = context.missingFacts.length
     ? context.missingFacts.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
     : context.factsReviewed
@@ -25204,7 +25219,7 @@ function renderSaasAiCeoTaskContextMarkup(options = {}) {
           <p>${escapeHtml(context.stageDetail)}</p>
         </header>
         <section aria-label="已完成事项">
-          <span>已完成</span>
+          <span>${context.attemptFailed ? "处理结果" : "已完成"}</span>
           <ul>${completedMarkup}</ul>
         </section>
         <section aria-label="待补商品事实">
@@ -25212,7 +25227,7 @@ function renderSaasAiCeoTaskContextMarkup(options = {}) {
           ${context.blockerTitle ? `<strong>${escapeHtml(context.blockerTitle)}</strong>` : ""}
           <ul>${missingMarkup}</ul>
         </section>
-        <button class="primary-action compact-action" type="button" data-ai-ceo-task-next-action data-global-flow-view="${escapeHtml(context.nextView)}" data-global-flow-key="${escapeHtml(context.nextKey)}">${escapeHtml(context.nextLabel)}</button>
+        <button class="primary-action compact-action" type="button" ${context.attemptFailed ? 'data-ai-ceo-task-context-close' : `data-ai-ceo-task-next-action data-global-flow-view="${escapeHtml(context.nextView)}" data-global-flow-key="${escapeHtml(context.nextKey)}"`}>${escapeHtml(context.nextLabel)}</button>
         <p class="saas-ai-ceo-task-context-boundary">完整字段在“选品与上架”修改；收起这里只改变界面，不会删除商品资料、报告或草稿。</p>
       </div>
     </aside>
@@ -25555,6 +25570,20 @@ function renderSaasAiCeoRecoveryHintMarkup(turn = {}) {
   if (!latest || !shouldShowSaasAiCeoRecoveryHint(latest)) return "";
   const text = String(latest.assistant_text || "");
   const blockers = Array.from(new Set(latest.blocked_by || []));
+  const modelSetupFailure = blockers.some((item) => /model_(?:auth|quota|billing|name|not_configured)/.test(String(item || "")));
+  if (latest.status === "model_call_failed" && !modelSetupFailure) {
+    const emptyAnswer = blockers.includes("empty_model_answer");
+    return `
+      <div class="saas-ai-ceo-recovery-hint" data-ai-ceo-recovery-hint="merchant_safe_ai_recovery_v1">
+        <span>本次未完成</span>
+        <div><strong>${emptyAnswer ? "模型没有返回可用正文" : "本次 AI 请求未完成"}</strong>
+          <small>${emptyAnswer ? "本次没有生成可用结果。已有对话和商品资料已保留；无需重新填写密钥。" : "这不代表 AI 连接已失效。请先刷新核对本次结果，避免重复提交。"}</small></div>
+        <div class="saas-ai-ceo-recovery-actions">
+          <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新状态</button>
+        </div>
+      </div>
+    `;
+  }
   const hasCurrentStoreMissing = blockers.includes("merchant_model_api_key_not_saved") || blockers.includes("current_store_model_connection_missing");
   const hasPlatformDefaultMissing = blockers.some((item) => String(item || "").startsWith("platform_model_"));
   const isUsageBlock = /用量|额度|余额|账单|套餐|计费/.test(text);
@@ -47207,6 +47236,8 @@ function renderSaasAiCeoThreadMarkup(fallbackTurn = null) {
 function saasAiCeoTurnStatusLabel(latest = {}) {
   if (latest.pending && latest.status === "model_response_delayed") return "仍在整理";
   if (latest.pending) return "正在处理";
+  if (["model_call_failed", "internal_dependency_failed", "model_answer_rejected"].includes(latest.status)) return "本次未完成";
+  if (latest.status === "session_expired") return "登录已失效";
   if (latest.status === "capability_status_answered") return "连接状态";
   if (latest.status === "realtime_search_answered" || latest.status === "realtime_search_answered_without_model") return "实时搜索";
   if (latest.status === "source_backed_market_report_draft") return "联网草稿";
@@ -47225,7 +47256,6 @@ function saasAiCeoTurnStatusLabel(latest = {}) {
   if (latest.status === "blocked_missing_model_config") return "等待 AI 连接";
   if (latest.status === "blocked_missing_packet") return "等待店铺资料";
   if (latest.status === "session_expired") return "登录已失效";
-  if (latest.status === "model_call_failed") return "AI 连接待恢复";
   return "AI CEO";
 }
 

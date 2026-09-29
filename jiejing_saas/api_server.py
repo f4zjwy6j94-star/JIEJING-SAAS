@@ -8356,10 +8356,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "",
                     str(attempt_recovery_state.get("failure_stage") or "internal_dependency").lower(),
                 )[:80] or "internal_dependency"
+                attempt_failure_state = str(
+                    attempt_recovery_state.get("attempt_failure_state") or "failed_internal_dependency"
+                )
+                attempt_failure_code = str(
+                    attempt_recovery_state.get("attempt_failure_code") or "internal_dependency_failed"
+                )
+                provider_failure_codes = {
+                    "empty_model_answer", "model_network_or_timeout", "model_rate_limited",
+                    "model_provider_temporary_error", "model_auth_or_permission_error",
+                    "model_quota_or_billing_limited", "model_provider_error", "model_runtime_failed",
+                }
                 error_type = (
-                    "model_network_or_timeout"
+                    (attempt_failure_code if attempt_failure_code in provider_failure_codes else "model_provider_failed")
                     if failure_stage == "model_provider"
                     else re.sub(r"[^A-Za-z0-9_]", "", _exc.__class__.__name__)[:80] or "InternalError"
+                )
+                public_failure_status = (
+                    "model_call_failed"
+                    if attempt_failure_state == "failed_model_provider"
+                    else "internal_dependency_failed"
                 )
                 try:
                     self.repository.write_audit(
@@ -8388,24 +8404,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             status="failed",
                             output={
                                 "ai_ceo_chat": {
-                                    "status": "internal_dependency_failed",
-                                    "blocked_by": ["internal_dependency_failed"],
+                                    "status": public_failure_status,
+                                    "blocked_by": [attempt_failure_code],
                                     "secret_exposed": False,
                                 },
                                 "usage_consumed": usage_consumed,
                                 "secret_exposed": False,
                             },
-                            audit_summary="AI CEO model task failed during internal persistence after the provider boundary.",
+                            audit_summary="AI CEO model task failed at a categorized boundary.",
                         )
                     except Exception:
                         pass
                 try:
-                    attempt_failure_state = str(
-                        attempt_recovery_state.get("attempt_failure_state") or "failed_internal_dependency"
-                    )
-                    attempt_failure_code = str(
-                        attempt_recovery_state.get("attempt_failure_code") or "internal_dependency_failed"
-                    )
                     update_model_attempt(
                         attempt_state=attempt_failure_state,
                         task_status="failed",
@@ -8429,11 +8439,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         else "内部依赖暂时不可用；本次未调用模型、未生成草稿，试用次数状态正在核对，请稍后查看。"
                     )
                 )
-                public_failure_status = (
-                    "model_call_failed"
-                    if attempt_failure_state == "failed_model_provider"
-                    else "internal_dependency_failed"
-                )
+                if usage_consumed and attempt_failure_code == "empty_model_answer":
+                    answer = "模型没有返回可用正文，本次未生成调研报告或草稿。调用用量已记录，已有商品资料不受影响；无需重新填写密钥，可以稍后重试本次请求。"
                 try:
                     send_chat_payload(
                         {
@@ -13474,6 +13481,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "jiejing_reasoning_mode",
             "thinking" if definition.provider_key == "deepseek" and model_tier in {"thinking", "pro"} else "disabled",
         )
+        if (
+            definition.provider_key == "deepseek"
+            and getattr(model_client, "jiejing_reasoning_mode", "") == "thinking"
+            and urlparse(getattr(model_client, "endpoint", "")).netloc.lower() == "api.deepseek.com"
+        ):
+            # This is not a provider/model failover. Only an empty, exhausted
+            # answer may use this isolated client, with the identical BYOK.
+            direct_client = build_model_client_from_byok_secret(
+                provider_key=definition.provider_key,
+                api_key=str(resolved.get("secret_value") or ""),
+                model=model_client.model,
+                base_url=model_client.endpoint.removesuffix("/chat/completions"),
+            )
+            direct_client.jiejing_model_tier = model_tier
+            direct_client.jiejing_reasoning_mode = "disabled"
+            model_client.jiejing_empty_answer_model_client = direct_client
         return {
             "status": "resolved",
             "mode": selected_mode,

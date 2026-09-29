@@ -994,6 +994,7 @@ def run_ai_ceo_chat(
             "answer": _model_unavailable_fallback_answer(route_meta, "模型服务这次没有返回可展示内容。"),
             "context": prompt_context,
             "model_client": _public_model_context(result, model_client, model_resolution),
+            "provider_error_type": "empty_model_answer",
             "model_initial_retry_count": model_initial_retry_count,
             "default_web_search": default_web_search,
             "source_records": source_records,
@@ -1021,7 +1022,11 @@ def run_ai_ceo_chat(
     )
     repair_retry_count = 0
     repair_candidate_answer = ""
-    if not answer_quality.get("accepted") and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True):
+    if (
+        not answer_quality.get("accepted")
+        and not (result or {}).get("bounded_empty_answer_recovery")
+        and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True)
+    ):
         repair_started_at = time.monotonic()
         try:
             active_listing_consistency_failed = any(
@@ -3471,6 +3476,7 @@ def _generate_model_text_with_initial_retry(
     timeout_seconds = _ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind)
     max_output_tokens = _ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind)
     fallback_model_client = getattr(model_client, "jiejing_fallback_model_client", None)
+    empty_answer_client = getattr(model_client, "jiejing_empty_answer_model_client", None)
     try:
         result = model_client.generate_text(
             system_prompt=system_prompt,
@@ -3489,18 +3495,19 @@ def _generate_model_text_with_initial_retry(
             realtime_kind=realtime_kind,
             on_text_delta=on_text_delta,
         )
-        if _empty_answer_exhausted_output_budget(result) and fallback_model_client is not None:
+        recovery_client = empty_answer_client or fallback_model_client
+        if _empty_answer_exhausted_output_budget(result) and recovery_client is not None:
             fallback_timeout = _env_int(
                 "JIEJING_AI_CEO_EMPTY_ANSWER_FALLBACK_TIMEOUT_SECONDS",
-                default=min(timeout_seconds, 10),
+                default=min(timeout_seconds, 24 if empty_answer_client else 10),
                 minimum=5,
-                maximum=20,
+                maximum=45 if empty_answer_client else 20,
             )
             fallback_tokens = _env_int(
                 "JIEJING_AI_CEO_EMPTY_ANSWER_FALLBACK_MAX_OUTPUT_TOKENS",
-                default=min(max_output_tokens, 1200),
+                default=min(max_output_tokens, 2400 if empty_answer_client else 1200),
                 minimum=256,
-                maximum=2048,
+                maximum=4096 if empty_answer_client else 2048,
             )
             fallback_prompt = (
                 system_prompt
@@ -3508,7 +3515,7 @@ def _generate_model_text_with_initial_retry(
                 "请直接、简洁地完成当前 merchant_message；未知商品事实继续标为待确认，不得重复分析过程。"
             )
             try:
-                fallback_result = fallback_model_client.generate_text(
+                fallback_result = recovery_client.generate_text(
                     system_prompt=fallback_prompt,
                     user_prompt=user_prompt,
                     temperature=0.1,
@@ -3516,15 +3523,20 @@ def _generate_model_text_with_initial_retry(
                     timeout_seconds=fallback_timeout,
                     on_text_delta=on_text_delta,
                 )
-                fallback_result = _complete_truncated_model_result(
-                    model_client=fallback_model_client,
-                    result=fallback_result,
-                    system_prompt=fallback_prompt,
-                    user_prompt=user_prompt,
-                    route=route,
-                    realtime_kind=realtime_kind,
-                    on_text_delta=on_text_delta,
-                )
+                if empty_answer_client is None:
+                    fallback_result = _complete_truncated_model_result(
+                        model_client=recovery_client,
+                        result=fallback_result,
+                        system_prompt=fallback_prompt,
+                        user_prompt=user_prompt,
+                        route=route,
+                        realtime_kind=realtime_kind,
+                        on_text_delta=on_text_delta,
+                    )
+                else:
+                    # The private recovery's one extra request is a hard cost
+                    # boundary: no continuation or answer-repair recursion.
+                    fallback_result["bounded_empty_answer_recovery"] = True
                 fallback_result["empty_answer_failover_used"] = True
                 fallback_result["primary_finish_reason"] = str(result.get("finish_reason") or "")
                 return fallback_result, _elapsed_ms(started_at), 1, None
@@ -4075,7 +4087,7 @@ def _classify_model_failure(exc: Exception) -> tuple[str, str]:
         return "model_quota_or_billing_limited", "AI 用量、余额、套餐或服务商账单限制挡住了本次回复。"
     if "429" in lowered or any(item in lowered for item in ("rate limit", "rate_limit", "too many requests")):
         return "model_rate_limited", "AI 服务商当前请求较多，本次连接被临时限流。"
-    if any(item in lowered for item in ("timeout", "timed out", "connection", "network", "temporarily unavailable")):
+    if isinstance(exc, (TimeoutError, ConnectionError)) or any(item in lowered for item in ("timeout", "timed out", "connection", "network", "temporarily unavailable")):
         return "model_network_or_timeout", "AI 连接暂时不稳定或超时。"
     if "401" in lowered or "403" in lowered or any(item in lowered for item in ("unauthorized", "forbidden", "invalid api key")):
         return "model_auth_or_permission_error", "AI 服务商拒绝了这次连接，需要在设置里复核账户、权限或模型名称。"
