@@ -17,6 +17,7 @@ import os
 import re
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone, tzinfo
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable
@@ -1719,6 +1720,7 @@ def _prompt_web_context(context: dict[str, Any]) -> dict[str, Any]:
         "summary": _safe_text(search.get("summary") or "", limit=500),
         "blocked_by": search.get("blocked_by") if isinstance(search.get("blocked_by"), list) else [],
         "source_records": records[:5],
+        "product_research_evidence": search.get("product_research_evidence") or {},
         "frontend_gets_search_api_key": False,
         "secret_exposed": False,
     }
@@ -1773,12 +1775,16 @@ def _run_default_web_context_search(
                 cached_result["search_latency_ms"] = 0
                 return cached_result
     budget = _default_web_context_budget(route=route, message=message)
-    search = _run_realtime_search(
-        kind="web_search",
-        message=message,
-        timeout_seconds=budget["timeout_seconds"],
-        max_results=budget["max_results"],
-        search_depth=budget["search_depth"],
+    product_research = route == AI_CEO_ROUTE_EBAY_WORKFLOW and not _looks_like_explicit_listing_intake(message) and (
+        _looks_like_product_selection_request(message=message, route=route)
+        or _looks_like_market_evidence_followup(message=message, route=route)
+    )
+    search = (
+        _run_product_selection_web_search(message=message, budget=budget)
+        if product_research else _run_realtime_search(
+            kind="web_search", message=message, timeout_seconds=budget["timeout_seconds"],
+            max_results=budget["max_results"], search_depth=budget["search_depth"],
+        )
     )
     records = search.get("source_records") if isinstance(search.get("source_records"), list) else []
     result = {
@@ -1789,6 +1795,7 @@ def _run_default_web_context_search(
         "captured_at": _safe_text(search.get("captured_at") or "", limit=80),
         "summary": _safe_text(search.get("summary") or "", limit=500),
         "source_records": records[:5],
+        "product_research_evidence": search.get("product_research_evidence") or {},
         "used_for_model_prompt": bool(search.get("status") == "ready" and records),
         "search_budget_seconds": _safe_int(search.get("search_budget_seconds") or budget["timeout_seconds"]),
         "search_max_results": _safe_int(search.get("search_max_results") or budget["max_results"]),
@@ -1863,7 +1870,7 @@ def _default_web_context_needs_report_budget(*, route: str, message: str) -> boo
 
 def _default_web_context_cache_key(*, route: str, message: str) -> str:
     safe_route = _safe_text(route or AI_CEO_ROUTE_GENERAL, limit=80)
-    safe_message = re.sub(r"\s+", " ", _safe_text(message or "", limit=500).strip().lower())
+    safe_message = re.sub(r"\s+", " ", _safe_text(message or "", limit=900).strip().lower())
     if not safe_message:
         return ""
     return hashlib.sha1(f"{safe_route}\n{safe_message}".encode("utf-8", errors="ignore")).hexdigest()
@@ -2346,10 +2353,11 @@ def _run_realtime_search(
     max_results: int | None = None,
     search_depth: str | None = None,
     temporal_contract: dict[str, Any] | None = None,
+    query_override: str = "",
 ) -> dict[str, Any]:
     provider = _public_search_provider()
     adapter = PublicSearchProbeAdapter()
-    query = _realtime_search_query(kind=kind, message=message, temporal_contract=temporal_contract)
+    query = _safe_text(query_override, limit=300) or _realtime_search_query(kind=kind, message=message, temporal_contract=temporal_contract)
     timeout_seconds = (
         _bounded_int(timeout_seconds, default=4, minimum=1, maximum=20)
         if timeout_seconds is not None
@@ -2633,6 +2641,13 @@ def _market_time_context(*, message: str) -> dict[str, Any]:
 
 
 def _realtime_search_query(*, kind: str, message: str, temporal_contract: dict[str, Any] | None = None) -> str:
+    # Detect product work before compacting the request. Candidate names often
+    # follow the merchant's constraints, beyond the old 260-character cutoff.
+    if kind == "web_search" and (
+        _looks_like_product_selection_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)
+        or _looks_like_market_evidence_followup(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)
+    ):
+        return _ebay_product_selection_search_query(message)
     text = _safe_text(message, limit=260)
     lowered = text.lower()
     clock = temporal_contract or temporal_evidence_contract(text, kind, now=now_iso())
@@ -2690,16 +2705,150 @@ def _ebay_platform_rule_search_query(message: str) -> str:
 
 
 def _ebay_product_selection_search_query(message: str) -> str:
+    return _ebay_product_selection_search_queries(message)[0]
+
+
+def _ebay_product_search_terms(message: str) -> list[str]:
+    """Keep explicitly supplied names; do not invent a product or use old history."""
+    text = _safe_text(message, limit=900)
+    generic = set("ebay us usa usd item id sold completed listing listings product products research market price prices tools source sources english compare and or on for the a an lightweight small parcel non electric no battery low return risk fragile".split())
+    names: list[str] = []
+    excluded = [name for clause in re.split(r"[，,。；;\n]", text)
+                for name in _explicitly_excluded_candidate_names(clause)]
+
+    def add(value: str) -> None:
+        value = re.sub(r"\s+", " ", value).strip(" \"'“”‘’：:，,。.")
+        words = re.findall(r"[a-z]+", value.lower())
+        if not 3 <= len(value) <= 90 or (words and not any(word not in generic for word in words)):
+            return
+        if any(_candidate_name_matches_exclusion(name, value) for name in excluded):
+            return
+        if value.lower() not in {name.lower() for name in names}:
+            names.append(value)
+
+    # Mixed-language merchant requests commonly supply exact English search
+    # phrases. Prefer those to a translated project title for the same item.
+    if re.search(r"[\u4e00-\u9fff]", text):
+        for match in re.finditer(r"[A-Za-z][A-Za-z0-9'-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9'&/-]*){1,11}", text):
+            prefix = re.split(r"[，,。；;\n]", text[:match.start()])[-1]
+            if not re.search(r"(?:不要|不得|禁止|不沿用|不复用|排除)[^。；;\n]*$", prefix):
+                add(match.group())
+    if not names:
+        for match in re.finditer(r'["“]([^"”\n]{3,90})["”]', text):
+            if not re.search(r"[\u4e00-\u9fff]", match.group(1)) or re.search(
+                r"(?:当前|候选|商品|产品|调研|比较|研究|关键词|搜索)\s*$", text[max(0, match.start()-12):match.start()]
+            ):
+                add(match.group(1))
+    if not names:
+        for match in re.finditer(r"(?:商品名称|产品名称|目标商品|商品方向|关键词|搜索词)\s*[:：]\s*([^。；;\n]{3,180})", text):
+            for value in re.split(r"[、，,]", match.group(1)):
+                add(value)
+    if not names and not re.search(r"[\u4e00-\u9fff]", text):
+        match = re.search(r"(?:compare|research|product ideas\s*:)\s+(.+?)(?:\s+(?:on|for)\s+ebay|[.;]|$)", text, re.I)
+        if match:
+            for value in re.split(r",|\s+and\s+", match.group(1), flags=re.I):
+                add(value)
+    return names[:3]
+
+
+def _ebay_product_selection_search_queries(message: str) -> list[str]:
+    names = _ebay_product_search_terms(message)
+    if names:
+        return [f"site:ebay.com/itm/ {name} eBay US price USD" for name in names]
     text = _normalized_text(message)
-    constraints = ["eBay US", "product research", "niche demand", "sold listings"]
+    constraints = ["site:ebay.com/itm/", "eBay US", "price USD"]
     if any(marker in text for marker in ("轻小", "小件", "轻量", "small parcel", "lightweight")):
-        constraints.extend(["lightweight", "small parcel"])
+        constraints.extend(["lightweight", "small"])
     if any(marker in text for marker in ("不带电", "无电", "非电子", "no battery", "non-electric")):
-        constraints.extend(["non-electric", "no battery"])
-    if any(marker in text for marker in ("低售后", "低退货", "low return")):
-        constraints.append("low return risk")
-    year = datetime.now(timezone.utc).year
-    return " ".join(dict.fromkeys([*constraints, str(year), "marketplace trends"]))
+        constraints.append("non-electric")
+    return [" ".join(dict.fromkeys(constraints))]
+
+
+def _run_product_selection_web_search(*, message: str, budget: dict[str, Any]) -> dict[str, Any]:
+    """At most three independent, bounded searches; never an extra model call."""
+    queries = _ebay_product_selection_search_queries(message)[:3]
+    candidates = _ebay_product_search_terms(message)
+
+    def search(query: str) -> dict[str, Any]:
+        try:
+            return _run_realtime_search(
+                kind="web_search", message=message, query_override=query,
+                timeout_seconds=budget["timeout_seconds"],
+                max_results=budget["max_results"], search_depth=budget["search_depth"],
+            )
+        except Exception:
+            # A partial provider failure must neither discard the other
+            # candidates nor expose a transport error containing credentials.
+            return {"status": "blocked", "blocked_by": ["public_search_provider_error"],
+                    "query": query, "source_records": [], "secret_exposed": False}
+
+    if len(queries) == 1:
+        searches = [search(queries[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+            searches = list(pool.map(search, queries))
+    captured_at = now_iso()
+    groups: list[list[dict[str, Any]]] = []
+    non_item_count = 0
+    for query_index, (query, result) in enumerate(zip(queries, searches)):
+        group = []
+        for record in result.get("source_records") or []:
+            url = _public_source_http_url(str(record.get("url") or ""))
+            parsed = urlparse(url)
+            host = str(parsed.hostname or "").lower()
+            is_item = (host == "ebay.com" or host.endswith(".ebay.com")) and bool(
+                re.fullmatch(r"/itm/(?:[^/]+/)?\d{9,15}/?", parsed.path)
+            )
+            candidate = candidates[query_index] if query_index < len(candidates) else ""
+            if not is_item or (candidate and not _product_source_matches_candidate(record, candidate)):
+                non_item_count += 1
+                continue
+            group.append({**record, "query": query, "market_evidence_role": "item_listing_reference",
+                          "verified_transaction": False, "merchant_product_facts_confirmed": False})
+        groups.append(group)
+    # One source per candidate first; a popular candidate must not crowd out
+    # the other candidates in the model's bounded source window.
+    balanced = [group[index] for index in range(5) for group in groups if index < len(group)]
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in balanced:
+        canonical = _canonical_public_source_url(record["url"])
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        records.append({**record, "citation_id": f"S{len(records) + 1}"})
+        if len(records) >= 5:
+            break
+    evidence = {
+        "contract_version": "product_listing_search_evidence_v1",
+        "search_queries": queries, "search_query_count": len(queries),
+        "failed_query_count": sum(item.get("status") != "ready" for item in searches),
+        "query_coverage": [{"query": query, "item_source_count": len(group)} for query, group in zip(queries, groups)],
+        "item_source_count": len(records), "non_item_source_count": non_item_count,
+        "sales_verification": "not_established", "merchant_product_facts_confirmed": False,
+        "rule": "只可引用片段明确出现的商品和标价；检索时间不是商品或成交日期。商品页链接、在售标价和搜索摘要均不证明已售成交、销量、需求或退货率；无证据逐项写未验证。",
+    }
+    return {
+        **searches[0], "status": "ready" if records else "blocked",
+        "query": " | ".join(queries), "captured_at": captured_at,
+        "source_records": records, "product_research_evidence": evidence,
+        "blocked_by": [] if records else list(dict.fromkeys([
+            "candidate_product_sources_missing", *[code for item in searches for code in item.get("blocked_by") or []],
+        ])),
+        "summary": "候选商品页面检索；商品标价不等于成交证据。" if records else "未获得候选商品页面，工具教程不作为商品市场证据。",
+        "secret_exposed": False,
+    }
+
+
+def _product_source_matches_candidate(record: dict[str, Any], candidate: str) -> bool:
+    """Conservative relevance, not proof of price, availability or a sale."""
+    searchable = _normalized_text(f"{record.get('title', '')} {record.get('snippet', '')}")
+    if re.search(r"[\u4e00-\u9fff]", candidate):
+        return any(part in searchable for part in re.split(r"[/、]", candidate.lower()) if len(part) >= 2)
+    terms = [word.rstrip("s") for word in re.findall(r"[a-z]{3,}", candidate.lower())
+             if word not in {"and", "for", "with", "set", "pack", "kit", "the"}]
+    source_terms = {word.rstrip("s") for word in re.findall(r"[a-z]{3,}", searchable)}
+    return bool(terms) and terms[-1] in source_terms and sum(term in source_terms for term in terms) >= (len(terms) * 3 + 4) // 5
 
 
 def _run_builtin_public_realtime_source(
@@ -4636,7 +4785,18 @@ def _looks_like_explicit_listing_intake(message: str) -> bool:
         r"(?:新建|创建|生成|整理|导入|带入|填写|填进|自动填).{0,16}(?:刊登草稿|上架资料)",
         r"(?:刊登草稿|上架资料).{0,16}(?:创建|生成|填写|带入)",
     )
-    explicit_intake = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+    explicit_intake = False
+    for clause in re.split(r"[。；;，,！!\n]", text):
+        for pattern in patterns:
+            for match in re.finditer(pattern, clause, flags=re.IGNORECASE):
+                prefix = clause[:match.start()]
+                # "不创建 Listing" is a no-write boundary in a research
+                # request, not permission to bypass candidate research.
+                if re.search(r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁)(?:\s|再|重复|直接|立即|自动|帮我|为我|先|去|做|新建|创建|生成|整理|导入|带入|填写|填进)*$", prefix):
+                    continue
+                if re.search(r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁).{0,8}(?:创建|生成|填写|带入)", match.group()):
+                    continue
+                explicit_intake = True
     if not explicit_intake:
         return False
     if not _merchant_defers_listing(message):

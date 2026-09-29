@@ -427,6 +427,7 @@ FILES=(
   "tools/test_jiejing_current_project_archive_ui.py"
   "tools/test_jiejing_ai_ceo_phase0_red_contracts.py"
   "tools/test_jiejing_ai_ceo_private_empty_answer.py"
+  "tools/test_jiejing_ai_ceo_product_search_evidence.py"
   "tools/test_jiejing_product_feedback_closure.py"
   "tools/test_jiejing_platform_operations_overview.py"
   "tools/test_jiejing_public_staging_proxy_contract.py"
@@ -844,6 +845,7 @@ python3 -m py_compile \
   tools/test_jiejing_ai_ceo_routing_supplier_http_red.py \
   tools/test_jiejing_ai_ceo_phase0_red_contracts.py \
   tools/test_jiejing_ai_ceo_private_empty_answer.py \
+  tools/test_jiejing_ai_ceo_product_search_evidence.py \
   tools/test_jiejing_product_feedback_closure.py \
   tools/test_jiejing_platform_operations_overview.py \
   tools/test_jiejing_public_staging_proxy_contract.py \
