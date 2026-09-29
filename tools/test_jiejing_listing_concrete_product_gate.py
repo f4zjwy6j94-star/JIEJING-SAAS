@@ -124,7 +124,7 @@ if (!saasListingDraftHasConcreteProduct(realDraft)) {{
     assert "state.saasListingComposerDraft = null" in product_render
     assert 'saasListingDraftFromReport(listingReport, "listing_render_gate")' in product_render
     assert "saasListingDraftHasConcreteProduct(safeListingReportDraft)" in product_render
-    assert "const showPublishFlow = Boolean(safeListingDraft || hasLiveListing);" in product_render
+    assert "const showPublishFlow = Boolean(safeListingDraft || hasLiveListing) && saasListingWizardRecord()?.step === 4;" in product_render
 
     print("PASS jiejing_listing_concrete_product_gate")
 
