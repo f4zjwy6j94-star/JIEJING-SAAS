@@ -357,7 +357,15 @@ async function main() {
     const second = await device(report, true);
     assert.deepEqual(await second.page.evaluate(() => state.saasListingComposerDraft.fields), contract.fields);
     assert.equal(await second.page.getByText("查看重写前文案", { exact: true }).count(), 1);
-    await second.page.evaluate(() => renderProductListingCenter());
+    // This fixture verifies restored-copy prefill, not completion of the facts
+    // and image steps. Select its real wizard surface without saving new facts
+    // or changing the restored checkpoint, then use the real publish action.
+    assert.equal(await second.page.evaluate(() => {
+      const selected = setSaasListingWizardStep(4);
+      renderProductListingCenter();
+      return selected;
+    }), true);
+    assert.equal(await second.page.locator("[data-listing-wizard-step]").getAttribute("data-listing-wizard-step"), "4");
     await second.page.locator('[data-saas-action="focus-publish-intake"]').first().click();
     assert.equal(await second.page.locator('#saasPublishIntakeForm [name="title"]').inputValue(), contract.fields.title);
     assert.equal(await second.page.locator('#saasPublishIntakeForm [name="description_html"]').inputValue(), `${contract.fields.selling_points}\n\n${contract.fields.description}`);

@@ -92,6 +92,7 @@ const parseSaasKeyValueLines = (value) => String(value || "").split(/\\r?\\n/).r
   return out;
 }, {});
 const saasListingMediaWritebackImageUrls = () => [];
+${factPacketProjectionSource}
 ${buyerCopyRewriteLookupSource}
 ${publishPrefillSource}
 globalThis.__result = saasPublishIntakePrefillValues();

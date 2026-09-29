@@ -31,6 +31,7 @@ const listingReport = {
   store_id: store.store_id,
   task_id: "task-inventory-location-ui",
   report_type: "listing.package",
+  status: "saved",
   created_at: new Date().toISOString(),
   listing_project_identity: listingProjectIdentity,
   report: {
@@ -47,6 +48,7 @@ const listingReport = {
         quantity: "1",
         price_band: "24.99",
         description_seed: "Local inventory-location browser fixture listing.",
+        selling_points: ["Aluminum construction", "Foldable desktop support", "Local browser fixture"],
         item_specifics: { Brand: "Unbranded", Material: "Aluminum" },
         selected_product_candidate: {
           candidate_id: listingProjectIdentity.candidate_id,
@@ -66,6 +68,12 @@ const locationInput = {
 };
 const counters = { intake: 0, decision: 0, execute: 0, reconcile: 0, preflight: 0, genericExecute: 0 };
 let confirmations = [];
+let factReport = null;
+let checkpoint = null;
+let checkpointRevision = 0;
+let factRevision = 0;
+const unexpectedRequests = [];
+const checkpointPath = `/stores/${store.store_id}/listing-drafts/${listingProjectIdentity.key}/checkpoint`;
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -194,7 +202,13 @@ function getPayload(pathname) {
     source_mode: "official_api",
     body: { present_resource_keys: ["account_business_policies", "inventory_items"], missing_resource_keys: [] },
   }] };
-  if (pathname === "/reports") return { reports: [listingReport] };
+  if (pathname === "/reports") return { reports: [factReport, listingReport].filter(Boolean) };
+  if (pathname === checkpointPath) return {
+    checkpoint,
+    current_revision: checkpointRevision,
+    current_base_report_id: (factReport || listingReport).report_id,
+    current_base_report: factReport || listingReport,
+  };
   if (pathname === "/health") return { status: "ok" };
   if (pathname === "/health/deep") return { operational_health: { status: "ready" } };
   if (pathname === "/readiness/product-saas") return { readiness: { beta_ready: true, production_ready: false, public_charging_allowed: false } };
@@ -212,6 +226,33 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { "content-type": contentType, "cache-control": "no-store" });
     fs.createReadStream(file).pipe(res);
     return;
+  }
+  // The inventory-location flow now lives in wizard step 4. These local-only
+  // save receipts let the browser reach it through the real three Next actions.
+  if (req.method === "POST" && url.pathname === `/stores/${store.store_id}/product-facts`) {
+    const body = await readBody(req);
+    if (JSON.stringify(body.listing_project_identity) !== JSON.stringify(listingProjectIdentity)) {
+      return sendJson(res, 409, { error: "fixture_project_scope_mismatch" });
+    }
+    factRevision += 1;
+    factReport = { ...listingReport, report_id: `report-location-facts-${factRevision}`, report_type: "merchant.product_facts",
+      created_at: new Date().toISOString(), report: { product_name: listingProduct, listing_project_identity: listingProjectIdentity,
+        merchant_product_fact_packet: body.merchant_product_fact_packet } };
+    return sendJson(res, 201, { status: "saved", is_current: true, report: factReport,
+      listing_project_identity: listingProjectIdentity, merchant_product_fact_packet: body.merchant_product_fact_packet });
+  }
+  if (req.method === "POST" && url.pathname === checkpointPath) {
+    const body = await readBody(req);
+    checkpointRevision += 1;
+    checkpoint = { checkpoint_id: `checkpoint-location-${checkpointRevision}`, revision: checkpointRevision,
+      mutation_id: body.mutation_id, company_id: companyId, store_id: store.store_id,
+      listing_project_identity: listingProjectIdentity, base_report_id: body.base_report_id,
+      fields: body.fields, merchant_edited_fields: body.merchant_edited_fields, saved_at: new Date().toISOString(), source: "merchant_edit" };
+    return sendJson(res, 201, { status: "saved", checkpoint });
+  }
+  if (req.method === "POST" && url.pathname === "/ai-ceo/chat-history/sync") {
+    await readBody(req);
+    return sendJson(res, 200, {});
   }
   if (req.method === "POST" && url.pathname === `/stores/${store.store_id}/ebay-inventory-location/confirmation`) {
     counters.intake += 1;
@@ -302,8 +343,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && /\/preflight$/.test(url.pathname)) counters.preflight += 1;
   if (req.method === "POST" && /\/execute$/.test(url.pathname)) counters.genericExecute += 1;
   if (req.method === "POST") {
+    unexpectedRequests.push(`${req.method} ${url.pathname}`);
     await readBody(req);
-    sendJson(res, 200, {});
+    sendJson(res, 404, { error: "fixture_blocks_other_writes" });
     return;
   }
   sendJson(res, 200, getPayload(url.pathname));
@@ -325,9 +367,39 @@ async function openPage(context, base, consoleErrors, requireListing = true) {
   await page.waitForFunction(() => typeof state === "object" && state.saasConfirmationsLiveLoaded === true, null, { timeout: 10000 });
   if (requireListing) {
     await page.locator('button[data-view="product"]:visible').click();
+    // Follow the visible wizard, rather than mounting the old stacked form or
+    // bypassing the save/rights checks with an internal step setter.
+    await page.locator('[data-listing-wizard-step]').waitFor({ state: "visible", timeout: 10000 });
+    for (let step = Number(await page.locator('[data-listing-wizard-step]').getAttribute('data-listing-wizard-step')); step < 4; step += 1) {
+      if (step === 1) {
+        await page.locator('[data-saas-product-fact-field="product_name"]').fill(listingProduct);
+        await page.locator('[data-saas-product-fact-field="condition"]').fill("NEW");
+        await page.locator('[data-saas-product-fact-field="material"]').fill("Aluminum");
+      }
+      if (step === 2) {
+        await page.waitForFunction(() => saasListingCloudRecord()?.loaded && !saasListingCloudRecord()?.read, null, { timeout: 10000 });
+        await page.locator('[data-saas-listing-draft-field="title"]').fill(listingProduct);
+        await page.locator('[data-saas-listing-draft-field="selling_points"]').fill("Aluminum construction\nFoldable desktop support\nLocal browser fixture");
+        await page.locator('[data-saas-listing-draft-field="description"]').fill("Local inventory-location browser fixture listing.");
+      }
+      if (step === 3) {
+        await page.locator('.saas-listing-wizard-images details > summary').click();
+        await page.locator('[data-saas-product-fact-field="image_urls"]').fill(`${base}/assets/jiejing-app-icon.svg`);
+        await page.locator('[data-saas-product-fact-field="image_rights_confirmed"]').check();
+      }
+      await page.locator('[data-saas-action="listing-wizard-next"]').click();
+      try {
+        await page.locator(`[data-listing-wizard-step="${step + 1}"]`).waitFor({ state: "visible", timeout: 10000 });
+      } catch (error) {
+        const reason = await page.evaluate(() => ({ step: saasListingWizardRecord()?.step, message: saasListingWizardRecord()?.message,
+          factsStatus: state.saasListingProductFactSaveStatus, missingCore: saasListingWizardCoreMissing(),
+          copyStatus: saasListingCloudRecord()?.status, imageCount: saasListingWizardImageUrls().length }));
+        throw new Error(`inventory fixture could not continue wizard step ${step}: ${JSON.stringify(reason)}; ${error.message}`);
+      }
+    }
     const publishDetails = page.locator('details[data-listing-publish-flow-details="publish_intake_collapsed_v1"]');
     await publishDetails.waitFor({ state: "attached", timeout: 10000 });
-    await publishDetails.evaluate((element) => { element.open = true; });
+    if (await publishDetails.getAttribute("open") === null) await publishDetails.locator(":scope > summary").click();
     await page.locator("#saasPublishIntakeForm").waitFor({ state: "visible", timeout: 10000 });
   }
   return page;
@@ -359,6 +431,11 @@ async function main() {
   const browser = await chromium.launch({ channel: process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome", headless: true });
   const context = await browser.newContext({ viewport: { width: 1365, height: 900 } });
   const consoleErrors = [];
+  await context.route("**/*", (route) => {
+    if (new URL(route.request().url()).origin === base) return route.continue();
+    unexpectedRequests.push(`foreign:${route.request().method()}`);
+    return route.abort();
+  });
   await context.addInitScript(({ apiBase, company, user, storeId, product, projectIdentity }) => {
     localStorage.setItem("jiejing_saas_api_base", apiBase);
     localStorage.setItem("jiejing_saas_backend_store_id", storeId);
@@ -367,6 +444,9 @@ async function main() {
     localStorage.setItem("jiejing_saas_last_account", user);
     localStorage.setItem(`jiejing_saas_onboarding_done:${user}`, "1");
     localStorage.setItem("jiejing_saas_selected_store_id", storeId);
+    const wizardScope = JSON.stringify([company, user, storeId, projectIdentity.key, projectIdentity.source_report_id, projectIdentity.candidate_id]);
+    // A saved starting preference makes the full first-visit path deterministic.
+    localStorage.setItem(`jiejing.listing-wizard.v1:${wizardScope}`, JSON.stringify({ scope: wizardScope, step: 1 }));
     localStorage.setItem(`jiejing_saas_protected_snapshot:${user}`, JSON.stringify({
       version: "2026-07-12-listing-media-restore-v3",
       saved_at: new Date().toISOString(),
@@ -393,6 +473,7 @@ async function main() {
         title: product,
         fields: {
           title: product,
+          selling_points: "Aluminum construction\nFoldable desktop support\nLocal browser fixture",
           description: "Local fixture listing draft",
           category: "Tablet & eBook Reader Stands",
           item_specifics: "Brand: Unbranded\nMaterial: Aluminum",
@@ -444,7 +525,7 @@ async function main() {
     await page.locator('button[data-view="product"]:visible').click();
     const approvedPublishDetails = page.locator('details[data-listing-publish-flow-details="publish_intake_collapsed_v1"]');
     await approvedPublishDetails.waitFor({ state: "attached", timeout: 5000 });
-    await approvedPublishDetails.evaluate((element) => { element.open = true; });
+    if (await approvedPublishDetails.getAttribute("open") === null) await approvedPublishDetails.locator(":scope > summary").click();
     const execute = page.locator('[data-saas-action="execute-ebay-inventory-location"]:visible');
     await execute.waitFor({ state: "visible", timeout: 5000 });
     if (await execute.isDisabled()) throw new Error("one exact fresh approval must enable the separate execution action");
@@ -497,6 +578,7 @@ async function main() {
       await attackPage.close();
     }
 
+    if (unexpectedRequests.length) throw new Error(`fixture must not reach other services or writes: ${unexpectedRequests.join(", ")}`);
     if (consoleErrors.length) throw new Error(`browser console must stay clean: ${consoleErrors[0]}`);
     process.stdout.write("PASS jiejing_ebay_inventory_location_browser\n");
   } finally {

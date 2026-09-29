@@ -156,8 +156,14 @@ if (controlledReceipt.executionId !== "exec_receipt_test") throw new Error("cont
     composer_start = app_js.index("function renderSaasListingComposerWorkspace")
     composer_end = app_js.index("function renderSaasListingMinimalWorkspace", composer_start)
     composer = app_js[composer_start:composer_end]
-    if "renderSaasListingUnpublishedDraftReceipt(draft)" not in composer:
-        raise AssertionError("Listing workspace does not surface the current unpublished-draft receipt")
+    wizard_start = app_js.index("function renderSaasListingWizard(")
+    wizard = app_js[wizard_start:composer_start]
+    if "renderSaasListingWizard({ draft, ctx, pendingConfirmations" not in composer:
+        raise AssertionError("Listing workspace does not enter the current product wizard")
+    if "renderSaasListingUnpublishedDraftReceipt(draft)" not in wizard:
+        raise AssertionError("Listing final step does not surface the current unpublished-draft receipt")
+    if "发布检查与确认" not in wizard or "未发布 eBay 草稿和正式发布分别确认" not in wizard:
+        raise AssertionError("Listing final step must preserve separate draft-save and publish confirmation")
     for marker in [
         "async function createSaasExistingDraftPublishConfirmation",
         "existing-draft-publish-confirmation",

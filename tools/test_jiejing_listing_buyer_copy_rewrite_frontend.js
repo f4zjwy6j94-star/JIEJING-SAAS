@@ -716,6 +716,9 @@ test("only a complete 422 quality rejection permits a new explicit operation; ma
     };
     const first = await device();
     try {
+      // Cost belongs to a different wizard step now. Seed the observed blank
+      // explicitly instead of depending on the old all-fields page render.
+      if (kind === "known") await first.page.evaluate(() => { state.saasListingComposerDraft.fields.cost_price = ""; });
       await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
       await first.page.waitForFunction(() => !state.saasLoading);
       assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback.status), kind === "known" ? "failed" : "generation_uncertain", kind);
@@ -1145,10 +1148,12 @@ test("unsaved product facts are kept as form edits and block rewrite before a mo
   reset();
   const first = await device();
   try {
-    await first.page.evaluate(() => renderProductListingCenter());
+    await first.page.evaluate(() => { setSaasListingWizardStep(1); renderProductListingCenter(); });
     const before = await first.page.evaluate(() => JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet));
     await first.page.locator('[data-saas-product-fact-field="material"]').fill("Steel pending merchant save");
-    await first.page.getByRole("button", { name: "让 AI 重写买家文案", exact: true }).click();
+    // The rewrite button is on a separate step. Exercise its real pre-request
+    // guard directly while the unsaved fact controls remain mounted.
+    await first.page.evaluate(() => generateSaasListingDraftFromCurrentProject({ generationMode: "rewrite_buyer_copy" }));
     assert.match(await first.page.locator("#actionToast").textContent(), /商品资料.*尚未保存/);
     assert.equal(requests.filter((r) => r.path === generationPath).length, 0);
     assert.equal(await first.page.locator('[data-saas-product-fact-field="material"]').inputValue(), "Steel pending merchant save");

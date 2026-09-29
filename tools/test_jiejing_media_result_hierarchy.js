@@ -18,31 +18,49 @@ function extract(name) {
   return tail.slice(0, tail.search(/\n(?:async )?function /));
 }
 
-test("saved buyer copy precedes the full fact form; ungenerated drafts still start with facts", () => {
+test("Listing renders only the selected wizard step instead of stacking facts, copy, images and publishing", () => {
+  const record = { key: "fixture-project", step: 2, busy: false, message: "" };
   const context = {
     state: { saasListingComposerDraft: { fields: { description: "Saved buyer copy" } } },
     escapeHtml: value => String(value ?? ""),
     saasListingSyncedProductRows: () => [],
     latestSaasAiCeoMarketResearchTurn: () => null,
     saasListingOpportunityFromDraft: () => ({}),
+    saasListingWizardRecord: () => record,
+    renderSaasListingAiGenerationFeedback: () => "",
+    saasSettingsDataSnapshotView: () => ({ accountTone: "amber", accountTitle: "状态待核实", accountDetail: "发布前检查" }),
+    saasListingWizardGenerationPending: () => false,
   };
   const sections = {
     renderSaasListingSourceIntake: "source", renderSaasMerchantProductFactsModule: "facts",
-    renderSaasListingDraftEditor: "editor", renderSaasListingMediaWritebackPanel: "media",
-    renderSaasListingNextActionPanel: "next", renderSaasListingUnpublishedDraftReceipt: "receipt",
+    renderSaasListingDraftEditor: "editor", renderSaasListingWizardImages: "media",
+    renderSaasListingVisiblePublishBridge: "publish", renderSaasListingUnpublishedDraftReceipt: "receipt",
     renderSaasListingAdvancedWorkDetails: "advanced",
   };
   for (const [name, label] of Object.entries(sections)) context[name] = () => `<section id="fixture-${label}"></section>`;
   vm.createContext(context);
+  vm.runInContext(extract("renderSaasListingWizard"), context);
   vm.runInContext(extract("renderSaasListingComposerWorkspace"), context);
   const render = () => context.renderSaasListingComposerWorkspace({ pendingConfirmations: [], ctx: {} });
+  const assertSections = (result, expected) => {
+    for (const label of Object.values(sections)) assert.equal(result.split(`id="fixture-${label}"`).length - 1, expected.includes(label) ? 1 : 0, label);
+  };
   let result = render();
-  assert.ok(result.indexOf('id="fixture-editor"') < result.indexOf('id="fixture-facts"'), "saved copy must be reachable before the long fact form");
-  assert.ok(result.indexOf('id="fixture-next"') < result.indexOf('id="fixture-facts"'), "next action remains ahead of the long form");
-  for (const label of Object.values(sections)) assert.equal(result.split(`id="fixture-${label}"`).length - 1, 1);
+  assertSections(result, ["editor"]);
+  assert.match(result, /data-saas-action="listing-wizard-next"/);
   context.state.saasListingComposerDraft.fields = {};
+  record.step = 1;
   result = render();
-  assert.ok(result.indexOf('id="fixture-facts"') < result.indexOf('id="fixture-editor"'), "new draft retains the facts-first path");
+  assertSections(result, ["facts"]);
+  record.step = 3;
+  assertSections(render(), ["media"]);
+  record.step = 4;
+  result = render();
+  assertSections(result, ["publish", "receipt", "advanced"]);
+  assert.match(result, /此步骤不会自动发布/);
+  assert.doesNotMatch(result, /data-saas-action="listing-wizard-next"/);
+  context.state.saasListingComposerDraft = null;
+  assertSections(render(), ["source"]);
 });
 
 test("concept-only material is not counted as reviewable or eligible for Listing", () => {
