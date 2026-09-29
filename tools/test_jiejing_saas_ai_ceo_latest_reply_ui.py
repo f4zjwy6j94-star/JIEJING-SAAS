@@ -48,15 +48,9 @@ def main() -> int:
         if marker not in app:
             return fail(f"missing adaptive AI CEO task-context contract: {marker}")
 
-    mount_contract = top_level_function(app, "mountSaasMerchantProjectStatusStrip")
-    allowed_views_match = re.search(r"\[([^\]]+)\]\.includes\(viewId\)", mount_contract, re.S)
-    if not allowed_views_match:
-        return fail("merchant project status mount must expose a scoped allowed-view list")
-    allowed_views = re.findall(r'["\']([^"\']+)["\']', allowed_views_match.group(1))
-    if "cockpit" in allowed_views:
-        return fail("historical project status must not mount the legacy strip inside AI CEO")
-    if allowed_views != ["product", "media", "confirm"]:
-        return fail(f"merchant project status strip must stay on product/media/confirm only: {allowed_views}")
+    for retired in ("mountSaasMerchantProjectStatusStrip", "renderSaasMerchantProjectStatusStrip"):
+        if retired in app:
+            return fail(f"legacy project strip must not return to any workbench page: {retired}")
 
     task_context_markup = top_level_function(app, "renderSaasAiCeoTaskContextMarkup")
     if task_context_markup.count("data-ai-ceo-task-next-action") != 1:
@@ -172,7 +166,7 @@ def main() -> int:
         "function shouldKeepSaasAiCeoThreadTurn",
         "function updateCeoAssistantMessage(messageId, text, status = \"\", model = null, sourceRecords = [], workflowDetails = {})",
         "updateCeoAssistantMessage(pendingMessageId, answer, chat?.status || \"\", chat?.model_client || null, sourceRecords, {",
-        "一句话交给 JV AI",
+        "一句话交给 AI CEO",
         "问问题直接答；说商品、链接、图片或订单，我会自动带到对应流程；真实发布、付款、退款和广告先问你。",
         "比如：帮我调研这个商品，整理 Listing 草稿",
         "也可以直接问普通问题。",

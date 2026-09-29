@@ -7,6 +7,19 @@ import jiejing_prepare_public_staging_bundle as bundle
 ROOT = Path(__file__).resolve().parents[1]
 
 class PublicDesignRelease(unittest.TestCase):
+    def test_ai_ceo_name_is_consistent_across_merchant_surfaces(self):
+        surfaces = [ROOT / name for name in ('index.html', 'app.html', 'app.js')]
+        surfaces += [path for path in (ROOT / 'assets').rglob('*')
+                     if path.is_file() and path.suffix in {'.html', '.js', '.css', '.svg'}]
+        retired_name = re.compile(r'\bJV[\s_-]*AI\b', re.I)
+        for path in surfaces:
+            with self.subTest(surface=path.relative_to(ROOT).as_posix()):
+                self.assertIsNone(retired_name.search(path.read_text(encoding='utf-8')),
+                                  'Merchant surfaces must use AI CEO, not the retired name')
+        for name in ('index.html', 'app.html', 'app.js',
+                     'assets/workbench-demo/index.html', 'assets/workbench-demo/workbench.js'):
+            self.assertTrue('AI CEO' in (ROOT / name).read_text(encoding='utf-8'), name)
+
     def test_real_entry_is_preserved(self):
         home = (ROOT / 'index.html').read_text(encoding='utf-8')
         for marker in ['id="nextStepModal"', 'id="entryLoginForm"', 'id="entryChallengeWidget"',
@@ -77,7 +90,7 @@ class PublicDesignRelease(unittest.TestCase):
         app = (ROOT / 'app.js').read_text(encoding='utf-8')
         self.assertIn('name="ai_ceo_prompt"', app)
         self.assertIn('jiejingTrustedTemplate("ai_ceo.cockpit")', app)
-        self.assertIn('cockpit.dataset.title = "JV AI"', app)
+        self.assertIn('cockpit.dataset.title = "AI CEO"', app)
         self.assertNotIn('JiejingDemoState', app)
         self.assertNotIn('packing-collection-v6', app)
 

@@ -146,7 +146,11 @@ class PublicSearchProbeAdapter:
         title = str(item.get("title") or item.get("name") or "").strip()
         url = str(item.get("url") or item.get("link") or "").strip()
         snippet = str(item.get("snippet") or item.get("summary") or item.get("description") or item.get("content") or "").strip()
-        source_time = str(item.get("captured_at") or item.get("date") or "").strip()
+        captured_at = str(item.get("captured_at") or "").strip()
+        published_at = str(item.get("published_at") or item.get("published_date") or "").strip()
+        updated_at = str(item.get("updated_at") or "").strip()
+        # A generic provider date has no guaranteed publication/retrieval meaning.
+        source_date = str(item.get("date") or "").strip()
         domain = self._domain(url)
         commerce_hint = self._commerce_hint(title, url, snippet)
         return {
@@ -154,7 +158,10 @@ class PublicSearchProbeAdapter:
             "url": url,
             "domain": domain,
             "snippet": snippet[:500],
-            "captured_at": source_time,
+            "captured_at": captured_at,
+            "published_at": published_at,
+            "updated_at": updated_at,
+            "date": source_date,
             "commerce_hint": commerce_hint,
             "score": item.get("score") if isinstance(item.get("score"), (int, float)) else None,
         }

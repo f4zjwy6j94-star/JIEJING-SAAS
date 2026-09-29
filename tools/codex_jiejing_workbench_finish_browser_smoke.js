@@ -119,7 +119,7 @@ async function verifyActualChatLayout(browser, base) {
         });
         assert.equal(speaker.color, 'rgb(255, 255, 255)', 'assistant badge must contrast with its dark background on every viewport');
         assert.equal(speaker.whiteSpace, 'nowrap');
-        assert(speaker.contentWidth <= speaker.width, 'JV AI badge must not wrap or clip');
+        assert(speaker.contentWidth <= speaker.width, 'AI CEO badge must not wrap or clip');
         for (let transition = 0; transition < 3; transition += 1) {
           const taskGeometry = await visual.evaluate(() => {
             const task = document.querySelector("[data-ai-ceo-task-context]");
@@ -166,7 +166,8 @@ async function verifyActualChatLayout(browser, base) {
       const supplement = await inspectModules(visual, variant, width);
       assert.deepEqual(errors, [], JSON.stringify({errors, requests}));
       assert.deepEqual(requests, []);
-      results.push({ variant, width, screenshot, ...geometry, composerControls, task_states: taskStates, supplement });
+      results.push({ variant, width, screenshot, ...geometry, composerControls, task_states: taskStates, supplement,
+        console_page_errors: [...errors], blocked_requests: [...requests] });
       await context.close();
     }
   }
@@ -223,7 +224,7 @@ async function inspectModules(page, variant, width) {
       styleLoaded: !![...document.styleSheets].find(s => s.href?.includes('jiejing-workbench-finish.css')),
       frameworkOverlay: !!document.querySelector('vite-error-overlay, nextjs-portal [data-nextjs-dialog]') };
   });
-  assert.match(initial.title, /JV AI/);
+  assert.match(initial.title, /AI CEO/);
   assert.equal(initial.visibleNav, 6);
   assert(initial.textLength > 25);
   assert(initial.styleLoaded && initial.background === 'rgb(242, 244, 238)' && initial.chatBackground === 'rgb(255, 255, 255)');
@@ -257,7 +258,92 @@ async function inspectModules(page, variant, width) {
   assert.equal(bulk.mode, 'bulk');
   assert.equal(bulk.navCount, 6);
   assert(product.overflow <= 1 && bulk.overflow <= 1, `business pages overflow: ${JSON.stringify({product, bulk})}`);
-  return {initial, product, bulk};
+  const settingsData = variant === 'empty' && [1440, 390, 320].includes(width)
+    ? await inspectRestrictedSettingsData(page, width) : null;
+  return {initial, product, bulk, settingsData};
+}
+
+async function inspectRestrictedSettingsData(page, width) {
+  // This is saved fixture data, not a read from an account or eBay. Exercise the
+  // real context resolver, settings renderer and tab handler with scoped state.
+  await page.evaluate(() => {
+    const companyId = 'ui-fixture-company';
+    const storeId = 'ui-fixture-store';
+    const resourceKeys = ['store_profile', 'account_business_policies', 'inventory_and_offers',
+      'orders_and_fulfillment', 'finances', 'taxonomy_listing_metadata'];
+    state.saasAccountHealth = {company_id:companyId, store_id:storeId, status:'restricted', incident_mode:true, label:'账号受限'};
+    state.saasDataPackets = [{packet_id:'ui-fixture-stale-packet', company_id:companyId, store_id:storeId,
+      platform:'ebay', source_mode:'official_api', created_at:'2026-08-28T08:00:00Z',
+      packet:{source_label:'official_api', present_resource_keys:resourceKeys, missing_resource_keys:[],
+        freshness:{stale_after_seconds:21600},
+        section_summary:resourceKeys.map(key => ({key, data_present:true, source_type:'official_api'}))}}];
+    state.saasSettingsTab = 'account';
+    document.querySelector('#view-connect').addEventListener('click', event => {
+      const button = event.target.closest('[data-saas-settings-tab]');
+      if (button) {
+        event.preventDefault();
+        state.saasSettingsTab = button.dataset.saasSettingsTab || 'account';
+        renderSaasConnectCenter(document.querySelector('#view-connect'));
+      }
+    });
+    setView('connect');
+  });
+  await page.locator('#view-connect.is-active [data-saas-settings-tab="data"]').click();
+  const panel = page.locator('#view-connect.is-active .saas-settings-clean-content');
+  const account = panel.locator('[data-saas-data-account-status]');
+  await account.waitFor({state:'visible'});
+  assert.match(await account.innerText(), /账号受限/);
+  assert.match(await account.innerText(), /真实发布已暂停/);
+  const text = await panel.innerText();
+  assert.match(text, /6\/6\s*类已保存/);
+  assert.match(text, /08[/-]28/);
+  assert.match(text, /历史资料\s*·\s*需更新/);
+  assert.doesNotMatch(text, /已读取|无核心缺口/);
+  const savedResources = await panel.locator('.saas-settings-resource-list article > strong').allTextContents();
+  assert.deepEqual(savedResources, Array(6).fill('已保存'));
+  const rendered = await page.evaluate(() => {
+    const view = document.querySelector('#view-connect');
+    const ctx = saasMerchantWorkbenchContext();
+    const account = view.querySelector('[data-saas-data-account-status]');
+    const content = view.querySelector('.saas-settings-clean-content');
+    return {view:state.view, tab:state.saasSettingsTab,
+      source:ctx.packetBody.source_label, lastSync:ctx.lastSync,
+      storeId:ctx.store.store_id, accountStoreId:state.saasAccountHealth.store_id,
+      companyId:state.saasCompany.company_id, accountCompanyId:state.saasAccountHealth.company_id,
+      accountStatus:account.innerText, visible:!!account.getClientRects().length,
+      overflow:document.documentElement.scrollWidth - innerWidth,
+      contentOverflow:content.scrollWidth - content.clientWidth,
+      frameworkOverlay:!!document.querySelector('vite-error-overlay, nextjs-portal [data-nextjs-dialog]')};
+  });
+  assert.equal(rendered.view, 'connect');
+  assert.equal(rendered.tab, 'data');
+  assert.equal(rendered.source, 'official_api');
+  assert.equal(rendered.lastSync, '2026-08-28T08:00:00Z');
+  assert.equal(rendered.storeId, rendered.accountStoreId);
+  assert.equal(rendered.companyId, rendered.accountCompanyId);
+  assert.equal(rendered.visible, true);
+  assert.equal(rendered.frameworkOverlay, false);
+  assert(rendered.overflow <= 1 && rendered.contentOverflow <= 1,
+    `settings data ${width}: no horizontal overflow: ${JSON.stringify(rendered)}`);
+  const screenshot = path.join(outDir, `settings-data-restricted-stale-${width}.png`);
+  await page.screenshot({path:screenshot, fullPage:true});
+  // A mobile full-page screenshot includes the fixed bottom navigation at its
+  // initial viewport position. Also prove the status is readable after normal
+  // scrolling, not merely present somewhere in the DOM below that navigation.
+  await account.evaluate(node => node.scrollIntoView({block:'center'}));
+  const accountReadable = await account.evaluate(node => {
+    const r = node.getBoundingClientRect();
+    const points = [[r.left + 12, r.top + 12], [r.right - 12, r.bottom - 12],
+      [r.left + r.width / 2, r.top + r.height / 2]];
+    return r.top >= 0 && r.bottom <= innerHeight && points.every(([x,y]) => {
+      const hit = document.elementFromPoint(x,y);
+      return hit === node || node.contains(hit);
+    });
+  });
+  assert.equal(accountReadable, true, `settings data ${width}: account warning must remain readable after scrolling`);
+  const statusScreenshot = path.join(outDir, `settings-data-account-visible-${width}.png`);
+  await page.screenshot({path:statusScreenshot});
+  return {width, ...rendered, savedResources, text, screenshot, accountReadable, statusScreenshot};
 }
 
 (async () => {

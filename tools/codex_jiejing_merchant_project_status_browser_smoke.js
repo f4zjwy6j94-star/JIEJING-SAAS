@@ -227,6 +227,19 @@ async function runSmoke() {
   if (expectedSnapshot?.snapshot_version !== "merchant_project_status_v1") {
     throw new Error("backend did not return merchant_project_status_v1");
   }
+  const expectedStages = (expectedSnapshot.stages || []).map((stage) => ({
+    key: stage.key,
+    status: stage.status,
+    is_current: stage.is_current === true,
+  }));
+  const expectedCurrentStages = expectedStages.filter((stage) => stage.is_current);
+  if (
+    expectedStages.length !== 8 ||
+    expectedCurrentStages.length !== 1 ||
+    expectedCurrentStages[0].key !== expectedSnapshot.current_stage
+  ) {
+    throw new Error("backend project status did not preserve eight stages and one matching current stage");
+  }
   if (expectedSnapshot?.work_record_index?.contract_version !== "merchant_project_work_record_index_v1") {
     throw new Error("backend did not return the project-scoped work record index");
   }
@@ -349,7 +362,6 @@ async function runSmoke() {
   );
   const initialDiagnostic = await page.evaluate(async () => {
     const snapshot = await refreshSaasMerchantProjectStatus();
-    const markupBeforeSetView = renderSaasMerchantProjectStatusStrip();
     setView("product");
     const stripCountAfterSetView = document.querySelectorAll('[data-merchant-project-status="merchant_project_status_v1"]').length;
     return {
@@ -361,7 +373,6 @@ async function runSmoke() {
       public_mode: isSaasPublicMvpMode(),
       protected_ready: state.saasProtectedStateReady,
       loading: state.saasLoading,
-      markup_length: markupBeforeSetView.length,
       strip_count_after_set_view: stripCountAfterSetView,
       route: window.location.href,
       strip_count: document.querySelectorAll('[data-merchant-project-status="merchant_project_status_v1"]').length,
@@ -370,34 +381,64 @@ async function runSmoke() {
   if (initialDiagnostic.snapshot_version !== "merchant_project_status_v1") {
     throw new Error(`merchant project snapshot did not load in browser: ${JSON.stringify(initialDiagnostic)}`);
   }
-  if (initialDiagnostic.current_view !== "product" || initialDiagnostic.strip_count < 1) {
-    throw new Error(`merchant project strip did not mount: ${JSON.stringify(initialDiagnostic)}`);
+  if (
+    initialDiagnostic.current_view !== "product" ||
+    initialDiagnostic.snapshot_project !== projectId ||
+    initialDiagnostic.state_snapshot_version !== "merchant_project_status_v1" ||
+    initialDiagnostic.strip_count !== 0 ||
+    initialDiagnostic.strip_count_after_set_view !== 0
+  ) {
+    throw new Error(`merchant project state or clean module header regressed: ${JSON.stringify(initialDiagnostic)}`);
   }
-  await page.waitForSelector('#view-product.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 60000 });
+  await page.waitForSelector("#view-product.is-active", { timeout: 60000 });
 
-  const viewResults = {};
-  for (const view of ["product", "media", "confirm"]) {
+  async function inspectProjectView(view) {
     await page.evaluate((nextView) => setView(nextView), view);
-    await page.waitForSelector(`#view-${view}.is-active [data-merchant-project-status="merchant_project_status_v1"]`, { timeout: 20000 });
-    viewResults[view] = await page.evaluate(
-      ({ view, projectId, expectedStage }) => {
-        const strip = document.querySelector(`#view-${view}.is-active [data-merchant-project-status="merchant_project_status_v1"]`);
-        const stages = Array.from(strip?.querySelectorAll(".saas-merchant-project-stages li") || []);
-        const current = stages.filter((item) => item.classList.contains("is-current"));
+    await page.waitForSelector(`#view-${view}.is-active`, { timeout: 20000 });
+    return page.evaluate(
+      ({ view, projectId, expectedStage, expectedStages }) => {
+        const activeView = document.querySelector(`#view-${view}.is-active`);
+        const snapshot = state.saasMerchantProjectStatus;
+        const stages = Array.isArray(snapshot?.stages) ? snapshot.stages : [];
+        const current = stages.filter((item) => item.is_current === true);
+        const stageState = stages.map((stage) => ({
+          key: stage.key,
+          status: stage.status,
+          is_current: stage.is_current === true,
+        }));
         const url = new URL(window.location.href);
         return {
-          strip_present: Boolean(strip),
+          strip_count: activeView?.querySelectorAll('[data-merchant-project-status="merchant_project_status_v1"], .saas-merchant-project-status-strip').length || 0,
+          active_view_has_content: Boolean(activeView?.textContent?.trim()),
+          snapshot_version: snapshot?.snapshot_version || "",
+          snapshot_project: snapshot?.project?.project_id || "",
+          snapshot_match: snapshot?.project?.project_id === projectId,
           stage_count: stages.length,
           current_count: current.length,
-          current_label: current[0]?.textContent?.trim() || "",
+          current_label: current[0]?.label || "",
+          current_stage: snapshot?.current_stage || "",
+          current_key: current[0]?.key || "",
+          stage_state_matches_backend: JSON.stringify(stageState) === JSON.stringify(expectedStages),
           route_project: url.searchParams.get("project") || "",
           route_view: url.searchParams.get("view") || "",
+          view_match: state.view === view && url.searchParams.get("view") === view,
           expected_stage: expectedStage,
           project_match: (url.searchParams.get("project") || "") === projectId,
         };
       },
-      { view, projectId, expectedStage: expectedSnapshot.current_stage },
+      { view, projectId, expectedStage: expectedSnapshot.current_stage, expectedStages },
     );
+  }
+  const viewResults = {};
+  for (const view of ["product", "media", "confirm"]) {
+    viewResults[view] = await inspectProjectView(view);
+  }
+  await page.evaluate(async () => {
+    await refreshSaasState({ silent: true });
+  });
+  const refreshedViewResults = {};
+  for (const view of ["product", "media", "confirm"]) {
+    refreshedViewResults[view] = await inspectProjectView(view);
   }
   await page.evaluate(() => setView("cockpit"));
   await page.waitForSelector("#view-cockpit.is-active", { timeout: 20000 });
@@ -566,6 +607,11 @@ async function runSmoke() {
     };
   }, projectId);
 
+  const reloadedViewResults = {};
+  for (const view of ["product", "media", "confirm"]) {
+    reloadedViewResults[view] = await inspectProjectView(view);
+  }
+
   const responsiveResults = [];
   for (const viewport of [
     { name: "desktop", width: 1440, height: 1000 },
@@ -573,9 +619,9 @@ async function runSmoke() {
     { name: "mobile", width: 390, height: 844 },
   ]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    for (const view of ["product", "confirm"]) {
+    for (const view of ["product", "media", "confirm"]) {
       await page.evaluate((nextView) => setView(nextView), view);
-      await page.waitForSelector(`#view-${view}.is-active [data-merchant-project-status="merchant_project_status_v1"]`, {
+      await page.waitForSelector(`#view-${view}.is-active`, {
         timeout: 20000,
       });
       responsiveResults.push(
@@ -583,11 +629,11 @@ async function runSmoke() {
           ({ viewport, view }) => {
             const root = document.documentElement;
             const activeView = document.querySelector(`#view-${view}.is-active`);
-            const strip = activeView?.querySelector('[data-merchant-project-status="merchant_project_status_v1"]');
             return {
               viewport: viewport.name,
               view,
-              strip_present: Boolean(strip),
+              strip_count: activeView?.querySelectorAll('[data-merchant-project-status="merchant_project_status_v1"], .saas-merchant-project-status-strip').length || 0,
+              active_view_has_content: Boolean(activeView?.textContent?.trim()),
               horizontal_overflow: Math.max(0, root.scrollWidth - root.clientWidth),
               active_view_overflow: activeView ? Math.max(0, activeView.scrollWidth - activeView.clientWidth) : -1,
               fake_later_action_count: activeView
@@ -610,7 +656,8 @@ async function runSmoke() {
           return {
             viewport: viewport.name,
             view: "cockpit",
-            strip_present: Boolean(activeView?.querySelector('[data-merchant-project-status="merchant_project_status_v1"]')),
+            strip_count: activeView?.querySelectorAll('[data-merchant-project-status="merchant_project_status_v1"], .saas-merchant-project-status-strip').length || 0,
+            active_view_has_content: Boolean(activeView?.textContent?.trim()),
             task_context_present: Boolean(activeView?.querySelector('[data-ai-ceo-task-context="adaptive_task_context_v1"]')),
             chat_width_ratio: activeView && chat ? chat.getBoundingClientRect().width / activeView.getBoundingClientRect().width : 0,
             horizontal_overflow: Math.max(0, root.scrollWidth - root.clientWidth),
@@ -627,15 +674,30 @@ async function runSmoke() {
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => setView("product"));
-  await page.waitForSelector('#view-product.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 20000 });
-  await page.screenshot({ path: path.join("output", "browser-smoke", "merchant-project-status-phase4.png"), fullPage: true });
+  await page.waitForSelector("#view-product.is-active", { timeout: 20000 });
+  const screenshotPath = path.join(os.tmpdir(), "jiejing-clean-project-modules-desktop.png");
+  await page.screenshot({ path: screenshotPath, fullPage: false });
 
-  const viewChecksPass = Object.values(viewResults).every(
-    (item) => item.strip_present && item.stage_count === 8 && item.current_count === 1 && item.project_match,
-  );
+  const projectViewPasses = (item) =>
+    item.strip_count === 0 &&
+    item.active_view_has_content &&
+    item.snapshot_version === "merchant_project_status_v1" &&
+    item.snapshot_match &&
+    item.stage_count === 8 &&
+    item.current_count === 1 &&
+    item.current_stage === item.expected_stage &&
+    item.current_key === item.expected_stage &&
+    item.stage_state_matches_backend &&
+    item.project_match &&
+    item.view_match;
+  const viewChecksPass = Object.values(viewResults).every(projectViewPasses);
+  const refreshedViewChecksPass = Object.values(refreshedViewResults).every(projectViewPasses);
+  const reloadedViewChecksPass = Object.values(reloadedViewResults).every(projectViewPasses);
   const responsiveChecksPass = responsiveResults.every(
     (item) =>
-      (item.view === "cockpit" ? !item.strip_present && !item.task_context_present && item.chat_width_ratio >= 0.9 : item.strip_present) &&
+      item.strip_count === 0 &&
+      item.active_view_has_content &&
+      (item.view !== "cockpit" || (!item.task_context_present && item.chat_width_ratio >= 0.9)) &&
       item.horizontal_overflow === 0 &&
       item.active_view_overflow === 0 &&
       item.fake_later_action_count === 0,
@@ -677,6 +739,8 @@ async function runSmoke() {
     mobileDetailAfter.aria_expanded === "true";
   const ok =
     viewChecksPass &&
+    refreshedViewChecksPass &&
+    reloadedViewChecksPass &&
     responsiveChecksPass &&
     cockpitHistoryOnlyPass &&
     activeTaskContextPass &&
@@ -699,6 +763,8 @@ async function runSmoke() {
     badResponses.length === 0;
   const failedChecks = Object.entries({
     view_checks: viewChecksPass,
+    refreshed_view_checks: refreshedViewChecksPass,
+    reloaded_view_checks: reloadedViewChecksPass,
     responsive_checks: responsiveChecksPass,
     cockpit_history_only_is_full_width: cockpitHistoryOnlyPass,
     active_task_context_behaves_across_viewports: activeTaskContextPass,
@@ -723,12 +789,15 @@ async function runSmoke() {
     .map(([key]) => key);
   const result = {
     ok,
+    screenshot_path: screenshotPath,
     failed_checks: failedChecks,
     project_id: projectId,
     backend_current_stage: expectedSnapshot.current_stage,
     backend_blocker: expectedSnapshot.blocker?.key || "",
     initial_diagnostic: initialDiagnostic,
     view_results: viewResults,
+    refreshed_view_results: refreshedViewResults,
+    reloaded_view_results: reloadedViewResults,
     after_reload: afterReload,
     legacy_activity_route: legacyActivityRoute,
     service_trace_ui: serviceTraceUi,

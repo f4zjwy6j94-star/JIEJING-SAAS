@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -52,8 +52,14 @@ def build_account_health_snapshot(
     business_policies = _packet_section_data(packet, "account_business_policies")
     finances = _packet_section_data(packet, "finances")
     connections = repository.list_connections(company_id=company_id, store_id=store_id)
-    execution_results = repository.list_execution_results(company_id=company_id, limit=80)
+    execution_results = repository.list_execution_results(
+        company_id=company_id,
+        store_id=store_id,
+        limit=80,
+        include_error_ids=tuple(sorted(STICKY_PROVIDER_RESTRICTION_ERROR_IDS)),
+    )
     latest_packet_created_at = str(latest_packet.get("created_at") or packet.get("created_at") or "")
+    packet_freshness = _packet_freshness_evidence(latest_packet, packet)
     provider_restriction_resolution = _provider_restriction_resolution_evidence(
         repository,
         company_id=company_id,
@@ -112,6 +118,9 @@ def build_account_health_snapshot(
         recent_platform_errors=recent_platform_errors,
         has_store_profile=has_store_profile,
     )
+    stale_clear_snapshot = status in {"normal", "attention"} and packet_freshness["blocks_clear_status"]
+    if stale_clear_snapshot:
+        status = "unknown"
     incident_mode = status in {
         "unknown",
         "registration_incomplete",
@@ -148,7 +157,7 @@ def build_account_health_snapshot(
         "can_enter_publish_preflight": not incident_mode and business_policies_present,
         "onboarding_stage": onboarding_stage,
         "business_policy_statuses": business_policy_statuses,
-        "summary": _merchant_summary(
+        "summary": "现有店铺数据已过期或采集时间无法核验；请刷新官方只读资料后再检查账号状态，无需重新授权。" if stale_clear_snapshot else _merchant_summary(
             status,
             has_store_profile=has_store_profile,
             business_policies_present=business_policies_present,
@@ -161,6 +170,7 @@ def build_account_health_snapshot(
             "packet_id": latest_packet.get("packet_id") or "",
             "packet_source_mode": latest_packet.get("source_mode") or packet.get("source_label") or "",
             "packet_created_at": latest_packet.get("created_at") or packet.get("created_at") or "",
+            "packet_freshness": packet_freshness,
             "official_packet_present": official_packet_present,
             "store_profile_present": has_store_profile,
             "business_policies_present": business_policies_present,
@@ -190,7 +200,10 @@ def build_account_health_snapshot(
             "allowed_incident_actions": ALLOWED_INCIDENT_ACTIONS,
             "confirmation_center_still_required_when_clear": True,
         },
-        "next_actions": _next_actions(
+        "next_actions": [
+            "刷新官方只读资料后再检查账号状态；无需重新授权，也无需重建商品草稿。",
+            "账号状态重新核验前暂停真实发布；资料和素材仍可继续整理。",
+        ] if stale_clear_snapshot else _next_actions(
             status,
             business_policies_present=business_policies_present,
             recent_platform_errors=recent_platform_errors,
@@ -212,7 +225,7 @@ def merge_account_health_into_payload(
     if not existing and snapshot_health:
         merged["account_health"] = snapshot_health
     elif existing and snapshot_health:
-        merged["account_health"] = {**snapshot_health, **existing}
+        merged["account_health"] = {**existing, **snapshot_health}
     merged["account_health_snapshot"] = {
         "status": account_health_snapshot.get("status"),
         "label": account_health_snapshot.get("label"),
@@ -349,6 +362,43 @@ def _packet_section_data(packet: dict[str, Any], key: str) -> dict[str, Any]:
     return {}
 
 
+def _packet_freshness_evidence(latest_packet: dict[str, Any], packet: dict[str, Any]) -> dict[str, Any]:
+    """Apply the packet's declared expiry without inventing a TTL for legacy packets."""
+    freshness = packet.get("freshness") if isinstance(packet.get("freshness"), dict) else {}
+    if "stale_after_seconds" not in freshness:
+        return {"status": "not_declared", "blocks_clear_status": False}
+    threshold = freshness.get("stale_after_seconds")
+    evidence: dict[str, Any] = {"status": "invalid", "blocks_clear_status": True}
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold < float("inf"):
+        return evidence
+    evidence["stale_after_seconds"] = threshold
+    timestamps = [value for value in (
+        freshness.get("snapshot_created_at"), packet.get("created_at"), latest_packet.get("created_at"),
+    ) if value not in (None, "")]
+    if not timestamps:
+        return evidence
+    now = datetime.now(timezone.utc)
+    ages = []
+    for value in timestamps:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return evidence
+            age = (now - parsed).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return evidence
+        if age < -300:
+            return evidence
+        ages.append(max(0.0, age))
+    age = max(ages)
+    evidence.update({
+        "status": "stale" if age >= threshold else "fresh",
+        "age_seconds": int(age),
+        "blocks_clear_status": age >= threshold,
+    })
+    return evidence
+
+
 def _packet_sections(packet: dict[str, Any]) -> list[Any]:
     if isinstance(packet.get("sections"), list):
         return list(packet.get("sections") or [])
@@ -389,12 +439,17 @@ def _recent_platform_error_summaries(
         if since and created_at and not _is_after(created_at, since):
             continue
         result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        seen_errors: set[tuple[str, str, str]] = set()
         for error in _walk_platform_errors(result):
             error_id = str(error.get("error_id") or error.get("errorId") or "").strip()
             code = str(error.get("code") or error_id or error.get("category") or "").strip()
             message = str(error.get("message") or error.get("longMessage") or error.get("detail") or "").strip()
             if not error_id and not code and not message:
                 continue
+            error_key = (error_id, code, message)
+            if error_key in seen_errors:
+                continue
+            seen_errors.add(error_key)
             summaries.append(
                 {
                     "action_type": record.get("action_type") or result.get("action_type") or "",
@@ -405,7 +460,6 @@ def _recent_platform_error_summaries(
                     "created_at": created_at,
                 }
             )
-            break
     return summaries
 
 
@@ -525,11 +579,12 @@ def _is_after(candidate: str, baseline: str) -> bool:
 def _walk_platform_errors(value: Any) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     if isinstance(value, dict):
-        if isinstance(value.get("platform_error"), dict):
-            found.append(value["platform_error"])
+        for key in ("platform_error", "provider_error"):
+            if isinstance(value.get(key), dict):
+                found.append(value[key])
         if isinstance(value.get("error"), dict):
             found.append(value["error"])
-        for key in ("errors", "warnings"):
+        for key in ("errors", "warnings", "provider_errors"):
             items = value.get(key)
             if isinstance(items, list):
                 found.extend(item for item in items if isinstance(item, dict))
@@ -538,7 +593,7 @@ def _walk_platform_errors(value: Any) -> list[dict[str, Any]]:
     elif isinstance(value, list):
         for item in value:
             found.extend(_walk_platform_errors(item))
-    return found[:20]
+    return found
 
 
 def _restriction_list(*values: Any) -> list[str]:

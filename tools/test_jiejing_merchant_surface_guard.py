@@ -204,7 +204,7 @@ def public_production_text(source: str) -> str:
     only when its target and its visible label both match that purpose.
     """
     demo_labels = {
-        "工作台演示", "查看 JV AI 演示", "在演示工作台继续",
+        "工作台演示", "查看 AI CEO 演示", "在演示工作台继续",
         "查看调研报告演示", "打开报告演示", "查看商品资料演示",
         "打开商品资料演示", "多件商品？查看批量铺货演示",
         "查看 Listing 编辑演示", "查看素材工坊演示", "查看确认中心演示",
@@ -291,7 +291,7 @@ def main() -> int:
     if not body_boundary:
         return fail("public homepage must use the approved V3 design scope")
     primary_ctas = re.findall(
-        r'<button\b(?=[^>]*data-home-primary-cta="jiejing_ai_ceo_workspace_v2")[^>]*>\s*进入 JV AI 工作台\s*</button>',
+        r'<button\b(?=[^>]*data-home-primary-cta="jiejing_ai_ceo_workspace_v2")[^>]*>\s*进入 AI CEO 工作台\s*</button>',
         index_html,
         flags=re.I,
     )

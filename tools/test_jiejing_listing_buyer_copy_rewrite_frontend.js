@@ -926,7 +926,12 @@ test("default saved results stay protected without a fresh matching cloud receip
         assert.equal(await first.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Newer title typed during cloud save");
       }
       assert.equal(await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback?.status), "generated_unapplied", kind);
-      await first.page.getByRole("button", { name: "AI 生成 Listing 草稿", exact: true }).click();
+      const generate = first.page.locator('[data-saas-action="listing-generate-ai-draft"]');
+      assert.equal(await generate.isDisabled(), true, kind);
+      assert.equal(await generate.textContent(), "等待本次生成结果", kind);
+      // The UI correctly prevents a click; independently prove the handler
+      // rejects a duplicate request without forcing a disabled control.
+      await first.page.evaluate(() => handleSaasAction(document.querySelector('[data-saas-action="listing-generate-ai-draft"]')));
       assert.equal(requests.filter((r) => r.path === generationPath).length, 1, kind);
       assert.deepEqual(first.errors, []); assert.deepEqual(unexpected, []);
     } finally { release.resolve(); releaseSave.resolve(); await first.context.close(); }

@@ -513,6 +513,7 @@ const baseFunctionNames = [
   "saasSha256Hex",
   "readSaasProtectedStateSnapshotFromStorage",
   "saasListingCloudSameIdentity",
+  "saasListingWizardGenerationPending",
 ];
 const baseFunctions = baseFunctionNames.map((name) => {
   const functionSource = extractFunction(name);
@@ -523,7 +524,9 @@ const baseFunctions = baseFunctionNames.map((name) => {
   }
   return functionSource;
 }).join("\n") + `\n${extractOptionalFunction("markSaasMerchantProductFactEdited")}\n${extractOptionalFunction("confirmSaasMerchantProductFactSuggestion")}`;
-const generationContextHelpers = source.slice(
+// These legacy fact forms have no wizard instance. Keep the real pending
+// predicate above so pending generation still prevents a premature unlock.
+const generationContextHelpers = "const saasListingWizardRecord = () => null;\n" + source.slice(
   source.indexOf("let saasListingAiGenerationEpoch ="),
   source.indexOf("async function generateSaasListingDraftFromCurrentProject("),
 );
@@ -1265,6 +1268,8 @@ async function installPendingFactEditor(page) {
   // Only the surrounding page/store/HTTP boundary remains synthetic.
   const functions = ["saasProductFactEditorScope", "saasProductFactEditorFields",
     "captureSaasPendingProductFactEditor", "restoreSaasPendingProductFactEditor",
+    "saasLatestObservedListingProductFactReport", "saasListingCloudContext",
+    "saasListingCloudReportMatchesContext", "saasTimestampMillis",
     "clearSaasPendingProductFactEditor",
     "captureSaasListingEditorFocus", "restoreSaasListingEditorFocus",
     "renderProductListingCenter", "saveSaasMerchantProductFacts", "persistSaasMerchantProductFacts",

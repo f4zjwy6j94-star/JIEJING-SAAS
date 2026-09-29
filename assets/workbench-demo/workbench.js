@@ -170,7 +170,7 @@
     const selected=responses[one('#sampleTask').value];if(!selected)return;
     const box=one('#sampleResponses');box.replaceChildren();
     const article=document.createElement('article');article.className='chat-answer';
-    const heading=document.createElement('h3');heading.textContent='JV AI · 预设回复';
+    const heading=document.createElement('h3');heading.textContent='AI CEO · 预设回复';
     const text=document.createElement('p');text.textContent=selected.text;
     const link=document.createElement('a');link.href=selected.href;link.className='text-button';link.textContent=selected.label;
     article.append(heading,text,link);box.append(article);article.scrollIntoView({block:'nearest'});

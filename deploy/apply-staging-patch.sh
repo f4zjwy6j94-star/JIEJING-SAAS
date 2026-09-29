@@ -189,6 +189,8 @@ FILES=(
   "jiejing_saas/billing_wechat_pay.py"
   "jiejing_saas/billing_wechat_pay_rehearsal.py"
   "jiejing_saas/ai_ceo_chat.py"
+  "jiejing_saas/market_quote_evidence.py"
+  "jiejing_saas/timely_evidence.py"
   "jiejing_saas/listing_draft_generation.py"
   "jiejing_saas/listing_generation_operations.py"
   "jiejing_saas/listing_generation_legacy_recovery.py"
@@ -383,6 +385,12 @@ FILES=(
   "tools/test_jiejing_media_nav_and_state_restore.py"
   "tools/test_jiejing_saas_clean_settings_and_listing_ui.py"
   "tools/test_jiejing_ai_ceo_open_domain_turn_plan.py"
+  "tools/test_jiejing_ai_ceo_market_quote_boundary.py"
+  "tools/test_jiejing_market_quote_evidence.py"
+  "tools/test_jiejing_public_search_temporal_metadata.py"
+  "tools/test_jiejing_ai_ceo_timely_evidence.py"
+  "tools/test_jiejing_listing_wizard_frontend.js"
+  "tools/codex_jiejing_listing_wizard_browser_smoke.js"
   "tools/test_jiejing_ai_ceo_product_image_intake.py"
   "tools/test_jiejing_listing_draft_generation.py"
   "tools/test_jiejing_listing_buyer_copy_rewrite.py"
@@ -416,6 +424,7 @@ FILES=(
   "tools/test_jiejing_phase2_response_boundary_hardening.py"
   "tools/test_jiejing_ai_ceo_routing_supplier_http_red.py"
   "tools/test_jiejing_ai_ceo_project_trace.py"
+  "tools/test_jiejing_current_project_archive_ui.py"
   "tools/test_jiejing_ai_ceo_phase0_red_contracts.py"
   "tools/test_jiejing_product_feedback_closure.py"
   "tools/test_jiejing_platform_operations_overview.py"
@@ -477,11 +486,13 @@ FILES=(
   "tools/jiejing_edge_cutover_preflight.py"
   "tools/test_jiejing_staging_patch_apply_contract.py"
   "tools/test_jiejing_saas_ai_ceo_chat_model_boundary.py"
+  "tools/test_jiejing_saas_ai_ceo_latest_reply_ui.py"
   "tools/test_jiejing_saas_ai_ceo_platform_model_fallback.py"
   "tools/test_jiejing_operational_health_readiness.py"
   "tools/test_jiejing_stripe_checkout_portal.py"
   "tools/test_jiejing_queue_recovery_heartbeat.py"
   "tools/test_jiejing_account_health_incident_mode.py"
+  "tools/test_jiejing_account_health_preflight.py"
   "tools/test_jiejing_frontend_settings_module_split.py"
   "tools/test_jiejing_media_asset_pipeline.py"
   "tools/test_jiejing_media_asset_jobs.py"
@@ -668,6 +679,7 @@ done
 python3 -m py_compile \
   jiejing_saas/*.py \
   jiejing_runtime/runtime.py \
+  jiejing_runtime/public_search.py \
   tools/jiejing_saas_backend_cli.py \
   tools/jiejing_media_controlled_acceptance.py \
   tools/jiejing_owner_media_testing.py \
@@ -690,6 +702,8 @@ python3 -m py_compile \
   jiejing_saas/billing_webhook.py \
   jiejing_saas/billing_wechat_pay.py \
   jiejing_saas/ai_ceo_chat.py \
+  jiejing_saas/market_quote_evidence.py \
+  jiejing_saas/timely_evidence.py \
   jiejing_saas/commercial_launch_gate.py \
   jiejing_saas/controlled_bridges.py \
   jiejing_saas/domain_readiness.py \

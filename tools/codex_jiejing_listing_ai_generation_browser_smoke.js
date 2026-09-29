@@ -398,20 +398,57 @@ function generatedPayload(requestBody, storeId) {
   };
 }
 
+// Concurrency cases intentionally keep unsaved inputs. Backward navigation
+// uses the visible wizard button. When a case needs a non-saving forward jump
+// or a target during generation, exercise the existing delegated gap-handler
+// contract via one temporary control, not a fictitious simultaneous editor.
+async function openListingTestStep(page, target) {
+  const current = Number(await page.locator('[data-listing-wizard-step]').getAttribute('data-listing-wizard-step'));
+  if (current === target) return;
+  const running = await page.evaluate(() => saasListingAiGenerationInFlight.has(saasListingAiGenerationContextKey()));
+  if (current > target && !running) {
+    for (let value = current; value > target; value -= 1) {
+      await page.click('[data-saas-action="listing-wizard-previous"]');
+      await page.waitForSelector(`[data-listing-wizard-step="${value - 1}"]`);
+    }
+    return;
+  }
+  const label = { 1: '材质', 2: '标题', 3: '图片 URL', 4: '费用预留' }[target];
+  await clickListingGapContract(page, label);
+  await page.waitForSelector(`[data-listing-wizard-step="${target}"]`);
+}
+
+async function clickListingGapContract(page, label) {
+  await page.evaluate(label => {
+    document.querySelector('[data-local-gap-navigation-fixture]')?.remove();
+    const button = document.createElement('button');
+    button.type = 'button'; button.textContent = label;
+    button.dataset.localGapNavigationFixture = 'true'; button.dataset.saasListingGapLabel = label;
+    button.style.cssText = 'position:fixed;top:2px;left:2px;z-index:2147483647';
+    document.body.append(button);
+  }, label);
+  await page.click('[data-local-gap-navigation-fixture]');
+  await page.evaluate(() => document.querySelector('[data-local-gap-navigation-fixture]')?.remove());
+}
+
 async function verifyListingGapNavigation(page) {
+  await openListingTestStep(page, 1);
   const before = await page.evaluate(() => ({
-    source: document.querySelector('#saasListingComposerInput')?.value || '',
+    source: state.saasListingComposerInput || '',
     fields: [...document.querySelectorAll('[data-saas-product-fact-field]')].map(field => [field.dataset.saasProductFactField, field.value, field.checked]),
   }));
-  await page.locator('.saas-listing-next-action-questions').getByRole('button', { name: /SKU/ }).first().click();
+  await openListingTestStep(page, 4);
+  await page.locator('[data-listing-advanced-checks] > summary').click();
+  await page.locator('.saas-listing-ebay-field-questions').getByRole('button', { name: /SKU/ }).first().click();
   const after = await page.evaluate(() => ({
-    source: document.querySelector('#saasListingComposerInput')?.value || '',
+    source: state.saasListingComposerInput || '',
     focused: document.activeElement?.dataset?.saasProductFactField || '',
     fields: [...document.querySelectorAll('[data-saas-product-fact-field]')].map(field => [field.dataset.saasProductFactField, field.value, field.checked]),
   }));
   if (after.focused !== 'sku' || before.source !== after.source || !isDeepStrictEqual(before.fields, after.fields)) {
     throw new Error(`SKU gap must focus its fact field without changing source or facts: ${JSON.stringify({focused:after.focused, sourceChanged:before.source !== after.source, factsChanged:!isDeepStrictEqual(before.fields, after.fields)})}`);
   }
+  await openListingTestStep(page, 4);
   await page.locator('[data-listing-advanced-checks] > summary').click();
   await page.locator('.saas-listing-ebay-field-questions').getByRole('button', { name: /SKU/ }).first().click();
   if (await page.evaluate(() => document.activeElement?.dataset?.saasProductFactField) !== 'sku') {
@@ -429,21 +466,8 @@ async function verifyListingGapNavigation(page) {
     ['Fulfillment policy', 'fulfillment_policy_id', 'publish'],
     ['费用预留', 'shipping_cost', 'publish'],
   ];
-  const caseButtons = await page.evaluate(cases => {
-    const host = document.createElement('div');
-    host.dataset.localGapNavigationFixture = 'true';
-    for (const [label] of cases) {
-      const button = document.createElement('button');
-      button.type = 'button'; button.textContent = label;
-      button.dataset.saasListingGapLabel = label;
-      host.append(button);
-    }
-    document.querySelector('#view-product').append(host);
-    return host.querySelectorAll('button').length;
-  }, cases);
-  if (caseButtons !== cases.length) throw new Error('gap test fixture did not render');
   for (const [label, key, family] of cases) {
-    await page.locator('[data-local-gap-navigation-fixture]').getByRole('button', { name: label, exact: true }).click();
+    await clickListingGapContract(page, label);
     const result = await page.evaluate(() => {
       const field = document.activeElement;
       return { fact: field?.dataset?.saasProductFactField, draft: field?.dataset?.saasListingDraftField,
@@ -455,18 +479,21 @@ async function verifyListingGapNavigation(page) {
       throw new Error(`gap ${label} must reveal and focus its field without confirming a checkbox: ${JSON.stringify(result)}`);
     }
   }
-  await page.evaluate(() => document.querySelector('[data-local-gap-navigation-fixture]').remove());
+  await openListingTestStep(page, 1);
   const preserved = await page.evaluate(() => ({
-    source: document.querySelector('#saasListingComposerInput')?.value || '',
+    source: state.saasListingComposerInput || '',
     fields: [...document.querySelectorAll('[data-saas-product-fact-field]')].map(field => [field.dataset.saasProductFactField, field.value, field.checked]),
   }));
   if (!isDeepStrictEqual(before, preserved)) throw new Error('gap navigation changed source or product facts');
-  // Capture the actual merchant path, with test-only controls already removed.
-  await page.locator('.saas-listing-next-action-questions').getByRole('button', { name: /SKU/ }).first().click();
+  // Capture the real checklist-to-fact jump, with test-only controls removed.
+  await openListingTestStep(page, 4);
+  await page.locator('[data-listing-advanced-checks] > summary').click();
+  await page.locator('.saas-listing-ebay-field-questions').getByRole('button', { name: /SKU/ }).first().click();
   const screenshotPath = path.join(os.tmpdir(), `jiejing-listing-gap-${viewportWidth}-${Date.now()}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
   console.log(JSON.stringify({ listing_gap_navigation_cases: cases.length + 2, viewport: viewportWidth, screenshot_path: screenshotPath }));
   console.log('PASS listing_gap_opens_sku_without_mutating_source_or_facts');
+  await openListingTestStep(page, 2);
 }
 
 async function runListingFocusSmoke(options = {}) {
@@ -568,13 +595,13 @@ async function runListingFocusSmoke(options = {}) {
       reportId: state.saasListingComposerDraft?.source_product_fact_report_id,
       requestPresent: !!state.saasListingProductFactSaveRequest, promisePresent: !!state.saasListingProductFactSavePromise,
       status: state.saasListingProductFactSaveStatus, loading: state.saasLoading,
-      saveText: document.querySelector('[data-saas-action="save-merchant-product-facts"]')?.textContent,
-      actionDisabled: [...document.querySelectorAll('[data-saas-action="listing-generate-ai-draft"], [data-saas-action="listing-rewrite-buyer-copy"], [data-saas-action="save-merchant-product-facts"]')].some(button => button.disabled),
+      saveText: document.querySelector('[data-saas-action="listing-wizard-next"]')?.textContent,
+      actionDisabled: [...document.querySelectorAll('[data-saas-action="listing-generate-ai-draft"], [data-saas-action="listing-rewrite-buyer-copy"], [data-saas-action="listing-wizard-next"]')].some(button => button.disabled),
       factDisabled: [...document.querySelectorAll('.saas-product-facts-module [data-saas-product-fact-field]')].some(field => field.disabled),
     }));
     if (afterSaveRefresh.result !== false || afterSaveRefresh.reportId !== observedRefreshedBase.reportId ||
         afterSaveRefresh.requestPresent || afterSaveRefresh.promisePresent || afterSaveRefresh.status !== "local_only" ||
-        afterSaveRefresh.loading || afterSaveRefresh.saveText !== "保存已确认资料" ||
+        afterSaveRefresh.loading || afterSaveRefresh.saveText !== "保存并继续" ||
         afterSaveRefresh.actionDisabled || afterSaveRefresh.factDisabled || initialFactPosts !== 1) {
       throw new Error(`same-project refresh left settled manual-save controls busy or applied its stale response: ${JSON.stringify(afterSaveRefresh)}`);
     }
@@ -1004,7 +1031,8 @@ async function runSmoke() {
     { timeout: 20000 },
   );
   await page.click('[data-saas-action="save-new-product-facts"]');
-  await factsSaved;
+  const initialFactReceipt = await (await factsSaved).json();
+  await page.evaluate(async () => { await state.saasListingProductFactSavePromise; });
 
   await page.waitForSelector('[data-saas-listing-draft-field="title"]', { timeout: 20000 });
   await page.fill('[data-saas-listing-draft-field="title"]', "Merchant Edited Zen Lotus Incense Burner");
@@ -1015,7 +1043,20 @@ async function runSmoke() {
     { timeout: 20000 },
   );
   await page.click('[data-saas-action="listing-generate-ai-draft"]');
-  const firstGeneration = await waitForTimingGate(initialGeneration, "Listing generation");
+  const firstGeneration = await waitForTimingGate(initialGeneration, "Listing generation").catch(async (error) => {
+    const diagnostic = await page.evaluate(() => ({ status: state.saasListingAiGenerationStatus,
+      feedback: state.saasListingComposerDraft?.ai_generation_feedback?.message,
+      saving: state.saasListingProductFactSaveStatus,
+      cloudStatus: saasListingCloudRecord()?.status,
+      packetNormalizationChangedKeys: (() => {
+        const packet = state.saasListingComposerDraft?.merchant_product_fact_packet || {};
+        const normalized = sanitizeSaasMerchantProductFactPacketSnapshot(packet);
+        return [...new Set([...Object.keys(packet), ...Object.keys(normalized)])]
+          .filter(key => JSON.stringify(packet[key]) !== JSON.stringify(normalized[key]));
+      })(),
+      toast: document.querySelector('#actionToast')?.textContent }));
+    throw new Error(`${error.message}: ${JSON.stringify(diagnostic)}`);
+  });
   const firstCloudRead = await waitForTimingGate(initialCloudRead, "Initial checkpoint read");
   await firstCloudRead.route.fulfill({ response: firstCloudRead.response });
   firstCloudRead.resolve();
@@ -1056,9 +1097,13 @@ async function runSmoke() {
     report: (state.saasReports || []).find((item) => item.report_id === "report-browser-listing-ai-1") || null,
     task: (state.saasTasks || []).find((item) => item.task_id === "task-browser-listing-ai-1") || null,
     sourceMode: state.saasListingSourceMode,
+    observedFactBase: state.saasListingComposerDraft.source_product_fact_report_id,
   }));
   if (!savedTrace.report || !savedTrace.task || savedTrace.sourceMode !== "listing_ai_generation") {
     throw new Error(`Listing AI trace was not stored in merchant state: ${JSON.stringify(savedTrace)}`);
+  }
+  if (savedTrace.observedFactBase !== initialFactReceipt.report.report_id) {
+    throw new Error("same-project generation lost the previously observed fact CAS baseline");
   }
 
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -1096,18 +1141,17 @@ async function runSmoke() {
   }
   const savedCopyLayout = await page.evaluate(() => {
     const editor = document.querySelector(".saas-listing-v2-draft-editor");
-    const facts = document.querySelector(".saas-product-facts-module");
     const primaryRect = editor.querySelector('.saas-listing-v2-draft-primary').getBoundingClientRect();
     const sideRect = editor.querySelector('.saas-listing-v2-draft-side').getBoundingClientRect();
     return {
-      editor_before_facts: Boolean(editor && facts && (editor.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      wizard_step: Number(document.querySelector('[data-listing-wizard-step]')?.dataset.listingWizardStep),
       facts_count: document.querySelectorAll(".saas-product-facts-module").length,
       title_count: document.querySelectorAll('[data-saas-listing-draft-field="title"]').length,
       tablet_stacked: innerWidth > 1024 || sideRect.top >= primaryRect.bottom,
     };
   });
-  if (!savedCopyLayout.editor_before_facts || savedCopyLayout.facts_count !== 1 || savedCopyLayout.title_count !== 1 || !savedCopyLayout.tablet_stacked) {
-    throw new Error(`Saved Listing must remain ahead of the complete fact form: ${JSON.stringify(savedCopyLayout)}`);
+  if (savedCopyLayout.wizard_step !== 2 || savedCopyLayout.facts_count !== 0 || savedCopyLayout.title_count !== 1 || !savedCopyLayout.tablet_stacked) {
+    throw new Error(`Saved Listing content step must show one editor without the fact form: ${JSON.stringify(savedCopyLayout)}`);
   }
   await page.locator(".saas-listing-v2-draft-editor").scrollIntoViewIfNeeded();
   const savedCopyScreenshotPath = path.join(os.tmpdir(), `jiejing-listing-result-first-${layout.viewport_width}-${Date.now()}.png`);
@@ -1146,6 +1190,13 @@ async function runSmoke() {
     document.querySelector('[data-saas-listing-draft-field="title"]') &&
     document.querySelector('[data-saas-action="listing-generate-ai-draft"]')?.disabled,
     null, { timeout: 15000 });
+  for (const action of ["listing-wizard-next", "listing-wizard-previous"]) {
+    await page.click(`[data-saas-action="${action}"]`);
+    if (!await page.evaluate(() => saasListingWizardRecord().step === 2 &&
+        state.saasListingProductFactSaveStatus === "saving")) {
+      throw new Error("wizard navigation bypassed the pending initial product save");
+    }
+  }
   await page.fill('[data-saas-listing-draft-field="title"]', "Other Store Unsaved Tablet Title");
   await page.evaluate(() => { window.__manualSaveTitleNode = document.activeElement; });
   await delayedManualFacts.route.fulfill({ response: delayedManualFacts.response });
@@ -1158,14 +1209,14 @@ async function runSmoke() {
     focusPreserved: document.activeElement === window.__manualSaveTitleNode && window.__manualSaveTitleNode?.isConnected,
     status: state.saasListingProductFactSaveStatus,
     generateDisabled: document.querySelector('[data-saas-action="listing-generate-ai-draft"]')?.disabled,
-    saveDisabled: document.querySelector('[data-saas-action="save-merchant-product-facts"]')?.disabled,
+    saveDisabled: document.querySelector('[data-saas-action="listing-wizard-next"]')?.disabled,
     rewriteDisabled: document.querySelector('[data-saas-action="listing-rewrite-buyer-copy"]')?.disabled,
     factControlDisabled: [...document.querySelectorAll('.saas-product-facts-module [data-saas-product-fact-field], .saas-product-facts-module [data-saas-action="mark-product-fact-unknown"], .saas-product-facts-module [data-saas-action="confirm-product-fact-suggestion"]')].some(control => control.disabled),
-    saveText: document.querySelector('[data-saas-action="save-merchant-product-facts"]')?.textContent,
+    saveText: document.querySelector('[data-saas-action="listing-wizard-next"]')?.textContent,
   }));
   if (manualSaveResult.title !== "Other Store Unsaved Tablet Title" || !manualSaveResult.focusPreserved ||
       manualSaveResult.status !== "saved" || manualSaveResult.generateDisabled || manualSaveResult.saveDisabled ||
-      manualSaveResult.rewriteDisabled || manualSaveResult.factControlDisabled || manualSaveResult.saveText !== "保存已确认资料") {
+      manualSaveResult.rewriteDisabled || manualSaveResult.factControlDisabled || manualSaveResult.saveText !== "保存并继续") {
     throw new Error(`completed new-product save did not preserve typing and release its controls: ${JSON.stringify(manualSaveResult)}`);
   }
   await page.waitForSelector('[data-saas-listing-draft-field="title"]', { timeout: 20000 });
@@ -1230,6 +1281,7 @@ async function runSmoke() {
   if (returnResult.staleReportPresent) throw new Error(`old Listing report entered the returned project: ${JSON.stringify(returnResult)}`);
   if (returnResult.title !== "Returned Project New Unsaved Title") throw new Error(`received returned-project title was later overwritten: ${JSON.stringify(returnResult)}`);
   const recoverSavedResult = async (body, report, requestStoreId, expectedTitle) => {
+    await openListingTestStep(page, 2);
     const beforePosts = generationRequestCount;
     const beforeReads = resultReadCount;
     installRecoveredResult(body, report, requestStoreId);
@@ -1255,6 +1307,9 @@ async function runSmoke() {
   while (!heldGeneration && Date.now() < editDeadline) await new Promise((resolve) => setTimeout(resolve, 20));
   if (!heldGeneration) throw new Error("edit-during-generation request was not held");
   await page.fill('[data-saas-listing-draft-field="title"]', "Merchant Typed While AI Was Running");
+  // Held-generation handler contract: ordinary Previous navigation is blocked
+  // while generating, so exercise the existing gap-navigation handler here.
+  await openListingTestStep(page, 1);
   await page.fill('[data-saas-product-fact-field="material"]', "Updated material awaiting save");
   const editedPayload = generatedPayload(heldGeneration.body, heldGeneration.storeId);
   editedPayload.report.report_id = "report-generated-before-new-merchant-edits";
@@ -1262,7 +1317,7 @@ async function runSmoke() {
   heldGeneration.resolve();
   await page.waitForTimeout(150);
   const editResult = await page.evaluate(() => ({
-    title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+    title: state.saasListingComposerDraft?.fields?.title,
     material: document.querySelector('[data-saas-product-fact-field="material"]')?.value,
     generating: state.saasLoading,
     buttonDisabled: document.querySelector('[data-saas-action="listing-generate-ai-draft"]')?.disabled,
@@ -1272,9 +1327,11 @@ async function runSmoke() {
     throw new Error(`generation discarded new edits or left the editor busy: ${JSON.stringify(editResult)}`);
   }
   await recoverSavedResult(heldGeneration.body, editedPayload.report, heldGeneration.storeId, "Merchant Typed While AI Was Running");
+  await openListingTestStep(page, 1);
   if (await page.inputValue('[data-saas-product-fact-field="material"]') !== "Updated material awaiting save") {
     throw new Error("saved-result review changed pending merchant fact input");
   }
+  await openListingTestStep(page, 2);
   heldGeneration = null;
   const requestCountBeforeDuplicate = generationRequestCount;
   await page.click('[data-saas-action="listing-generate-ai-draft"]');
@@ -1455,9 +1512,10 @@ async function runSmoke() {
     throw new Error("same-value fact capture revoked the existing Listing validation");
   }
   await page.fill('[data-saas-listing-draft-field="selling_points"]', "New edit while waiting");
+  await openListingTestStep(page, 1);
   await page.fill('[data-saas-product-fact-field="material"]', "New unsaved material while waiting");
   await finishHeldRequest(blockedGeneration, "blocked", "blocked-with-new-edits");
-  if (await page.inputValue('[data-saas-listing-draft-field="selling_points"]') !== "New edit while waiting" ||
+  if (await page.evaluate(() => state.saasListingComposerDraft?.fields?.selling_points) !== "New edit while waiting" ||
       await page.inputValue('[data-saas-product-fact-field="material"]') !== "New unsaved material while waiting" ||
       !await generationFeedback.isVisible() || !(await generationFeedback.textContent()).includes("材质")) {
     throw new Error("blocked generation failed to show an inline reason while retaining in-flight edits");
@@ -1468,8 +1526,24 @@ async function runSmoke() {
     renderProductListingCenter();
   });
   const retainedCopy = { title: "原中文标题", selling_points: "原卖点一\n原卖点二\n原卖点三", description: "原描述保留" };
-  for (const [key, value] of Object.entries(retainedCopy)) await page.fill(`[data-saas-listing-draft-field="${key}"]`, value);
   await page.fill('[data-saas-product-fact-field="material"]', "Steel");
+  const changedFactsResponse = page.waitForResponse(response => response.request().method() === "POST" &&
+    new URL(response.url()).pathname.endsWith('/product-facts'), { timeout: 20000 });
+  await page.click('[data-saas-action="listing-wizard-next"]');
+  const changedFactsReceipt = await changedFactsResponse;
+  await page.waitForFunction(() => !saasListingWizardRecord()?.busy);
+  if (await page.locator('[data-listing-wizard-step="2"]').count() !== 1) {
+    const diagnostic = await page.evaluate(() => ({ step: saasListingWizardRecord()?.step,
+      message: saasListingWizardRecord()?.message, saveStatus: state.saasListingProductFactSaveStatus,
+      missing: saasListingWizardCoreMissing(), feedback: state.saasListingComposerDraft?.ai_generation_feedback?.status,
+      toast: document.querySelector('#actionToast')?.textContent }));
+    const failure = await changedFactsReceipt.json();
+    throw new Error(`changed-material save did not advance: ${JSON.stringify({ ...diagnostic,
+      responseStatus: changedFactsReceipt.status(), errorCode: failure.error_code,
+      expectedFactBase: changedFactsReceipt.request().postDataJSON()?.save_context?.expected_fact_report_id,
+      currentFactBase: failure.current_fact_report_id })}`);
+  }
+  for (const [key, value] of Object.entries(retainedCopy)) await page.fill(`[data-saas-listing-draft-field="${key}"]`, value);
   const rejectedGeneration = await beginHeldRequest();
   const changedFactValidation = await page.evaluate(() => ({
     generated: state.saasListingComposerDraft.model_generated,
@@ -1531,6 +1605,9 @@ async function runSmoke() {
   if (!await page.evaluate(() => state.saasListingComposerDraft.model_generated === false && state.saasListingComposerDraft.buyer_copy_requires_validated_listing_generation === true)) {
     throw new Error("failed regeneration or reload revived the previous fact snapshot's Listing validation");
   }
+  // Internal publication-guard contract: mount the actual final-step form so
+  // false is proof of its gate, not merely the absence of a form on step 2.
+  await openListingTestStep(page, 4);
   const publishBoundary = await page.evaluate(async () => ({
     title: saasPublishIntakePrefillValues().title,
     description: saasPublishIntakePrefillValues().description_html,
@@ -1540,6 +1617,7 @@ async function runSmoke() {
   if (publishBoundary.title || publishBoundary.description || publishBoundary.publish !== false || publishBoundary.ebayDraft !== false) {
     throw new Error("changed facts allowed old buyer copy into publishing or eBay draft confirmation");
   }
+  await openListingTestStep(page, 2);
   await generationFeedback.scrollIntoViewIfNeeded();
   const failureScreenshotPath = path.join(os.tmpdir(), `jiejing-listing-generation-rejected-${viewportWidth}-${Date.now()}.png`);
   await page.screenshot({ path: failureScreenshotPath, fullPage: false });
@@ -1612,6 +1690,7 @@ async function runSmoke() {
     const refreshTitle = "Merchant Title While Refresh Is Pending";
     const refreshMaterial = "Merchant material awaiting explicit save";
     await page.fill('[data-saas-listing-draft-field="title"]', refreshTitle);
+    await openListingTestStep(page, 1);
     await page.fill('[data-saas-product-fact-field="material"]', refreshMaterial);
     const factProvenanceAfterInput = await page.evaluate(() => Array.from(
       document.querySelectorAll("#view-product [data-saas-product-fact-field]"), (field) => [
@@ -1625,7 +1704,7 @@ async function runSmoke() {
       companyId: state.saasIdentity?.company_id, userId: state.saasIdentity?.user_id,
       storeId: activeSaasStore()?.store_id, identity: saasCurrentListingProjectIdentity(),
       baseReportId: state.saasListingComposerDraft?.source_product_fact_report_id,
-      title: document.querySelector('[data-saas-listing-draft-field="title"]')?.value,
+      title: state.saasListingComposerDraft?.fields?.title,
       material: document.querySelector('[data-saas-product-fact-field="material"]')?.value,
       provenance: Array.from(document.querySelectorAll("#view-product [data-saas-product-fact-field]"), (field) => [
         field.dataset.saasProductFactField, field.dataset.productFactConfirmed || "",
@@ -1651,7 +1730,7 @@ async function runSmoke() {
     const explicitFactSave = page.waitForResponse((response) => response.request().method() === "POST" &&
       new URL(response.url()).pathname === `/stores/${refreshScope.storeId}/product-facts` && response.status() === 201,
     { timeout: 20000 });
-    await page.click('[data-saas-action="save-merchant-product-facts"]');
+    await page.click('[data-saas-action="listing-wizard-next"]');
     const savedFactResponse = await explicitFactSave;
     await page.evaluate(async () => { await state.saasListingProductFactSavePromise; });
     const savedFactPayload = await savedFactResponse.json();
@@ -1677,6 +1756,8 @@ async function runSmoke() {
     throw new Error("cross-base regression requires the fact version saved by the preceding UI case");
   }
   const pendingMaterialC = "Unsaved material C from the first client";
+  await page.waitForSelector('[data-listing-wizard-step="2"]');
+  await openListingTestStep(page, 1);
   await page.fill('[data-saas-product-fact-field="material"]', pendingMaterialC);
   const secondClientPacket = structuredClone(factVersionA.report.merchant_product_fact_packet);
   const secondClientMaterialB = "Saved material B from the second client";
@@ -1708,7 +1789,20 @@ async function runSmoke() {
     const versionWarning = page.locator('[data-saas-product-fact-version-warning]');
     if (!await versionWarning.isVisible() || !/更新/.test(await versionWarning.textContent()) ||
         !/保留/.test(await versionWarning.textContent())) {
-      throw new Error("retained old-base facts have no visible new-version warning");
+      const diagnostic = await page.evaluate(() => ({ step: saasListingWizardRecord()?.step,
+        draftBase: state.saasListingComposerDraft?.source_product_fact_report_id,
+        editorBase: document.querySelector('#view-product')?.saasProductFactEditorBaseline?.baseReportId,
+        pendingBase: document.querySelector('#view-product')?.saasProductFactEditorBaseline?.pendingBaseReportId,
+        pendingFields: document.querySelector('#view-product')?.saasProductFactEditorBaseline?.pendingFieldKeys,
+        warningCount: document.querySelectorAll('[data-saas-product-fact-version-warning]').length,
+        cloudStatus: saasListingCloudRecord()?.status,
+        cloudBase: saasListingCloudRecord()?.baseReportId,
+        conflictBase: saasListingCloudRecord()?.conflict?.baseReportId,
+        factReports: (state.saasReports || []).filter(report => report.report_type === 'merchant.product_facts')
+          .map(report => [report.report_id, report.report?.listing_project_identity?.key]),
+        warningText: document.querySelector('[data-saas-product-fact-version-warning]')?.textContent }));
+      throw new Error(`retained old-base facts have no visible new-version warning: ${JSON.stringify({ ...diagnostic,
+        factA: factVersionA.report_id, factB: factVersionB.report_id })}`);
     }
     if (firstClientFactBodies.length !== 0) throw new Error("refresh automatically submitted old-base merchant facts");
     // Merely visiting another workspace is not the explicit project reopen
@@ -1750,7 +1844,7 @@ async function runSmoke() {
     const conflictResponse = page.waitForResponse((response) => response.request().method() === "POST" &&
       new URL(response.url()).pathname === `/stores/${refreshScope.storeId}/product-facts` && response.status() === 409,
     { timeout: 20000 });
-    await page.click('[data-saas-action="save-merchant-product-facts"]');
+    await page.click('[data-saas-action="listing-wizard-next"]');
     await conflictResponse;
     await page.evaluate(async () => { await state.saasListingProductFactSavePromise; });
     if (firstClientFactBodies.length !== 1 || firstClientFactBodies[0].save_context?.expected_fact_report_id !== factVersionA.report_id ||
@@ -1776,18 +1870,50 @@ async function runSmoke() {
     }
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => typeof state !== "undefined" && state.saasProtectedStateReady && !state.saasLoading);
-    await waitForRefreshCompletion(page.evaluate(() => refreshSaasState({ silent: true })), "Explicit reopen at fact version B");
+    await waitForRefreshCompletion(page.evaluate(() => refreshSaasState({ silent: true })), "Reload before explicit fact recovery");
+    // Reload is not permission to discard a cached conflicting fact edit. The
+    // new scoped action explicitly confirms that loss, independently of copy.
+    if (await page.inputValue('[data-saas-product-fact-field="material"]') !== pendingMaterialC || firstClientFactBodies.length !== 1) {
+      throw new Error("reload discarded conflicting fact input or retried its save without confirmation");
+    }
+    await page.evaluate(async () => { await saasListingCloudRecord()?.read; await saasListingCloudRecord()?.write; });
+    const readRecoveryState = () => page.evaluate(() => {
+      const cloud = saasListingCloudRecord();
+      return { fields: state.saasListingComposerDraft.fields, edited: state.saasListingComposerDraft.merchant_edited_fields,
+        cloud: cloud ? { base: cloud.baseReportId, revision: cloud.revision, fields: cloud.fields,
+          dirty: cloud.dirty, pending: cloud.pending, conflict: cloud.conflict } : null };
+    });
+    const beforeRecovery = await readRecoveryState();
+    const generationCountBeforeRecovery = generationRequestCount;
+    const loadLatest = page.locator('[data-saas-action="listing-load-latest-product-facts"]');
+    page.once('dialog', async dialog => {
+      if (dialog.type() !== 'confirm' || !dialog.message().includes('放弃本机未保存的商品资料') || !dialog.message().includes('Listing 文案保留')) {
+        throw new Error('fact recovery did not clearly confirm the facts-only discard');
+      }
+      await dialog.dismiss();
+    });
+    await loadLatest.click();
+    if (await page.inputValue('[data-saas-product-fact-field="material"]') !== pendingMaterialC ||
+        !isDeepStrictEqual(await readRecoveryState(), beforeRecovery) || firstClientFactBodies.length !== 1) {
+      throw new Error('cancelling fact recovery changed input, copy, cloud state or sent a save');
+    }
+    page.once('dialog', dialog => dialog.accept());
+    await loadLatest.click();
     if (await page.inputValue('[data-saas-product-fact-field="material"]') !== secondClientMaterialB ||
         !await page.evaluate((reportId) => state.saasListingComposerDraft?.source_product_fact_report_id === reportId, factVersionB.report_id) ||
         await page.locator('[data-saas-product-fact-version-warning]').count()) {
-      throw new Error("explicit reopen did not discard the old DOM overlay and restore real fact version B");
+      throw new Error("confirmed fact recovery did not discard the old fact overlay and restore real version B");
+    }
+    if (!isDeepStrictEqual(await readRecoveryState(), beforeRecovery) || firstClientFactBodies.length !== 1 ||
+        generationRequestCount !== generationCountBeforeRecovery || !await page.evaluate(() => state.saasListingComposerDraft.model_generated !== true)) {
+      throw new Error('facts-only recovery changed copy/cloud state, kept old validation or triggered a write/generation');
     }
     const newMaterialD = "New material D after explicit reopen";
     await page.fill('[data-saas-product-fact-field="material"]', newMaterialD);
     const finalSave = page.waitForResponse((response) => response.request().method() === "POST" &&
       new URL(response.url()).pathname === `/stores/${refreshScope.storeId}/product-facts` && response.status() === 201,
     { timeout: 20000 });
-    await page.click('[data-saas-action="save-merchant-product-facts"]');
+    await page.click('[data-saas-action="listing-wizard-next"]');
     const finalSavedPayload = await (await finalSave).json();
     await page.evaluate(async () => { await state.saasListingProductFactSavePromise; });
     const factVersionD = matchingFacts(await api("/reports?limit=24", { token }))[0];
@@ -1796,7 +1922,7 @@ async function runSmoke() {
         factVersionD.report.merchant_product_fact_packet.merchant_confirmed_facts.material !== newMaterialD) {
       throw new Error("explicit reopen and merchant save did not create version D from observed version B");
     }
-    contextCases.push("new_fact_base_retains_unsaved_input_and_original_cas_until_explicit_reopen");
+    contextCases.push("new_fact_base_retains_unsaved_input_and_original_cas_until_confirmed_fact_recovery");
   } finally {
     page.off("request", captureFirstClientFactPost);
   }

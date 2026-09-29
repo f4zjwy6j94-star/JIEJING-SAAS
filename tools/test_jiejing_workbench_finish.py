@@ -96,7 +96,7 @@ class WorkbenchFinishContract(unittest.TestCase):
 
     def test_six_navigation_routes_keep_approved_names(self) -> None:
         self.assertEqual(self.document.nav, [
-            ("cockpit", "JV AI"), ("product", "选品与上架"),
+            ("cockpit", "AI CEO"), ("product", "选品与上架"),
             ("media", "素材工坊"), ("confirm", "确认中心"),
             ("service", "客服与订单"), ("connect", "设置"),
         ])
@@ -111,13 +111,13 @@ class WorkbenchFinishContract(unittest.TestCase):
 
     def test_rename_does_not_change_runtime_identifiers_or_preserved_views(self) -> None:
         self.assertEqual(self.document.ids["ceoInput"]["name"], "ai_ceo_prompt")
-        self.assertEqual(self.document.ids["view-cockpit"]["data-title"], "JV AI")
+        self.assertEqual(self.document.ids["view-cockpit"]["data-title"], "AI CEO")
         self.assertIn("ceoForm", self.document.ids)
         self.assertIn("view-bulk", self.document.ids)
         self.assertIn("view-connect", self.document.ids)
         self.assertIn("hidden", self.document.ids["view-activity"])
         self.assertEqual(self.document.ids["view-activity"]["data-internal-view"], "legacy-report-center")
-        self.assertNotIn("AI CEO", HTML)
+        self.assertFalse("JV AI" in HTML, "retired assistant name must not appear")
 
     def test_finish_cannot_override_visibility_or_layout_state(self) -> None:
         forbidden = {

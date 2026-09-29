@@ -79,8 +79,8 @@ def main() -> None:
 
     merchant_evidence = scope("function renderSaasMerchantEvidencePanel", "function saasModelProviderRows")
     assert "<strong>${escapeHtml(packetId)}</strong>" not in merchant_evidence
-    assert 'id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 JV AI 的问题或商品任务"' in APP_HTML
-    assert 'id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 JV AI 的问题或商品任务"' in APP_JS
+    assert 'id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 AI CEO 的问题或商品任务"' in APP_HTML
+    assert 'id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 AI CEO 的问题或商品任务"' in APP_JS
     assert ".source-form-grid label:focus-within" in STYLES
     print("PASS jiejing_merchant_copy_maturity")
 

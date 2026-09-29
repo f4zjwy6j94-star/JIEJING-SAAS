@@ -66,7 +66,7 @@ def main() -> None:
     assert 'data-home-version="finish-review-v12"' in INDEX
     assert re.findall(r'data-home-section="([^"]+)"', INDEX) == ["hero", "proof", "capabilities", "workflow", "merchants", "plans"]
     assert INDEX.count('data-home-primary-cta="jiejing_ai_ceo_workspace_v2"') == 1
-    assert "进入 JV AI 工作台" in INDEX
+    assert "进入 AI CEO 工作台" in INDEX
     assert re.findall(r'<button\b[^>]*data-plan="([^"]+)"', INDEX) == ["free", "single", "multi"]
     assert re.findall(r'data-workflow-module="([^"]+)"', INDEX) == ["cockpit", "product", "media", "confirm"]
     hero = INDEX[INDEX.index('data-home-section="hero"'):INDEX.index('data-home-section="proof"')]

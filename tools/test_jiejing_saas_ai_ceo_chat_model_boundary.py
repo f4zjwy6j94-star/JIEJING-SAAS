@@ -12,6 +12,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -49,7 +50,18 @@ class FakeModelHandler(BaseHTTPRequestHandler):
         )
         messages = body.get("messages") if isinstance(body.get("messages"), list) else []
         user_prompt = str(messages[-1].get("content") if messages and isinstance(messages[-1], dict) else "")
-        if "travel mosquito repeller" in user_prompt.lower():
+        system_prompt = str(messages[0].get("content") if messages and isinstance(messages[0], dict) else "")
+        if "timely_evidence_review_v1" in system_prompt:
+            evidence = json.loads(user_prompt)
+            source = evidence["source_records"][0]
+            content = json.dumps({"all_claims_supported": True, "answers_question": True, "date_scope_matches": True,
+                "conflicts": [], "claims": [{"text": evidence["candidate_answer"], "source_id": source["citation_id"],
+                                               "excerpt": source["snippet"]}]}, ensure_ascii=False)
+        elif "realtime_search" in user_prompt and '"realtime_kind": "news_search"' in user_prompt:
+            evidence = json.loads(user_prompt)
+            source = evidence["realtime_search"]["source_records"][0]
+            content = source["snippet"].rstrip("。") + "[" + source["citation_id"] + "]。"
+        elif "travel mosquito repeller" in user_prompt.lower():
             content = (
                 "### Product market research report\n"
                 "**Suggested product:** Travel mosquito repeller product\n"
@@ -114,6 +126,10 @@ class FakeSearchHandler(BaseHTTPRequestHandler):
                 },
             ],
         }
+        if "美股为什么大跌" in str(body.get("query") or ""):
+            today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            payload["results"] = [{"title": "Offline dated market-news fixture", "url": "https://www.reuters.com/markets/fixture",
+                "content": f"截至{today}，该公开报道把这次美股回落与风险偏好下降联系起来。", "published_at": today}]
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("content-type", "application/json")
@@ -1092,6 +1108,7 @@ def main() -> int:
             return fail("AI CEO realtime search response must not expose search provider credential")
 
         search_call_count = len(FakeSearchHandler.calls)
+        market_model_call_count = len(FakeModelHandler.calls)
         market_news_response = post_json(
             f"{base_url}/stores/{store_id}/merchant-ceo/chat",
             {
@@ -1118,8 +1135,10 @@ def main() -> int:
             return fail(f"market move question should route as realtime news_search: {market_news_chat}")
         if len(FakeSearchHandler.calls) <= search_call_count:
             return fail("market move question should call the backend search provider")
-        if len(FakeModelHandler.calls) <= call_count + 1:
-            return fail("market move question should synthesize source records through the account model")
+        if len(FakeModelHandler.calls) != market_model_call_count + 2:
+            return fail("dated market news should make one synthesis call and one evidence review through the account model")
+        if market_news_chat.get("answer_stream_buffered") is not True or not market_news_chat.get("temporal_evidence_quality", {}).get("accepted"):
+            return fail("dated market news should pass the temporal review before returning its answer")
         if realtime_response.get("ai_ceo_market_report") is not None:
             return fail("realtime stock question must not be saved as an AI CEO Listing handoff report")
         if realtime_response.get("ai_ceo_market_report_delivery") is not None:
@@ -1136,7 +1155,7 @@ def main() -> int:
         latest_command = latest.get("command", {})
         if latest_command.get("ai_reply_status") != "realtime_search_answered":
             return fail("latest AI CEO command should keep realtime model-synthesis status")
-        if "NASDAQ" not in str(latest_command.get("ai_reply") or ""):
+        if str(latest_command.get("ai_reply") or "") != market_news_chat.get("answer"):
             return fail("latest AI CEO command should keep realtime source-backed reply")
 
         high_risk_response = post_json(

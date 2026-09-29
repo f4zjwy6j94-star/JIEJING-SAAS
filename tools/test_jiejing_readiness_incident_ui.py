@@ -28,14 +28,16 @@ def main() -> int:
             "function saasReadinessMerchantStatus",
             "function renderSaasReadinessIncidentStrip",
             'data-saas-readiness-incident="database"',
+            "function renderSaasMerchantProjectStatusStrip",
+            "mountSaasMerchantProjectStatusStrip",
+            'data-merchant-project-status="merchant_project_status_v1"',
         ]:
             if forbidden in app_js:
                 return fail(f"merchant surface still exposes internal readiness incident UI: {forbidden}")
         for needle, label in [
-            ("function renderSaasMerchantProjectStatusStrip", "current project status renderer"),
-            ('data-merchant-project-status="merchant_project_status_v1"', "current project status marker"),
-            ("当前阻断", "merchant blocker label"),
-            ("所有页面都按同一后端项目状态继续。", "single backend project guidance"),
+            ("function refreshSaasMerchantProjectStatus", "backend project status refresh"),
+            ("function commitSaasActiveListingProjectContext", "current project continuity"),
+            ("function syncSaasProjectRoute", "current project route"),
             ("function saasSellerOnboardingGuidance", "seller onboarding guidance mapper"),
             ("完成 eBay 卖家注册", "precise seller registration guidance"),
             ("无需重新授权", "no repeat OAuth guidance"),

@@ -9123,9 +9123,21 @@ class SaaSRepository:
             )
         return {"execution_id": execution_id, **result}
 
-    def list_execution_results(self, *, company_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+    def list_execution_results(
+        self,
+        *,
+        company_id: str,
+        store_id: str | None = None,
+        limit: int | None = None,
+        include_error_ids: tuple[str, ...] = (),
+    ) -> list[dict[str, Any]]:
         self.initialize()
-        params: list[Any] = [company_id]
+        scope_params: list[Any] = [company_id]
+        scope_clause = "c.company_id = ?"
+        if store_id is not None:
+            scope_clause += " and c.store_id = ?"
+            scope_params.append(store_id)
+        params = list(scope_params)
         limit_clause = ""
         if limit and limit > 0:
             limit_clause = "limit ?"
@@ -9135,12 +9147,30 @@ class SaaSRepository:
                 f"""
                 select e.* from execution_results e
                 join confirmations c on c.confirmation_id = e.confirmation_id
-                where c.company_id = ?
+                where {scope_clause}
                 order by e.created_at desc
                 {limit_clause}
                 """,
                 tuple(params),
             ).fetchall()
+            # Keep known account restrictions even when ordinary executions
+            # fill the recent window. Exact error parsing remains in account
+            # health; this text filter only retrieves candidate historical rows
+            # and works with SQLite TEXT and PostgreSQL JSON/JSONB alike.
+            error_ids = sorted({str(value) for value in include_error_ids if str(value).isdigit()})
+            if error_ids and limit and limit > 0:
+                error_clause = " or ".join("cast(e.result_json as text) like ?" for _ in error_ids)
+                historical_rows = conn.execute(
+                    f"""
+                    select e.* from execution_results e
+                    join confirmations c on c.confirmation_id = e.confirmation_id
+                    where {scope_clause} and ({error_clause})
+                    order by e.created_at desc
+                    """,
+                    tuple([*scope_params, *(f"%{error_id}%" for error_id in error_ids)]),
+                ).fetchall()
+                by_id = {row["execution_id"]: row for row in [*rows, *historical_rows]}
+                rows = sorted(by_id.values(), key=lambda row: str(row["created_at"]), reverse=True)
         return [self._execution_row_to_dict(row) for row in rows]
 
     def write_audit(
@@ -19342,6 +19372,9 @@ def _normalize_ai_ceo_chat_history_turn(
             if record_type == "source":
                 cleaned.append(
                     {
+                        "citation_id": re.sub(r"[^A-Za-z0-9]", "", str(item.get("citation_id") or ""))[:20],
+                        "published_at": _sanitize_merchant_ceo_text(item.get("published_at"), limit=100),
+                        "updated_at": _sanitize_merchant_ceo_text(item.get("updated_at"), limit=100),
                         "title": _sanitize_merchant_ceo_text(item.get("title") or item.get("domain"), limit=160),
                         "url": _sanitize_merchant_ceo_text(item.get("url"), limit=500),
                         "domain": _sanitize_merchant_ceo_text(item.get("domain"), limit=120),

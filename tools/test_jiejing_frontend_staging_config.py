@@ -483,7 +483,7 @@ def main() -> int:
     for first_day_marker in [
         "login_onboarding_ai_ceo_v3", "saas-first-day-path-strip",
         'data-first-day-path="login_onboarding_ai_ceo_v3"', "刷新不会跳过向导",
-        "一句话交给 JV AI",
+        "一句话交给 AI CEO",
     ]:
         if first_day_marker not in app_js + app_html + styles_css:
             return fail(f"first-day path marker missing: {first_day_marker}")

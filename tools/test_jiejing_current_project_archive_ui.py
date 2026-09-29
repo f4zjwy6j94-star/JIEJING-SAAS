@@ -15,19 +15,36 @@ def main() -> None:
         "saasMerchantProjectStatus",
         "/merchant-project-status?project_id=",
         "merchant_project_status_v1",
-        "renderSaasMerchantProjectStatusStrip",
+        "refreshSaasMerchantProjectStatus",
+        "commitSaasActiveListingProjectContext",
         "syncSaasProjectRoute",
     )
     for marker in required:
         if marker not in app_js:
             raise AssertionError(f"current project status integration missing: {marker}")
 
-    status_scope_start = app_js.index("function renderSaasMerchantProjectStatusStrip")
-    status_scope_end = app_js.index("function ", status_scope_start + 20)
+    for retired in (
+        "renderSaasMerchantProjectStatusStrip",
+        "mountSaasMerchantProjectStatusStrip",
+        'data-merchant-project-status="merchant_project_status_v1"',
+    ):
+        if retired in app_js:
+            raise AssertionError(f"repeated project banner must not return: {retired}")
+
+    status_scope_start = app_js.index("async function refreshSaasMerchantProjectStatus")
+    status_scope_end = app_js.index("async function refreshSaasState", status_scope_start)
     status_scope = app_js[status_scope_start:status_scope_end]
     for forbidden in ("旧手机壳", "OLD-CASE", "JJ-DRAFT-PROOF", "media_job_a82cc638bf481bb7"):
         if forbidden in status_scope:
-            raise AssertionError(f"current project strip contains historical fixture: {forbidden}")
+            raise AssertionError(f"current project state contains historical fixture: {forbidden}")
+
+    for marker in (
+        "function renderSaasRecentProductTasks",
+        "function renderSaasListingModeNav",
+        "function renderSaasMediaStudioStatus",
+    ):
+        if marker not in app_js:
+            raise AssertionError(f"existing product workflow entry missing: {marker}")
 
     if "URLSearchParams" not in app_js or 'searchParams.set("project"' not in app_js:
         raise AssertionError("view routing does not preserve the opaque current project")

@@ -4,7 +4,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
 <title>捷境 · 工作台互动演示</title>
 <link rel="icon" href="../jiejing-app-icon.svg"><link rel="stylesheet" href="./workbench.css">
-<script src="./media-data.js" defer></script><script src="./workbench-state.js" defer></script><script src="./workbench.js" defer></script>
+<script src="./media-data.js" defer></script><script src="./workbench-state.js" defer></script><script src="./workbench.js?v=20260929-ai-ceo-name" defer></script>
 </head>
 <body data-ui-revision="finish-review-v12">
 <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -23,7 +23,7 @@
     <a class="brand" href="../../"><img src="../jiejing-logo-mark.svg" width="35" height="35" alt=""><span><strong>捷境</strong><small>JIEJING</small></span></a>
     <div class="project-switch"><span>示例商品</span><strong>旅行收纳袋套装</strong><small>在各模块中继续同一件商品</small></div>
     <nav aria-label="工作台模块">
-      <a href="#cockpit" data-nav="cockpit" aria-current="page"><svg><use href="#i-chat"/></svg>JV AI</a>
+      <a href="#cockpit" data-nav="cockpit" aria-current="page"><svg><use href="#i-chat"/></svg>AI CEO</a>
       <a href="#listing" data-nav="listing"><svg><use href="#i-list"/></svg>选品与上架</a>
       <a href="#media" data-nav="media"><svg><use href="#i-image"/></svg>素材工坊</a>
       <a href="#confirm" data-nav="confirm"><svg><use href="#i-check"/></svg>确认中心<span id="navMissing">待核对</span></a>
@@ -36,12 +36,12 @@
     <header class="work-header"><a class="back-link" href="../../#workflow"><svg><use href="#i-back"/></svg>返回官网</a><p><span class="mode-dot"></span>互动演示<span class="header-note"> · 示例数据，不连接真实店铺</span></p><button type="button" class="quiet-button" id="resetDemo">重置演示</button></header>
     <main id="workspace" tabindex="-1">
       <section class="workspace-view" data-view="cockpit">
-        <div class="page-heading"><div><h1>JV AI</h1><p>管理经营需求、商品任务与结果。</p></div><span class="status-tag">预设任务演示</span></div>
+        <div class="page-heading"><div><h1>AI CEO</h1><p>管理经营需求、商品任务与结果。</p></div><span class="status-tag">预设任务演示</span></div>
         <div class="cockpit-grid">
           <div class="conversation">
             <div class="conversation-scroll" id="conversation">
               <article class="chat-user"><span>你的目标</span><p>我有一套旅行收纳袋。帮我整理商品资料、准备 Listing，再做几种用途的商品图。</p></article>
-              <article class="chat-answer"><div class="answer-title"><img src="../jiejing-logo-mark.svg" width="25" height="25" alt="">JV AI <span>示例回复</span></div><h2>商品资料与内容准备</h2><p>参考图与六件组合已整理为示例资料。尺寸、材质、重量和库存尚待补充，未知参数不会自动填入。</p><div class="answer-plan"><div><span>商品资料</span><strong>集中补充缺失参数</strong><a href="#facts">打开资料表</a></div><div><span>Listing</span><strong>标题与描述可以继续修改</strong><a href="#listing">查看草稿</a></div><div><span>商品图片</span><strong>四种不同构图的方案</strong><a href="#media">查看素材</a></div></div><button type="button" class="text-button" id="toggleReport" aria-expanded="false" aria-controls="sampleReport">查看调研报告示例</button><div id="sampleReport" class="sample-report" hidden><h3>旅行收纳袋：调研报告结构示例</h3><p>正式调研会整理来源、采集时间、需求场景、竞品与风险。这份演示不包含实时销量，不代表选品或盈利结论。</p><dl><div><dt>使用场景</dt><dd>旅行分装、箱内整理</dd></div><div><dt>需要验证</dt><dd>尺寸组合、买家反馈、可售价格区间</dd></div><div><dt>来源状态</dt><dd>演示未调用搜索；真实任务需附来源</dd></div></dl></div></article>
+              <article class="chat-answer"><div class="answer-title"><img src="../jiejing-logo-mark.svg" width="25" height="25" alt="">AI CEO <span>示例回复</span></div><h2>商品资料与内容准备</h2><p>参考图与六件组合已整理为示例资料。尺寸、材质、重量和库存尚待补充，未知参数不会自动填入。</p><div class="answer-plan"><div><span>商品资料</span><strong>集中补充缺失参数</strong><a href="#facts">打开资料表</a></div><div><span>Listing</span><strong>标题与描述可以继续修改</strong><a href="#listing">查看草稿</a></div><div><span>商品图片</span><strong>四种不同构图的方案</strong><a href="#media">查看素材</a></div></div><button type="button" class="text-button" id="toggleReport" aria-expanded="false" aria-controls="sampleReport">查看调研报告示例</button><div id="sampleReport" class="sample-report" hidden><h3>旅行收纳袋：调研报告结构示例</h3><p>正式调研会整理来源、采集时间、需求场景、竞品与风险。这份演示不包含实时销量，不代表选品或盈利结论。</p><dl><div><dt>使用场景</dt><dd>旅行分装、箱内整理</dd></div><div><dt>需要验证</dt><dd>尺寸组合、买家反馈、可售价格区间</dd></div><div><dt>来源状态</dt><dd>演示未调用搜索；真实任务需附来源</dd></div></dl></div></article>
               <div id="sampleResponses" aria-live="polite"></div>
             </div>
             <div class="demo-composer"><label for="sampleTask">选择演示任务</label><div><select id="sampleTask"><option value="listing">帮我准备 Listing 草稿</option><option value="media">帮我做几种用途的商品图</option><option value="confirm">查看发布前还缺什么</option></select><button class="primary-button" type="button" id="runSample">查看示例回复</button></div><small>本页不调用大模型；正式工作台可输入自己的需求。</small></div>

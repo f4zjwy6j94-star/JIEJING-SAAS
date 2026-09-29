@@ -425,8 +425,92 @@ process.stdout.write(JSON.stringify(renders));
 """
 
 
+def verify_data_snapshot_runtime(app: str) -> None:
+    """A complete saved packet is not current account/publishing eligibility."""
+    fixture = r"""
+const assert = require('node:assert/strict');
+const state = {saasConnected:true, saasLoading:false, saasCompany:{company_id:'company-a'}};
+const now = Date.parse('2026-09-29T08:00:00Z');
+Date.now = () => now;
+const forbid = () => { throw new Error('status rendering must not read/write network or storage'); };
+globalThis.fetch = forbid; globalThis.localStorage = {getItem:forbid,setItem:forbid};
+globalThis.sessionStorage = globalThis.localStorage;
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const publicRuntimeText = value => String(value ?? '');
+const saasTimestampLabel = value => value || '尚无记录';
+const isSaasAuthorizedConnectionStatus = value => value === 'authorized';
+const saasEbayResourceLabel = value => value;
+const saasCollectedSourceRecords = () => [];
+const saasEbayPacketResourceRows = packet => ['account','listings','orders','policies','fees','restrictions'].map(label => ({label,status:packet.present_resource_keys?.includes(label)?'present':'missing',summary:'official_api'}));
+const ctx = {store:{store_id:'store-a'},connection:{status:'authorized'},hasPacket:true,official:true,
+  presentCount:6,coverageTotal:6,missingKeys:[],sourceLabel:'eBay 官方资料',
+  lastSync:'2026-08-28T02:20:32Z',packetBody:{freshness:{stale_after_seconds:21600},present_resource_keys:['account','listings','orders','policies','fees','restrictions']}};
+state.saasAccountHealth = {store_id:'store-a',company_id:'company-a',status:'restricted',incident_mode:true,label:'账号受限'};
+"""
+    checks = r"""
+let html = renderSaasSettingsDataPanel(ctx);
+assert(html.includes('账号受限'), 'saved 6/6 data must visibly retain the restricted account warning');
+assert(html.includes('已保存') && !html.includes('已读取'), 'cached resources must be labelled saved, not freshly read');
+assert(html.includes(ctx.lastSync) && html.includes('需更新'), 'cached data must show its time and expiry');
+assert(html.includes('真实发布已暂停'), 'restriction must state the business impact');
+assert(html.includes('data-saas-action="sync-ebay-readonly"'), 'retain existing opt-in read-only update action');
+let focus = renderSaasSettingsDataFocusPanel(ctx);
+assert(!focus.includes('无核心缺口') && !focus.includes('已读取'), 'coverage must not imply full readiness');
+let view = saasSettingsDataSnapshotView(ctx, now);
+assert.equal(view.accountTone, 'red');
+assert.equal(view.freshness, 'stale');
+state.saasAccountHealth = {...state.saasAccountHealth, severity:'green'};
+assert.equal(saasSettingsDataSnapshotView(ctx, now).accountTone, 'red', 'restriction wins over conflicting colour');
+state.saasAccountHealth = {store_id:'store-b',company_id:'company-a',status:'normal'};
+assert.equal(saasSettingsDataSnapshotView(ctx, now).accountTitle, '状态待核实', 'another store must not confer healthy status');
+state.saasAccountHealth = {store_id:'store-a',company_id:'company-b',status:'normal'};
+assert.equal(saasSettingsDataSnapshotView(ctx, now).accountTitle, '状态待核实', 'another tenant must not confer healthy status');
+state.saasAccountHealth = {status:'normal'};
+assert.equal(saasSettingsDataSnapshotView(ctx, now).accountTitle, '状态待核实', 'unbound health must not confer status');
+state.saasAccountHealth = {store_id:'store-a',company_id:'company-a',status:'unknown',incident_mode:true};
+assert.equal(saasSettingsDataSnapshotView(ctx, now).accountTitle, '状态待核实', 'missing evidence must not be presented as a confirmed restriction');
+state.saasAccountHealth = {store_id:'store-a',company_id:'company-a',status:'normal'};
+assert.equal(saasSettingsDataSnapshotView(ctx, now).accountTitle, '状态待核实', 'expired normal packet cannot prove current status');
+const fresh = {...ctx,lastSync:'2026-09-29T07:00:00Z'};
+view = saasSettingsDataSnapshotView(fresh, now);
+assert.equal(view.freshness, 'fresh');
+assert.equal(view.accountTitle, '最近核验未见限制');
+assert(!renderSaasSettingsDataPanel(fresh).includes('可发布'), 'healthy data must not claim publishing readiness');
+for (const date of ['', 'bad-date', '2026-09-29T09:00:00Z', '2026-09-29T07:00:00']) {
+  view = saasSettingsDataSnapshotView({...fresh,lastSync:date}, now);
+  assert.equal(view.freshness, 'unknown');
+  assert.equal(view.accountTitle, '状态待核实');
+}
+view = saasSettingsDataSnapshotView({...fresh,packetBody:{...fresh.packetBody,freshness:{}}}, now);
+assert.equal(view.freshness, 'unknown', 'missing TTL must not imply current freshness');
+view = saasSettingsDataSnapshotView({...fresh,packetBody:{...fresh.packetBody,freshness:{stale_after_seconds:true}}}, now);
+assert.equal(view.freshness, 'unknown', 'invalid TTL must not imply freshness');
+view = saasSettingsDataSnapshotView({...fresh,packetBody:{...fresh.packetBody,freshness:{stale_after_seconds:21600,snapshot_created_at:ctx.lastSync}}}, now);
+assert.equal(view.freshness, 'stale', 'resaved old data must keep original capture time');
+view = saasSettingsDataSnapshotView({...fresh,official:false}, now);
+assert.equal(view.accountTitle, '状态待核实', 'sample data cannot establish official account eligibility');
+view = saasSettingsDataSnapshotView({...ctx,hasPacket:false,presentCount:0,lastSync:''}, now);
+assert.equal(view.freshness, 'missing');
+state.saasAccountHealth = {store_id:'store-a',company_id:'company-a',status:'restricted',incident_mode:true};
+assert.equal(saasSettingsDataSnapshotView({...ctx,hasPacket:false}, now).accountTitle, '账号受限', 'missing/expired data must never clear a saved restriction');
+state.saasAccountHealth = {store_id:'store-a',company_id:'company-a',status:'suspended',incident_mode:true,label:'<img src=x onerror=alert(1)>'};
+assert(!renderSaasSettingsDataPanel(ctx).includes('<img'), 'untrusted health labels must not become markup');
+console.log('PASS settings data cache/account separation');
+"""
+    names = ["saasAccountHealthSnapshot", "saasMerchantSafeSettingsText", "saasAccountHealthMerchantText",
+             "saasSettingsDataSnapshotView", "renderSaasSettingsDataPanel", "renderSaasSettingsFocusPanel", "renderSaasSettingsDataFocusPanel"]
+    # Render the current implementation first so the regression also fails on
+    # the old misleading UI, not merely on the new helper's absence.
+    baseline_names = [name for name in names if name != "saasSettingsDataSnapshotView" or f"function {name}(" in app]
+    script = fixture + "\n" + "\n".join(function_source(app, name) for name in baseline_names) + checks
+    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=30)
+    if result.returncode:
+        raise AssertionError(f"store data status runtime regression:\n{result.stderr}")
+
+
 def main() -> None:
     app = (ROOT / "app.js").read_text(encoding="utf-8")
+    verify_data_snapshot_runtime(app)
     workspace = function_source(app, "renderSaasSettingsAccountWorkspace")
     for marker in (
         "saas-account-workspace",

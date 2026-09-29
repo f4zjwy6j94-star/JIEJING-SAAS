@@ -555,7 +555,7 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(app_js, "安全边界", "AI CEO route card safety row")
     require(styles, ".saas-ceo-routing-why", "AI CEO route card three-row styling")
     require(app_js, "继续小批量实验台", "AI CEO compact task card bulk next button")
-    require(app_js, "一句话交给 JV AI", "JV AI low-learning-cost empty title")
+    require(app_js, "一句话交给 AI CEO", "AI CEO low-learning-cost empty title")
     require(app_js, "first_day_ai_ceo_path_v2", "AI CEO first-day path marker")
     require(app_js, "比如：帮我调研这个商品，整理 Listing 草稿", "AI CEO low-learning-cost composer example")
     require(app_js, "也可以直接问普通问题。", "AI CEO low-learning-cost plain chat hint")
@@ -658,7 +658,9 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(app_js, 'data-listing-source-details="listing_source_collapsed_after_draft_v1"', "Listing source intake collapses after draft")
     require(app_js, "更换或补充商品资料", "Listing collapsed source intake merchant label")
     require(app_js, "当前草稿已生成；只有换商品或补链接、图片、成本、规格时再展开", "Listing collapsed source intake guidance")
-    require(app_js, "draft ? renderSaasListingSourceIntake", "Listing source intake switches to collapsed mode after draft")
+    require(app_js, "draft ? renderSaasListingWizard", "Existing product uses the single-current-step wizard")
+    require(app_js, "function navigateSaasListingWizard", "Wizard has scoped previous and save-and-continue navigation")
+    require(app_js, 'data-listing-wizard-step="${step}"', "Only the current wizard step is rendered")
     require(app_js, "data-saas-listing-input-chip", "Listing input quick chips")
     require(app_js, "function renderSaasFirstRunAssuranceStrip", "shared first-run assurance strip")
     require(app_js, "不用完整", "Listing simple first-run copy")
@@ -771,7 +773,7 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     require(app_js, "按基础、价格利润、素材描述、平台参数和物流履约往下补", "Listing ordered publish flow copy")
     require(app_js, "function saasListingMerchantSourceLabel", "Listing merchant-facing source label helper")
     require(app_js, "已有 AI CEO 市场结论或上架草稿，可以作为上架依据", "Listing report import uses merchant-facing copy")
-    require(app_js, "店铺连接和授权配置在设置里", "Listing settings boundary copy")
+    require(app_js, "保存资料不代表当前账号可发布；账号状态以单列检查为准", "Listing distinguishes saved data from account eligibility")
     require(app_js, '<span class="pill green">草稿</span>', "Listing draft pill uses merchant-facing label")
     require(app_js, "const productLabel = saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel", "model value product label is defined before request")
     require(app_js, "function saasModelValueFailureMessage", "precise model value failure toast")
@@ -801,7 +803,7 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     require(app_js, "在这里管理账号、店铺数据、AI、团队权限、套餐与付款", "settings home low-learning-cost copy")
     require(app_js, "商品和订单工作回到对应工作台继续", "settings home keeps business work in its workbench")
     require(app_js, "商品、订单、政策、费用等来源可追溯", "settings status merchant-facing data copy")
-    require(app_js, "已同步的店铺资料", "settings data panel merchant-facing title")
+    require(app_js, "店铺资料与账号状态", "settings data panel separates cached data from account status")
     require(app_js, "什么时候需要打开设置", "settings usage-rule section")
     if "主理人高级区" in app_js:
         return fail("merchant app must not contain the owner-only advanced settings surface")
@@ -855,14 +857,19 @@ assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logis
     source_cards_index = source_intake_body.index("renderSaasListingSourceCards")
     if not input_panel_index < source_cards_index:
         raise AssertionError("Listing source alternatives must stay below the primary product input")
-    source_intake_call_index = composer_body.index("renderSaasListingSourceIntake")
-    product_facts_index = composer_body.index("renderSaasMerchantProductFactsModule")
-    draft_editor_index = composer_body.index("renderSaasListingDraftEditor")
-    media_index = composer_body.index("renderSaasListingMediaWritebackPanel")
-    next_action_index = composer_body.index("renderSaasListingNextActionPanel")
-    advanced_index = composer_body.index("renderSaasListingAdvancedWorkDetails")
-    if not (source_intake_call_index < product_facts_index < draft_editor_index < media_index < next_action_index < advanced_index):
-        raise AssertionError("Listing daily surface must flow from source selection to product facts, draft, media, one next action, then collapsed advanced checks")
+    require(composer_body, "draft ? renderSaasListingWizard", "Existing product renders the step wizard rather than stacked editors")
+    wizard_start = app_js.index("function renderSaasListingWizard({")
+    wizard_body = app_js[wizard_start:composer_start]
+    for marker in ('step === 1 ? renderSaasMerchantProductFactsModule', 'step === 2 ?',
+                   'step === 3 ? renderSaasListingWizardImages', 'renderSaasListingDraftEditor',
+                   'renderSaasListingVisiblePublishBridge', 'renderSaasListingUnpublishedDraftReceipt',
+                   'renderSaasListingAdvancedWorkDetails', 'listing-wizard-previous', 'listing-wizard-next'):
+        require(wizard_body, marker, "Four-step wizard keeps all existing business capabilities")
+    for direct_editor in ('renderSaasMerchantProductFactsModule', 'renderSaasListingDraftEditor',
+                          'renderSaasListingMediaWritebackPanel', 'renderSaasListingNextActionPanel'):
+        if direct_editor in composer_body:
+            raise AssertionError(f"Listing composer must not stack wizard editors: {direct_editor}")
+    require(listing_body, 'saasListingWizardRecord()?.step === 4', "Publish intake is shown only at the final step")
     next_action_start = app_js.index("function renderSaasListingNextActionPanel")
     next_action_end = app_js.index("function renderSaasListingWorkflowProofPanel", next_action_start)
     next_action_body = app_js[next_action_start:next_action_end]

@@ -27,6 +27,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jiejing_runtime.models import now_iso
 from jiejing_runtime.public_search import PublicSearchProbeAdapter, PublicSearchProbeConfig
+from .market_quote_evidence import market_quote_answer_quality, new_york_market_time
+from .timely_evidence import (merchant_followup, timely_request_kind, temporal_evidence_contract,
+                             source_temporal_evidence, temporal_evidence_fallback,
+                             review_temporal_answer)
 from .model_provider_catalog import (
     MODEL_SECRET_PURPOSE,
     READY_MODEL_SECRET_STATUSES,
@@ -111,12 +115,15 @@ def build_ai_ceo_turn_plan(
     direct_normalized = _normalized_text(safe_message)
     ebay_workflow = _looks_like_ebay_workflow(direct_normalized) or bool(
         contextual_followup and previous_route == AI_CEO_ROUTE_EBAY_WORKFLOW
+        and merchant_followup(safe_message)
+        and not _classify_local_clock_request(safe_message)
+        and not _classify_external_realtime_request(safe_message)
     )
     high_risk = _looks_like_high_risk_action(direct_normalized)
     explicit_rule = _looks_like_explicit_rule_memory(direct_normalized)
     ticker = next((entity for entity in entities if re.fullmatch(r"[A-Z]{1,5}", entity)), "")
 
-    weather_request = any(marker in normalized for marker in ("天气", "气温", "降雨", "下雨", "weather", "forecast"))
+    weather_request = timely_request_kind(effective_query) == "weather"
     quote_request = bool(ticker) and any(
         marker in normalized
         for marker in ("股价", "股票", "行情", "盘前", "盘后", "涨跌", "收盘", "quote", "stock price")
@@ -531,6 +538,11 @@ def run_ai_ceo_chat(
         "turn_plan": _public_ai_ceo_turn_plan(authoritative_turn_plan),
         "working_state": authoritative_turn_plan.get("working_state") or {},
     }
+    temporal_contract = temporal_evidence_contract(
+        route_message, realtime_kind, now=now_iso(), client_timezone=client_timezone,
+    ) if realtime_kind and realtime_kind != "stock_quote" and (
+        timely_request_kind(route_message) or realtime_kind in {"weather", "exchange_rate", "news_search", "company_research"}
+    ) else {}
     selection_contract = _selection_response_contract(
         message=safe_message,
         route=route,
@@ -570,11 +582,17 @@ def run_ai_ceo_chat(
         if on_stage is not None:
             on_stage("sources")
         search_started_at = time.monotonic()
-        realtime_search = _run_realtime_search(kind=realtime_kind, message=route_message)
+        realtime_search = _run_realtime_search(kind=realtime_kind, message=route_message,
+                                             **({"temporal_contract": temporal_contract} if temporal_contract else {}))
+        if temporal_contract:
+            realtime_search["temporal_evidence_contract"] = temporal_contract
         search_latency_ms = _elapsed_ms(search_started_at)
         if realtime_search.get("status") == "ready":
             use_model_synthesis = _env_enabled("JIEJING_AI_CEO_REALTIME_MODEL_SYNTHESIS_ENABLED", default=True)
-            if realtime_search.get("provider") == "stooq_public_quote" or not use_model_synthesis:
+            temporal_candidates = [source_temporal_evidence(record, temporal_contract)
+                                   for record in realtime_search.get("source_records") or []] if temporal_contract else []
+            if (realtime_search.get("provider") == "stooq_public_quote" or not use_model_synthesis
+                    or (temporal_contract and not any(item["eligible"] for item in temporal_candidates))):
                 return {
                     "status": "realtime_search_answered_without_model",
                     "answer": _fallback_realtime_search_answer(realtime_kind, realtime_search),
@@ -582,6 +600,10 @@ def run_ai_ceo_chat(
                     "model_client": model_context,
                     "realtime_search": realtime_search,
                     "source_records": realtime_search.get("source_records") or [],
+                    **({"answer_stream_buffered": True, "temporal_evidence_quality": {
+                        "accepted": False, "quality_gate": "timely_evidence_v1", "review_call_count": 0,
+                        "blocked_by": list(dict.fromkeys(item["reason"] for item in temporal_candidates if not item["eligible"])),
+                    }} if temporal_contract else {}),
                     **_ai_ceo_latency_fields(
                         turn_started_at,
                         search_latency_ms=search_latency_ms,
@@ -613,6 +635,9 @@ def run_ai_ceo_chat(
             if on_stage is not None:
                 on_stage("model")
             model_started_at = time.monotonic()
+            quote_quality: dict[str, Any] = {}
+            temporal_quality: dict[str, Any] = {}
+            used_evidence_fallback = False
             try:
                 result = model_client.generate_text(
                     system_prompt=search_prompt[0],
@@ -620,7 +645,8 @@ def run_ai_ceo_chat(
                     temperature=0.1,
                     max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
                     timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
-                    on_text_delta=on_text_delta,
+                    # Time-sensitive claims must be checked before reaching the browser.
+                    on_text_delta=None if realtime_kind == "stock_quote" or temporal_contract else on_text_delta,
                 )
                 result = _complete_truncated_model_result(
                     model_client=model_client,
@@ -634,7 +660,7 @@ def run_ai_ceo_chat(
                 answer = _clean_answer(result.get("text") if isinstance(result, dict) else "")
                 if not answer:
                     raise RuntimeError("empty_realtime_search_answer")
-                if _realtime_answer_needs_repair(
+                if not temporal_contract and _realtime_answer_needs_repair(
                     answer,
                     realtime_search.get("source_records") or [],
                     realtime_kind,
@@ -643,9 +669,12 @@ def run_ai_ceo_chat(
                     repair_result = model_client.generate_text(
                         system_prompt=(
                             search_prompt[0]
-                            + " 上一版回答过短或只说无法判断。请基于已有 source_records 给出可用分析："
-                            "先说明数据时间和能确认的事实，再列主要驱动、偏强/偏弱两种情景与风险。"
-                            "没有精确实时价时可以明确缺口，但不能只返回一句无法分析，也不能编造数字。"
+                            + (" 上一版行情回答未通过证据核验。核对股票或指数、交易日期、数值、涨跌方向和来源编号；"
+                               "抓取时间或文章发布时间不是交易日期。无法核实时简短说明，不猜数字，也不补写无关分析。"
+                               if realtime_kind == "stock_quote" else
+                               " 上一版回答过短或只说无法判断。请基于已有 source_records 给出可用分析："
+                               "先说明数据时间和能确认的事实，再列主要驱动、偏强/偏弱两种情景与风险。"
+                               "没有精确实时价时可以明确缺口，但不能编造数字。")
                         ),
                         user_prompt=search_prompt[1],
                         temperature=0.1,
@@ -668,18 +697,33 @@ def run_ai_ceo_chat(
                             realtime_kind,
                             message=route_message,
                         )
-                        or len(repair_answer) > len(answer)
+                        or (realtime_kind != "stock_quote" and len(repair_answer) > len(answer))
                     ):
                         result = repair_result
                         answer = repair_answer
-                if _realtime_answer_needs_repair(
+                if realtime_kind == "stock_quote":
+                    quote_quality = market_quote_answer_quality(
+                        answer, realtime_search.get("source_records") or [], message=route_message, now=now_iso(),
+                    )
+                if temporal_contract:
+                    temporal_quality = review_temporal_answer(
+                        model_client=model_client, message=route_message, answer=answer,
+                        records=_source_records_for_model(realtime_search.get("source_records") or []),
+                        contract=temporal_contract,
+                        timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
+                    )
+                    model_latency_ms = _elapsed_ms(model_started_at)
+                    realtime_search["temporal_evidence_blocked_by"] = temporal_quality.get("blocked_by") or []
+                if (not temporal_contract and _realtime_answer_needs_repair(
                     answer,
                     realtime_search.get("source_records") or [],
                     realtime_kind,
                     message=route_message,
-                ):
+                )) or (temporal_contract and not temporal_quality.get("accepted")):
                     answer = _fallback_realtime_search_answer(realtime_kind, realtime_search)
-                status = "realtime_search_answered"
+                    used_evidence_fallback = True
+                status = ("realtime_search_answered_without_model"
+                          if used_evidence_fallback and (realtime_kind == "stock_quote" or temporal_contract) else "realtime_search_answered")
             except Exception:
                 model_latency_ms = _elapsed_ms(model_started_at)
                 result = {}
@@ -690,6 +734,10 @@ def run_ai_ceo_chat(
                 "answer": answer,
                 "context": context,
                 "model_client": _public_model_context(result, model_client, model_resolution) if result else model_context,
+                **({"market_quote_quality": quote_quality, "answer_stream_buffered": True}
+                   if realtime_kind == "stock_quote" else {}),
+                **({"temporal_evidence_quality": temporal_quality, "answer_stream_buffered": True}
+                   if temporal_contract else {}),
                 "realtime_search": realtime_search,
                 "source_records": realtime_search.get("source_records") or [],
                 **_ai_ceo_latency_fields(
@@ -1272,10 +1320,19 @@ def run_ai_ceo_fast_turn(
         )
         if model_connection.get("configured"):
             return None
+    route_message = _safe_text(authoritative_turn_plan.get("effective_query") or safe_message, limit=1200)
+    temporal_contract = temporal_evidence_contract(
+        route_message, realtime_kind, now=now_iso(), client_timezone=client_timezone,
+    ) if realtime_kind and realtime_kind != "stock_quote" and (
+        timely_request_kind(route_message) or realtime_kind in {"weather", "exchange_rate", "news_search", "company_research"}
+    ) else {}
     realtime_search = _run_realtime_search(
         kind=realtime_kind,
-        message=_safe_text(authoritative_turn_plan.get("effective_query") or safe_message, limit=1200),
+        message=route_message,
+        **({"temporal_contract": temporal_contract} if temporal_contract else {}),
     )
+    if temporal_contract:
+        realtime_search["temporal_evidence_contract"] = temporal_contract
     if realtime_search.get("status") == "ready":
         return {
             "status": "realtime_search_answered_without_model",
@@ -1581,9 +1638,18 @@ def build_ai_ceo_realtime_search_prompts(
         "回答要短、直接、带时间感和来源；不要出现“调用模型”“后端模型”“BYOK”“Tavily API key”等实现词。"
         "涉及 eBay 规则、政策、图片或发布要求时，必须区分官方强制要求、平台建议和商家最佳实践；"
         "强制性表述必须紧跟对应的官方来源编号。没有官方来源支撑时，不得使用‘必须’‘一律’‘绝对’‘禁止’或‘会被下架’等断言。"
-        "如果来源不足以确认精确实时数值，仍要整理来源中能确认的事实、主要驱动、两种可能情景和风险；不能只用一句“无法分析”结束。"
+        "用户要求新闻或基本面分析时，整理来源中能确认的事实、主要驱动和风险；只问行情数字时不要扩展成行情分析。"
         "需要执行真实发布、改价、库存、退款、广告、政策、付款或敏感客服承诺时，必须停在决策中心。"
         "普通实时咨询默认不写长期经营记忆。"
+        "行情问题必须明确股票或指数名称及交易日；纳斯达克综合指数与纳斯达克100不是同一指数。"
+        "抓取时间、文章发布时间与行情所属交易日是不同信息，不能互相代替；北京时间今天也不等于美国已收盘的交易日。"
+        "只有来源明确给出对应交易日期和收盘数值时才可报收盘，使用绝对日期并逐项标注引用。"
+        "数字不足以核实时只需简短说明本次未核实，不要先给确定数字再追加免责声明，也不要凑字数或猜涨跌原因。"
+        "所有时效事实都必须用绝对日期标明适用时点，逐句带来源引用。"
+        "temporal_evidence_contract 给出用户时区的日期及请求时点；只把符合该时点的来源当作当前证据。"
+        "published_at/updated_at只是文章发布或更新记录，captured_at只是抓取记录；不能据此改写旧事件的日期。"
+        "来源相互矛盾、没有日期或没有对应主体证据时，明确说本次未核实，不自行补全。"
+        "优先输出简短事实句或少量要点，每句自带日期和引用；无需表格、泛泛分析或礼貌收尾。"
     )
     source_records = _source_records_for_model(
         realtime_search.get("source_records") if isinstance(realtime_search.get("source_records"), list) else []
@@ -1594,6 +1660,9 @@ def build_ai_ceo_realtime_search_prompts(
         "current_context": _prompt_context_for_route(context, AI_CEO_ROUTE_EXTERNAL_REALTIME),
         "current_model_client": model_context or {},
         "recent_conversation": _sanitize_ai_ceo_conversation_history(conversation_history),
+        "market_time_context": _market_time_context(message=message)
+        if (route_meta or {}).get("realtime_kind") == "stock_quote" else {},
+        "temporal_evidence_contract": realtime_search.get("temporal_evidence_contract") or {},
         "realtime_search": {
             "status": realtime_search.get("status"),
             "provider": realtime_search.get("provider"),
@@ -2213,11 +2282,13 @@ def _classify_external_realtime_request(message: str) -> str:
     text = _normalized_text(message)
     if not text:
         return ""
+    if _classify_local_clock_request(message):
+        return ""
     if _looks_like_market_news_request(text):
         return "news_search"
     current_markers = ("现在", "当前", "实时", "最新", "今天", "此刻", "刚刚", "now", "current", "latest", "today")
-    stock_markers = ("股价", "股票", "行情", "盘前", "盘后", "涨跌", "收盘", "市值", "share price", "stock price")
-    ambiguous_quote_markers = ("报价", "quote")
+    stock_markers = ("股价", "股價", "股票", "行情", "盘前", "盘后", "涨跌", "收盘", "收盤", "点位", "多少点", "多少點", "市值", "share price", "stock price", "index level")
+    ambiguous_quote_markers = ("报价", "quote", "close")
     market_entities = (
         "英伟达",
         "nvidia",
@@ -2228,6 +2299,9 @@ def _classify_external_realtime_request(message: str) -> str:
         "苹果",
         "aapl",
         "纳斯达克",
+        "納斯達克",
+        "纳指",
+        "納指",
         "nasdaq",
         "标普",
         "s&p",
@@ -2252,7 +2326,11 @@ def _classify_external_realtime_request(message: str) -> str:
         return "news_search"
     if any(marker in text for marker in ("帮我搜", "联网查", "搜索一下", "google 一下", "google一下", "web search", "search web")):
         return "web_search"
-    return ""
+    # A merchant describing missing current supplier facts is still supplying
+    # workflow context. Explicit searches above retain their existing route.
+    if _looks_like_ebay_workflow(text):
+        return ""
+    return timely_request_kind(message)
 
 
 def _run_realtime_search(
@@ -2262,10 +2340,11 @@ def _run_realtime_search(
     timeout_seconds: int | None = None,
     max_results: int | None = None,
     search_depth: str | None = None,
+    temporal_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     provider = _public_search_provider()
     adapter = PublicSearchProbeAdapter()
-    query = _realtime_search_query(kind=kind, message=message)
+    query = _realtime_search_query(kind=kind, message=message, temporal_contract=temporal_contract)
     timeout_seconds = (
         _bounded_int(timeout_seconds, default=4, minimum=1, maximum=20)
         if timeout_seconds is not None
@@ -2519,9 +2598,41 @@ def _workflow_handoff_id(*parts: Any) -> str:
     return f"{prefix}_{digest}"
 
 
-def _realtime_search_query(*, kind: str, message: str) -> str:
+def _market_index_name(message: str) -> str:
+    text = str(message).lower()
+    if re.search(r"nasdaq[\s-]*100|纳(?:斯达克|指)\s*100|納(?:斯達克|指)\s*100|\bndx\b", text):
+        return "NASDAQ-100 NDX"
+    if any(word in text for word in ("纳斯达克", "納斯達克", "纳指", "納指", "nasdaq", "ixic")):
+        return "NASDAQ Composite COMP IXIC"
+    if any(word in text for word in ("标普", "s&p 500", "spx")):
+        return "S&P 500 SPX"
+    if any(word in text for word in ("道琼斯", "道指", "dow jones")):
+        return "Dow Jones Industrial Average DJI"
+    return ""
+
+
+def _market_time_context(*, message: str) -> dict[str, Any]:
+    """Search calendar anchor, not proof of exchange opening/closing."""
+    current = datetime.fromisoformat(now_iso().replace("Z", "+00:00"))
+    market_now = new_york_market_time(current)
+    anchor = market_now.date()
+    if market_now.hour < 16:
+        anchor -= timedelta(days=1)
+    while anchor.weekday() >= 5:
+        anchor -= timedelta(days=1)
+    return {"server_now": current.isoformat(), "exchange_timezone": "America/New_York",
+            "exchange_now": market_now.isoformat(), "exchange_calendar_date": market_now.date().isoformat(),
+            "search_session_anchor_date": anchor.isoformat(), "session_calendar_verified": False,
+            "calendar_note": "仅工作日检索锚点，不是已核验交易日；节假日、提前收盘和行情日期必须由来源确认。",
+            "requested_index": _market_index_name(message)}
+
+
+def _realtime_search_query(*, kind: str, message: str, temporal_contract: dict[str, Any] | None = None) -> str:
     text = _safe_text(message, limit=260)
     lowered = text.lower()
+    clock = temporal_contract or temporal_evidence_contract(text, kind, now=now_iso())
+    requested_date = clock.get("requested_date") or clock.get("user_calendar_date")
+    temporal_query = f"as of {requested_date} official primary sources publication or update date"
     if kind == "company_research":
         symbol = _stock_symbol_from_message(text)
         entity = symbol or text
@@ -2530,6 +2641,11 @@ def _realtime_search_query(*, kind: str, message: str) -> str:
             "SEC filings investor relations reliable sources"
         )
     if kind == "stock_quote":
+        index_name = _market_index_name(text)
+        if index_name:
+            clock = _market_time_context(message=text)
+            return (f"{index_name} {text} {clock.get('search_session_anchor_date', '')} "
+                    "latest completed trading session close points change trading date official source")
         if any(marker in lowered for marker in ("英伟达", "nvidia", "nvda")):
             return "NVDA NVIDIA current stock price today quote official market source"
         if any(marker in lowered for marker in ("特斯拉", "tesla", "tsla")):
@@ -2538,11 +2654,11 @@ def _realtime_search_query(*, kind: str, message: str) -> str:
             return "AAPL Apple current stock price today quote official market source"
         return f"{text} current stock price quote official market source"
     if kind == "exchange_rate":
-        return f"{text} current exchange rate official source"
+        return f"{text} exchange rate {temporal_query}"
     if kind == "weather":
-        return f"{text} current weather official forecast"
+        return f"{text} weather forecast {temporal_query}"
     if kind == "news_search":
-        return f"{text} latest news reliable sources"
+        return f"{text} latest news {temporal_query}"
     if kind == "web_search" and _looks_like_platform_rule_request(
         message=text,
         route=AI_CEO_ROUTE_EBAY_WORKFLOW,
@@ -2553,7 +2669,7 @@ def _realtime_search_query(*, kind: str, message: str) -> str:
         route=AI_CEO_ROUTE_EBAY_WORKFLOW,
     ):
         return _ebay_product_selection_search_query(text)
-    return f"{text} reliable web sources"
+    return f"{text} {temporal_query}" if timely_request_kind(text) else f"{text} reliable web sources"
 
 
 def _ebay_platform_rule_search_query(message: str) -> str:
@@ -2985,6 +3101,7 @@ def _source_records_from_search_snapshot(snapshot: dict[str, Any]) -> list[dict[
                 "domain": domain,
                 "snippet": snippet,
                 "published_at": _safe_text(item.get("published_at") or item.get("published_date") or "", limit=100),
+                "updated_at": _safe_text(item.get("updated_at") or "", limit=100),
                 "captured_at": _safe_text(item.get("captured_at") or "", limit=80),
                 "source_type": "live_public_search",
                 "provider": provider,
@@ -2998,6 +3115,25 @@ def _source_records_from_search_snapshot(snapshot: dict[str, Any]) -> list[dict[
 def _fallback_realtime_search_answer(kind: str, realtime_search: dict[str, Any]) -> str:
     records = realtime_search.get("source_records") if isinstance(realtime_search.get("source_records"), list) else []
     captured_at = _safe_text(realtime_search.get("captured_at") or "", limit=80)
+    if realtime_search.get("temporal_evidence_contract"):
+        links = []
+        for record in records[:3]:
+            url = _public_source_http_url(str(record.get("url") or ""))
+            if url:
+                links.append(f"[{_domain_from_url(url)}]({url})")
+        return temporal_evidence_fallback(
+            records, conflict="unresolved_source_conflict" in (realtime_search.get("temporal_evidence_blocked_by") or []),
+        ) + ("\n\n可核对来源：" + "、".join(links) if links else "")
+    if kind == "stock_quote":
+        # Never launder the same unverified numbers through a fallback.
+        links = []
+        for record in records[:3]:
+            url = _public_source_http_url(str(record.get("url") or ""))
+            if url:
+                links.append(f"[{_domain_from_url(url)}]({url})")
+        return ("本次未核实到与所问股票或指数、交易日期一致的行情，暂不能确认收盘点位或涨跌。"
+                "知道当前日期不等于已经取得该交易日的收盘数据；搜索到的旧报价不能当作最新行情。"
+                + ("\n\n可核对来源：" + "、".join(links) if links else ""))
     if not records:
         return "我尝试了实时搜索，但当前没有拿到足够来源。这个问题不能用旧知识硬答，需要换一个搜索词或检查后端搜索 provider。"
     intro = "我已查到公开网页来源，但当前来源片段不足以让我直接确认精确实时数值。" if kind == "stock_quote" else "我已查到公开网页来源，先按来源给你一个简短结论。"
@@ -3030,7 +3166,9 @@ def _realtime_answer_needs_repair(
     )
     if not policy_quality.get("accepted"):
         return True
-    minimum_length = 80 if kind in {"stock_quote", "exchange_rate", "weather"} else 120
+    if kind == "stock_quote":
+        return not market_quote_answer_quality(text, source_records, message=message, now=now_iso())["accepted"]
+    minimum_length = 80 if kind in {"exchange_rate", "weather"} else 120
     if source_records and len(text) < minimum_length:
         return True
     refusal_markers = ("无法给出", "无法分析", "不能分析", "无法判断", "不能判断")
@@ -3225,7 +3363,8 @@ def _sanitize_untrusted_source_text(value: Any, *, limit: int) -> tuple[str, boo
     raw = _safe_text(value, limit=limit)
     if not raw:
         return "", False
-    pieces = [item.strip() for item in re.split(r"(?<=[.!?。！？;；])\s*|\n+", raw) if item.strip()]
+    # Sentence sanitation must not split decimal prices or percentage values.
+    pieces = [item.strip() for item in re.split(r"(?<=[!?。！？;；])\s*|(?<=\.)(?!\s*\d)\s*|\n+", raw) if item.strip()]
     retained: list[str] = []
     removed = False
     for piece in pieces:

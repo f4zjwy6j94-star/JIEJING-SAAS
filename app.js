@@ -8129,7 +8129,8 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     net_profit: "",
     gross_margin_percent: "",
     item_specifics: itemSpecifics,
-    image_urls: editedFields.has("images") ? (String(fields.images ?? "").match(/https?:\/\/[^\s,，；;]+/gi) || []).join("\n") : publishPrefill.image_urls || imageUrls,
+    image_urls: saasMerchantProductFactProjectedValue(draft?.merchant_product_fact_packet || {}, {}, "image_urls",
+      editedFields.has("images") ? (String(fields.images ?? "").match(/https?:\/\/[^\s,，；;]+/gi) || []).join("\n") : publishPrefill.image_urls || imageUrls),
     description_html:
       buyerCopyRequiresValidatedGeneration
         ? ""
@@ -8140,7 +8141,10 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     payment_policy_id: publishPrefill.payment_policy_id || accountPrefill.payment_policy_id,
     return_policy_id: publishPrefill.return_policy_id || accountPrefill.return_policy_id,
   };
-  return { ...values, ...(typeof currentSaasPendingPublishIntakeValues === "function" ? currentSaasPendingPublishIntakeValues() : {}) };
+  const merged = { ...values, ...(typeof currentSaasPendingPublishIntakeValues === "function" ? currentSaasPendingPublishIntakeValues() : {}) };
+  // An old form snapshot must not resurrect a subsequently revoked image.
+  merged.image_urls = saasMerchantProductFactProjectedValue(draft?.merchant_product_fact_packet || {}, {}, "image_urls", merged.image_urls);
+  return merged;
 }
 
 function renderSaasPublishInputField(label, name, options = {}) {
@@ -9589,12 +9593,14 @@ function renderSaasMerchantProductFactField(packet = {}, definition = []) {
   `;
 }
 
-function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerDraft) {
+function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerDraft, options = {}) {
   if (!draft) return "";
   const packet = saasMerchantProductFactPacket(draft);
-  const { pendingSuggestionLabels, missingLabels } = saasMerchantProductFactReviewSummary(packet);
-  const factStatusLabel = pendingSuggestionLabels.length ? "待确认" : missingLabels.length ? "待补" : "已填写";
-  const factStatusDetail = [
+  const reviewPacket = options.wizard ? { ...packet, unknown_facts: packet.unknown_facts.filter((key) => !["image_urls", "image_rights_confirmed"].includes(key)) } : packet;
+  const { pendingSuggestionLabels, missingLabels } = saasMerchantProductFactReviewSummary(reviewPacket);
+  const coreMissing = options.wizard ? saasListingWizardCoreMissing(draft) : [];
+  const factStatusLabel = options.wizard ? coreMissing.length ? "待核对" : "可继续" : pendingSuggestionLabels.length ? "待确认" : missingLabels.length ? "待补" : "已填写";
+  const factStatusDetail = options.wizard ? coreMissing.length ? `请核对 ${coreMissing.map(saasMerchantProductFactLabel).join("、")}` : "3 项基础资料已确认" : [
     pendingSuggestionLabels.length ? `${pendingSuggestionLabels.length} 项 AI 建议待确认` : "",
     missingLabels.length ? `${missingLabels.length} 项资料缺失` : "",
   ].filter(Boolean).join(" · ") || "商品事实已补齐";
@@ -9603,13 +9609,25 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
     missingLabels.length ? `仍缺：${missingLabels.join("、")}` : "",
   ].filter(Boolean).join("；") || "可以继续生成 Listing 文案和发布体检";
   const generationFeedback = renderSaasListingAiGenerationFeedback(draft);
+  const coreKeys = ["product_name", "condition", "material"];
+  const definitions = saasMerchantProductFactDefinitions();
+  const renderGroup = (group) => `<section class="saas-product-fact-group">
+    <header><span>${escapeHtml(group.label)}</span><p>${escapeHtml(group.help)}</p></header>
+    <div class="saas-product-fact-grid">${group.fields.map((field) => renderSaasMerchantProductFactField(packet, field)).join("")}</div></section>`;
+  const allFields = definitions.flatMap((group) => group.fields);
+  const factGroups = options.wizard
+    ? renderGroup({ label: "先核对这 3 项", help: "有来源的值保留来源标记；AI 建议需要你明确确认。", fields: coreKeys.map((key) => allFields.find(([name]) => name === key)) }) +
+      `<details class="saas-listing-wizard-other-facts"><summary>其他商品与发货资料（发布前补齐）</summary>${definitions.map((group) => renderGroup({ ...group,
+        label: group.key === "fulfillment" ? "物流履约" : group.label, help: group.key === "fulfillment" ? "按实际发货安排填写。" : group.help,
+        fields: group.fields.filter(([key]) => ![...coreKeys, "image_urls", "image_rights_confirmed"].includes(key)) })).join("")}</details>`
+    : definitions.map(renderGroup).join("");
   return `
     <section class="saas-product-facts-module" data-product-fact-packet="merchant_product_fact_packet_v1" aria-label="商品资料补全">
       <div class="saas-product-facts-head">
         <div>
           <span>商品资料</span>
           <strong>AI 先填能整理的，你只确认真实缺口</strong>
-          <p>材质、成本、库存、发货和图片权利以你的真实资料为准。保存只记录资料；请点击“AI 生成 Listing 草稿”，再进行本地发布体检，不用去 eBay 手工填写。</p>
+          <p>${options.wizard ? "先核对商品名称、状态和材质，再保存并继续。其他已知资料也可以一起填写；图片在第 3 步核对。" : "材质、成本、库存、发货和图片权利以你的真实资料为准。保存只记录资料；请点击“AI 生成 Listing 草稿”，再进行本地发布体检，不用去 eBay 手工填写。"}</p>
         </div>
         <div class="saas-product-facts-score">
           <b>${escapeHtml(factStatusLabel)}</b>
@@ -9626,28 +9644,17 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
         <span class="is-green">来源资料</span><span class="is-green">商家确认</span><span class="is-amber">AI 建议 · 待确认</span><span>待补资料</span>
       </div>
       <div class="saas-product-facts-groups">
-        ${saasMerchantProductFactDefinitions()
-          .map(
-            (group) => `
-              <section class="saas-product-fact-group">
-                <header><span>${escapeHtml(group.label)}</span><p>${escapeHtml(group.help)}</p></header>
-                <div class="saas-product-fact-grid">
-                  ${group.fields.map((field) => renderSaasMerchantProductFactField(packet, field)).join("")}
-                </div>
-              </section>
-            `,
-          )
-          .join("")}
+        ${factGroups}
       </div>
       <div class="saas-product-facts-footer">
         <div>
           <strong>${escapeHtml(footerStatus)}</strong>
           <p>至少确认商品名称、状态和材质后，AI 才生成买家文案；留空内容不会被猜测，真实发布也会继续停住。</p>
         </div>
-        <div class="button-row">
+        ${options.wizard ? "" : `<div class="button-row">
           <button class="secondary-action" type="button" data-saas-action="save-merchant-product-facts" ${state.saasLoading || state.saasListingProductFactSaveStatus === "saving" ? "disabled" : ""}>${state.saasListingProductFactSaveStatus === "saving" ? "保存中…" : "保存已确认资料"}</button>
           <button class="primary-action" type="button" data-saas-action="listing-generate-ai-draft" ${state.saasLoading || state.saasListingProductFactSaveStatus === "saving" ? "disabled" : ""}>${state.saasListingAiGenerationStatus === "running" ? "AI 正在生成…" : "AI 生成 Listing 草稿"}</button>
-        </div>
+        </div>`}
       </div>
       <div data-saas-listing-ai-feedback-slot ${generationFeedback ? "" : "hidden"}>${generationFeedback}</div>
     </section>
@@ -9763,8 +9770,8 @@ function saasListingDraftPreflightSummary(
     {
       key: "store",
       label: "店铺资料",
-      title: ctx.hasPacket ? "已读取当前账号店铺资料" : "等待店铺资料",
-      detail: ctx.hasPacket ? "可结合账号政策、位置和只读资料做更真实的体检。" : "没有店铺资料时只做资料层检查，不冒充真实发布验证。",
+      title: ctx.hasPacket ? "已有保存的店铺资料" : "等待店铺资料",
+      detail: ctx.hasPacket ? "保存资料不代表当前账号可发布；账号状态以单列检查为准，最终仍需发布体检。" : "没有店铺资料时只做资料层检查，不冒充真实发布验证。",
       tone: ctx.hasPacket ? "green" : "red",
     },
     {
@@ -10801,6 +10808,167 @@ function mountSaasListingModeNav(viewId = "product", activeMode = "single") {
   return true;
 }
 
+const saasListingWizardRecords = new Map();
+
+function saasListingWizardCoreMissing(draft = state.saasListingComposerDraft) {
+  const packet = saasMerchantProductFactPacket(draft) || {};
+  const confirmed = { ...packet.source_confirmed_facts, ...packet.merchant_confirmed_facts };
+  return ["product_name", "condition", "material"].filter((key) => !saasMerchantProductFactValuePresent(key, confirmed[key]));
+}
+
+function saasListingWizardImageUrls(draft = state.saasListingComposerDraft) {
+  const packet = saasMerchantProductFactPacket(draft) || {};
+  const values = packet.values || {};
+  const raw = saasMerchantProductFactProjectedValue(packet, values, "image_urls",
+    draft?.publish_prefill?.image_urls || saasListingMediaWritebackImageUrls(draft).join("\n"));
+  return Array.from(new Set((Array.isArray(raw) ? raw : String(raw).split(/\r?\n|[,，；;]+/))
+    .map((url) => String(url).trim()).filter((url) => /^https?:\/\/[^\s]+$/i.test(url)))).slice(0, 24);
+}
+
+function saasListingWizardRecord() {
+  const context = saasListingCloudContext();
+  if (!context || !state.saasListingComposerDraft) return null;
+  if (!saasListingWizardRecords.has(context.key)) {
+    const draft = state.saasListingComposerDraft;
+    const hasCopy = ["title", "selling_points", "description"].every((key) => String(draft.fields?.[key] || "").trim());
+    const inferred = hasCopy ? (saasListingWizardImageUrls(draft).length ? 3 : 2) : saasListingWizardCoreMissing(draft).length ? 1 : 2;
+    let step = inferred;
+    try {
+      const saved = JSON.parse(localStorage.getItem(`jiejing.listing-wizard.v1:${context.key}`) || "null");
+      if (saved?.scope === context.key && Number.isInteger(saved.step) && saved.step >= 1 && saved.step <= 4) step = saved.step;
+    } catch (_error) { /* A missing navigation preference cannot alter product evidence. */ }
+    saasListingWizardRecords.set(context.key, { key: context.key, step, busy: false, message: "" });
+  }
+  return saasListingWizardRecords.get(context.key);
+}
+
+function setSaasListingWizardStep(step) {
+  const record = saasListingWizardRecord();
+  if (!record || !Number.isInteger(step) || step < 1 || step > 4) return false;
+  const rendered = document.querySelector("[data-listing-wizard-step]");
+  if (record.step === 4 && step !== 4 && rendered?.dataset.listingWizardScope === record.key) {
+    saasPendingPublishIntakeFormValues = snapshotSaasPublishIntakeFormValues();
+  }
+  record.step = step;
+  record.message = "";
+  // Only a navigation preference is stored here. Saved facts, copy and media
+  // remain in their existing scoped backend contracts.
+  try { localStorage.setItem(`jiejing.listing-wizard.v1:${record.key}`, JSON.stringify({ scope: record.key, step })); } catch (_error) { /* Keep this visit usable. */ }
+  return true;
+}
+
+function saasListingWizardGenerationPending() {
+  const feedback = state.saasListingComposerDraft?.ai_generation_feedback;
+  return saasListingAiGenerationInFlight.has(saasListingAiGenerationContextKey()) ||
+    (feedback?.context_key === saasListingAiGenerationContextKey() && ["running", "generation_uncertain", "generated_unapplied"].includes(feedback.status));
+}
+
+async function navigateSaasListingWizard(direction) {
+  const record = saasListingWizardRecord();
+  if (!record || record.busy) return false;
+  const epoch = saasListingAiGenerationEpoch;
+  const current = () => saasListingCloudContext()?.key === record.key && epoch === saasListingAiGenerationEpoch;
+  const step = record.step;
+  const fail = (message) => { if (current()) { record.message = message; showActionToast(message); } return false; };
+  captureSaasListingDraftEditor();
+  if (direction === "previous") {
+    if (state.saasListingProductFactSaveStatus === "saving" || saasListingAiGenerationInFlight.has(saasListingAiGenerationContextKey())) return fail("当前保存或生成尚未完成，请稍后再切换步骤。输入仍保留。");
+    setSaasListingWizardStep(Math.max(1, step - 1));
+    renderProductListingCenter();
+    return true;
+  }
+  if (step >= 4) return false;
+  if (state.saasListingProductFactSaveStatus === "saving") return fail("商品资料尚未保存完成，请稍后再继续。输入仍保留。");
+  if (saasListingWizardGenerationPending()) return fail("本次 AI 生成结果尚未确认，请先核对结果和云端版本。现有内容已保留。");
+  if (!requireSaasProtectedSessionForAction()) return false;
+  record.busy = true;
+  record.message = "正在保存本步内容…";
+  // Capture the current controls before any render replaces them.
+  try {
+    if (step === 1 || step === 3) {
+      const saved = await saveSaasMerchantProductFacts();
+      if (!current()) return false;
+      if (!saved || state.saasListingProductFactSaveStatus !== "saved") return fail("本步尚未保存到账号，输入已保留。请检查保存提示后重试；如有版本冲突，请先核对最新资料。");
+      if (step === 1) {
+        const missing = saasListingWizardCoreMissing();
+        if (missing.length) return fail(`资料已保存。继续前请确认：${missing.map(saasMerchantProductFactLabel).join("、")}。其他缺项可稍后补充。`);
+      } else {
+        const packet = saasMerchantProductFactPacket() || {};
+        const facts = { ...packet.source_confirmed_facts, ...packet.merchant_confirmed_facts };
+        if (!saasListingWizardImageUrls().length) return fail("还没有关联商品图片。请打开本商品素材，审核后送回 Listing；系统会自动带入图片地址。");
+        if (facts.image_rights_confirmed !== true) return fail("请确认这些图片的商业使用权，再保存并继续。");
+        if (saasListingMediaWritebackForDraft() && !saasListingMediaWritebackRightsReady()) return fail("已生成素材仍需完成实物一致性、商业使用权和平台规则审核，请打开本商品素材继续核对。");
+      }
+    } else {
+      const fields = state.saasListingComposerDraft?.fields || {};
+      if (!["title", "selling_points", "description"].every((key) => String(fields[key] || "").trim())) return fail("请先生成或填写标题、核心卖点和商品描述，再保存并继续。");
+      if (!(await hydrateSaasListingCloudCheckpoint())) return fail("暂时无法核对账号里的 Listing 版本，当前输入已保留。请重试保存。");
+      if (!current()) return false;
+      let cloud = saasListingCloudRecord();
+      if (cloud?.dirty) await flushSaasListingCloudCheckpoint();
+      if (!current()) return false;
+      cloud = saasListingCloudRecord();
+      if (!cloud || cloud.conflict || cloud.dirty || cloud.pending || cloud.write || !["saved", "current", "idle"].includes(cloud.status)) {
+        return fail(cloud?.conflict ? "云端已有另一版本。请在文案下方核对并处理版本冲突，再保存并继续。" : "Listing 尚未成功保存到账号，输入已保留。请检查文案下方的保存状态后重试。");
+      }
+      // Hydration and save reconciliation can adopt a newer cloud copy, so
+      // validate the resulting editor again rather than the pre-read values.
+      const savedFields = state.saasListingComposerDraft?.fields || {};
+      if (!["title", "selling_points", "description"].every((key) => String(savedFields[key] || "").trim())) {
+        return fail("账号里的最新文案仍缺标题、核心卖点或商品描述。请补齐当前内容，再保存并继续。");
+      }
+    }
+    if (!current()) return false;
+    setSaasListingWizardStep(step + 1);
+    return true;
+  } catch (_error) {
+    return fail("本步保存未完成，输入已保留。请检查网络与账号状态后重试。");
+  } finally {
+    record.busy = false;
+    if (current()) renderProductListingCenter();
+  }
+}
+
+function renderSaasListingWizardImages(draft) {
+  const packet = saasMerchantProductFactPacket(draft);
+  const urls = saasListingWizardImageUrls(draft);
+  const fields = saasMerchantProductFactDefinitions().flatMap((group) => group.fields);
+  const rights = fields.find(([key]) => key === "image_rights_confirmed");
+  const imageField = fields.find(([key]) => key === "image_urls");
+  return `<section class="saas-listing-wizard-images saas-product-facts-module" aria-label="商品图片核对">
+    <h3>选择并核对这件商品的图片</h3>
+    <p>已有图片和生成素材会继续保留。打开本商品素材，逐项审核后送回 Listing，系统会自动关联图片。</p>
+    <button type="button" class="primary-action" data-saas-action="open-media">打开本商品素材与审核</button>
+    ${urls.length ? renderSaasListingMediaWritebackPanel(draft) : ""}
+    ${!saasListingMediaWritebackForDraft(draft) && urls.length ? `<div class="saas-listing-wizard-image-grid">${urls.map((url, index) => `<figure><img src="${escapeHtml(url)}" alt="已关联商品图片 ${index + 1}" loading="lazy"><figcaption>图片 ${index + 1}</figcaption></figure>`).join("")}</div>` : ""}
+    ${!urls.length ? '<p role="status">当前 Listing 还没有关联图片；素材工坊中已生成的结果需先审核并送回。</p>' : `<p>当前 Listing 已关联 ${urls.length} 张图片。</p>`}
+    ${renderSaasMerchantProductFactField(packet, rights)}
+    <details><summary>查看或补充已有图片地址（可选）</summary>${renderSaasMerchantProductFactField(packet, imageField)}</details>
+  </section>`;
+}
+
+function renderSaasListingWizard({ draft, ctx, pendingConfirmations, opportunity, marketReport, listingReport }) {
+  const record = saasListingWizardRecord();
+  const step = record?.step || 1;
+  const titles = ["商品资料", "Listing 内容", "商品图片", "发布检查与确认"];
+  const feedback = renderSaasListingAiGenerationFeedback(draft);
+  const account = saasSettingsDataSnapshotView(ctx);
+  const body = step === 1 ? renderSaasMerchantProductFactsModule(draft, { wizard: true })
+    : step === 2 ? `<div class="saas-listing-wizard-copy-actions"><p>使用已保存的商品资料生成文案，也可以直接编辑已有内容。</p><button type="button" class="primary-action" data-saas-action="listing-generate-ai-draft" ${record?.busy || state.saasListingProductFactSaveStatus === "saving" || saasListingWizardGenerationPending() ? "disabled" : ""}>${saasListingWizardGenerationPending() ? "等待本次生成结果" : "AI 生成 Listing 草稿"}</button><div data-saas-listing-ai-feedback-slot ${feedback ? "" : "hidden"}>${feedback}</div></div>${renderSaasListingDraftEditor(draft)}`
+    : step === 3 ? renderSaasListingWizardImages(draft)
+    : `${renderSaasListingVisiblePublishBridge(draft, ctx, pendingConfirmations)}${renderSaasListingUnpublishedDraftReceipt(draft)}${renderSaasListingAdvancedWorkDetails(draft, ctx, pendingConfirmations, opportunity, marketReport, listingReport)}`;
+  return `<section class="saas-listing-wizard" data-listing-wizard-step="${step}" data-listing-wizard-scope="${escapeHtml(record?.key || "")}" aria-label="单商品四步上架">
+    <header class="saas-listing-wizard-heading"><span>第 ${step} / 4 步</span><h3>${titles[step - 1]}</h3></header>
+    ${account.accountTone === "red" || step === 4 ? `<aside class="saas-listing-wizard-account is-${escapeHtml(account.accountTone)}" aria-label="店铺账号状态"><strong>${escapeHtml(account.accountTitle)}</strong><p>${escapeHtml(account.accountDetail)} 商品资料与文案仍可保存。</p></aside>` : ""}
+    <div class="saas-listing-wizard-body">${body}</div>
+    <p class="saas-listing-wizard-message" data-listing-wizard-message role="status" aria-live="polite">${escapeHtml(record?.message || "")}</p>
+    <footer class="saas-listing-wizard-navigation">
+      ${step > 1 ? `<button type="button" class="secondary-action" data-saas-action="listing-wizard-previous" ${record?.busy ? "disabled" : ""}>上一步</button>` : ""}
+      ${step < 4 ? `<button type="button" class="primary-action" data-saas-action="listing-wizard-next" ${!record || record.busy ? "disabled" : ""}>${record?.busy ? "保存中…" : "保存并继续"}</button>` : '<p>未发布 eBay 草稿和正式发布分别确认；此步骤不会自动发布。</p>'}
+    </footer>
+  </section>`;
+}
+
 function renderSaasListingComposerWorkspace({
   listingReport,
   marketReport,
@@ -10831,15 +10999,15 @@ function renderSaasListingComposerWorkspace({
       <div class="saas-listing-composer-head saas-listing-v2-head">
         <div>
           <p class="eyebrow">JIEJING Listing</p>
-          <h2>商品上架项目台</h2>
-          <p>先把商品资料放进来。JIEJING 会按市场结论、Listing 草稿、素材/利润和发布确认的顺序往下展开；店铺连接和授权配置在设置里。</p>
+          <h2>商品上架</h2>
+          <p>按商品资料、Listing 内容、商品图片、发布检查与确认逐步完成；已保存的资料和素材会继续保留。</p>
         </div>
-        <span class="pill ${draft || reportsReady ? "green" : "neutral"}">${escapeHtml(statusLabel)}</span>
+        ${!draft ? `<span class="pill ${reportsReady ? "green" : "neutral"}">${escapeHtml(statusLabel)}</span>` : ""}
       </div>
 
       <div class="saas-listing-cplus-stack">
         ${
-          ceoHandoff
+          ceoHandoff && !draft
             ? `<section class="saas-listing-ai-handoff" aria-label="AI CEO 已带入目标">
                 <div>
                   <span>来自 AI CEO</span>
@@ -10850,14 +11018,7 @@ function renderSaasListingComposerWorkspace({
               </section>`
             : ""
         }
-        ${draft ? renderSaasListingSourceIntake({ draft, inputValue, inputChips, marketReport, listingReport, syncedRows }) : renderSaasListingSourceIntake({ draft: null, inputValue, inputChips, marketReport, listingReport, syncedRows })}
-        ${!hasBuyerCopy ? renderSaasMerchantProductFactsModule(draft) : ""}
-        ${renderSaasListingDraftEditor(draft)}
-        ${renderSaasListingMediaWritebackPanel(draft)}
-        ${draft ? renderSaasListingNextActionPanel(draft, ctx, pendingConfirmations) : ""}
-        ${hasBuyerCopy ? renderSaasMerchantProductFactsModule(draft) : ""}
-        ${draft ? renderSaasListingUnpublishedDraftReceipt(draft) : ""}
-        ${draft ? renderSaasListingAdvancedWorkDetails(draft, ctx, pendingConfirmations, opportunity, marketReport, listingReport) : ""}
+        ${draft ? renderSaasListingWizard({ draft, ctx, pendingConfirmations, opportunity, marketReport, listingReport }) : renderSaasListingSourceIntake({ draft: null, inputValue, inputChips, marketReport, listingReport, syncedRows })}
       </div>
     </section>
   `;
@@ -10961,7 +11122,7 @@ function renderSaasProductListingCenter(view) {
   const resourceRows = saasEbayPacketResourceRows(ctx.packetBody);
   const liveTypes = new Set((state.saasModelValueGate?.evidence || {}).live_model_report_types || []);
   const hasLiveListing = Boolean((liveTypes.has("listing.package") || listingReport) && safeListingReport);
-  const showPublishFlow = Boolean(safeListingDraft || hasLiveListing);
+  const showPublishFlow = Boolean(safeListingDraft || hasLiveListing) && saasListingWizardRecord()?.step === 4;
   const canRunModel = state.saasConnected && ctx.hasPacket && isSaasModelConfigured();
   const primaryAction = !state.saasConnected
     ? ["refresh", "读取登录状态", "secondary-action"]
@@ -11247,11 +11408,13 @@ function captureSaasPendingProductFactEditor(view) {
     return pending?.scope === scope && pending.generation === Number(view.saasProductFactEditorGeneration || 0)
       ? pending : null;
   }
-  const fields = currentFields.filter((field) => {
+  const visibleKeys = new Set(currentFields.map((field) => field.key));
+  const retainedFields = (baseline.pendingEditor?.fields || []).filter((field) => !visibleKeys.has(field.key));
+  const fields = [...retainedFields, ...currentFields.filter((field) => {
     const previous = baseline.fields.find((item) => item.key === field.key);
     return previous && (JSON.stringify(field) !== JSON.stringify(previous) ||
       (baseline.pendingFieldKeys || []).includes(field.key));
-  });
+  })];
   const active = document.activeElement;
   const focusedKey = view.contains(active) ? active?.dataset?.saasProductFactField || "" : "";
   return { scope, fields, focusedKey,
@@ -11260,6 +11423,51 @@ function captureSaasPendingProductFactEditor(view) {
     hasVersionConflict: baseline.pendingBaseReportId !== baseline.baseReportId,
     selectionStart: focusedKey ? active.selectionStart : null,
     selectionEnd: focusedKey ? active.selectionEnd : null };
+}
+
+function saasLatestObservedListingProductFactReport(context = saasListingCloudContext()) {
+  return context ? (state.saasReports || []).filter((report) =>
+    report?.report_type === "merchant.product_facts" && report.report_id && saasListingCloudReportMatchesContext(report, context))
+    .sort((a, b) => saasTimestampMillis(b.created_at) - saasTimestampMillis(a.created_at) || String(b.report_id).localeCompare(String(a.report_id)))[0] || null : null;
+}
+
+function loadSaasLatestListingProductFacts() {
+  if (!requireSaasProtectedSessionForAction()) return false;
+  const context = saasListingCloudContext();
+  const draft = state.saasListingComposerDraft;
+  const epoch = saasListingAiGenerationEpoch;
+  const report = saasLatestObservedListingProductFactReport(context);
+  if (!context || !draft || !report?.report?.merchant_product_fact_packet) {
+    showActionToast("尚未读到本商品的最新资料，请先刷新；当前输入保持不变。");
+    return false;
+  }
+  if (state.saasListingProductFactSaveStatus === "saving" || saasListingWizardRecord()?.busy ||
+      saasListingAiGenerationInFlight.has(saasListingAiGenerationContextKey())) {
+    showActionToast("当前保存或生成尚未完成，请稍后再载入资料。输入仍保留。");
+    return false;
+  }
+  if (!window.confirm("将放弃本机未保存的商品资料，载入当前账号中已保存的最新商品资料。Listing 文案保留，文案云端版本冲突仍需单独核对。是否继续？")) return false;
+  const latest = saasLatestObservedListingProductFactReport();
+  if (context.key !== saasListingCloudContext()?.key || epoch !== saasListingAiGenerationEpoch ||
+      draft !== state.saasListingComposerDraft || latest?.report_id !== report.report_id) {
+    showActionToast("商品或最新资料已变化，请重新核对后再载入；当前输入保持不变。");
+    return false;
+  }
+  const packet = latest.report.merchant_product_fact_packet;
+  const projected = applySaasMerchantProductFactPacketToDraft(draft, packet);
+  // This action adopts facts only. Copy text and its independent cloud record
+  // remain untouched; changed facts revoke validation, not the merchant's text.
+  projected.fields = { ...(draft.fields || {}) };
+  invalidateSaasListingValidationForFactChange(projected, draft.merchant_product_fact_packet || {}, packet);
+  projected.source_product_fact_report_id = latest.report_id;
+  state.saasListingComposerDraft = projected;
+  state.saasProductFactSaveAttempt = null;
+  state.saasListingProductFactSaveStatus = "saved";
+  clearSaasPendingProductFactEditor();
+  saveSaasProtectedStateSnapshot();
+  renderProductListingCenter();
+  showActionToast("已载入最新商品资料；Listing 文案保留，尚未再次保存或发布。");
+  return true;
 }
 
 function restoreSaasPendingProductFactEditor(view, pending) {
@@ -11279,12 +11487,23 @@ function restoreSaasPendingProductFactEditor(view, pending) {
       ? { ...pending, hasVersionConflict: pendingBaseReportId !== baseReportId } : null,
     fields: saasProductFactEditorFields(view) };
   view.querySelector("[data-saas-product-fact-version-warning]")?.remove();
-  if (pendingBaseReportId !== baseReportId) {
+  // A copy-checkpoint conflict can intentionally retain draft A even after a
+  // refresh observes fact version B. Show that independent fact update without
+  // rebasing this editor's expected A or adopting any of B's values.
+  const observedFactHead = saasLatestObservedListingProductFactReport();
+  if (pendingBaseReportId !== baseReportId || (observedFactHead && observedFactHead.report_id !== pendingBaseReportId)) {
     const warning = document.createElement("p");
     warning.dataset.saasProductFactVersionWarning = "";
     warning.className = "saas-product-facts-simulation-note";
     warning.setAttribute("role", "status");
-    warning.textContent = "商品资料已有更新，本页修改仍保留。请重新打开商品核对最新资料后再保存；当前修改尚未覆盖新版本。";
+    warning.textContent = "商品资料已有更新，本页修改仍保留。请核对并载入最新商品资料后再保存；当前修改尚未覆盖新版本。";
+    if (observedFactHead) {
+      const load = document.createElement("button");
+      load.type = "button"; load.className = "secondary-action";
+      load.dataset.saasAction = "listing-load-latest-product-facts";
+      load.textContent = "载入最新商品资料";
+      warning.appendChild(load);
+    }
     view.querySelector(".saas-product-facts-module")?.prepend(warning);
   }
   if (!applies) return;
@@ -11312,11 +11531,17 @@ function restoreSaasPendingProductFactEditor(view, pending) {
   });
 }
 
-function clearSaasPendingProductFactEditor(view = document.querySelector("#view-product")) {
+function clearSaasPendingProductFactEditor(view = document.querySelector("#view-product"), options = {}) {
   if (!view) return;
+  const pending = options.preserveOtherSteps ? captureSaasPendingProductFactEditor(view) : null;
+  const visibleKeys = new Set(saasProductFactEditorFields(view).map((field) => field.key));
+  const retainedFields = (pending?.fields || []).filter((field) => !visibleKeys.has(field.key));
   view.saasProductFactEditorGeneration = Number(view.saasProductFactEditorGeneration || 0) + 1;
   delete view.saasProductFactEditorBaseline;
   view.querySelector("[data-saas-product-fact-version-warning]")?.remove();
+  if (retainedFields.length) restoreSaasPendingProductFactEditor(view, { ...pending,
+    fields: retainedFields, focusedKey: "", generation: view.saasProductFactEditorGeneration,
+    expectedFactReportId: String(state.saasListingComposerDraft?.source_product_fact_report_id || ""), hasVersionConflict: false });
 }
 
 function captureSaasListingEditorFocus(view) {
@@ -15921,7 +16146,7 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
     procurement_cost: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost", projected.publish_prefill?.procurement_cost),
     price: saasMerchantProductFactProjectedValue(packet, facts, "selling_price", projected.publish_prefill?.price),
     currency: facts.currency || projected.publish_prefill?.currency || "USD",
-    image_urls: facts.image_urls || projected.publish_prefill?.image_urls || "",
+    image_urls: saasMerchantProductFactProjectedValue(packet, facts, "image_urls", projected.publish_prefill?.image_urls),
     image_rights_confirmed: facts.image_rights_confirmed === true,
   };
   projected.fields = {
@@ -29897,63 +30122,13 @@ function commitSaasActiveListingProjectContext(view = state.view || "product") {
   saveSaasProtectedStateSnapshot();
   const routeSynced = syncSaasProjectRoute(normalizedView, { projectId });
   if (routeSynced) {
-    void refreshSaasMerchantProjectStatus({ projectId }).then(() => {
-      const currentIdentity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
-      if (state.view === normalizedView && currentIdentity?.key === projectId) {
-        mountSaasMerchantProjectStatusStrip(normalizedView);
-      }
-    }).catch((error) => {
+    void refreshSaasMerchantProjectStatus({ projectId }).catch((error) => {
       if (!isSaasUnrecoverableSessionError(error)) {
         console.warn(`[JIEJING optional API skipped] merchant project status refresh: ${publicRuntimeText(error?.message || error).slice(0, 200)}`);
       }
     });
   }
   return routeSynced;
-}
-
-function renderSaasMerchantProjectStatusStrip(snapshot = state.saasMerchantProjectStatus) {
-  if (!snapshot || snapshot.snapshot_version !== "merchant_project_status_v1") return "";
-  const stages = Array.isArray(snapshot.stages) ? snapshot.stages : [];
-  const current = stages.find((stage) => stage?.is_current) || stages.find((stage) => stage?.key === snapshot.current_stage) || {};
-  const blocker = snapshot.blocker && typeof snapshot.blocker === "object" ? snapshot.blocker : {};
-  const nextAction = snapshot.next_action && typeof snapshot.next_action === "object" ? snapshot.next_action : {};
-  const project = snapshot.project && typeof snapshot.project === "object" ? snapshot.project : {};
-  const blockerActive = String(blocker.key || "none") !== "none";
-  const tone = snapshot.overall_status === "published" ? "green" : blockerActive ? "amber" : "neutral";
-  const projectLabel = project.product_name || project.sku || "当前商品项目";
-  return `
-    <section class="saas-merchant-project-status-strip is-${escapeHtml(tone)}" data-merchant-project-status="merchant_project_status_v1" aria-label="当前商品项目进度">
-      <div class="saas-merchant-project-status-main">
-        <span class="pill ${escapeHtml(tone)}">${escapeHtml(current.label || "资料")}</span>
-        <div>
-          <strong>${escapeHtml(projectLabel)}</strong>
-          <p>${escapeHtml(current.detail || "等待当前项目证据")}</p>
-        </div>
-      </div>
-      <ol class="saas-merchant-project-stages" aria-label="八步项目进度">
-        ${stages
-          .map(
-            (stage) => `<li class="is-${escapeHtml(stage.status || "waiting")} ${stage.is_current ? "is-current" : ""}"><span>${escapeHtml(stage.label || stage.key || "")}</span></li>`,
-          )
-          .join("")}
-      </ol>
-      <div class="saas-merchant-project-decision">
-        <span>${blockerActive ? "当前阻断" : "下一步"}</span>
-        <strong>${escapeHtml(blockerActive ? blocker.title || "需要处理" : nextAction.label || "继续当前项目")}</strong>
-        <p>${escapeHtml(blockerActive ? blocker.detail || "" : "所有页面都按同一后端项目状态继续。")}</p>
-        <button class="secondary-action compact-action" type="button" data-global-flow-view="${escapeHtml(nextAction.view || "product")}">${escapeHtml(nextAction.label || "继续")}</button>
-      </div>
-    </section>
-  `;
-}
-
-function mountSaasMerchantProjectStatusStrip(viewId = state.view || "") {
-  if (!isSaasPublicMvpMode() || !["product", "media", "confirm"].includes(viewId)) return;
-  const view = document.querySelector(`#view-${viewId}`);
-  if (!view) return;
-  view.querySelectorAll(":scope > .saas-merchant-project-status-strip").forEach((node) => node.remove());
-  const markup = renderSaasMerchantProjectStatusStrip();
-  if (markup) insertJiejingTrustedHtml(view, "afterbegin", trustedJiejingHtml(markup, "merchant.project_status"));
 }
 
 async function refreshSaasState(options = {}) {
@@ -33888,19 +34063,25 @@ function saasListingItemSpecificsWithMerchantFacts(current = "", facts = {}) {
 }
 
 function collectSaasMerchantProductFacts() {
-  const merchantConfirmed = {};
-  const unknownFacts = [];
+  // A wizard step renders only its own controls. Preserve the other steps;
+  // removing a visible value must still revoke that field's prior confirmation.
+  const current = saasMerchantProductFactPacket() || {};
+  const merchantConfirmed = { ...(current.merchant_confirmed_facts || {}) };
+  const visibleFields = Array.from(document.querySelectorAll("[data-saas-product-fact-field]"));
+  const visibleKeys = new Set(visibleFields.map((field) => field.dataset.saasProductFactField));
+  const unknownFacts = (current.unknown_facts || []).filter((key) => !visibleKeys.has(key));
   const pendingSuggestionFacts = [];
   const explicitUnknownFacts = [];
-  document.querySelectorAll("[data-saas-product-fact-field]").forEach((field) => {
+  visibleFields.forEach((field) => {
     const key = String(field.dataset.saasProductFactField || "").trim();
     if (!key) return;
+    delete merchantConfirmed[key];
     const value = field.type === "checkbox"
       ? field.checked === true
       : sanitizeSaasWorkflowFeedbackText(field.value || "", key === "image_urls" ? 2400 : key === "source_url" ? 700 : 240);
     if (field.dataset.productFactUnknown === "true" || !saasMerchantProductFactValuePresent(key, value)) {
       unknownFacts.push(key);
-      if (field.dataset.productFactUnknown === "true") explicitUnknownFacts.push(key);
+      if (field.dataset.productFactUnknown === "true" || field.dataset.productFactConfirmed === "true") explicitUnknownFacts.push(key);
       return;
     }
     const originState = String(field.dataset.productFactOriginState || "missing");
@@ -34060,7 +34241,7 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
     procurement_cost: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost", draft.publish_prefill?.procurement_cost),
     price: saasMerchantProductFactProjectedValue(packet, facts, "selling_price", draft.publish_prefill?.price),
     currency: facts.currency || draft.publish_prefill?.currency || "USD",
-    image_urls: facts.image_urls || draft.publish_prefill?.image_urls || "",
+    image_urls: saasMerchantProductFactProjectedValue(packet, facts, "image_urls", draft.publish_prefill?.image_urls),
     image_rights_confirmed: facts.image_rights_confirmed === true,
   };
   draft.fields = {
@@ -34157,7 +34338,7 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
     }
     if (response.report?.report_id && state.saasListingComposerDraft) {
       state.saasListingComposerDraft.source_product_fact_report_id = String(response.report.report_id);
-      if (typeof clearSaasPendingProductFactEditor === "function") clearSaasPendingProductFactEditor();
+      if (typeof clearSaasPendingProductFactEditor === "function") clearSaasPendingProductFactEditor(undefined, { preserveOtherSteps: true });
     }
     if (response.task) state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
     if (response.report) state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
@@ -34288,7 +34469,12 @@ function captureSaasListingFactsForAiGeneration(draft = state.saasListingCompose
   if (!draft) return null;
   const current = saasMerchantProductFactPacket(draft) || {};
   if (!document.querySelector("[data-saas-product-fact-field]")) {
-    return sanitizeSaasMerchantProductFactPacketSnapshot(current);
+    // A copy-only wizard step has no fact controls to project. Keep the
+    // captured packet on the draft so the initial wire and its later unsent
+    // signature check bind the same normalized facts, not server/UI metadata.
+    const packet = sanitizeSaasMerchantProductFactPacketSnapshot(current);
+    draft.merchant_product_fact_packet = packet;
+    return packet;
   }
   const collected = collectSaasMerchantProductFacts();
   const retainedSourceConfirmedFacts = { ...(current.source_confirmed_facts || {}) };
@@ -34550,6 +34736,7 @@ function updateSaasListingGenerationFeedbackSlots() {
     slot.innerHTML = renderSaasListingAiGenerationFeedback(); slot.hidden = !slot.innerHTML;
   });
   document.querySelectorAll("[data-saas-listing-copy-history-slot]").forEach((slot) => { slot.innerHTML = renderSaasListingBuyerCopyRewriteHistory(); });
+  releaseSaasListingAiGenerationButtons();
 }
 
 async function checkSaasListingLegacyGenerationResult(taskId) {
@@ -34723,6 +34910,7 @@ async function applySaasListingGenerationResult(result, operation, isCurrent, ed
       restored.listing_project_identity = { ...operation.listing_project_identity }; restored.listing_project_key = operation.listing_project_identity.key;
       restored.simulation_only = state.saasListingComposerDraft.merchant_product_fact_packet?.simulation_only === true;
       restored.safe_local_only = restored.simulation_only; restored.model_generated = true; restored.ai_generation_feedback = null;
+      restored.source_product_fact_report_id = String(state.saasListingComposerDraft.source_product_fact_report_id || "");
       state.saasListingComposerDraft = restored; state.saasListingSourceMode = "listing_ai_generation";
       saveSaasProtectedStateSnapshot(); renderProductListingCenter(); return true;
     }
@@ -34883,6 +35071,10 @@ async function resumeSaasListingGeneration() {
     if (saasListingAiGenerationInFlight.get(contextKey) === request) saasListingAiGenerationInFlight.delete(contextKey);
     feedback.checking = false;
     if (current()) { saveSaasProtectedStateSnapshot(); updateSaasListingGenerationFeedbackSlots(); }
+    // Successful adoption clears the operation feedback before rendering.
+    // Release that render's in-flight UI lock only in this same project visit.
+    if (request.epoch === saasListingAiGenerationEpoch && request.refreshGeneration === saasStateRefreshGeneration &&
+        contextKey === saasListingAiGenerationContextKey()) releaseSaasListingAiGenerationButtons();
   }
 }
 
@@ -34931,6 +35123,7 @@ function reconcileSaasListingRewriteFeedback(record) {
   draft.ai_generation_feedback = null;
   saveSaasProtectedStateSnapshot();
   document.querySelectorAll("[data-saas-listing-ai-feedback-slot]").forEach((slot) => { slot.innerHTML = ""; slot.hidden = true; });
+  releaseSaasListingAiGenerationButtons();
   return true;
 }
 
@@ -34982,7 +35175,9 @@ function releaseSaasListingAiGenerationButtons() {
   document.querySelectorAll('[data-saas-action="listing-generate-ai-draft"], [data-saas-action="listing-rewrite-buyer-copy"], [data-saas-action="save-merchant-product-facts"]').forEach((button) => {
     button.disabled = state.saasLoading || state.saasListingProductFactSaveStatus === "saving";
     if (button.dataset.saasAction === "listing-generate-ai-draft") {
-      button.textContent = state.saasListingAiGenerationStatus === "running" ? "AI 正在生成…" : "AI 生成 Listing 草稿";
+      const pending = saasListingWizardGenerationPending();
+      button.disabled = button.disabled || Boolean(saasListingWizardRecord()?.busy) || pending;
+      button.textContent = pending ? "等待本次生成结果" : state.saasListingAiGenerationStatus === "running" ? "AI 正在生成…" : "AI 生成 Listing 草稿";
     }
     if (button.dataset.saasAction === "save-merchant-product-facts") {
       button.textContent = state.saasListingProductFactSaveStatus === "saving" ? "保存中…" : "保存已确认资料";
@@ -35261,6 +35456,11 @@ async function generateSaasListingDraftFromCurrentProject(options = {}) {
     restored.safe_local_only = packet?.simulation_only === true;
     restored.simulation_only = packet?.simulation_only === true;
     restored.model_generated = true;
+    // Generation creates copy, not a new observation of merchant fact history.
+    // Retain this visit's original CAS baseline only for the same identity.
+    if (saasListingCloudSameIdentity(serverIdentity, listingProjectIdentity)) {
+      restored.source_product_fact_report_id = String(draft.source_product_fact_report_id || "");
+    }
     state.saasListingComposerDraft = restored;
     state.saasListingSourceMode = "listing_ai_generation";
     state.saasListingAiGenerationStatus = "completed";
@@ -36254,6 +36454,11 @@ function focusSaasListingGapField(label = "", prompt = "") {
   };
   const target = definition ? ["fact", definition[0]]
     : labels.map((value) => Object.prototype.hasOwnProperty.call(aliases, value) ? aliases[value] : null).find(Boolean);
+  if (target && state.saasListingComposerDraft && saasListingWizardRecord()) {
+    const targetStep = target[0] === "draft" ? 2 : target[0] === "publish" ? 4
+      : ["image_urls", "image_rights_confirmed"].includes(target[1]) ? 3 : 1;
+    if (saasListingWizardRecord().step !== targetStep) { setSaasListingWizardStep(targetStep); renderProductListingCenter(); }
+  }
   const view = document.querySelector("#view-product");
   const selector = !target ? "" : target[0] === "fact"
     ? `[data-saas-product-fact-field="${target[1]}"]`
@@ -36275,6 +36480,10 @@ function focusSaasListingGapField(label = "", prompt = "") {
 function focusSaasPublishIntakeForm() {
   captureSaasListingComposerInput();
   captureSaasListingDraftEditor();
+  if (saasListingWizardRecord() && saasListingWizardRecord().step !== 4) {
+    setSaasListingWizardStep(4);
+    renderProductListingCenter();
+  }
   prefillSaasPublishIntakeFromListingComposer();
   const details = document.querySelector('[data-listing-publish-flow-details="publish_intake_collapsed_v1"]');
   if (details) details.open = true;
@@ -36573,6 +36782,14 @@ async function runSaasDomesticBillingQueryRefund(button) {
 
 function handleSaasAction(button) {
   const action = button.dataset.saasAction;
+  if (action === "listing-load-latest-product-facts") {
+    loadSaasLatestListingProductFacts();
+    return;
+  }
+  if (action === "listing-wizard-next" || action === "listing-wizard-previous") {
+    void navigateSaasListingWizard(action === "listing-wizard-next" ? "next" : "previous");
+    return;
+  }
   if (action === "login-session") {
     loginSaasBackendSession(button);
     return;
@@ -39063,12 +39280,12 @@ function renderSaasInactiveViewPlaceholder(viewId = "") {
     view.saasProductFactEditorBaseline.pendingEditor = captureSaasPendingProductFactEditor(view);
   }
   const labels = {
-    cockpit: ["JV AI", "对话与当前任务将在打开本页时读取。"],
-    workflow: ["JV AI", "经营任务可在 JV AI 对话中继续。"],
+    cockpit: ["AI CEO", "对话与当前任务将在打开本页时读取。"],
+    workflow: ["AI CEO", "经营任务可在 AI CEO 对话中继续。"],
     product: ["Listing", "这里只接收店铺资料和模型输出，不用旧商品内容填空。"],
     media: ["素材工坊", "素材任务等待 Listing Package 和商家来源记录。"],
     bulk: ["批量铺货", "批量机会等待真实店铺资料和来源记录。"],
-    activity: ["JV AI", "报告可在 JV AI 和对应业务模块查看。"],
+    activity: ["AI CEO", "报告可在 AI CEO 和对应业务模块查看。"],
     confirm: ["决策中心", "确认中心只承接高风险动作，不展示历史商品流程。"],
     service: ["客服与订单", "客服草稿等待当前账号商品档案和物流边界。"],
     connect: ["设置", "账号、安全、AI 连接、来源记录和确认边界会在打开本页时读取。"],
@@ -39094,15 +39311,15 @@ function renderSaasProtectedStateLoadingView(viewId = "") {
   const view = document.querySelector(`#view-${viewId}`);
   if (!view) return false;
   const labels = {
-    cockpit: "JV AI",
+    cockpit: "AI CEO",
     product: "Listing",
     bulk: "批量铺货",
     media: "素材工坊",
     confirm: "决策中心",
     service: "客服与订单",
     connect: "设置",
-    activity: "JV AI 报告",
-    workflow: "JV AI",
+    activity: "AI CEO 报告",
+    workflow: "AI CEO",
   };
   const title = labels[viewId] || "捷境工作台";
   view.innerHTML = jiejingTrustedTemplate("view.protected_loading")`
@@ -39193,7 +39410,6 @@ function setView(nextView, options = {}) {
     }
   }
   if (nextView === "connect") renderConnect();
-  mountSaasMerchantProjectStatusStrip(nextView);
   updateOverlay();
   renderWorkflowFeedbackWidget();
 }
@@ -40742,19 +40958,19 @@ function renderSaasCockpitRealWorkbench() {
   const hasVisibleCeoChat = Boolean(visibleCommandChat.trim());
   const firstRunHandoff = hasVisibleCeoChat ? "" : renderSaasAiCeoFirstRunHandoff();
   const taskContextState = saasAiCeoTaskContextState();
-  cockpit.dataset.title = "JV AI";
+  cockpit.dataset.title = "AI CEO";
   const pageTitleNode = document.querySelector("#pageTitle");
   const moduleHintNode = document.querySelector("#moduleFlowHint");
-  if (pageTitleNode) pageTitleNode.textContent = "JV AI";
+  if (pageTitleNode) pageTitleNode.textContent = "AI CEO";
   if (moduleHintNode) moduleHintNode.textContent = "像聊天一样说出目标；连接、店铺资料、AI 和订阅状态集中到设置页。";
   cockpit.innerHTML = jiejingTrustedTemplate("ai_ceo.cockpit")`
-    <section class="saas-real-cockpit-shell saas-ai-ceo-workbench saas-ai-ceo-chatgpt-shell" data-ai-ceo-fixed-chat-viewport="ai_ceo_fixed_chat_viewport_v1" aria-label="JV AI 对话工作台">
+    <section class="saas-real-cockpit-shell saas-ai-ceo-workbench saas-ai-ceo-chatgpt-shell" data-ai-ceo-fixed-chat-viewport="ai_ceo_fixed_chat_viewport_v1" aria-label="AI CEO 对话工作台">
       <div class="saas-ai-ceo-cockpit-main">
         <div class="saas-ai-ceo-chatgpt-layout saas-ai-ceo-chatgpt-layout-clean ${taskContextState.visible ? "has-task-context" : ""} ${taskContextState.visible && !taskContextState.expanded ? "is-task-context-collapsed" : ""}">
-          <section class="ceo-panel cockpit-chat-panel saas-ai-ceo-chat saas-ai-ceo-thread" aria-label="JV AI 对话窗口">
+          <section class="ceo-panel cockpit-chat-panel saas-ai-ceo-chat saas-ai-ceo-thread" aria-label="AI CEO 对话窗口">
             <div class="saas-ai-ceo-thread-intro ${hasVisibleCeoChat ? "is-compact" : "is-empty"}">
-              <p class="eyebrow">JIEJING · JV AI</p>
-              <h2>${hasVisibleCeoChat ? "JV AI" : "一句话交给 JV AI"}</h2>
+              <p class="eyebrow">JIEJING · AI CEO</p>
+              <h2>${hasVisibleCeoChat ? "AI CEO" : "一句话交给 AI CEO"}</h2>
               <p>${hasVisibleCeoChat ? "继续当前对话。" : "问问题直接答；说商品、链接、图片或订单，我会自动带到对应流程；真实发布、付款、退款和广告先问你。"}</p>
             </div>
             ${firstRunHandoff}
@@ -40765,8 +40981,8 @@ function renderSaasCockpitRealWorkbench() {
               <form class="chat-compose saas-ai-ceo-composer" id="ceoForm">
                 <button type="button" class="saas-ai-ceo-attachment-button" id="ceoAttachmentButton" aria-label="添加商品图片" title="添加商品图片">＋</button>
                 <input id="ceoAttachmentInput" class="saas-ai-ceo-attachment-input" type="file" multiple accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true" />
-                <input id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 JV AI 的问题或商品任务" placeholder="比如：帮我调研这个商品，整理 Listing 草稿…" autocomplete="off" />
-                <button type="submit" class="primary-action" aria-label="发送给 JV AI">发送</button>
+                <input id="ceoInput" type="text" name="ai_ceo_prompt" aria-label="交给 AI CEO 的问题或商品任务" placeholder="比如：帮我调研这个商品，整理 Listing 草稿…" autocomplete="off" />
+                <button type="submit" class="primary-action" aria-label="发送给 AI CEO">发送</button>
               </form>
               ${
                 hasVisibleCeoChat
@@ -45161,34 +45377,69 @@ function renderSaasSettingsPlatformPanel(ctx = saasMerchantWorkbenchContext()) {
   `;
 }
 
+function saasSettingsDataSnapshotView(ctx, now = Date.now()) {
+  // Saved resource coverage, cache age and account eligibility are independent.
+  // Never interpret a successful historical read as proof of a usable account.
+  const rawTime = String(ctx.lastSync || "").trim();
+  const times = [rawTime, ctx.packetBody?.freshness?.snapshot_created_at, ctx.packetBody?.created_at].filter(Boolean);
+  const ages = times.map(value => /(?:Z|[+-]\d{2}:\d{2})$/i.test(String(value)) ? now - Date.parse(value) : NaN);
+  const ttl = ctx.packetBody?.freshness?.stale_after_seconds;
+  const validTime = rawTime && ages.length && ages.every(age => Number.isFinite(age) && age >= 0);
+  const age = Math.max(...ages);
+  const freshness = !ctx.hasPacket ? "missing"
+    : !validTime || !Number.isFinite(ttl) || ttl <= 0 ? "unknown"
+    : age >= ttl * 1000 ? "stale" : "fresh";
+  const health = saasAccountHealthSnapshot();
+  const storeId = String(ctx.store?.store_id || "");
+  const companyId = String(state.saasCompany?.company_id || "");
+  const scoped = Boolean(storeId && String(health.store_id || "") === storeId
+    && (!health.company_id || String(health.company_id) === companyId));
+  const status = scoped ? String(health.status || "").toLowerCase() : "unknown";
+  const restricted = scoped && ["restricted", "suspended", "payout_hold", "quota_limited", "registration_incomplete"].includes(status);
+  const labels = { restricted: "账号受限", suspended: "账号已暂停", payout_hold: "收款受限", quota_limited: "刊登额度受限", registration_incomplete: "卖家注册待完成" };
+  const verified = scoped && !health.incident_mode && status === "normal" && ctx.official && freshness === "fresh";
+  return {
+    freshness,
+    freshnessTitle: { missing: "尚无同步记录", unknown: "时效待核实", stale: "历史资料 · 需更新", fresh: "最近同步资料" }[freshness],
+    freshnessDetail: freshness === "stale" ? "已超过资料有效期，仅供历史参考。"
+      : freshness === "fresh" ? "资料截至最后同步时间，并非实时监测。"
+      : freshness === "missing" ? "连接店铺后可读取资料。" : "同步时间或有效期未确认，不能据此判断当前状态。",
+    accountTitle: restricted ? labels[status] || "账号状态异常" : verified ? "最近核验未见限制" : "状态待核实",
+    accountDetail: restricted ? "真实发布已暂停。历史资料仍可查看；更新资料不等于解除账号限制。"
+      : verified ? "最终发布仍须通过发布前检查并由你确认。" : "已保存资料不代表账号可用；真实发布前须核验账号状态。",
+    accountTone: restricted ? "red" : verified ? "green" : "amber",
+  };
+}
+
 function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
   const resourceRows = saasEbayPacketResourceRows(ctx.packetBody);
+  const snapshot = saasSettingsDataSnapshotView(ctx);
   const connectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "not_connected";
   const connectionReady = isSaasAuthorizedConnectionStatus(connectionStatus);
   return `
     <section class="saas-settings-card">
       <div class="saas-settings-card-head">
         <div>
-          <strong>已同步的店铺资料</strong>
-          <p>以下为最近一次同步结果，不代表实时状态。更新数据不会修改 eBay 商品或订单。</p>
+          <strong>店铺资料与账号状态</strong>
+          <p>已保存的资料和账号状态分别展示。更新数据只读取 eBay，不会修改商品或订单。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected || !connectionReady ? "disabled" : ""}>${connectionReady ? "更新 eBay 数据" : "连接店铺后更新"}</button>
       </div>
       <div class="saas-settings-status-list">
         <article>
-          <span>店铺数据</span>
-          <strong>${ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 已读取` : "等待读取"}</strong>
-          <small>${escapeHtml(ctx.sourceLabel)} · ${ctx.presentCount}/${ctx.coverageTotal}</small>
+          <span>已保存资料</span>
+          <strong>${ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 类已保存` : "尚无资料"}</strong>
+          <small>${escapeHtml(ctx.sourceLabel)}${ctx.missingKeys.length ? ` · 尚缺 ${ctx.missingKeys.length} 类` : " · 资料覆盖不代表账号可用"}</small>
         </article>
-        <article>
+        <article class="is-${snapshot.freshness === "fresh" ? "green" : "amber"}">
           <span>最后同步</span>
           <strong>${escapeHtml(saasTimestampLabel(ctx.lastSync))}</strong>
-          <small>${ctx.lastSync ? "下方资料以此时间为准" : "尚未取得同步时间"}</small>
+          <small>${escapeHtml(snapshot.freshnessTitle)} · ${escapeHtml(snapshot.freshnessDetail)}</small>
         </article>
-        <article>
-          <span>待读取资料</span>
-          <strong>${ctx.hasPacket && ctx.presentCount >= ctx.coverageTotal ? "资料类别齐全" : ctx.missingKeys.length ? `${ctx.missingKeys.length} 类` : "等待店铺同步"}</strong>
-          <small>${escapeHtml(ctx.hasPacket && ctx.presentCount >= ctx.coverageTotal ? "不代表商品资料已完整或账号可发布" : ctx.missingKeys.map(saasEbayResourceLabel).join(" / ") || "连接 eBay 后读取商品、订单、政策和费用资料")}</small>
+        <article class="is-${snapshot.accountTone}" data-saas-data-account-status>
+          <span>账号状态</span>
+          <strong>${escapeHtml(snapshot.accountTitle)}</strong>
+          <small>${escapeHtml(snapshot.accountDetail)}</small>
         </article>
       </div>
       <div class="saas-settings-resource-list">
@@ -45200,8 +45451,8 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
                   (row) => `
                     <article>
                       <span>${escapeHtml(row.label)}</span>
-                      <strong>${row.status === "present" ? "已读取" : "待读取"}</strong>
-                      <small>${row.summary === "official_api" ? "eBay 官方来源" : row.status === "present" ? "最近同步已保存" : "本次同步尚未取得完整资料"}</small>
+                      <strong>${row.status === "present" ? "已保存" : "尚无资料"}</strong>
+                      <small>${row.status !== "present" ? "最近同步未取得此类资料" : row.summary === "official_api" ? "eBay 官方来源 · 截至最后同步" : "最近同步保存的资料"}</small>
                     </article>
                   `,
                 )
@@ -45359,28 +45610,29 @@ function renderSaasSettingsModelStatusPanel(ctx = saasMerchantWorkbenchContext()
 
 function renderSaasSettingsDataFocusPanel(ctx = saasMerchantWorkbenchContext()) {
   const records = saasCollectedSourceRecords(ctx);
+  const snapshot = saasSettingsDataSnapshotView(ctx);
   return renderSaasSettingsFocusPanel({
-    eyebrow: "数据边界",
-    title: "读到什么就用什么，缺什么就显示缺口",
-    detail: "店铺数据只认官方只读资料、商家补充资料和有留痕的公开来源；不会用旧商品或旧素材冒充真实测试。",
+    eyebrow: "资料来源",
+    title: "核对来源、时效与缺失资料",
+    detail: "店铺数据来自 eBay 只读同步；商家补充资料和公开来源单独留存。资料完整度与账号权限分别核验。",
     rows: [
       {
-        label: "官方资料",
-        title: ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 已读取` : "待读取",
-        detail: ctx.hasPacket ? "商品、订单、政策、费用等来源可追溯。" : "连接 eBay 后读取官方只读资料。",
-        tone: ctx.hasPacket ? "green" : "amber",
+        label: "资料时效",
+        title: snapshot.freshnessTitle,
+        detail: snapshot.freshnessDetail,
+        tone: snapshot.freshness === "fresh" ? "green" : "amber",
       },
       {
         label: "来源记录",
         title: `${records.length} 条`,
-        detail: "供应商、竞品、公开网页和报告引用都要留来源。",
+        detail: "查看商品资料、公开网页和报告的引用来源。",
         tone: records.length ? "green" : "amber",
       },
       {
-        label: "缺口",
-        title: ctx.hasPacket && ctx.presentCount >= ctx.coverageTotal ? "无核心缺口" : ctx.missingKeys.length ? `${ctx.missingKeys.length} 项` : "等待店铺同步",
-        detail: ctx.missingKeys.join(" / ") || "缺口清楚后再进入报告或 Listing 判断。",
-        tone: ctx.hasPacket && ctx.presentCount >= ctx.coverageTotal ? "green" : "amber",
+        label: "资料覆盖",
+        title: ctx.hasPacket && ctx.presentCount >= ctx.coverageTotal ? "资料类别齐全" : ctx.missingKeys.length ? `尚缺 ${ctx.missingKeys.length} 类` : "等待店铺同步",
+        detail: ctx.missingKeys.map(saasEbayResourceLabel).join(" / ") || "仅表示已保存的资料类别，不代表商品可发布。",
+        tone: "amber",
       },
     ],
     actions: `<button class="secondary-action compact-action" type="button" data-saas-action="copy-source-records">复制来源快照</button>`,
@@ -47230,7 +47482,7 @@ function renderSaasAiCeoChatTurnMarkup(turn = {}, options = {}) {
     <article class="message ai${latest.pending ? " is-pending" : ""}${
       latest.pending && options.suppressPendingAssistant ? " is-superseded-pending" : ""
     }"${assistantId} data-status="${escapeHtml(latest.status)}">
-      <span>JV AI</span>
+      <span>AI CEO</span>
       <div class="saas-ai-ceo-message-body">
         ${
           latest.pending
@@ -47256,7 +47508,7 @@ function renderSaasAiCeoLatestReplyMarkup(turn = state.saasAiCeoLatestTurn) {
     <section class="saas-ai-ceo-latest-turn ${latest.pending ? "is-pending" : ""}" data-assistant-id="${escapeHtml(latest.assistant_id)}" data-status="${escapeHtml(latest.status)}">
       ${latest.user_text ? `<p class="saas-ai-ceo-latest-user">${escapeHtml(latest.user_text)}</p>` : ""}
       <article class="saas-ai-ceo-latest-answer">
-        <span>JV AI</span>
+        <span>AI CEO</span>
         <div>
           ${
             latest.pending

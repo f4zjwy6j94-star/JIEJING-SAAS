@@ -1673,7 +1673,6 @@ async function main() {
         },
       };
       saveSaasProtectedStateSnapshot = () => true;
-      mountSaasMerchantProjectStatusStrip = () => false;
       const before = {
         publicMode: isSaasPublicMvpMode(),
         protectedRoute: isProtectedSaasAppRoute(),

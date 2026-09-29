@@ -6,6 +6,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -299,6 +301,158 @@ class _RestrictedExecutionRepository:
         return self.provider_restriction_resolution_audit
 
 
+def _health_regression_checks(repo: SaaSRepository, context: dict) -> list[str]:
+    failures: list[str] = []
+    company_id = context["company_id"]
+    store_id = context["store"]["store_id"]
+    other_store = repo.create_store(
+        company_id=company_id,
+        user_id=context["user_id"],
+        payload={"platform": "ebay", "store_name": "other-health-store"},
+    )
+
+    def record(target_store_id: str, name: str, *, error: bool = False) -> None:
+        task = repo.create_task(
+            company_id=company_id, store_id=target_store_id, user_id=context["user_id"],
+            task_type="account_health.test", title=name, input_data={},
+        )
+        confirmation = repo.create_confirmation(
+            company_id=company_id, store_id=target_store_id, task_id=task["task_id"],
+            runtime_run_id="account_health_test", action_type="publish_listing", title=name, item={},
+        )
+        repo.save_execution_result(
+            confirmation=confirmation,
+            result={
+                "status": "blocked_platform_error" if error else "simulated_no_platform_write",
+                "created_at": "2026-08-26T04:08:00+00:00" if error else "2027-01-01T00:00:00+00:00",
+                "store_id": target_store_id,
+                **({"steps": [{"provider_error": {"error_id": 25019, "message": "Account verification required"}}]} if error else {}),
+            },
+        )
+
+    record(other_store["store_id"], "unrelated store restriction", error=True)
+    other_health = build_account_health_snapshot(repo, company_id=company_id, store_id=store_id)
+    if other_health["status"] != "normal":
+        failures.append("another store's provider rejection contaminated this store")
+    record(store_id, "sticky target store restriction", error=True)
+    for index in range(81):
+        record(store_id, f"newer ordinary execution {index}")
+    retained = build_account_health_snapshot(repo, company_id=company_id, store_id=store_id)
+    if retained["status"] != "restricted" or retained["can_execute_real_writes"] is not False:
+        failures.append("25019 was forgotten after more than 80 ordinary executions")
+    scoped_records = repo.list_execution_results(
+        company_id=company_id, store_id=store_id, limit=80, include_error_ids=("25019",),
+    )
+    if len(scoped_records) != 81 or any(row.get("result", {}).get("store_id") != store_id for row in scoped_records):
+        failures.append("historical restriction retrieval lost its store scope or bounded ordinary window")
+    if repo.list_execution_results(
+        company_id="unrelated-company", store_id=store_id, limit=80, include_error_ids=("25019",),
+    ):
+        failures.append("historical restriction retrieval crossed the company boundary")
+    restricted = build_account_health_snapshot(
+        _RestrictedExecutionRepository(), company_id=company_id, store_id=store_id,
+    )
+    old_clear_payload = _publish_payload(company_id=company_id, store_id=store_id)
+    old_clear_payload["account_health"] = {
+        "status": "clear", "selling_status": "active", "payout_status": "available", "restrictions": [],
+    }
+    original_payload = deepcopy(old_clear_payload)
+    merged = merge_account_health_into_payload(old_clear_payload, restricted)
+    issue_keys = {
+        item.get("key") for item in ExecutionService(demo_mode=False).preflight(
+            _request(merged, company_id=company_id, store_id=store_id),
+        ).get("issues", [])
+    }
+    if merged["account_health"]["status"] != "restricted" or "account_health.status" not in issue_keys:
+        failures.append("old clear payload overrode the latest restricted health during publish preflight")
+    if old_clear_payload != original_payload:
+        failures.append("account health merge mutated the saved payload")
+
+    class NestedRestrictionRepository(_RestrictedExecutionRepository):
+        def list_execution_results(self, **kwargs: object) -> list[dict]:
+            records = super().list_execution_results(**kwargs)
+            records[0]["result"] = {"steps": [
+                {"platform_error": {"error_id": "40000", "message": "unrelated old error"}},
+                {"result": {"provider_error": {"errorId": 25019, "message": "Account verification required"}}},
+            ]}
+            return records
+
+    nested = build_account_health_snapshot(
+        NestedRestrictionRepository(packet_created_at="2026-09-01T00:00:00+00:00"),
+        company_id=company_id, store_id=store_id,
+    )
+    if nested["status"] != "restricted":
+        failures.append("nested provider restriction was skipped after the first non-sticky error")
+
+    class FreshnessRepository(_RestrictedExecutionRepository):
+        def __init__(self, *, snapshot_time: str, threshold: object = 21600, blocked: bool = False) -> None:
+            super().__init__(packet_created_at=snapshot_time)
+            self.threshold = threshold
+            self.blocked = blocked
+
+        def list_platform_data_packets(self, **kwargs: object) -> list[dict]:
+            packets = super().list_platform_data_packets(**kwargs)
+            packets[0]["packet"]["freshness"] = {
+                "status": "fresh_at_creation", "snapshot_created_at": self.packet_created_at,
+                "stale_after_seconds": self.threshold,
+            }
+            return packets
+
+        def list_execution_results(self, **kwargs: object) -> list[dict]:
+            return super().list_execution_results(**kwargs) if self.blocked else []
+
+    now = datetime.now(timezone.utc)
+    freshness_cases = [
+        ("fresh", (now - timedelta(minutes=1)).isoformat(), 21600, "normal", False),
+        ("stale", (now - timedelta(hours=7)).isoformat(), 21600, "unknown", False),
+        ("invalid timestamp", "not-a-date", 21600, "unknown", False),
+        ("invalid threshold", now.isoformat(), 0, "unknown", False),
+        ("future timestamp", (now + timedelta(days=1)).isoformat(), 21600, "unknown", False),
+        ("known restriction stays visible", (now - timedelta(days=30)).isoformat(), 21600, "restricted", True),
+    ]
+    for label, stamp, threshold, expected, blocked in freshness_cases:
+        snapshot = build_account_health_snapshot(
+            FreshnessRepository(snapshot_time=stamp, threshold=threshold, blocked=blocked),
+            company_id=company_id, store_id=store_id,
+        )
+        if snapshot["status"] != expected:
+            failures.append(f"packet freshness {label}: expected {expected}, got {snapshot['status']}")
+        if expected != "normal" and (snapshot["can_execute_real_writes"] or snapshot["can_enter_publish_preflight"]):
+            failures.append(f"packet freshness {label} incorrectly permits writes or publish preflight")
+
+    class RewrappedSnapshotRepository(FreshnessRepository):
+        def __init__(self, *, old_timestamp_field: str) -> None:
+            super().__init__(snapshot_time=now.isoformat())
+            self.old_timestamp_field = old_timestamp_field
+
+        def list_platform_data_packets(self, **kwargs: object) -> list[dict]:
+            packets = super().list_platform_data_packets(**kwargs)
+            packet = packets[0]["packet"]
+            packet["created_at"] = now.isoformat()
+            old_stamp = (now - timedelta(hours=7)).isoformat()
+            if self.old_timestamp_field == "snapshot":
+                packet["freshness"]["snapshot_created_at"] = old_stamp
+            elif self.old_timestamp_field == "packet":
+                packet["created_at"] = old_stamp
+            else:
+                packets[0]["created_at"] = old_stamp
+            return packets
+
+    for old_field in ("snapshot", "packet", "record"):
+        snapshot = build_account_health_snapshot(
+            RewrappedSnapshotRepository(old_timestamp_field=old_field),
+            company_id=company_id, store_id=store_id,
+        )
+        evidence = snapshot["evidence_package"]["packet_freshness"]
+        if snapshot["status"] != "unknown" or evidence["status"] != "stale":
+            failures.append(f"new wrapper timestamps hid the old {old_field} timestamp")
+        if evidence.get("age_seconds", 0) < 7 * 3600:
+            failures.append(f"freshness did not preserve the oldest {old_field} evidence age")
+        if snapshot["can_execute_real_writes"] or snapshot["can_enter_publish_preflight"]:
+            failures.append(f"rewrapped old {old_field} data incorrectly permits publish")
+    return failures
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     db_path = OUT / "account-health.sqlite"
@@ -584,6 +738,9 @@ def main() -> int:
     ):
         if forbidden.lower() in serialized.lower():
             return fail(f"account health snapshot leaked forbidden marker: {forbidden}")
+    regression_failures = _health_regression_checks(repo, healthy_ctx)
+    if regression_failures:
+        return fail("; ".join(regression_failures))
     print("PASS jiejing_account_health_incident_mode")
     return 0
 

@@ -70,13 +70,12 @@ def main() -> None:
     assert 'startupView && currentView === "cockpit" ? startupView : currentView' in refresh_view_body
     commit_body = app_js[
         app_js.index("function commitSaasActiveListingProjectContext") :
-        app_js.index("function renderSaasMerchantProjectStatusStrip")
+        app_js.index("async function refreshSaasState")
     ]
     for marker in [
         "saveSaasProtectedStateSnapshot();",
         "syncSaasProjectRoute(normalizedView, { projectId })",
         "refreshSaasMerchantProjectStatus({ projectId })",
-        "mountSaasMerchantProjectStatusStrip(normalizedView)",
     ]:
         assert marker in commit_body, marker
     render_body = app_js[
