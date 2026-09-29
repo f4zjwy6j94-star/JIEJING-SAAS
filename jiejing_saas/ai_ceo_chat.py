@@ -4792,9 +4792,9 @@ def _looks_like_explicit_listing_intake(message: str) -> bool:
                 prefix = clause[:match.start()]
                 # "不创建 Listing" is a no-write boundary in a research
                 # request, not permission to bypass candidate research.
-                if re.search(r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁)(?:\s|再|重复|直接|立即|自动|帮我|为我|先|去|做|新建|创建|生成|整理|导入|带入|填写|填进)*$", prefix):
+                if re.search(r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁|不需要|不必|无须|不允许|不许)(?:\s|再|重新|重复|直接|立即|自动|帮我|为我|先|去|做|新建|创建|生成|整理|导入|带入|填写|填进)*$", prefix):
                     continue
-                if re.search(r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁).{0,8}(?:创建|生成|填写|带入)", match.group()):
+                if re.search(r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁|不需要|不必|无须|不允许|不许).{0,8}(?:创建|生成|填写|带入)", match.group()):
                     continue
                 explicit_intake = True
     if not explicit_intake:

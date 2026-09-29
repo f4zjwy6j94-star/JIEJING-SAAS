@@ -88,7 +88,9 @@ class ProductSearchEvidenceTests(unittest.TestCase):
 
     def test_no_listing_boundary_is_not_a_listing_creation_request(self):
         self.assertFalse(chat._looks_like_explicit_listing_intake(FOLLOWUP))
-        for message in ("候选商品只做调研，不创建 Listing。", "只比较候选，不生成 Listing 草稿。", "不要创建 Listing，先选品。"):
+        for message in ("候选商品只做调研，不创建 Listing。", "只比较候选，不生成 Listing 草稿。", "不要创建 Listing，先选品。",
+                        "只做候选调研，不需要生成 Listing。", "无须创建 Listing。", "不必创建 Listing。",
+                        "先不要重新生成 Listing，继续核对候选。", "不允许生成 Listing 草稿。"):
             self.assertFalse(chat._looks_like_explicit_listing_intake(message), message)
         self.assertTrue(chat._looks_like_explicit_listing_intake("生成 Listing 草稿，不公开发布。"))
         plan = chat.build_ai_ceo_turn_plan(FOLLOWUP)
