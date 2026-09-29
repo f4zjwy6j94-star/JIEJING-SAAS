@@ -4537,7 +4537,7 @@ def _selection_answer_constraint_violations(
 def _merchant_defers_listing(message: str) -> bool:
     return bool(
         re.search(
-            r"(?:本轮|这轮|当前|现在|先|暂时|暂缓)?\s*(?:不要|不做|无需|不进入|先不|暂不).{0,18}(?:listing|上架|刊登|草稿)",
+            r"(?:本轮|这轮|当前|现在|先|暂时|暂缓)?\s*(?:不要|不做|不建|不创建|不生成|不需要|无须|不必|不允许|无需|不进入|先不|暂不).{0,18}(?:listing|上架|刊登|草稿)",
             _normalized_text(message),
             flags=re.IGNORECASE,
         )
@@ -4574,7 +4574,7 @@ def _answer_invents_unknown_product_facts(answer: str) -> bool:
     )
     fact_field = re.compile(r"(?:材质|重量|尺寸|采购价|采购成本|成本|包装|品牌|型号|物流服务)\s*[:：=]\s*\S+", flags=re.IGNORECASE)
     asserted_composition = re.compile(r"(?:采用|使用|配备|由).{0,35}(?:制成|材质|胶|钢|硅胶|塑料|金属)", flags=re.IGNORECASE)
-    asserted_shipping = re.compile(r"(?:USPS|UPS|FedEx)\s+[A-Za-z ]{2,40}", flags=re.IGNORECASE)
+    asserted_shipping = re.compile(r"(?<![A-Za-z])(?:USPS|UPS|FedEx)\b\s+[A-Za-z ]{2,40}", flags=re.IGNORECASE)
     for clause in re.split(r"(?<=[。！？；])|\n+", answer):
         compact = clause.strip()
         if not compact or any(marker in compact for marker in speculative_markers):

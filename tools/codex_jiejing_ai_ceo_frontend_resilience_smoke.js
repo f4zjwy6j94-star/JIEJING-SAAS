@@ -612,6 +612,27 @@ async function main() {
       throw new Error(`research continuation prompt is not explicit: ${JSON.stringify(continuation)}`);
     }
 
+    const candidateResearchRoute = await page.evaluate(() => {
+      const command = buildSaasCeoCommand(
+        "继续当前商品项目，只做候选级联网调研，搜索 stainless steel measuring spoons cups set 的商品页面。核对每个候选的链接和标价。不创建 Listing，不生图、不采购、不发布。",
+        saasMerchantWorkbenchContext(),
+      );
+      const holder = document.createElement("div");
+      holder.id = "candidate-research-route-fixture";
+      holder.innerHTML = renderSaasCeoRoutingTaskCard(command);
+      document.body.append(holder);
+      return command.intent;
+    });
+    const candidateResearchButton = page.locator("#candidate-research-route-fixture button");
+    if (
+      candidateResearchRoute !== "research" ||
+      (await candidateResearchButton.textContent()).trim() !== "继续选品调研" ||
+      await candidateResearchButton.getAttribute("data-global-flow-view") !== "cockpit"
+    ) {
+      throw new Error("candidate evidence research must render a research continuation, not a Listing handoff");
+    }
+    await page.locator("#candidate-research-route-fixture").evaluate((element) => element.remove());
+
     chatResponseProjectId = "listing-project-foreign-response";
     const responseProjectGuard = await page.evaluate(async () => {
       const payload = await requestSaasAiCeoChat(state.saasLastCeoCommand, {}, [], { enforceProjectIdentity: true });

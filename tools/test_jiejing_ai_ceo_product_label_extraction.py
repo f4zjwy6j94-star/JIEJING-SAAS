@@ -36,6 +36,12 @@ def main() -> None:
     invalid_label = function_body(app_js, "saasIsInvalidMarketProductLabel")
     for marker in ["产品名", "商品名", "两条理由", "名和两条理由"]:
         require(invalid_label, marker, "generic prompt-fragment product guard")
+    invalid_label_probe = subprocess.run(
+        ["node"], input="const publicRuntimeText = (value) => String(value || '');\n" + invalid_label
+        + "\nconsole.log(JSON.stringify(['证据边界说明','来源与限制','sources and limitations','stainless steel measuring cups set']"
+        + ".map(saasIsInvalidMarketProductLabel)));\n", text=True, encoding="utf-8", capture_output=True, check=True,
+    )
+    assert json.loads(invalid_label_probe.stdout.strip()) == [True, True, True, False], invalid_label_probe.stdout
 
     concise_label = function_body(app_js, "saasAiCeoConciseAnswerProductLabel")
     for marker in ["assistant_text", "lines[0]", "理由", "saasIsConcreteProductLabel"]:
@@ -75,6 +81,7 @@ def main() -> None:
             + "saasCeoCommandIntent('继续 report_5eaf36a405de7331，只补 eBay US Sold & Completed 成交证据并做三选一；不能复用品牌或图片，不生成 Listing、不生图、不写 eBay。')"
             + ",saasCeoCommandIntent('继续候选商品的真实供应商事实核验；实时库存和最终报价未确认。本轮不采购、不付款、不建 Listing、不生图、不写 eBay。')"
             + ",saasCeoCommandIntent('现在只创建捷境内部的、被事实阻断的 Listing 草稿；不采购、不付款、不生图、不保存 eBay 草稿、不公开发布。')"
+            + ",saasCeoCommandIntent('本轮不做候选级联网调研，只根据已有商品资料生成 Listing 草稿。')"
             + "]));\n"
         ),
         text=True,
@@ -82,7 +89,25 @@ def main() -> None:
         capture_output=True,
         check=True,
     )
-    assert json.loads(intent_probe.stdout.strip()) == ["research", "listing", "bulk", "research", "research", "listing"], intent_probe.stdout
+    assert json.loads(intent_probe.stdout.strip()) == ["research", "listing", "bulk", "research", "research", "listing", "listing"], intent_probe.stdout
+
+    candidate_research = (
+        "继续当前商品项目，不新建项目。本轮只做候选级联网调研，请分别用 "
+        "stainless steel measuring spoons cups set、silicone kitchen spatula、stainless steel coffee teaspoons "
+        "搜索 eBay 美国站的具体商品页面。每个候选给出商品标题、链接、美元标价、套装件数和检索日期。"
+        "根据实际证据比较并推荐一个暂定找货方向。不创建 Listing，不生图、不采购、不发布。"
+    )
+    research_messages = [candidate_research] + [
+        "只核对当前候选的商品页面和价格，" + boundary + "。"
+        for boundary in ("不创建 Listing", "不生成 Listing", "不需要生成 Listing", "无须创建 Listing",
+                         "不必创建 Listing", "不允许生成 Listing 草稿", "先不要重新生成 Listing")
+    ]
+    research_probe = subprocess.run(
+        ["node"], input=risk_router + "\n" + intent_router
+        + "\nconsole.log(JSON.stringify(" + json.dumps(research_messages, ensure_ascii=False)
+        + ".map(saasCeoCommandIntent)));\n", text=True, encoding="utf-8", capture_output=True, check=True,
+    )
+    assert json.loads(research_probe.stdout.strip()) == ["research"] * len(research_messages), research_probe.stdout
 
     risk_probe = subprocess.run(
         ["node"],

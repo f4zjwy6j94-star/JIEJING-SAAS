@@ -19634,6 +19634,16 @@ def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
         "这次调研",
         "本次调研",
         "待确认商品",
+        "证据边界说明",
+        "证据边界",
+        "证据说明",
+        "来源与限制",
+        "来源与资料日期",
+        "注意事项",
+        "下一步",
+        "evidence limitations",
+        "evidence boundary",
+        "sources and limitations",
     )
     if compact in invalid_markers:
         return True
@@ -19884,18 +19894,30 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
 
     if not candidates:
         table_header_index = -1
+        table_product_column = 0
         for index, line in enumerate(lines):
-            if line.startswith("|") and re.search(r"商品|产品|品类|名称|product", line, flags=re.IGNORECASE) and re.search(r"推荐|评分|score|risk|风险", line, flags=re.IGNORECASE):
+            if not line.startswith("|"):
+                table_header_index = -1
+                continue
+            if re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+                continue
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            name_columns = [
+                column for column, cell in enumerate(cells)
+                if re.fullmatch(r"候选(?:商品|品)?|商品(?:名称)?|产品(?:名称)?|品类|名称|candidate(?: product)?|product(?: name)?|item name", cell, flags=re.IGNORECASE)
+            ]
+            # Evidence tables need not contain a recommendation score. Only
+            # an explicit product column can identify a candidate; section
+            # headings such as "证据边界说明" are not product fallbacks.
+            if name_columns and re.search(r"推荐|评分|score|risk|风险|标题|title|链接|link|url|标价|price|检索日期", line, flags=re.IGNORECASE):
                 table_header_index = index
+                table_product_column = name_columns[0]
                 continue
             if table_header_index < 0 or index <= table_header_index:
                 continue
-            if not line.startswith("|") or re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+            if len(cells) < 2 or table_product_column >= len(cells):
                 continue
-            cells = [cell.strip() for cell in line.strip("|").split("|")]
-            if len(cells) < 2:
-                continue
-            add_candidate(cells[0], start_index=max(0, table_header_index), block="\n".join(lines[table_header_index : index + 2]), source="ai_ceo_market_report_table")
+            add_candidate(cells[table_product_column], start_index=max(0, table_header_index), block=line, source="ai_ceo_market_report_table")
             if len(candidates) >= 5:
                 break
 

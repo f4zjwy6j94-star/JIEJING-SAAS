@@ -137,6 +137,61 @@ class ProductSearchEvidenceTests(unittest.TestCase):
         query = chat._realtime_search_query(kind="web_search", message=message)
         self.assertIn("felt chair pads", query)
 
+    def test_candidate_evidence_table_survives_chat_validation_and_report_save(self):
+        message = (
+            "继续当前商品项目，不新建项目。本轮只做候选级联网调研，请分别用 "
+            + "、".join(PRODUCTS)
+            + " 搜索 eBay 美国站的具体商品页面。每个候选给出匹配的商品标题、链接、可核对的美元标价、"
+            "套装件数和检索日期，精简表格呈现。只写来源明确显示的内容，缺失项标为未验证；"
+            "在售标价不等于成交价，抓取时间不等于交易日期，不能编造销量、退货率或需求稳定结论。"
+            "根据实际证据比较并推荐一个暂定找货方向。不创建 Listing，不生图、不采购、不发布。"
+        )
+        answer = (
+            "### 候选级 eBay 美国站调研结果\n\n检索日期：2026-09-29（抓取时间，非成交日期）\n\n"
+            "| 候选 | 匹配商品标题 | 链接 | 可核对美元标价 | 套装件数 | 检索日期 |\n"
+            "|---|---|---|---|---|---|\n"
+            + "\n".join(
+                f"| {name} | {name} | https://www.ebay.com/itm/12345678900{i} | US $12.99 [S{i}] | 未验证 | 2026-09-29 |"
+                for i, name in enumerate(PRODUCTS, 1)
+            )
+            + "\n\n### 证据边界说明\n在售标价不等于成交价；销量和退货率未验证。\n\n"
+            "### 暂定找货方向（建议）\n建议优先找货：stainless steel measuring spoons cups set。"
+            "这是暂定建议，商品规格、材质、成本、重量和实际发货地待供应商提供。"
+        )
+        class Model:
+            provider = "deepseek"
+            model = "deepseek-v4-pro"
+            endpoint = "https://api.deepseek.com/v1/chat/completions"
+            calls = 0
+
+            def generate_text(self, **kwargs):
+                self.calls += 1
+                return {"text": answer, "model_mode": "live_http_model_text", "model_configured": True, "model": self.model}
+
+        with tempfile.TemporaryDirectory(prefix="jiejing-product-table-test-") as folder:
+            repo = SaaSRepository(Path(folder) / "fixture.sqlite")
+            account = repo.create_user_with_company(email="product-table@example.test",
+                password="unit-test-only-password", company_name="Offline table fixture")
+            identity = {"user_id": account["user"]["user_id"], "company_id": account["company"]["company_id"]}
+            store = repo.create_store(**identity, payload={"platform": "ebay", "marketplace": "EBAY_US"})
+            model = Model()
+            with patch.object(chat, "PublicSearchProbeAdapter", FakeSearch):
+                result = chat.run_ai_ceo_chat(repository=repo, **identity, store_id=store["store_id"],
+                    message=message, model_client=model)
+            self.assertEqual("model_answered", result["status"], result.get("answer_quality"))
+            self.assertEqual(answer, result["answer"], result.get("answer_quality"))
+            self.assertEqual(1, model.calls, "A valid evidence table must not trigger a paid repair call")
+            task = repo.create_task(**identity, store_id=store["store_id"], task_type="merchant_ceo_chat",
+                title="Candidate table fixture", input_data={"message": message})
+            report = repo.save_ai_ceo_market_research_report(task=task, message=message, chat=result)
+            self.assertIsNotNone(report)
+            serialized = json.dumps(report, ensure_ascii=False)
+            self.assertNotIn('"name": "证据边界说明"', serialized)
+            for name in PRODUCTS:
+                self.assertIn(f'"name": "{name}"', serialized)
+            del repo
+            gc.collect()
+
     def test_no_source_discovery_searches_physical_listings_not_research_tools(self):
         query = chat._realtime_search_query(kind="web_search", message="无货源，帮我选品，eBay美国站轻小不带电，比较3个候选。")
         self.assertIn("site:ebay.com/itm/", query)
@@ -144,6 +199,47 @@ class ProductSearchEvidenceTests(unittest.TestCase):
         self.assertIn("non-electric", query)
         self.assertNotIn("product research", query)
         self.assertNotIn("marketplace trends", query)
+
+    def test_metadata_headings_cannot_become_product_candidates(self):
+        for heading in ("证据边界说明", "证据边界", "来源与限制", "sources and limitations"):
+            result = chat.validate_ai_ceo_answer_quality(
+                message="帮我调研1个候选商品，不要编造商品事实。", route="ebay_workflow",
+                answer=f"### {heading}\n需求和风险仍未核实。材质、尺寸和成本未知。",
+            )
+            self.assertFalse(result["accepted"], heading)
+            self.assertIn("missing_concrete_product_candidates", result["blocked_by"])
+
+    def test_cups_is_not_ups_but_unverified_shipping_remains_blocked(self):
+        message = "帮我调研1个候选商品，不要编造商品事实。"
+        valid = chat.validate_ai_ceo_answer_quality(message=message, route="ebay_workflow",
+            answer="候选商品 1：stainless steel measuring cups set\n商品规格、成本和运输方案未知。")
+        self.assertTrue(valid["accepted"], valid)
+        for carrier in ("UPS Ground", "USPS First Class", "FedEx Express"):
+            invalid = chat.validate_ai_ceo_answer_quality(message=message, route="ebay_workflow",
+                answer=f"候选商品 1：stainless steel measuring cups set\n使用 {carrier} shipping。")
+            self.assertFalse(invalid["accepted"], carrier)
+            self.assertIn("invented_unknown_product_facts", invalid["blocked_by"])
+
+    def test_deferred_listing_blocks_listing_fields_in_candidate_answer(self):
+        for boundary in ("不创建 Listing", "不生成 Listing", "不需要生成 Listing", "无须创建 Listing",
+                         "不必创建 Listing", "不允许生成 Listing 草稿"):
+            result = chat.validate_ai_ceo_answer_quality(
+                message="比较1个候选商品。" + boundary + "。", route="ebay_workflow",
+                answer="候选商品 1：stainless steel measuring cups set\n商品规格、成本和运输方案未知。\nListing 标题：Stainless Steel Measuring Cups Set",
+            )
+            self.assertFalse(result["accepted"], (boundary, result))
+            self.assertIn("listing_scope_exceeded", result["blocked_by"])
+
+    def test_evidence_table_uses_named_product_column_not_row_number(self):
+        result = chat.validate_ai_ceo_answer_quality(
+            message="比较2个候选商品，核对商品链接与价格，不要编造商品事实。", route="ebay_workflow",
+            answer=("| 序号 | 候选商品 | 商品链接 | 在售标价 |\n|---|---|---|---|\n"
+                "| 1 | felt chair pads | https://www.ebay.com/itm/123456789001 | 未验证 |\n"
+                "| 2 | wooden napkin rings | https://www.ebay.com/itm/123456789002 | 未验证 |\n"
+                "\n证据边界：商品尺寸、重量、成本与发货地未知。"),
+        )
+        self.assertTrue(result["accepted"], result)
+        self.assertEqual(2, result["candidate_count"])
 
     def test_guide_results_do_not_count_as_product_evidence(self):
         FakeSearch.guide_only = True

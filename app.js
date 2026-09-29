@@ -8507,6 +8507,16 @@ function saasIsInvalidMarketProductLabel(value = "") {
     "这次调研",
     "本次调研",
     "待确认商品",
+    "证据边界说明",
+    "证据边界",
+    "证据说明",
+    "来源与限制",
+    "来源与资料日期",
+    "注意事项",
+    "下一步",
+    "evidence limitations",
+    "evidence boundary",
+    "sources and limitations",
   ]);
   if (invalidExact.has(lower)) return true;
   if (/(?:两|2)条理由/.test(text) && /(?:产品|商品)?名(?:称)?/.test(text)) return true;
@@ -23948,14 +23958,14 @@ function saasCeoCommandIntent(text = "") {
     .replace(/(?:不|不要|暂不|先不).{0,8}(?:公开|真实|正式).{0,4}(?:发布|上架|刊登)/gi, "");
   const listingDeferred =
     !asksForInternalListingDraft &&
-    (/(?:本轮|这轮|当前|现在|只读|先|暂时|暂缓)?\s*(?:不要|不做|不建|不生成|无需|不进入|先不|暂不).{0,18}(?:Listing|刊登|上架|草稿)/i.test(listingDeferralScope) ||
+    (/(?:本轮|这轮|当前|现在|只读|先|暂时|暂缓)?\s*(?:不要|不做|不建|不创建|不生成|不需要|无须|不必|不允许|无需|不进入|先不|暂不).{0,18}(?:Listing|刊登|上架|草稿)/i.test(listingDeferralScope) ||
       /(?:Listing|刊登|上架|草稿).{0,8}(?:不要|先不|暂不).{0,8}(?:做|建|创建|生成|进入)/i.test(listingDeferralScope));
   const productResearchScope = raw.replace(
-    /(?:本轮|这轮|当前|现在|此次|这次)?\s*(?:不|不要|不做|不再|无需|先不|暂不|禁止)\s*(?:(?:联网|重新|继续|再)\s*){0,2}(?:选品|找品|筛选|市场调研|市场报告)/gi,
+    /(?:本轮|这轮|当前|现在|此次|这次)?\s*(?:不|不要|不做|不再|无需|先不|暂不|禁止)\s*(?:(?:联网|重新|继续|再)\s*){0,2}(?:选品|找品|筛选|市场调研|市场报告|候选(?:级)?(?:联网)?调研|候选(?:商品|品)?(?:的)?(?:检索|比较|核对))/gi,
     "",
   );
   const hasProductResearchIntent =
-    /选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|供应商事实核验|供应商核验|货源核验|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i.test(productResearchScope);
+    /选品|候选商品|候选品|商品候选|产品候选|候选.{0,18}(?:调研|检索|比较|核对|商品页面|标价|价格)|(?:核对|搜索|检索|比较|调研).{0,18}候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|供应商事实核验|供应商核验|货源核验|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i.test(productResearchScope);
   const asksForListingHandoff =
     asksForInternalListingDraft ||
     (!listingDeferred &&
