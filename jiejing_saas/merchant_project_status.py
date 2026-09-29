@@ -28,6 +28,36 @@ FAILED_MEDIA_STATUSES = {"failed", "blocked", "validation_failed", "needs_rework
 RESTRICTED_ACCOUNT_STATUSES = {"restricted", "suspended", "blocked", "account_review_required"}
 
 
+def _research_report_complete(item: dict[str, Any]) -> bool:
+    report_type = str(item.get("report_type") or "")
+    if report_type not in {"ai_ceo.market_research", "market.report", "market.data_packet"}:
+        return False
+    body = item.get("report") if isinstance(item.get("report"), dict) else {}
+    quality = body.get("answer_quality") if isinstance(body.get("answer_quality"), dict) else {}
+    if quality.get("accepted") is False or str(body.get("status") or item.get("status") or "") in {
+        "failed", "blocked", "model_answer_rejected", "model_call_failed", "session_expired",
+        "source_backed_market_report_draft", "market_report_recovery_draft",
+    }:
+        return False
+    if report_type != "ai_ceo.market_research":
+        return True
+    # Saving an answer is not evidence that it contains a usable recommendation.
+    # Supplier facts remain a separate stage: they must not hold valid research
+    # open, nor can research acceptance fill in missing product facts.
+    candidates = body.get("product_candidates") or body.get("candidate_products") or []
+    candidates = candidates if isinstance(candidates, list) else []
+    selected_id = str(body.get("selected_candidate_id") or "")
+    selected = [candidate for candidate in candidates if isinstance(candidate, dict)
+                and str(candidate.get("name") or "").strip()
+                and (candidate.get("selected") is True
+                     or (selected_id and str(candidate.get("candidate_id") or "") == selected_id))]
+    sources = body.get("source_records") if isinstance(body.get("source_records"), list) else []
+    blockers = set(_string_list(body.get("blocked_by")))
+    return bool(len(selected) == 1 and any(isinstance(source, dict) and source.get("url") for source in sources)
+                and not blockers.intersection({"answer_quality_not_ready_for_listing", "concrete_candidate_required",
+                                               "selected_candidate_required", "source_evidence_required"}))
+
+
 def build_merchant_project_status(
     *,
     repository: Any,
@@ -205,10 +235,7 @@ def build_merchant_project_status(
                 fact_gap_keys.add(reason[len(prefix):].strip())
     fact_gap_count = len(fact_gap_keys)
     facts_simulation_only = "simulation_only_product_facts" in fact_blockers
-    research_ready = any(
-        str(item.get("report_type") or "") in {"ai_ceo.market_research", "market.report", "market.data_packet"}
-        for item in matching_reports
-    ) or any(str(item.get("report_id") or "") == canonical_identity.get("source_report_id") for item in reports)
+    research_ready = any(_research_report_complete(item) for item in matching_reports)
     facts_ready = bool(latest_fact_report and not unknown_facts and not fact_blockers)
     media_ready = any(_media_job_approved(item) for item in matching_media)
     # A successful reviewed rework is the terminal evidence for this stage.
@@ -328,7 +355,7 @@ def build_merchant_project_status(
 
     stage_details = {
         "intake": "商品项目已锁定" if matching_tasks else "等待商品项目记录",
-        "research": "市场调研已归档" if research_ready else "等待市场调研",
+        "research": "市场调研已完成" if research_ready else "等待有效调研结论",
         "facts": (
             "商品事实已补齐"
             if facts_ready

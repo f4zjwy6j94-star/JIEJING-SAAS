@@ -223,6 +223,27 @@ class AiCeoOpenDomainTurnPlanTest(unittest.TestCase):
         self.assertEqual(plan["research_depth"], "none")
         self.assertNotIn("merchant_product_source_required", plan["blocked_by"])
 
+    def test_no_source_selection_with_freshness_words_keeps_the_selection_workflow(self) -> None:
+        message = (
+            "我现在没有货源，想从零开始做 eBay 美国站。请帮我做一次联网选品调研："
+            "筛选轻小、不带电、非易碎、尽量降低侵权风险的商品，比较 3 个具体候选，"
+            "推荐 1 个优先找货的方向。请说明需求依据、竞争情况、参考售价范围、物流和退货风险，"
+            "并给出来源链接及资料日期；没有可靠成交数据就明确说，不能编造销量或宣称它是最畅销商品。"
+            "我的采购预算、供应商、真实成本、材质规格和发货地还未确定，找到货源后我再补充。"
+            "现在只做调研和找货清单，不生成虚构商品事实，不发布、不采购，"
+            "也不要沿用旧平板支架或书签项目。"
+        )
+        plan = build_ai_ceo_turn_plan(message)
+
+        self.assertEqual(plan["route"], AI_CEO_ROUTE_EBAY_WORKFLOW)
+        self.assertEqual(plan["workflow_target"], "market_research")
+        self.assertEqual(plan["source_mode"], "merchant_has_no_source")
+        self.assertEqual(plan["realtime_kind"], "", "Selection must reach the model-backed candidate workflow")
+        self.assertEqual(plan["required_tools"], ["ebay_public_research"])
+        self.assertTrue(plan["freshness_required"])
+        self.assertIn("merchant_product_source_required", plan["blocked_by"])
+        self.assertFalse(plan["confirmation_required"])
+
     def test_negated_publish_language_stays_in_internal_listing_intake(self) -> None:
         plan = build_ai_ceo_turn_plan(
             "这是我的真实供货商品，请新建独立商品项目和捷境内部待核对 Listing。"

@@ -536,7 +536,7 @@ def main() -> int:
                     "id": "ceo-chat-pre-model-market-report-test",
                     "text": "web search eBay market research and recommend one product for Listing: travel mosquito repeller",
                     "title": "Realtime market research before model setup",
-                    "summary": "AI CEO fast realtime market research should become a Listing handoff report",
+                    "summary": "Product selection needs candidate analysis, not a raw search handoff",
                     "intent": "listing_workflow",
                     "status": "ready",
                     "status_label": "realtime_search",
@@ -544,28 +544,19 @@ def main() -> int:
                 },
             },
             token=token,
+            expected_status=503,
         )
         pre_model_market_chat = pre_model_market_report_response.get("ai_ceo_chat", {})
-        if pre_model_market_chat.get("status") != "realtime_search_answered_without_model":
-            return fail(f"pre-model realtime market research should use the fast search route: {pre_model_market_chat}")
-        pre_model_ai_market_report = pre_model_market_report_response.get("ai_ceo_market_report", {})
-        if pre_model_ai_market_report.get("report_type") != "ai_ceo.market_research":
-            return fail(f"pre-model realtime market research should be saved as a structured Listing report: {pre_model_ai_market_report}")
-        pre_model_report_body = pre_model_ai_market_report.get("report") if isinstance(pre_model_ai_market_report.get("report"), dict) else {}
-        pre_model_handoff = pre_model_report_body.get("listing_handoff") if isinstance(pre_model_report_body.get("listing_handoff"), dict) else {}
-        if pre_model_handoff.get("ready_for_listing_draft") is not False or pre_model_handoff.get("triggers_real_platform_write") is not False:
-            return fail(f"pre-model realtime market report must wait for a concrete selection and supplier facts: {pre_model_handoff}")
-        pre_model_delivery = pre_model_market_report_response.get("ai_ceo_market_report_delivery", {})
-        if pre_model_delivery.get("contract_version") != "2026-07-04-ai-ceo-market-report-delivery-v1":
-            return fail(f"pre-model realtime market report should return the Listing delivery contract: {pre_model_delivery}")
-        if pre_model_delivery.get("structured_report_saved") is not True or pre_model_delivery.get("listing_import_ready") is not False:
-            return fail(f"pre-model realtime market report should be saved but not import-ready before facts are complete: {pre_model_delivery}")
-        for forbidden_key in ("frontend_gets_model_api_key", "runtime_gets_raw_ebay_token", "secret_exposed", "triggers_real_platform_write"):
-            if pre_model_delivery.get(forbidden_key) is not False:
-                return fail(f"pre-model report delivery should keep {forbidden_key}=False: {pre_model_delivery}")
-        reports_after_pre_model_market = fetch_json(f"{base_url}/reports?limit=30", token=token).get("reports", [])
-        if not any(item.get("report_id") == pre_model_ai_market_report.get("report_id") for item in reports_after_pre_model_market):
-            return fail("pre-model realtime market report should be queryable from /reports before model setup")
+        if pre_model_market_chat.get("status") != "blocked_before_model_chat":
+            return fail("Product selection without an available model must not impersonate candidate analysis")
+        if pre_model_market_report_response.get("ai_ceo_market_report") is not None:
+            return fail("Raw search without candidate analysis must not create a market report")
+        if pre_model_market_report_response.get("ai_ceo_market_report_delivery") is not None:
+            return fail("Blocked selection must not produce a Listing handoff")
+        if pre_model_market_report_response.get("usage_consumed") is not False or FakeModelHandler.calls:
+            return fail("Missing model must not consume a trial turn or call a provider")
+        if pre_model_market_report_response.get("listing_created") is not False:
+            return fail("Blocked selection must not create a Listing")
         if "unit-test-search-credential-placeholder" in json.dumps(pre_model_market_report_response, ensure_ascii=False):
             return fail("pre-model realtime market report response must not expose the search credential")
 

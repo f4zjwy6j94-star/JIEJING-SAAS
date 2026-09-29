@@ -9127,7 +9127,8 @@ function renderSaasFirstRunAssuranceStrip(items = [], extraClass = "") {
 }
 
 function renderSaasListingSourceCards({ marketReport, listingReport, syncedRows = [] } = {}) {
-  const hasAiReport = Boolean(marketReport || listingReport || latestSaasAiCeoMarketResearchTurn());
+  const hasAiReport = Boolean(listingReport || (marketReport?.report_type === "ai_ceo.market_research"
+    ? saasAiCeoMarketReportCanStartBlockedListingDraft(marketReport) : marketReport));
   const sourceMode = state.saasListingComposerDraft?.source_type || state.saasListingSourceMode || "";
   const cards = [
     {
@@ -9136,7 +9137,7 @@ function renderSaasListingSourceCards({ marketReport, listingReport, syncedRows 
       copy: hasAiReport ? "已有 AI CEO 市场结论或上架草稿，可以作为上架依据。" : "先在 AI CEO 里发起选品/市场调研，结论会回到这里。",
       status: hasAiReport ? "可导入调研" : "等待调研",
       tone: hasAiReport ? "green" : "neutral",
-      action: "listing-source-ai-report",
+      action: hasAiReport ? "listing-source-ai-report" : "listing-start-research",
       actionLabel: hasAiReport ? "导入调研" : "去 AI CEO",
       disabled: false,
     },
@@ -21726,7 +21727,10 @@ function saasAiCeoStageCoverage(reports = [], confirmations = []) {
       label: "市场报告",
       detail: "判断类目机会、竞争强度、费用风险和可切入角度。",
       reportTypes: ["ai_ceo.market_research", "market.report", "market.data_packet"],
-      done: types.has("ai_ceo.market_research") || types.has("market.report") || types.has("market.data_packet"),
+      done: reports.some((record) => record.report_type === "ai_ceo.market_research"
+        ? saasAiCeoMarketReportCanStartBlockedListingDraft(record) &&
+          Array.isArray(record.report?.source_records) && record.report.source_records.some((source) => source?.url)
+        : ["market.report", "market.data_packet"].includes(record.report_type)),
     },
     {
       key: "listing",
@@ -25165,6 +25169,7 @@ function saasAiCeoTaskContextProjection(command = state.saasLastCeoCommand) {
     stageDetail: publicRuntimeText(currentStage?.detail || blocker.detail || "围绕当前商品继续整理事实、草稿与审核边界。").slice(0, 160),
     completedItems,
     missingFacts,
+    factsReviewed: stages.some((stage) => stage?.key === "facts" && stage?.status === "completed"),
     blockerTitle: publicRuntimeText(blocker.title || "").slice(0, 96),
     nextView,
     nextLabel,
@@ -25181,7 +25186,9 @@ function renderSaasAiCeoTaskContextMarkup(options = {}) {
     : "<li>当前任务已建立，等待第一项可核对结果。</li>";
   const missingMarkup = context.missingFacts.length
     ? context.missingFacts.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
-    : "<li>当前没有新增资料缺口；继续核对下一阶段。</li>";
+    : context.factsReviewed
+      ? "<li>商品资料已完成核对。</li>"
+      : "<li>商品事实尚未完成核对；请按当前步骤继续。</li>";
   return `
     <aside class="saas-ai-ceo-task-context ${contextState.expanded ? "is-expanded" : "is-collapsed"}" data-ai-ceo-task-context="adaptive_task_context_v1" data-ai-ceo-task-context-state="${escapeHtml(contextState.state)}" aria-label="当前商品任务">
       <button class="saas-ai-ceo-task-context-summary" type="button" data-ai-ceo-task-context-summary data-ai-ceo-task-context-toggle aria-controls="saasAiCeoTaskContextDetail" aria-expanded="${contextState.expanded ? "true" : "false"}">
@@ -36857,6 +36864,10 @@ function handleSaasAction(button) {
   }
   if (action === "confirm-product-fact-suggestion") {
     confirmSaasMerchantProductFactSuggestion(button);
+    return;
+  }
+  if (action === "listing-start-research") {
+    setView("cockpit");
     return;
   }
   if (action === "listing-source-ai-report") {

@@ -110,6 +110,33 @@ async function screenshot(page, name) { const file = path.join(output, `${name}.
   await page.goto(`${base}/app.html?start=app&qa=public-saas&view=product`);
   await bootstrap(page, base, { startStep: 1 });
   assert((await page.title()).length > 0); assert(page.url().startsWith(base));
+  await page.evaluate(() => {
+    state.saasListingComposerDraft = null;
+    state.saasReports = [];
+    state.saasListingComposerInput = "";
+    renderProductListingCenter();
+  });
+  const callsBeforeResearchEntry = calls.length;
+  await page.getByRole("button", { name: "去 AI CEO", exact: true }).click();
+  assert(await page.locator("#view-cockpit.is-active").isVisible());
+  assert(await page.getByRole("textbox", { name: "交给 AI CEO 的问题或商品任务", exact: true }).isVisible());
+  assert.equal(calls.length, callsBeforeResearchEntry, "Navigation must not import, generate or save");
+  checks.push("empty-account research entry navigates to AI CEO without a business request");
+  await page.evaluate(({ identity }) => {
+    state.saasMerchantProjectStatus = null;
+    state.saasReports = [{ report_id: identity.source_report_id, report_type: "ai_ceo.market_research",
+      report: { listing_project_identity: identity, status: "model_answer_rejected", answer_quality: { accepted: false },
+        candidate_products: [], source_records: [{ url: "https://example.test/research" }] } }];
+    setView("cockpit", { aiCeoTaskContextMode: "active_product_task", aiCeoTaskContextExpanded: true,
+      aiCeoTaskContextProjectId: identity.key, aiCeoTaskContextCommandId: "fixture-research" });
+  }, { identity });
+  const taskContext = page.locator(".saas-ai-ceo-task-context");
+  assert(await taskContext.isVisible());
+  assert(!(await taskContext.locator('[aria-label="已完成事项"]').innerText()).includes("市场报告"));
+  assert((await taskContext.innerText()).includes("商品事实尚未完成核对"));
+  await screenshot(page, "research-pending-desktop");
+  checks.push("failed research stays pending even before backend status arrives; absent facts stay unverified");
+  await page.reload(); await bootstrap(page, base, { startStep: 1 });
   await step(page, 1);
   assert.equal(await page.locator('[data-saas-listing-draft-field="title"]').count(), 0);
   assert.equal(await page.locator('[data-saas-product-fact-field="image_rights_confirmed"]').count(), 0);

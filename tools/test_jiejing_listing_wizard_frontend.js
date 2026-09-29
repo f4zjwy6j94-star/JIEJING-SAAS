@@ -18,6 +18,42 @@ function load(names, extra = {}) {
   }
   return context;
 }
+
+test("empty source card opens AI CEO without importing, generating or changing the draft", () => {
+  const draft = { product: "untouched merchant draft" };
+  const visits = [];
+  const context = load(["renderSaasListingSourceCards", "handleSaasAction"], {
+    state: { saasListingComposerDraft: draft }, escapeHtml: String,
+    latestSaasAiCeoMarketResearchTurn: () => null,
+    saasAiCeoMarketReportCanStartBlockedListingDraft: () => false,
+    setView: view => visits.push(view),
+    handleSaasListingSourceAiReport: () => assert.fail("The navigation button must not import reports"),
+  });
+  const html = context.renderSaasListingSourceCards();
+  const action = html.match(/data-saas-action="([^"]+)"[^>]*>去 AI CEO<\/button>/)?.[1];
+  assert(action, "An empty account has a visible AI CEO entry");
+  context.handleSaasAction({ dataset: { saasAction: action } });
+  assert.deepEqual(visits, ["cockpit"]);
+  assert.equal(context.state.saasListingComposerDraft, draft);
+  assert.match(context.renderSaasListingSourceCards({ listingReport: { report_type: "listing.package" } }),
+    /data-saas-action="listing-source-ai-report"[^>]*>导入调研/);
+  const failed = context.renderSaasListingSourceCards({ marketReport: { report_type: "ai_ceo.market_research",
+    report: { answer_quality: { accepted: false }, candidate_products: [] } } });
+  assert(!failed.includes("可导入调研"));
+  assert.match(failed, /data-saas-action="listing-start-research"/);
+});
+
+test("a task with no fact packet cannot claim there are no missing facts", () => {
+  const context = load(["renderSaasAiCeoTaskContextMarkup"], {
+    escapeHtml: String, saasAiCeoTaskContextState: () => ({ visible: true, expanded: true }),
+    saasAiCeoTaskContextProjection: () => ({ productLabel: "当前商品任务", stageLabel: "调研",
+      stageDetail: "等待候选", completedItems: [], missingFacts: [], factsReviewed: false,
+      blockerTitle: "", nextView: "cockpit", nextKey: "cockpit", nextLabel: "继续调研" }),
+  });
+  const html = context.renderSaasAiCeoTaskContextMarkup();
+  assert(!html.includes("没有新增资料缺口"));
+  assert(html.includes("商品事实尚未完成核对"));
+});
 test("facts continue uses confirmed core facts, independent of publish gaps", () => {
   const context = load(["saasMerchantProductFactValuePresent", "saasListingWizardCoreMissing"], {
     saasMerchantProductFactPacket: draft => draft.merchant_product_fact_packet,

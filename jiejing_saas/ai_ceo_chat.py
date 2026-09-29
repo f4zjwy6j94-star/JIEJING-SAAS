@@ -202,11 +202,11 @@ def build_ai_ceo_turn_plan(
     elif ebay_workflow:
         route = AI_CEO_ROUTE_EBAY_WORKFLOW
         response_mode = "jiejing_workflow"
-        # Preserve the existing read-only search fallback: an explicit web
-        # research request can still return sourced work evidence before a
-        # merchant model is connected. When a model is configured the fast
-        # route yields back to the model-backed workflow below.
-        realtime_kind = "" if explicit_listing_intake else classified_realtime
+        # Selection uses the sourced, model-backed workflow and its candidate
+        # quality gate. Words like "now" or "latest information" must not
+        # short-circuit it through a generic news/search answer. Other explicit
+        # read-only web questions retain their existing realtime fallback.
+        realtime_kind = "" if explicit_listing_intake or product_selection_request else classified_realtime
         required_tools = [] if explicit_listing_intake else ["ebay_public_research"]
         freshness_required = not explicit_listing_intake
         research_depth = "none" if explicit_listing_intake else "deep" if product_selection_request else "quick"

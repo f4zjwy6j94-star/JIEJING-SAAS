@@ -104,6 +104,40 @@ class TimelyEvidenceTests(unittest.TestCase):
                 self.assertTrue(plan["freshness_required"])
                 self.assertNotIn("ebay_public_research", plan["required_tools"])
 
+    def test_no_source_selection_reaches_candidate_analysis_not_news_fast_answer(self):
+        question = (
+            "我现在没有货源，想从零开始做 eBay 美国站。请帮我做一次联网选品调研："
+            "筛选轻小、不带电、非易碎、尽量降低侵权风险的商品，比较 3 个具体候选，推荐 1 个优先找货的方向。"
+            "请说明需求依据、竞争情况、参考售价范围、物流和退货风险，并给出来源链接及资料日期；"
+            "没有可靠成交数据就明确说，不能编造销量或宣称它是最畅销商品。"
+            "我的采购预算、供应商、真实成本、材质规格和发货地还未确定，找到货源后我再补充。"
+            "现在只做调研和找货清单，不生成虚构商品事实，不发布、不采购，也不要沿用旧平板支架或书签项目。"
+        )
+        records = [{"title": "Product research guide", "url": "https://example.test/research",
+                    "content": "Compare competition, shipping costs and product claims before sourcing."}]
+        answer = "\n".join(
+            f"候选商品 {index}：{name}\n推荐度评分：{85-index}/100\n"
+            "调研依据：[S1]仅提供筛选方法，未提供该商品的销量或价格。资料日期未标注。\n"
+            "成交证据不足，竞争和参考售价待核实。材质、尺寸、重量、成本和发货地均未知。\n"
+            "找货时应核对运输损坏、规格不符和退货费用风险。"
+            for index, name in enumerate(("线缆标签", "行李拉链固定夹", "桌面线缆整理夹"), 1)
+        ) + "\n最终推荐：线缆标签，作为优先找货的待验证方向，不是最畅销结论。"
+        result, _, model, requests = self.run_chat(question, records, answer)
+        self.assertTrue(requests)
+        self.assertEqual(len(model.calls), 1)
+        self.assertEqual(result["status"], "model_answered_non_live")
+        self.assertEqual(result["route"], chat.AI_CEO_ROUTE_EBAY_WORKFLOW)
+        self.assertEqual(result["answer_quality"]["quality_gate"], "ebay_product_selection_answer_v2")
+        self.assertTrue(result["answer_quality"]["accepted"])
+        self.assertEqual(result["answer_quality"]["candidate_count"], 3)
+        self.assertEqual(result["turn_plan"]["source_mode"], "merchant_has_no_source")
+        self.assertNotEqual(result["route_label"], "实时搜索")
+        self.assertFalse(result["frontend_gets_model_api_key"])
+        fast, _, fast_model, fast_requests = self.run_chat(question, records, answer, fast=True)
+        self.assertIsNone(fast, "Trial AI must continue into the model-backed selection path")
+        self.assertEqual(fast_requests, [])
+        self.assertEqual(fast_model.calls, [])
+
     def test_undated_weather_never_streams_or_becomes_current_fact(self):
         records = [{"title": "Shanghai weather", "url": "https://weather.example/shanghai",
                     "content": "Shanghai temperature is 31 C and sunny.", "captured_at": NOW}]

@@ -166,7 +166,12 @@ def market_report() -> dict[str, Any]:
         "report_type": "ai_ceo.market_research",
         "status": "saved",
         "created_at": "2026-08-27T01:01:00Z",
-        "report": {"secret_exposed": False},
+        "report": {
+            "candidate_products": [{"candidate_id": IDENTITY["candidate_id"], "name": "禅意倒流香炉", "selected": True}],
+            "selected_candidate_id": IDENTITY["candidate_id"],
+            "source_records": [{"url": "https://example.test/research"}],
+            "answer_quality": {"accepted": True}, "secret_exposed": False,
+        },
     }
 
 
@@ -360,6 +365,41 @@ def create_fixture_store(repository, *, company_id, store_id, user_id="user-a"):
             company_id=company_id, user_id=user_id,
             payload={"store_name": "Local fixture", "platform": "ebay", "marketplace": "EBAY_US"},
         )
+
+
+class ResearchCompletionTest(unittest.TestCase):
+    def snapshot_for(self, body):
+        report = market_report()
+        report["report"] = {"listing_project_identity": IDENTITY, **body}
+        return build(FixtureRepository(tasks=[task()], reports=[report]))
+
+    def test_saved_empty_or_rejected_research_is_not_completed(self):
+        for body in (
+            {},
+            {"status": "realtime_search_answered_without_model", "candidate_products": [],
+             "source_records": [{"url": "https://example.test/research"}]},
+            {"status": "model_answer_rejected", "answer_quality": {"accepted": False},
+             "candidate_products": [{"candidate_id": "a", "name": "线缆标签", "selected": True}]},
+        ):
+            with self.subTest(body=body):
+                snapshot = self.snapshot_for(body)
+                research = next(stage for stage in snapshot["stages"] if stage["key"] == "research")
+                self.assertNotEqual(research["status"], "completed")
+                self.assertEqual(snapshot["current_stage"], "research")
+                self.assertEqual(snapshot["next_action"]["view"], "cockpit")
+
+    def test_research_can_complete_before_supplier_facts_are_available(self):
+        snapshot = self.snapshot_for({
+            "status": "model_answered", "answer_quality": {"accepted": True},
+            "candidate_products": [{"candidate_id": "a", "name": "线缆标签", "selected": True}],
+            "selected_candidate_id": "a", "source_records": [{"url": "https://example.test/research"}],
+            "listing_handoff": {"ready_for_listing_draft": False},
+            "blocked_by": ["merchant_product_source_required", "supplier_facts_incomplete"],
+        })
+        stages = {stage["key"]: stage["status"] for stage in snapshot["stages"]}
+        self.assertEqual(stages["research"], "completed")
+        self.assertEqual(stages["facts"], "waiting")
+        self.assertEqual(snapshot["current_stage"], "facts")
 
 
 class MerchantProjectEvidenceScopeTest(unittest.TestCase):
@@ -691,7 +731,10 @@ class MerchantProjectEvidenceScopeTest(unittest.TestCase):
 
 def main() -> None:
     scope_result = unittest.TextTestRunner(verbosity=2).run(
-        unittest.defaultTestLoader.loadTestsFromTestCase(MerchantProjectEvidenceScopeTest)
+        unittest.TestSuite([
+            unittest.defaultTestLoader.loadTestsFromTestCase(MerchantProjectEvidenceScopeTest),
+            unittest.defaultTestLoader.loadTestsFromTestCase(ResearchCompletionTest),
+        ])
     )
     assert scope_result.wasSuccessful(), "real-repository project evidence regressions failed"
     assert "." in _now_iso().removesuffix("Z")
