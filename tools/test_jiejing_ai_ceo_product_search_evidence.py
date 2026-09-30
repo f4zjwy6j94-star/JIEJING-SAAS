@@ -162,6 +162,7 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             web = model.calls[0]["web_context"]
             self.assertEqual(3, len(web["source_records"]))
             self.assertEqual("not_established", web["product_research_evidence"]["sales_verification"])
+            self.assertEqual("not_established", web["product_research_evidence"].get("current_availability_verification"))
             self.assertFalse(web["product_research_evidence"]["merchant_product_facts_confirmed"])
             del repo
             gc.collect()
@@ -375,6 +376,7 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             self.assertNotEqual("local_clock_answered", result["status"], "Date constraints are part of the report task, not a clock question")
             self.assertEqual([sources[0]["url"]], [s["url"] for s in result["source_records"]])
             self.assertEqual("S1", model.calls[0]["web_context"]["source_records"][0]["citation_id"])
+            self.assertEqual("not_established", model.calls[0]["web_context"]["product_research_evidence"].get("current_availability_verification"))
             self.assertEqual(sources[0]["captured_at"], result["source_records"][0]["captured_at"])
             self.assertEqual("model_answered", result["status"], result.get("answer_quality"))
             # A client cannot replace the retained evidence with raw snippets or
@@ -633,6 +635,88 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             self.assertFalse(chat._answer_uses_unsupported_demand_shortcuts(statement), statement)
         for statement in ("长期稳定需求。", "虽然尚无成交证据，但需求稳定。", "不能证明销量，但存在持续痛点。", "不能证明销量而需求稳定。"):
             self.assertTrue(chat._answer_uses_unsupported_demand_shortcuts(statement), statement)
+
+    def test_current_listing_claim_is_not_cancelled_by_later_uncertainty(self):
+        # Minimized merchant-visible report740 failure. Historical search
+        # snippets cannot prove current availability, even with a footer caveat.
+        sources = [
+            {"citation_id": "S1", "title": "Measuring Cups and Spoons",
+             "url": "https://www.ebay.com/itm/123456789001",
+             "snippet": "Measuring cups. Buy it now.", "market_evidence_role": "item_listing_reference"},
+            {"citation_id": "S4", "title": "Chef Select measuring cups",
+             "url": "https://www.ebay.com/itm/123456789004", "market_evidence_role": "item_listing_reference"},
+        ]
+        result = chat.validate_ai_ceo_answer_quality(
+            message="比较1个候选商品，不创建 Listing。", route="ebay_workflow",
+            answer=("候选 1：stainless steel measuring spoons cups set\n"
+                    "来源支持：S1 和 S4 的标题都指向这一品类在 eBay US 有在售 listing。\n"
+                    "来源日期、当前在售状态、主商品价格和销量：均未验证。"),
+            source_records=sources)
+        self.assertFalse(result["accepted"], result)
+        self.assertIn("research_unverified_current_availability", result["blocked_by"])
+
+    def test_availability_guard_checks_each_statement_and_table_status(self):
+        sources = [{"citation_id": "S1", "title": "Measuring cups",
+                    "url": "https://www.ebay.com/itm/123456789001", "snippet": "Buy it now"}]
+        prefix = "候选商品 1：stainless steel measuring cups set\n"
+        for claim in (
+            "当前在售 [S1]。\n当前在售状态未验证。",
+            "主商品价格未验证，但商品仍在售。", "不能证明销量，but currently available [S1].",
+            "| 候选商品 | 状态 | 来源 |\n|---|---|---|\n| measuring cups | 在售 | [S1] |",
+            "| 维度 | measuring cups |\n|---|---|\n| 来源 | S1 |\n| 状态 | 在售 |",
+        ):
+            result = chat.validate_ai_ceo_answer_quality(message="比较1个候选商品，不创建 Listing。",
+                route="ebay_workflow", answer=prefix+claim, source_records=sources)
+            self.assertIn("research_unverified_current_availability", result["blocked_by"], claim)
+        for claim in (
+            "来源日期、当前在售状态、主商品价格和销量：均未验证。",
+            "不能确认是否仍在售 [S1]。", "不要写当前在售；只可确认历史页面存在。",
+            "历史页面当时在售，无法确认目前在售状态。", "Current availability is unverified [S1].",
+            "Not currently available evidence; availability unknown.",
+            "在售标价不等于成交价。当前状态待核实。",
+            "| 候选商品 | 状态 | 来源 |\n|---|---|---|\n| measuring cups | 在售状态未验证 | [S1] |",
+        ):
+            result = chat.validate_ai_ceo_answer_quality(message="比较1个候选商品，不创建 Listing。",
+                route="ebay_workflow", answer=prefix+claim, source_records=sources)
+            self.assertNotIn("research_unverified_current_availability", result["blocked_by"], claim)
+
+    def test_real_chat_repairs_availability_or_rejects_without_generic_projection(self):
+        bad = "\n\n".join(f"候选商品 {i}：{name}\n当前在售 [S{i}]。价格与供应商事实未验证。"
+                          for i, name in enumerate(PRODUCTS, 1))
+        good = bad.replace("当前在售", "历史商品页面参考，当前在售状态未验证")
+        for already_recovered in (False, True):
+            class Model:
+                provider, model, calls = "deepseek", "offline-availability-fixture", 0
+                def generate_text(self, **kwargs):
+                    self.calls += 1
+                    if self.calls > 1:
+                        self_test.assertIn("research_unverified_current_availability", kwargs["system_prompt"])
+                    return {"text": good if self.calls > 1 else bad, "model_mode": "live_http_model_text",
+                            "model_configured": True, "bounded_empty_answer_recovery": already_recovered}
+            self_test = self
+            with tempfile.TemporaryDirectory(prefix="jiejing-availability-", ignore_cleanup_errors=True) as folder:
+                repo = SaaSRepository(Path(folder) / "fixture.sqlite")
+                account = repo.create_user_with_company(email="availability@example.test",
+                    password="unit-test-only-password", company_name="Availability fixture")
+                identity = {"user_id": account["user"]["user_id"], "company_id": account["company"]["company_id"]}
+                store = repo.create_store(**identity, payload={"platform": "ebay", "marketplace": "EBAY_US"})
+                model = Model()
+                with patch.object(chat, "PublicSearchProbeAdapter", FakeSearch):
+                    result = chat.run_ai_ceo_chat(repository=repo, **identity, store_id=store["store_id"],
+                        message="比较3个候选商品："+"、".join(PRODUCTS)+"。不创建 Listing。", model_client=model)
+                self.assertFalse(result["answer_quality"].get("contract_projection_used"))
+                if already_recovered:
+                    self.assertEqual(1, model.calls, "Do not exceed the existing bounded recovery budget")
+                    self.assertEqual("model_answer_rejected", result["status"])
+                    self.assertIn("research_unverified_current_availability", result["answer_quality"]["blocked_by"])
+                    self.assertIn("历史商品页面误写成了当前在售证明", result["answer"])
+                else:
+                    self.assertEqual(2, model.calls)
+                    self.assertEqual("model_answered", result["status"])
+                    self.assertEqual(good, result["answer"])
+                    self.assertEqual(1, result["answer_quality"]["repair_retry_count"])
+                del repo
+                gc.collect()
 
     def test_research_cannot_swap_citations_or_promote_ambiguous_prices_and_brands(self):
         sources = [

@@ -2852,7 +2852,8 @@ def _run_product_selection_web_search(*, message: str, budget: dict[str, Any]) -
         "query_coverage": [{"query": query, "item_source_count": len(group)} for query, group in zip(queries, groups)],
         "item_source_count": len(records), "non_item_source_count": non_item_count,
         "sales_verification": "not_established", "merchant_product_facts_confirmed": False,
-        "rule": "只可引用片段明确出现的商品和标价；检索时间不是商品或成交日期。商品页链接、在售标价和搜索摘要均不证明已售成交、销量、需求或退货率；无证据逐项写未验证。",
+        "current_availability_verification": "not_established",
+        "rule": "只可引用片段明确出现的商品和标价；检索时间不是商品或成交日期。商品页链接、在售标价和搜索摘要均不证明当前在售、已售成交、销量、需求或退货率；无证据逐项写未验证。",
     }
     return {
         **searches[0], "status": "ready" if records else "blocked",
@@ -3937,6 +3938,11 @@ def _owned_report_source_context(*, repository: Any, company_id: str, store_id: 
         return empty
     return {**empty, "status": "ready", "blocked_by": [], "source_records": records, "cache_status": "report_reuse",
             "used_for_model_prompt": True, "source_report_id": report_id,
+            "product_research_evidence": {
+                "current_availability_verification": "not_established", "sales_verification": "not_established",
+                "merchant_product_facts_confirmed": False,
+                "rule": "历史商品页只证明曾有相关页面，不能证明当前在售。来源日期与当前状态未核实时逐项写未验证；不可先断言在售再用末尾免责声明抵消。",
+            },
             "summary": "沿用已保存报告的原始来源与原始检索日期，本轮未联网。历史回答不是新的事实证据。"}
 
 
@@ -4578,6 +4584,21 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
         # Model tables often use links without [S#]. Formatting must not bypass
         # the same evidence checks applied to prose with citation labels.
         claim_line = re.sub(r"[*_`]+", "", line)
+        # Search snippets (even ones saying Buy it now) are historical product
+        # references, not a live listing-status check. Evaluate each assertion:
+        # a later disclaimer must not cancel a contradictory positive claim.
+        for clause in re.split(r"[。；;！!？?\n，,|]|\b(?:but|however)\b|(?:但是|不过|但)", claim_line, flags=re.I):
+            if not re.search(
+                r"(?:当前|目前|现在|仍然|仍|正在).{0,8}(?:在售|售卖)|"
+                r"(?:有|存在|均为|都是)\s*在售\s*(?:listing|商品|产品|刊登)|"
+                r"^\s*在售\s*$|(?:状态|status|availability)\s*[:：]\s*(?:在售|active|available|for sale)|"
+                r"\b(?:currently|still|actively)\s+(?:available|listed|for sale)\b",
+                clause, re.I):
+                continue
+            if not re.search(
+                r"(?:不能|无法|不应|不可|不要|未验证|未核实|未确认|不确定|待核|尚待|是否|历史|当时|曾经)|"
+                r"\b(?:not|cannot|unverified|unknown|unconfirmed|historical)\b", clause, re.I):
+                blocked.add("research_unverified_current_availability")
         for source in line_sources.values():
             prices = set(re.findall(r"(?:US\s*)?\$\s*(\d+(?:\.\d+)?)", str(source.get("snippet") or "")))
             uncertain = re.search(r"(?:主商品)?(?:价格|标价|报价|售价).{0,8}(?:未验证|未核实|不确定|无法确认)|"
@@ -5551,6 +5572,8 @@ def _model_answer_repair_instruction(
         instructions.append("删除所有 Listing 标题、字段、SKU、Item specifics、类目映射和刊登建议。")
     if "invented_unknown_product_facts" in blocked_by:
         instructions.append("删除所有重量、尺寸、材质、成本、品牌、型号、包装和物流服务的数值或断言；逐项写未知或待核。")
+    if "research_unverified_current_availability" in blocked_by:
+        instructions.append("商品搜索摘要和历史页面不能证明当前在售；逐句移除当前在售的断言，改为历史页面参考、当前状态未验证，不能只在末尾加免责声明。")
     if "excluded_previous_candidate_reused" in blocked_by:
         excluded = "、".join(str(item) for item in selection_contract.get("excluded_candidate_names", []) if str(item))
         instructions.append(f"不得再次推荐这些旧候选：{excluded}。" if excluded else "不得复用上一轮候选。")
@@ -5600,6 +5623,7 @@ def _model_answer_rejected_fallback(
         ("connection_status_mismatch", "改写了真实连接状态"),
         ("listing_scope_exceeded", "越过了本轮只做选品的范围"),
         ("invented_unknown_product_facts", "把未知的重量、材质、成本或物流信息写成了事实"),
+        ("research_unverified_current_availability", "把历史商品页面误写成了当前在售证明"),
         ("excluded_previous_candidate_reused", "复用了已经淘汰的旧候选"),
         ("missing_candidate_ebay_evidence_entry", "没有为每个候选提供可复核的 eBay US 入口或 Item ID"),
         ("search_entry_presented_as_demand_evidence", "把搜索入口误当成了成交证据"),
