@@ -8484,6 +8484,8 @@ function saasIsInvalidMarketProductLabel(value = "") {
   const text = publicRuntimeText(value).replace(/\s+/g, " ").trim();
   if (!text) return true;
   const lower = text.toLowerCase();
+  const sectionLabel = lower.replace(/\s*[（(][^()（）]{1,40}[）)]\s*$/, "");
+  if (/^(?:(?:未验证|未核实|待验证|待核验|待确认|待补)(?:事项|项目|项|事实|资料|信息)?(?:汇总|清单|说明|总结|列表)?|(?:供应商|商家|商品|货源|采购)?(?:资料|参数|事实|信息)(?:清单|汇总|要求|说明|核验|确认)|(?:证据|操作|交易|流程|执行|任务|本轮)?边界(?:说明|约束|限制)?|(?:(?:supplier|merchant|product|source)\s+)?(?:information|facts?|evidence|verification)\s+(?:checklist|summary|notes|requirements)|(?:unverified|unconfirmed|missing)\s+(?:items|facts|information)|(?:evidence\s+)?boundary\s+(?:notes|explanation))$/i.test(sectionLabel)) return true;
   const invalidExact = new Set([
     "ai ceo 市场调研",
     "ai ceo market research",

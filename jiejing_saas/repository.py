@@ -19618,6 +19618,16 @@ def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
     if not text:
         return True
     compact = re.sub(r"\s+", " ", text).strip().lower()
+    section_label = re.sub(r"\s*[（(][^()（）]{1,40}[）)]\s*$", "", compact)
+    if re.fullmatch(
+        r"(?:未验证|未核实|待验证|待核验|待确认|待补)(?:事项|项目|项|事实|资料|信息)?(?:汇总|清单|说明|总结|列表)?|"
+        r"(?:供应商|商家|商品|货源|采购)?(?:资料|参数|事实|信息)(?:清单|汇总|要求|说明|核验|确认)|"
+        r"(?:证据|操作|交易|流程|执行|任务|本轮)?边界(?:说明|约束|限制)?|"
+        r"(?:(?:supplier|merchant|product|source)\s+)?(?:information|facts?|evidence|verification)\s+(?:checklist|summary|notes|requirements)|"
+        r"(?:unverified|unconfirmed|missing)\s+(?:items|facts|information)|(?:evidence\s+)?boundary\s+(?:notes|explanation)",
+        section_label,
+    ):
+        return True
     invalid_markers = (
         "ai ceo 市场调研",
         "ai ceo market",
@@ -19707,6 +19717,18 @@ def _ai_ceo_market_candidate_score(raw_block: str, index: int) -> int:
         score = max(0, min(100, int(match.group(1))))
         return score
     return max(62, 88 - index * 5)
+
+
+def _ai_ceo_market_table_product_column(cells: list[str]) -> int | None:
+    """Identify product columns, not arbitrary report headings or prose."""
+    labels = [re.sub(r"\s*[（(][^()（）]{1,40}[）)]\s*$", "", cell).strip() for cell in cells]
+    strong = r"候选(?:商品|品|方向)?|商品(?:名称)?|产品(?:名称)?|品类|candidate(?: product)?|product(?: name)?|item name"
+    for index, label in enumerate(labels):
+        if re.fullmatch(strong, label, flags=re.IGNORECASE):
+            return index
+    if re.search(r"推荐|评分|score|risk|风险|标题|title|链接|link|url|标价|price|检索日期|依据|证据|未验证", " ".join(labels), re.I):
+        return next((i for i, label in enumerate(labels) if re.fullmatch(r"名称|name", label, re.I)), None)
+    return None
 
 
 def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict[str, Any]]:
@@ -19905,16 +19927,13 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
             if re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
                 continue
             cells = [cell.strip() for cell in line.strip("|").split("|")]
-            name_columns = [
-                column for column, cell in enumerate(cells)
-                if re.fullmatch(r"候选(?:商品|品)?|商品(?:名称)?|产品(?:名称)?|品类|名称|candidate(?: product)?|product(?: name)?|item name", cell, flags=re.IGNORECASE)
-            ]
+            product_column = _ai_ceo_market_table_product_column(cells)
             # Evidence tables need not contain a recommendation score. Only
             # an explicit product column can identify a candidate; section
             # headings such as "证据边界说明" are not product fallbacks.
-            if name_columns and re.search(r"推荐|评分|score|risk|风险|标题|title|链接|link|url|标价|price|检索日期", line, flags=re.IGNORECASE):
+            if product_column is not None:
                 table_header_index = index
-                table_product_column = name_columns[0]
+                table_product_column = product_column
                 continue
             if table_header_index < 0 or index <= table_header_index:
                 continue
@@ -19968,20 +19987,9 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
             if len(candidates) >= 5:
                 break
 
-    if not candidates:
-        for index, line in enumerate(lines):
-            stripped = re.sub(r"^[#>\-\s]+", "", line).strip(" *-:：")
-            if not re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9 /()（）&+\-]{3,60}", stripped):
-                continue
-            block = "\n".join(lines[index : index + 8])
-            if not re.search(
-                r"\u9700\u6c42|\u7ade\u4e89|\u4f18\u52bf|\u98ce\u9669|\u91c7\u8d2d|\u6210\u672c|\u552e\u4ef7|\u5229\u6da6|\u8f7b\u5c0f|\u4e0d\u5e26\u7535|demand|competition|risk|cost|margin",
-                block,
-                flags=re.IGNORECASE,
-            ):
-                continue
-            add_candidate(stripped, start_index=index, block=block, source="ai_ceo_market_report_heading")
-
+    # A short heading with nearby risk/cost words is not product evidence.
+    # Require an explicit candidate/name structure rather than inventing cards
+    # from arbitrary sections such as supplier checklists or boundary notes.
     if not candidates:
         fallback_patterns = (
             r"(?:建议产品|推荐产品|目标商品|商品方向|推荐品类|建议品类)\s*[:：]\s*([^\n。；;]{2,90})",

@@ -43,6 +43,24 @@ def main() -> None:
     )
     assert json.loads(invalid_label_probe.stdout.strip()) == [True, True, True, False], invalid_label_probe.stdout
 
+    # Actual persisted bad report: metadata headings were projected into cards.
+    # Keep legitimate supplier-incomplete drafts available while rejecting these.
+    labels = ["未验证项汇总", "供应商资料清单（待补）", "边界说明", "supplier information checklist",
+              "stainless steel measuring cups set", "边界测量仪"]
+    blocked_draft_probe = subprocess.run(["node"], input=(
+        "const publicRuntimeText = (value) => String(value || '');\n" + invalid_label + "\n"
+        + function_body(app_js, "saasIsConcreteProductLabel") + "\n"
+        + "const saasAiCeoListingHandoffFieldsFromReport = r => r.report.listing_handoff.listing_fields;\n"
+        + "const saasSelectedMarketProductCandidate = c => c.find(x => x.selected);\n"
+        + function_body(app_js, "saasAiCeoMarketReportCanStartBlockedListingDraft") + "\n"
+        + "console.log(JSON.stringify(" + json.dumps(labels, ensure_ascii=False) + ".map(name => {"
+        + "const candidate = {name, selected:true}; return saasAiCeoMarketReportCanStartBlockedListingDraft({"
+        + "report_type:'ai_ceo.market_research',report:{listing_import_ready:false, answer_quality:{accepted:true},"
+        + "blocked_by:['supplier_facts_incomplete'],listing_handoff:{listing_fields:{"
+        + "product_candidates:[candidate],selected_product_candidate:candidate}}}}); })));\n"
+    ), text=True, encoding="utf-8", capture_output=True, check=True)
+    assert json.loads(blocked_draft_probe.stdout.strip()) == [False, False, False, False, True, True], blocked_draft_probe.stdout
+
     concise_label = function_body(app_js, "saasAiCeoConciseAnswerProductLabel")
     for marker in ["assistant_text", "lines[0]", "理由", "saasIsConcreteProductLabel"]:
         require(concise_label, marker, "concise model answer product extraction")

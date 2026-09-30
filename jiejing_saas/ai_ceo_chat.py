@@ -4513,6 +4513,7 @@ def validate_ai_ceo_answer_quality(
         answer=answer,
         context=context or {},
         candidates=candidates,
+        source_records=source_records or [],
     )
     accepted = candidate_count >= required_count and first_candidate_visible and not constraint_violations
     blocked_by = []
@@ -4588,6 +4589,7 @@ def _selection_answer_constraint_violations(
     answer: str,
     context: dict[str, Any],
     candidates: list[dict[str, Any]],
+    source_records: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     merchant_text = _normalized_text(message)
     answer_text = _safe_text(answer, limit=12000)
@@ -4643,9 +4645,13 @@ def _selection_answer_constraint_violations(
         blocked_by.append("excluded_previous_candidate_reused")
 
     if selection_contract.get("candidate_evidence_entry_required"):
-        candidate_blocks = _selection_candidate_blocks(answer_text)
+        candidate_blocks = _selection_candidate_blocks(answer_text, candidate_names=candidate_names)
         required_count = max(1, _safe_int(selection_contract.get("required_candidate_count") or len(candidates) or 1))
-        inspected_blocks = candidate_blocks[:required_count]
+        sources_by_id = {str(record.get("citation_id")): str(record.get("url") or "")
+                         for record in source_records or [] if isinstance(record, dict) and record.get("citation_id")}
+        inspected_blocks = [block + "\n" + "\n".join(
+            sources_by_id[ref] for ref in dict.fromkeys(re.findall(r"\[(S\d+)\]", block)) if ref in sources_by_id
+        ) for block in candidate_blocks[:required_count]]
         if len(inspected_blocks) < required_count or any(not _candidate_block_has_ebay_evidence_entry(block) for block in inspected_blocks):
             blocked_by.append("missing_candidate_ebay_evidence_entry")
         if any(
@@ -5265,14 +5271,54 @@ def _candidate_name_matches_exclusion(excluded_name: str, candidate_name: str) -
     return False
 
 
-def _selection_candidate_blocks(answer: str) -> list[str]:
+def _selection_candidate_blocks(answer: str, *, candidate_names: list[str] | None = None) -> list[str]:
     text = _safe_text(answer, limit=12000)
     pattern = re.compile(
-        r"(?:^|\n)\s*(?:[-*]\s*)?(?:#{1,6}\s*)?(?:候选商品|候选品|候选)\s*[一二三四五六七八九十\dA-Z]*\s*[:：.)、-]",
+        r"(?:^|\n)\s*(?:[-*]\s*)?(?:#{1,6}\s*)?(?:候选商品|候选品|候选)\s*[一二三四五六七八九十\dA-Z]*\s*[:：.)、-]\s*(?P<name>[^\n]+)",
         flags=re.IGNORECASE,
     )
     matches = list(pattern.finditer(text))
-    return [text[match.start() : matches[index + 1].start() if index + 1 < len(matches) else len(text)] for index, match in enumerate(matches)]
+    blocks = [text[match.start() : matches[index + 1].start() if index + 1 < len(matches) else len(text)] for index, match in enumerate(matches)]
+    if candidate_names is None:
+        return blocks
+    from .repository import _ai_ceo_market_table_product_column, _clean_ai_ceo_market_candidate_name
+
+    by_name: dict[str, list[str]] = {}
+    for match, block in zip(matches, blocks):
+        name = _clean_ai_ceo_market_candidate_name(match.group("name").strip(" *#"))
+        prose: list[str] = []
+        for line in block.splitlines():
+            normalized_line = line.replace("*", "").strip()
+            if normalized_line.startswith("|"):
+                cells = [cell.strip() for cell in normalized_line.strip("|").split("|")]
+                if _ai_ceo_market_table_product_column(cells) is not None:
+                    # A comparison table belongs to all its named products,
+                    # not to whichever candidate heading precedes it. Its
+                    # rows are mapped individually below. Attribute tables
+                    # without a product-name column remain in the prose.
+                    break
+            prose.append(line)
+        by_name.setdefault(_normalized_candidate_name(name), []).append("\n".join(prose))
+    column = None
+    for line in text.replace("*", "").splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            column = None
+            continue
+        if re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        header_column = _ai_ceo_market_table_product_column(cells)
+        if header_column is not None:
+            column = header_column
+            continue
+        if column is not None and len(cells) > column:
+            name = _clean_ai_ceo_market_candidate_name(cells[column])
+            if name:
+                by_name.setdefault(_normalized_candidate_name(name), []).append(line)
+    # Align evidence with each extracted product; a duplicated recommendation
+    # or another candidate's source cannot fill a missing candidate's evidence.
+    return ["\n".join(by_name.get(_normalized_candidate_name(name), [])) for name in candidate_names]
 
 
 def _candidate_block_has_real_item_id(block: str) -> bool:
@@ -5300,7 +5346,19 @@ def _answer_uses_unsupported_demand_shortcuts(answer: str) -> bool:
         "替换和备用需求",
         "需求稳定",
     )
-    return any(marker in answer for marker in shortcuts)
+    for clause in re.split(r"[。；;!！？\n，,|]|但是|然而|但|却", re.sub(r"[*_`]+", "", answer)):
+        for marker in shortcuts:
+            for match in re.finditer(re.escape(marker), clause):
+                before, after = clause[:match.start()], clause[match.end():]
+                negative = re.search(
+                    r"(?:不能|无法|不应|不要|不得|禁止|尚未|未能|未验证|未核实|没有证据|证据不足)"
+                    r"(?:\s|[“「『\"'：:]|据此|直接|充分|足以|支持|证明|推断|断言|判断|判定|认定|声称|确认|说明|表明|其|存在|具有|有|是|为|的)*$",
+                    before,
+                )
+                uncertain = re.match(r".{0,6}(?:尚未验证|尚未核实|未验证|未核实|待验证|待核验|待核实)", after)
+                if not negative and not uncertain:
+                    return True
+    return False
 
 
 def _requested_product_candidate_count(message: str) -> int:

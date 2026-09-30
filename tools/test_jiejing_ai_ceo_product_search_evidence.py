@@ -328,6 +328,112 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             self.assertFalse(result["accepted"], heading)
             self.assertIn("missing_concrete_product_candidates", result["blocked_by"])
 
+    def test_report_sections_are_not_products_even_with_nearby_risk_terms(self):
+        from jiejing_saas.repository import _ai_ceo_market_product_candidates
+        sections = ("未验证项汇总", "供应商资料清单（待补）", "边界说明", "本轮观察摘要", "后续执行步骤")
+        answer = "\n\n".join(f"### {heading}\n采购成本未知，风险需要核实。" for heading in sections)
+        self.assertEqual([], _ai_ceo_market_product_candidates(message="比较3个候选商品", answer=answer))
+        for heading in sections[:3]:
+            with self.subTest(heading=heading):
+                bad_card = f"候选商品 1：{heading}\n采购成本未知，风险需要核实。"
+                result = chat.validate_ai_ceo_answer_quality(message="调研1个候选商品", route="ebay_workflow", answer=bad_card)
+                self.assertFalse(result["accepted"], result)
+
+    def test_compact_evidence_table_does_not_require_price_or_score_columns(self):
+        from jiejing_saas.repository import _ai_ceo_market_product_candidates
+        for header in ("候选商品", "候选商品（英文）", "Product name (English)"):
+            with self.subTest(header=header):
+                answer = f"| {header} | 依据 | 未验证项 |\n|---|---|---|\n" + "\n".join(
+                    f"| {name} | [S{i}] 仅为竞品页面 | 规格与成交资料未知 |"
+                    for i, name in enumerate(PRODUCTS, 1))
+                answer += "\n\n### 未验证项汇总\n采购成本未知。\n### 供应商资料清单（待补）\n履约风险未知。\n### 边界说明\n不得采购。"
+                candidates = _ai_ceo_market_product_candidates(message="比较3个候选商品", answer=answer)
+                self.assertEqual(list(PRODUCTS), [item["name"] for item in candidates])
+
+    def test_candidate_table_citations_satisfy_evidence_without_dropping_report(self):
+        sources = [{"citation_id": f"S{i}", "title": name,
+                    "url": f"https://www.ebay.com/itm/12345678900{i}", "market_evidence_role": "item_listing_reference"}
+                   for i, name in enumerate(PRODUCTS, 1)]
+        answer = "| 候选商品 | 依据 | 未验证项 |\n|---|---|---|\n" + "\n".join(
+            f"| {name} | [S{i}] 仅为竞品页面，不能证明需求稳定 | 成交、供应商及商品事实未验证 |"
+            for i, name in enumerate(PRODUCTS, 1))
+        context = {"selection_contract": {"required_candidate_count": 3,
+            "candidate_evidence_entry_required": True, "common_sense_demand_claims_forbidden": True}}
+        quality = chat.validate_ai_ceo_answer_quality(message="比较3个候选商品，不创建 Listing", route="ebay_workflow",
+            answer=answer, source_records=sources, context=context)
+        self.assertTrue(quality["accepted"], quality)
+        for missing_reference in ("", "[S99]"):
+            bad = answer.replace("[S2]", missing_reference)
+            quality = chat.validate_ai_ceo_answer_quality(message="比较3个候选商品，不创建 Listing", route="ebay_workflow",
+                answer=bad, source_records=sources, context=context)
+            self.assertFalse(quality["accepted"], quality)
+        mixed = f"候选商品 1：{PRODUCTS[0]}\n" + answer.replace("[S1]", "")
+        quality = chat.validate_ai_ceo_answer_quality(message="比较3个候选商品，不创建 Listing", route="ebay_workflow",
+            answer=mixed, source_records=sources, context=context)
+        self.assertFalse(quality["accepted"], "Another table row cannot provide the first product's missing evidence")
+        with_own_attribute = mixed.replace(f"候选商品 1：{PRODUCTS[0]}\n",
+            f"候选商品 1：{PRODUCTS[0]}\n| 项目 | 内容 |\n|---|---|\n| 依据 | [S1] |\n\n")
+        quality = chat.validate_ai_ceo_answer_quality(message="比较3个候选商品，不创建 Listing", route="ebay_workflow",
+            answer=with_own_attribute, source_records=sources, context=context)
+        self.assertTrue(quality["accepted"], "A product's own attribute table still supplies its evidence")
+
+    def test_owned_revision_compact_table_survives_real_chat_and_report_save(self):
+        message = (
+            "修订刚才的候选调研报告，不新建项目。本轮不要联网检索，沿用已保存报告的五条原始来源与原编号、链接和检索日期；"
+            "没有明确日期就写未验证，不要填写今天日期。比较三个原候选商品：" + "、".join(PRODUCTS) + "。"
+            "用简洁比较表列依据和未验证项，给一个暂定找货建议及供应商资料清单。"
+            "S3 多价格不能认作主价，Chef Select 不能写无品牌，已结束商品不能说在售；无成交证据不推断销量。"
+            "竞品不是我的商品事实，供应商规格、重量、成本、发货地和图片授权仍未知。不创建 Listing、生图、采购或发布。"
+        )
+        answer = "| 候选商品 | 依据 | 未验证项 |\n|---|---|---|\n" + "\n".join(
+            f"| {name} | [S{i}] 仅为竞品页面，不能证明需求稳定 | 成交及真实商品资料未验证 |"
+            for i, name in enumerate(PRODUCTS, 1))
+        answer += ("\n\n### 未验证项汇总\n品牌、价格与成交量未验证。\n"
+                   "### 供应商资料清单（待补）\n材质、规格、重量、成本、发货地及图片授权未知。\n"
+                   "### 边界说明\n不创建 Listing，不采购、不发布。")
+        class Model:
+            provider, model, calls = "deepseek", "offline-owned-revision", 0
+            def generate_text(self, **kwargs):
+                self.calls += 1
+                return {"text": answer, "model_mode": "live_http_model_text", "model_configured": True}
+        with tempfile.TemporaryDirectory(prefix="jiejing-revision-table-", ignore_cleanup_errors=True) as folder:
+            repo = SaaSRepository(Path(folder) / "fixture.sqlite")
+            account = repo.create_user_with_company(email="revision-table@example.test", password="unit-test-only-password", company_name="Owned table fixture")
+            identity = {"user_id": account["user"]["user_id"], "company_id": account["company"]["company_id"]}
+            store = repo.create_store(**identity, payload={"platform": "ebay", "marketplace": "EBAY_US"})
+            project = {"key": "listing-project-owned-table", "source_report_id": "seed", "candidate_id": "candidate-1"}
+            sources = [{"citation_id": f"S{i}", "title": PRODUCTS[(i-1) % 3],
+                        "url": f"https://www.ebay.com/itm/12345678900{i}", "snippet": "Price and supplier facts unverified.",
+                        "captured_at": "2026-09-29T10:00:00Z", "market_evidence_role": "item_listing_reference"}
+                       for i in range(1, 6)]
+            task = repo.create_task(**identity, store_id=store["store_id"], task_type="merchant_ceo_chat", title="Original research", input_data={"message":"比较3个候选商品"})
+            seed = repo.save_ai_ceo_market_research_report(task=task, message="比较3个候选商品", chat={
+                "answer":answer, "route":"ebay_workflow", "status":"model_answered", "source_records":sources}, listing_project_identity=project)
+            history = [{"user_text":"比较3个候选商品", "assistant_text":answer, "route":"ebay_workflow", "market_report_id":seed["report_id"]}]
+            model = Model()
+            with patch.object(chat, "PublicSearchProbeAdapter", FakeSearch):
+                result = chat.run_ai_ceo_chat(repository=repo, **identity, store_id=store["store_id"], message=message,
+                    model_client=model, conversation_history=history,
+                    active_listing_context={"contract_version":"active_listing_context_v1", "listing_project_identity":project})
+            self.assertEqual([], FakeSearch.calls)
+            self.assertEqual(1, model.calls, "Valid report structure must not require a paid repair")
+            self.assertEqual("model_answered", result["status"], result.get("answer_quality"))
+            self.assertEqual(answer, result["answer"])
+            self.assertFalse(result["answer_quality"].get("contract_projection_used"))
+            self.assertEqual([s["url"] for s in sources], [s["url"] for s in result["source_records"]])
+            saved = repo.save_ai_ceo_market_research_report(task=task, message=message, chat=result, listing_project_identity=project)
+            self.assertEqual(list(PRODUCTS), [c["name"] for c in saved["report"]["product_candidates"]])
+            self.assertEqual("incomplete", saved["report"]["supplier_fact_status"])
+            self.assertFalse(saved["report"]["listing_import_ready"])
+            del repo
+            gc.collect()
+
+    def test_uncertainty_about_demand_is_not_an_affirmative_demand_claim(self):
+        for statement in ("不能证明需求稳定。", "不能据此判断存在长期稳定需求。", "需求长期稳定尚未验证。", "无成交证据，不要推断需求稳定。"):
+            self.assertFalse(chat._answer_uses_unsupported_demand_shortcuts(statement), statement)
+        for statement in ("长期稳定需求。", "虽然尚无成交证据，但需求稳定。", "不能证明销量，但存在持续痛点。", "不能证明销量而需求稳定。"):
+            self.assertTrue(chat._answer_uses_unsupported_demand_shortcuts(statement), statement)
+
     def test_research_cannot_swap_citations_or_promote_ambiguous_prices_and_brands(self):
         sources = [
             {"citation_id": "S1", "title": "Chef Select measuring cups", "url": "https://www.ebay.com/itm/123456789001", "snippet": "Seller feedback. $31.24 previous price $36.75. Other items $64.39.", "market_evidence_role": "item_listing_reference"},
