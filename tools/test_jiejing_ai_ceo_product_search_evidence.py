@@ -33,6 +33,40 @@ PRODUCTS = (
     "stainless steel coffee teaspoons",
 )
 
+# Redacted merchant-visible production failure: products were table columns,
+# not rows. Keep this format (including bare S# references) in the real path.
+TRANSPOSED_ANSWER = """## 候选商品比较表
+
+| 维度 | 不锈钢量勺量杯套装 | 硅胶锅铲 | 不锈钢咖啡勺 |
+|---|---|---|---|
+| 来源编号 | S1、S4 | S2、S5 | S3 |
+| 来源状态 | S1 在售参考、S4 在售参考 | S2 已结束（卖家因 listing 错误下架）、S5 在售参考 | S3 在售参考（二手） |
+| 品牌归属 | S4 为 Chef Select（有品牌，不可写无品牌） | S5 为 Soli；S2 未验证 | S3 为 Reed & Barton（有品牌） |
+| 主价 | 未验证（S1/S4 片段含多商品多价格） | 未验证（S2 已结束，S5 未显示明确主价） | 未验证（S3 多价格，不能认作主价） |
+| 成交证据 | 不足 | 不足 | 不足 |
+| 销量推断 | 不推断 | 不推断 | 不推断 |
+| 商品事实 | 材质、重量、尺寸、成本、发货地、图片授权均未知 | 同左 | 同左 |
+| 主要风险 | 竞品多、需区分套装规格 | S2 已结束，不能作为在售依据 | 二手/品牌件，与轻小件新品定位可能不符 |
+
+## 暂定找货建议
+
+优先找 **不锈钢量勺量杯套装**，理由：来源记录相对完整（S1、S4 两条在售参考），且更贴近轻小件、不带电、非液体粉末的默认方向。但这是暂定方向，不是已证实需求。
+
+## 供应商资料清单（待补）
+
+- 供应商名称与资质
+- 材质规格（是否为 18/8 不锈钢）
+- 套装件数与单件尺寸
+- 单品净重、包装重量与包装尺寸
+- 采购成本与最小起订量
+- 发货地与实际履约方案
+- 图片授权证明
+- 品牌/MPN 信息（确认是否自有品牌或无品牌，不能凭竞品推断）
+
+## 边界确认
+
+本轮不新建项目、不创建 Listing、不生图、不采购、不发布。竞品信息仅作市场参考，不构成你的商品事实；所有商品参数仍为待核状态。"""
+
 
 class FakeSearch:
     calls = []
@@ -445,6 +479,86 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             self.assertFalse(saved["report"]["listing_import_ready"])
             del repo
             gc.collect()
+
+    def test_owned_transposed_comparison_survives_chat_and_report_without_repair(self):
+        message = "修订刚才的候选调研报告，不新建项目。本轮不要联网检索，沿用已保存报告的五条原始来源。比较三个原候选商品：" + "、".join(PRODUCTS) + "。给暂定找货建议，商品事实未知，不创建 Listing、不生图、不发布。"
+
+        class Model:
+            provider, model, calls = "deepseek", "offline-transposed-replay", 0
+            def generate_text(self, **kwargs):
+                self.calls += 1
+                return {"text": TRANSPOSED_ANSWER, "model_mode": "live_http_model_text", "model_configured": True}
+
+        with tempfile.TemporaryDirectory(prefix="jiejing-transposed-", ignore_cleanup_errors=True) as folder:
+            repo = SaaSRepository(Path(folder) / "fixture.sqlite")
+            account = repo.create_user_with_company(email="transposed@example.test", password="unit-test-only-password", company_name="Transposed fixture")
+            identity = {"user_id": account["user"]["user_id"], "company_id": account["company"]["company_id"]}
+            store = repo.create_store(**identity, payload={"platform":"ebay", "marketplace":"EBAY_US"})
+            project = {"key":"listing-project-transposed", "source_report_id":"seed", "candidate_id":"candidate-1"}
+            titles = [PRODUCTS[0], PRODUCTS[1], PRODUCTS[2], "Chef Select measuring cups", "Soli silicone spatula"]
+            sources = [{"citation_id":f"S{i}", "title":title, "url":f"https://www.ebay.com/itm/12345678900{i}",
+                        "snippet":"Supplier facts and current price not verified.", "captured_at":"2026-09-29T10:00:00Z",
+                        "market_evidence_role":"item_listing_reference"} for i, title in enumerate(titles, 1)]
+            task = repo.create_task(**identity, store_id=store["store_id"], task_type="merchant_ceo_chat", title="Original comparison", input_data={"message":"比较3个候选商品"})
+            seed = repo.save_ai_ceo_market_research_report(task=task, message="比较3个候选商品", chat={"answer":TRANSPOSED_ANSWER,
+                "route":"ebay_workflow", "status":"model_answered", "source_records":sources}, listing_project_identity=project)
+            history = [{"user_text":"比较3个候选商品", "assistant_text":TRANSPOSED_ANSWER, "route":"ebay_workflow", "market_report_id":seed["report_id"]}]
+            model = Model()
+            with patch.object(chat, "PublicSearchProbeAdapter", FakeSearch):
+                result = chat.run_ai_ceo_chat(repository=repo, **identity, store_id=store["store_id"], message=message,
+                    model_client=model, conversation_history=history,
+                    active_listing_context={"contract_version":"active_listing_context_v1", "listing_project_identity":project})
+            self.assertEqual("model_answered", result["status"], result.get("answer_quality"))
+            self.assertEqual(TRANSPOSED_ANSWER, result["answer"])
+            self.assertEqual(1, model.calls, "A valid column comparison must not consume a repair call")
+            self.assertEqual([], FakeSearch.calls)
+            self.assertEqual([s["url"] for s in sources], [s["url"] for s in result["source_records"]])
+            self.assertFalse(result["answer_quality"].get("contract_projection_used"))
+            saved = repo.save_ai_ceo_market_research_report(task=task, message=message, chat=result, listing_project_identity=project)
+            self.assertEqual(["不锈钢量勺量杯套装", "硅胶锅铲", "不锈钢咖啡勺"], [c["name"] for c in saved["report"]["product_candidates"]])
+            self.assertEqual("incomplete", saved["report"]["supplier_fact_status"])
+            self.assertFalse(saved["report"]["listing_import_ready"])
+            del repo
+            gc.collect()
+
+    def test_column_comparison_keeps_evidence_per_product_not_per_table(self):
+        names = ["不锈钢量勺量杯套装", "硅胶锅铲", "不锈钢咖啡勺"]
+        sources = [{"citation_id":f"S{i}", "title":name, "url":f"https://www.ebay.com/itm/12345678900{i}"}
+                   for i, name in enumerate(names, 1)]
+        answer = "| 维度 | " + " | ".join(names) + " |\n|---|---|---|---|\n| 来源编号 | S1 | S2 | S3 |\n| 未验证项 | 商品事实未知 | 商品事实未知 | 商品事实未知 |"
+        context = {"selection_contract":{"candidate_evidence_entry_required":True}}
+        def quality(text):
+            return chat.validate_ai_ceo_answer_quality(message="比较3个候选商品", route="ebay_workflow",
+                answer=text, source_records=sources, context=context)
+        self.assertTrue(quality(answer)["accepted"], quality(answer))
+        for replacement in ("", "同左", "S99"):
+            for prefix in ("", "候选商品 1：不锈钢量勺量杯套装\n"):
+                bad = prefix + answer.replace("| S2 |", f"| {replacement} |")
+                self.assertFalse(quality(bad)["accepted"], "A peer column cannot lend its evidence")
+        for heading in ("维度 | 依据 | 未验证项", "维度 | 不锈钢量勺量杯套装 | 不锈钢量勺量杯套装"):
+            bad = f"| {heading} |\n|---|---|---|\n| 风险 | 未知 | 未知 |"
+            self.assertFalse(quality(bad)["accepted"], "Metadata/duplicate headers are not a candidate comparison")
+        self.assertFalse(quality(answer + "\n| 主价 | $99 |")["accepted"], "Misaligned columns must not silently drop claims")
+
+    def test_column_comparison_cannot_bypass_price_brand_and_source_checks(self):
+        sources = [
+            {"citation_id":"S1", "title":"Unbranded measuring cups", "url":"https://www.ebay.com/itm/123456789001", "snippet":"Unbranded $12.99"},
+            {"citation_id":"S2", "title":"Soli silicone spatula", "url":"https://www.ebay.com/itm/123456789002", "snippet":"Price unverified"},
+            {"citation_id":"S3", "title":"Reed Barton teaspoons", "url":"https://www.ebay.com/itm/123456789003", "snippet":"$31.24 previous $36.75 other items $64.39"},
+        ]
+        prefix = "| 维度 | 不锈钢量勺量杯套装 | 硅胶锅铲 | 不锈钢咖啡勺 |\n|---|---|---|---|\n| 来源编号 | S1 | S2 | S3 |\n"
+        def quality(text):
+            return chat.validate_ai_ceo_answer_quality(message="比较3个候选商品", route="ebay_workflow", answer=text, source_records=sources)
+        bad = quality(prefix + "| 主价 | $12.99 | 未验证 | $31.24 |")
+        self.assertIn("research_ambiguous_main_item_price", bad["blocked_by"])
+        bad_brand = quality(prefix + "| 品牌 | 无品牌 | 无品牌 | 无品牌 |")
+        self.assertIn("research_unverified_unbranded_claim", bad_brand["blocked_by"])
+        unknown = quality(prefix.replace("| S2 |", "| S99 |") + "| 主价 | 未验证 | 未验证 | 未验证 |")
+        self.assertIn("research_citation_not_in_evidence", unknown["blocked_by"])
+        good = quality(prefix + "| 主价 | $12.99 | 未验证 | 主商品价格未验证 |\n| 品牌 | 无品牌 | Soli | Reed Barton |")
+        self.assertTrue(good["accepted"], good)
+        good_with_cell_citations = quality(prefix + "| 主价 | $12.99 [S1] | 未验证 [S2] | 未验证 [S3] |")
+        self.assertTrue(good_with_cell_citations["accepted"], "A different column's ambiguous prices cannot invalidate S1's own price")
 
     def test_uncertainty_about_demand_is_not_an_affirmative_demand_claim(self):
         for statement in ("不能证明需求稳定。", "不能据此判断存在长期稳定需求。", "需求长期稳定尚未验证。", "无成交证据，不要推断需求稳定。"):

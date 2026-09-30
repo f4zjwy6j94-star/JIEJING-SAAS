@@ -19733,6 +19733,63 @@ def _ai_ceo_market_table_product_column(cells: list[str]) -> int | None:
     return None
 
 
+def _ai_ceo_market_table_product_headers(cells: list[str]) -> list[str]:
+    """Only an explicit dimension axis can make product names into columns."""
+    if not 3 <= len(cells) <= 6 or not re.fullmatch(
+        r"(?:比较|对比)?(?:维度|项目|指标|属性)|比较项|对比项|dimension|attribute|feature|criteria|criterion",
+        cells[0], re.I,
+    ):
+        return []
+    names = [_clean_ai_ceo_market_candidate_name(cell) for cell in cells[1:]]
+    if any(not name or re.fullmatch(
+        r"依据|证据|内容|状态|名称|取值|数值|说明|来源|value|content|status|source|evidence|notes?", name, re.I,
+    ) for name in names) or len({name.casefold() for name in names}) != len(names):
+        return []
+    return names
+
+
+def _ai_ceo_market_split_comparison_tables(answer: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Return per-product column blocks and the remaining non-comparison lines."""
+    lines = [line.strip() for line in str(answer or "").replace("*", "").splitlines()]
+    result: list[tuple[str, str]] = []
+    remainder: list[str] = []
+    index = 0
+    while index + 1 < len(lines):
+        line = lines[index]
+        cells = [cell.strip() for cell in line.strip("|").split("|")] if line.startswith("|") else []
+        names = _ai_ceo_market_table_product_headers(cells)
+        if not names or not re.fullmatch(r"\|?\s*[-:|\s]+\|?", lines[index + 1]):
+            remainder.append(line)
+            index += 1
+            continue
+        rows: list[list[str]] = []
+        aligned = True
+        table_start = index
+        index += 2
+        while index < len(lines) and lines[index].startswith("|"):
+            row = [cell.strip() for cell in lines[index].strip("|").split("|")]
+            if len(row) == len(cells) and row[0]:
+                rows.append(row)
+            else:
+                aligned = False
+            index += 1
+        if not rows or not aligned:
+            remainder.extend(lines[table_start:index])
+            continue
+        for column, name in enumerate(names, 1):
+            attributes = []
+            for row in rows:
+                value = row[column]
+                # Bare S# in an explicitly labelled source row is a citation,
+                # not a reason to discard the product or borrow a peer's URL.
+                if re.search(r"来源|引用|依据|证据|source|reference|citation|evidence", row[0], re.I):
+                    value = re.sub(r"(?<![\w\[])(S\d+)(?![\w\]])", r"[\1]", value)
+                attributes.append(f"{row[0]}：{value}")
+            result.append((name, f"候选商品：{name}\n" + "\n".join(attributes)))
+    remainder.extend(lines[index:])
+    return result, remainder
+
+
 def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict[str, Any]]:
     """Extract merchant-facing product cards from flexible AI CEO market reports."""
 
@@ -19823,7 +19880,7 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
             return ""
         return cleaned
 
-    def add_candidate(name: str, *, start_index: int = 0, block: str = "", source: str = "ai_ceo_market_report") -> None:
+    def add_candidate(name: str, *, start_index: int = 0, block: str = "", source: str = "ai_ceo_market_report", isolated_block: bool = False) -> None:
         cleaned = plausible_name(name)
         if not cleaned:
             return
@@ -19837,7 +19894,12 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
                 "candidate_id": f"candidate_{len(candidates) + 1}",
                 "name": cleaned,
                 "score": _ai_ceo_market_candidate_score(score_block, len(candidates)),
-                "reasons": nearby_reasons(start_index) if lines else [_sanitize_merchant_ceo_text(score_block or clean_answer, limit=160)],
+                "reasons": (
+                    [_sanitize_merchant_ceo_text(line, limit=160) for line in block.splitlines()
+                     if re.search(r"来源|价格|主价|风险|需求|未验证|未知", line)][:3]
+                    if isolated_block else nearby_reasons(start_index) if lines
+                    else [_sanitize_merchant_ceo_text(score_block or clean_answer, limit=160)]
+                ),
                 "price_band": _extract_ai_ceo_price_band(score_block or clean_answer),
                 "source": source,
                 "selected": len(candidates) == 0,
@@ -19944,6 +20006,10 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
             add_candidate(cells[table_product_column], start_index=max(0, table_header_index), block=line, source="ai_ceo_market_report_table")
             if len(candidates) >= 5:
                 break
+
+    column_candidates, _ = _ai_ceo_market_split_comparison_tables(clean_answer)
+    for name, block in column_candidates:
+        add_candidate(name, block=block, source="ai_ceo_market_report_column_table", isolated_block=True)
 
     if not candidates:
         vertical_table_label_pattern = re.compile(

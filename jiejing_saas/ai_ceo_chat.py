@@ -500,7 +500,6 @@ def run_ai_ceo_chat(
     active_listing_context: dict[str, Any] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
-    on_answer_rejected: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Call the merchant model for an AI CEO chat turn."""
     turn_started_at = time.monotonic()
@@ -1044,20 +1043,6 @@ def run_ai_ceo_chat(
         source_records=source_records,
         context=prompt_context,
     )
-    if not answer_quality.get("accepted") and on_answer_rejected is not None:
-        try:
-            # Private, consent-scoped observer only. Never return this event,
-            # attach it to a task/report, or include provider reasoning.
-            on_answer_rejected({
-                "stage": "initial_quality_rejection",
-                "answer": answer,
-                "blocked_by": answer_quality.get("blocked_by") or [],
-                "candidate_count": answer_quality.get("candidate_count"),
-                "required_candidate_count": answer_quality.get("required_candidate_count"),
-                "bounded_empty_answer_recovery": (result or {}).get("bounded_empty_answer_recovery") is True,
-            })
-        except Exception:
-            pass  # Optional diagnosis must not break a merchant turn.
     repair_retry_count = 0
     repair_candidate_answer = ""
     if (
@@ -4564,7 +4549,16 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
     by_url = {_canonical_public_source_url(str(s.get("url") or "")): s for s in records if isinstance(s, dict)}
     allowed_urls = set(by_url)
     blocked = set()
-    for line in answer.splitlines():
+    from .repository import _ai_ceo_market_split_comparison_tables
+
+    column_candidates, claim_lines = _ai_ceo_market_split_comparison_tables(answer)
+    for _, block in column_candidates:
+        # Price/brand attributes inherit only this product column's explicit
+        # references. Formatting must not bypass checks or contaminate peers.
+        refs = list(dict.fromkeys(re.findall(r"\[(S\d+)\]", block)))
+        suffix = " " + " ".join(f"[{ref}]" for ref in refs) if refs else ""
+        claim_lines.extend(line + suffix for line in block.splitlines()[1:])
+    for line in claim_lines:
         refs = list(dict.fromkeys(re.findall(r"\[(S\d+)\]", line)))
         line_sources = {ref: by_id[ref] for ref in refs if ref in by_id}
         if any(ref not in by_id for ref in refs):
@@ -5296,7 +5290,10 @@ def _selection_candidate_blocks(answer: str, *, candidate_names: list[str] | Non
     blocks = [text[match.start() : matches[index + 1].start() if index + 1 < len(matches) else len(text)] for index, match in enumerate(matches)]
     if candidate_names is None:
         return blocks
-    from .repository import _ai_ceo_market_table_product_column, _clean_ai_ceo_market_candidate_name
+    from .repository import (
+        _ai_ceo_market_table_product_column, _ai_ceo_market_table_product_headers,
+        _ai_ceo_market_split_comparison_tables, _clean_ai_ceo_market_candidate_name,
+    )
 
     by_name: dict[str, list[str]] = {}
     for match, block in zip(matches, blocks):
@@ -5306,7 +5303,7 @@ def _selection_candidate_blocks(answer: str, *, candidate_names: list[str] | Non
             normalized_line = line.replace("*", "").strip()
             if normalized_line.startswith("|"):
                 cells = [cell.strip() for cell in normalized_line.strip("|").split("|")]
-                if _ai_ceo_market_table_product_column(cells) is not None:
+                if _ai_ceo_market_table_product_column(cells) is not None or _ai_ceo_market_table_product_headers(cells):
                     # A comparison table belongs to all its named products,
                     # not to whichever candidate heading precedes it. Its
                     # rows are mapped individually below. Attribute tables
@@ -5331,6 +5328,9 @@ def _selection_candidate_blocks(answer: str, *, candidate_names: list[str] | Non
             name = _clean_ai_ceo_market_candidate_name(cells[column])
             if name:
                 by_name.setdefault(_normalized_candidate_name(name), []).append(line)
+    column_candidates, _ = _ai_ceo_market_split_comparison_tables(text)
+    for name, block in column_candidates:
+        by_name.setdefault(_normalized_candidate_name(name), []).append(block)
     # Align evidence with each extracted product; a duplicated recommendation
     # or another candidate's source cannot fill a missing candidate's evidence.
     return ["\n".join(by_name.get(_normalized_candidate_name(name), [])) for name in candidate_names]

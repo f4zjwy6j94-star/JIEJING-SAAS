@@ -78,7 +78,6 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ai_ceo_browser_streaming", [sys.executable, "tools/test_jiejing_ai_ceo_browser_streaming_contract.py"]),
     ("model_streaming_client", [sys.executable, "tools/test_jiejing_model_streaming_client.py"]),
     ("ai_ceo_private_empty_answer", [sys.executable, "tools/test_jiejing_ai_ceo_private_empty_answer.py"]),
-    ("ai_ceo_private_answer_capture", [sys.executable, "tools/test_jiejing_ai_ceo_private_answer_capture.py"]),
     ("ai_ceo_product_search_evidence", [sys.executable, "tools/test_jiejing_ai_ceo_product_search_evidence.py"]),
     ("ai_ceo_source_quality", [sys.executable, "tools/test_jiejing_ai_ceo_source_quality.py"]),
     ("public_search_temporal_metadata", [sys.executable, "tools/test_jiejing_public_search_temporal_metadata.py"]),
