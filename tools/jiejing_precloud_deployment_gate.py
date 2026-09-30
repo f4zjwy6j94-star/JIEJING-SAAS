@@ -312,6 +312,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("version_bound_release_evidence", [sys.executable, "tools/test_jiejing_version_bound_release_evidence.py"]),
     ("source_bound_release_gate_evidence", [sys.executable, "tools/test_jiejing_release_gate_evidence.py"]),
     ("workflow_entry_feedback", ["node", "tools/test_jiejing_workflow_entry_feedback.js"]),
+    ("workbench_boot_recovery", ["node", "--test", "tools/test_jiejing_workbench_boot_recovery.js"]),
     ("owner_launch_control", [sys.executable, "tools/test_jiejing_owner_launch_control.py"]),
     ("owner_launch_control_access", [sys.executable, "tools/test_jiejing_owner_launch_control_access.py"]),
     ("billing_provider_webhook", [sys.executable, "tools/test_jiejing_billing_provider_webhook.py"]),

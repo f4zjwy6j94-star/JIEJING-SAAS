@@ -192,6 +192,65 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             del repo
             gc.collect()
 
+    def test_recommendation_summary_does_not_hide_other_table_candidates(self):
+        message = "当前项目只做候选级联网调研，比较3个候选：" + "、".join(PRODUCTS) + "。每个候选最多保留2个来源，最终推荐1个找货方向。不创建 Listing。"
+        answer = (
+            "| 候选 | 商品标题 | 链接 | 标价 |\n|---|---|---|---|\n"
+            + "\n".join(
+                f"| {name} | {name} | https://www.ebay.com/itm/12345678900{i} | US $12.99 [S{i}] |"
+                for i, name in enumerate(PRODUCTS, 1)
+            )
+            + f"\n\n推荐产品：{PRODUCTS[0]}\n"
+            "以上是竞品在售标价，不是成交证据。销量和品牌未验证；供应商、实物规格、重量、成本、发货地及图片权利未知。"
+        )
+
+        class Model:
+            provider, model = "deepseek", "offline-candidate-table"
+            calls = 0
+
+            def generate_text(self, **kwargs):
+                self.calls += 1
+                return {"text": answer, "model_mode": "live_http_model_text", "model_configured": True}
+
+        with tempfile.TemporaryDirectory(prefix="jiejing-mixed-table-", ignore_cleanup_errors=True) as folder:
+            repo = SaaSRepository(Path(folder) / "fixture.sqlite")
+            account = repo.create_user_with_company(email="mixed-table@example.test",
+                password="unit-test-only-password", company_name="Offline mixed table")
+            identity = {"user_id": account["user"]["user_id"], "company_id": account["company"]["company_id"]}
+            store = repo.create_store(**identity, payload={"platform": "ebay", "marketplace": "EBAY_US"})
+            model = Model()
+            with patch.object(chat, "PublicSearchProbeAdapter", FakeSearch):
+                result = chat.run_ai_ceo_chat(repository=repo, **identity, store_id=store["store_id"],
+                    message=message, model_client=model)
+            self.assertEqual("model_answered", result["status"], result.get("answer_quality"))
+            self.assertEqual(1, model.calls, "A recommendation summary must not cause paid retries of a complete table")
+            self.assertEqual(3, result["answer_quality"]["candidate_count"])
+            task = repo.create_task(**identity, store_id=store["store_id"], task_type="merchant_ceo_chat",
+                title="Mixed table fixture", input_data={"message": message})
+            saved = repo.save_ai_ceo_market_research_report(task=task, message=message, chat=result)
+            self.assertEqual(set(PRODUCTS), {item["name"] for item in saved["report"]["product_candidates"]})
+            self.assertEqual(PRODUCTS[0], saved["report"]["selected_product_candidate"]["name"])
+            del repo
+            gc.collect()
+
+    def test_candidate_count_is_not_source_limit_or_final_recommendation_count(self):
+        comparison = "、".join(PRODUCTS)
+        cases = (
+            (f"只做候选级联网调研，比较 {comparison}。每个候选最多保留2个来源，推荐一个暂定找货方向。不创建 Listing。", 3),
+            ("每个候选给2个链接，比较3个候选商品，最终推荐1个找货方向。", 3),
+            ("比较三个轻小不带电商品，每个提供两个来源，最终推荐一个方向。", 3),
+            ("调研四个候选商品，每个保留1个链接。", 4),
+            ("推荐一款具体商品，给出3个来源。", 1),
+            ("先给我两个候选商品，不要生成 Listing。", 2),
+        )
+        answer = "\n".join(f"候选商品 {i}：{name}\n品牌、销量与供应商事实未知。" for i, name in enumerate(PRODUCTS, 1))
+        for message, count in cases:
+            with self.subTest(message=message):
+                result = chat.validate_ai_ceo_answer_quality(message="本轮选品调研。" + message, route="ebay_workflow", answer=answer)
+                self.assertEqual(count, result["required_candidate_count"])
+                if count > len(PRODUCTS):
+                    self.assertFalse(result["accepted"], "A genuinely missing candidate must remain blocked")
+
     def test_no_source_discovery_searches_physical_listings_not_research_tools(self):
         query = chat._realtime_search_query(kind="web_search", message="无货源，帮我选品，eBay美国站轻小不带电，比较3个候选。")
         self.assertIn("site:ebay.com/itm/", query)

@@ -19892,7 +19892,10 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
             if len(candidates) >= 5:
                 break
 
-    if not candidates:
+    # A report may compare several products in a table and name just one
+    # recommendation in a heading. That heading must not suppress the table.
+    # add_candidate still deduplicates names and enforces the five-item bound.
+    if len(candidates) < 5:
         table_header_index = -1
         table_product_column = 0
         for index, line in enumerate(lines):

@@ -46,6 +46,47 @@
         }
       })();
     </script>
+    <script>
+      // This recovery must run before external assets: app.js cannot report its
+      // own stalled download. It never reveals cached account data or logs out.
+      (function guardJiejingAppAssets() {
+        var root = document.documentElement;
+        if (!root.classList.contains("app-start-requested")) return;
+        var loaded = false;
+        function isMainScript(event) {
+          var target = event.target;
+          return target && target.tagName === "SCRIPT" && /(?:^|\/)app\.js(?:\?|$)/.test(target.getAttribute("src") || "");
+        }
+        function showRecovery() {
+          if (loaded || root.classList.contains("app-ready")) return;
+          root.classList.add("app-boot-failed");
+          var status = document.getElementById("appBootLoading");
+          if (status) status.setAttribute("aria-label", "页面资源加载缓慢，请重试");
+        }
+        function onError(event) { if (isMainScript(event)) showRecovery(); }
+        function onRetry(event) {
+          if (!event.target || event.target.id !== "appAssetRetry") return;
+          event.preventDefault();
+          event.target.disabled = true;
+          window.location.reload();
+        }
+        function onLoad(event) {
+          if (!isMainScript(event)) return;
+          loaded = true;
+          window.clearTimeout(timeout);
+          root.classList.remove("app-boot-failed");
+          var status = document.getElementById("appBootLoading");
+          if (status) status.setAttribute("aria-label", "正在打开捷境工作台");
+          window.removeEventListener("error", onError, true);
+          document.removeEventListener("load", onLoad, true);
+          document.removeEventListener("click", onRetry);
+        }
+        var timeout = window.setTimeout(showRecovery, 20000);
+        window.addEventListener("error", onError, true);
+        document.addEventListener("load", onLoad, true);
+        document.addEventListener("click", onRetry);
+      })();
+    </script>
     <style>
       #appBootLoading {
         display: none !important;
@@ -137,6 +178,37 @@
         cursor: pointer;
       }
       #appBootRecovery button { background: #08766e; color: #fff; border-color: #08766e; }
+
+      #appAssetRecovery { display: none; }
+      html.app-start-requested.app-boot-failed #appBootLoading::before { display: none; }
+      html.app-boot-failed #appAssetRecovery {
+        display: grid;
+        gap: 16px;
+        width: min(440px, 100%);
+        box-sizing: border-box;
+        padding: 28px;
+        border: 1px solid #c6ddd5;
+        border-radius: 8px;
+        background: #fffefa;
+        box-shadow: 0 18px 50px rgba(15, 44, 38, 0.08);
+        text-align: center;
+        font: 500 15px/1.6 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      #appAssetRecovery p { margin: 0; }
+      #appAssetRecovery p:first-child { font-size: 18px; font-weight: 700; }
+      #appAssetRetry {
+        min-height: 44px;
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 18px;
+        background: #08766e;
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      #appAssetRetry:focus-visible, #appAssetRecovery a:focus-visible { outline: 3px solid #10231f; outline-offset: 3px; }
+      #appAssetRecovery a { color: #174f48; text-underline-offset: 4px; }
 
       html.app-direct-start #entryShell,
       html.app-direct-start #siteShell,
@@ -340,6 +412,12 @@
   <body>
     <div class="app-boot-loading" id="appBootLoading" role="status" aria-live="polite" aria-label="正在打开捷境工作台" hidden>
       <div id="appBootRecovery"><button id="appBootRetry" type="button">重新尝试</button><a href="./index.html?reason=login_required">返回登录</a></div>
+      <div id="appAssetRecovery">
+        <p>页面资源加载缓慢，请重试</p>
+        <p>重试不会清除登录信息或重复提交任务。</p>
+        <button id="appAssetRetry" type="button">重新加载页面</button>
+        <a href="./index.html?start=site">返回首页</a>
+      </div>
     </div>
     <div class="entry-shell" id="entryShell">
       <section class="entry-panel is-active" data-entry-panel="intro">

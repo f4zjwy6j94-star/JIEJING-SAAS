@@ -5306,13 +5306,37 @@ def _answer_uses_unsupported_demand_shortcuts(answer: str) -> bool:
 
 def _requested_product_candidate_count(message: str) -> int:
     text = _normalized_text(message)
-    arabic_match = re.search(r"(?:给我|找|推荐|筛|选)?\s*([1-4])\s*(?:个|款|种|条)", text)
-    if arabic_match:
-        return int(arabic_match.group(1))
-    chinese_counts = (("一个", 1), ("一款", 1), ("一种", 1), ("两个", 2), ("两款", 2), ("二个", 2), ("三个", 3), ("三款", 3), ("四个", 4), ("四款", 4))
-    for marker, count in chinese_counts:
-        if marker in text:
+    numbers = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4}
+    count_pattern = r"(?<!\d)([1-4一二两三四])\s*(?:个|款|种)\s*"
+    qualifiers = r"(?:(?:具体|不同|全新|新的|轻小|不带电|非易碎|可选)(?:的)?)*"
+
+    def count_for(pattern: str) -> int | None:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1)
+            return int(value) if value.isdigit() else numbers[value]
+        return None
+
+    # Compare N candidates and recommend one is an N-candidate request.
+    # Source/link limits and quantities in a set are not candidate counts.
+    for pattern in (
+        count_pattern + qualifiers + r"候选(?:商品|产品|品)?",
+        r"(?:比较|对比|筛选|调研)\s*" + count_pattern + qualifiers + r"(?:商品|产品|品类|方向)",
+    ):
+        count = count_for(pattern)
+        if count is not None:
             return count
+    if re.search(r"比较|对比|分别(?:用|搜索|调研)|\bcompare\b", text):
+        names = _ebay_product_search_terms(message)
+        if len(names) > 1:
+            return len(names)
+    count = count_for(count_pattern + qualifiers + r"(?:商品|产品|品类|方向)")
+    if count is not None:
+        return count
+    count = count_for(r"(?:给(?:我|出)?|推荐|筛(?:选)?|选(?:出)?|找(?:出)?)\s*" + count_pattern
+                      + r"(?!来源|链接|页面|商品页|资料|证据|件|套)")
+    if count is not None:
+        return count
     return 2
 
 

@@ -670,6 +670,14 @@ def main() -> int:
     auth_gate = f'("auth_reveal_boundary", ["node", "--test", "{auth_boundary}"])'
     if precloud_gate.count(auth_gate) != 1 or precloud_gate.count(auth_boundary) != 1:
         return fail("auth reveal boundary regression must run exactly once in precloud gate")
+    boot_recovery = "tools/test_jiejing_workbench_boot_recovery.js"
+    if whitelist_entries.count(f'"{boot_recovery}"') != 1 or not (ROOT / boot_recovery).is_file():
+        return fail("workbench boot recovery regression must ship exactly once")
+    if node_check_entries.count(f'"$NODE_BIN" --check {boot_recovery}') != 1:
+        return fail("workbench boot recovery regression must receive a Node syntax check")
+    boot_gate = f'("workbench_boot_recovery", ["node", "--test", "{boot_recovery}"])'
+    if precloud_gate.count(boot_gate) != 1 or precloud_gate.count(boot_recovery) != 1:
+        return fail("workbench boot recovery regression must run exactly once in precloud gate")
     media_usage_dependencies = (
         "jiejing_saas/media_credit_activity.py",
         "tools/test_jiejing_merchant_media_usage.py",
