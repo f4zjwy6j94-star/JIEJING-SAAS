@@ -500,6 +500,7 @@ def run_ai_ceo_chat(
     active_listing_context: dict[str, Any] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
+    on_answer_rejected: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Call the merchant model for an AI CEO chat turn."""
     turn_started_at = time.monotonic()
@@ -1043,6 +1044,20 @@ def run_ai_ceo_chat(
         source_records=source_records,
         context=prompt_context,
     )
+    if not answer_quality.get("accepted") and on_answer_rejected is not None:
+        try:
+            # Private, consent-scoped observer only. Never return this event,
+            # attach it to a task/report, or include provider reasoning.
+            on_answer_rejected({
+                "stage": "initial_quality_rejection",
+                "answer": answer,
+                "blocked_by": answer_quality.get("blocked_by") or [],
+                "candidate_count": answer_quality.get("candidate_count"),
+                "required_candidate_count": answer_quality.get("required_candidate_count"),
+                "bounded_empty_answer_recovery": (result or {}).get("bounded_empty_answer_recovery") is True,
+            })
+        except Exception:
+            pass  # Optional diagnosis must not break a merchant turn.
     repair_retry_count = 0
     repair_candidate_answer = ""
     if (
