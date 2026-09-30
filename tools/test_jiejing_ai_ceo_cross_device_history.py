@@ -570,7 +570,7 @@ def main() -> int:
             response = request_json(
                 f"{base_url}/stores/{archive_store}/merchant-ceo/chat", token=archive_account,
                 payload={"idempotency_key": f"server-archive-fixture-{index:03d}",
-                         "message": f"当前时间，第{index}次",
+                         "message": "当前时间",
                          "client_now": "2026-09-05T12:00:00+08:00", "client_timezone": "Asia/Shanghai",
                          "chat_archive_contract": "server_finalized_chat_archive_v1"},
             )
@@ -582,12 +582,15 @@ def main() -> int:
         while archive_page.get("has_more"):
             archive_page = request_json(f"{base_url}/ai-ceo/chat-history?cursor={archive_page['next_cursor']}", token=archive_account)["ai_ceo_chat_history"]
             archive_turns = archive_page["turns"] + archive_turns
-        if len(archive_turns) != 31 or archive_turns[0].get("user_text") != "当前时间，第0次":
+        expected_ids = [response["ai_ceo_chat_history_turn"]["assistant_id"] for response in archive_responses]
+        if (len(archive_turns) != 31 or len(set(expected_ids)) != 31
+                or [turn["assistant_id"] for turn in archive_turns] != expected_ids
+                or any(turn.get("user_text") != "当前时间" for turn in archive_turns)):
             return fail(f"31 finalized server chats without browser SYNC must remain retrievable; got {len(archive_turns)}")
         metadata = archive_responses[0].get("ai_ceo_chat_history_turn", {})
         if metadata.get("assistant_id") != archive_turns[0]["assistant_id"] or metadata.get("archived") is not True:
             return fail("terminal HTTP response must expose the exact archived turn identity")
-        replay_payload = {"idempotency_key": "server-archive-fixture-000", "message": "当前时间，第0次",
+        replay_payload = {"idempotency_key": "server-archive-fixture-000", "message": "当前时间",
             "client_now": "2026-09-05T12:00:00+08:00", "client_timezone": "Asia/Shanghai",
             "chat_archive_contract": "server_finalized_chat_archive_v1"}
         replay = request_json(f"{base_url}/stores/{archive_store}/merchant-ceo/chat", token=archive_account, payload=replay_payload)
@@ -603,7 +606,7 @@ def main() -> int:
             except urllib.error.HTTPError as error:
                 if error.code != expected_status: return fail("archive protocol error lost its HTTP contract")
                 rejected = error.read().decode("utf-8")
-                if metadata["request_task_id"] in rejected or "当前时间，第0次" in rejected:
+                if metadata["request_task_id"] in rejected or "当前时间" in rejected:
                     return fail("idempotency conflict leaked the original request details")
         legacy_payload = {**replay_payload, "idempotency_key": "archive-legacy-clock"}
         legacy_payload.pop("chat_archive_contract")

@@ -1069,6 +1069,44 @@ class AiCeoBackendAuthorityRedTests(unittest.TestCase):
 
 
 class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
+    def test_report_revision_with_date_constraint_reaches_backend_not_clock_answer(self) -> None:
+        message = (
+            "修订刚才的候选调研报告，不新建项目。本轮不要联网检索，沿用已保存报告的五条原始来源与原编号、链接和检索日期；"
+            "没有明确日期就写未验证，不要填写今天日期。比较三个原候选商品：stainless steel measuring spoons cups set、"
+            "silicone kitchen spatula、stainless steel coffee teaspoons。用简洁比较表列依据和未验证项，给一个暂定找货建议及供应商资料清单。"
+            "S3 多价格不能认作主价，Chef Select 不能写无品牌，已结束商品不能说在售；无成交证据不推断销量。"
+            "竞品不是我的商品事实，供应商规格、重量、成本、发货地和图片授权仍未知。不创建 Listing、生图、采购或发布。"
+        )
+        result = run_node_json("\n".join([
+            "const requests = []; const messages = [];",
+            "const state = { saasLastCeoCommand: null, saasAiCeoLatestTurn: null, view: 'cockpit' };",
+            "const saasMerchantWorkbenchContext = () => ({});",
+            "const buildSaasCeoCommand = (text) => ({ id: 'revision', text, route: 'ebay_workflow' });",
+            "const normalizeSaasCeoCommand = (value) => value;",
+            "const normalizeSaasAiCeoLatestTurn = (value) => value && typeof value === 'object' ? value : null;",
+            "const prepareSaasNewListingProjectRequest = (text) => ({ active: false, blocked: false, commandText: text, sourceAssetIds: [] });",
+            "const saasMerchantProjectRouteId = () => 'same-project'; const saasCurrentMerchantProjectId = saasMerchantProjectRouteId;",
+            "const saasAiCeoCommandUsesProductTaskContext = () => false;",
+            "const setSaasAiCeoTaskContextState = () => null; const refreshSaasAiCeoTaskContext = () => null;",
+            "const persistSaasLastCeoCommand = () => null; const recordSaasCeoCommandSourceRecord = () => null;",
+            "const persistSaasCeoCommandToBackend = () => Promise.resolve(); const hashString = () => 1;",
+            "const addCeoMessage = (text, answer, options) => { messages.push({ answer, pending: options.pending }); state.saasAiCeoLatestTurn = { assistant_id: options.assistantId, created_at: options.createdAt }; };",
+            "const scheduleSaasAiCeoPendingWatchdog = () => null;",
+            "const requestSaasAiCeoChat = (command, callbacks, assets, options) => { requests.push({ text: command.text, options }); return new Promise(() => {}); };",
+            "const document = { querySelector: () => null, querySelectorAll: () => [], getElementById: () => null }; const replaceJiejingTrustedHtml = () => null;",
+            "const trustedJiejingHtml = (value) => value; const renderSaasCeoCommandConsole = () => ''; const refreshSaasCeoRoutingTaskCard = () => null;",
+            frontend_chat_archive_dependencies(),
+            function_body(APP_JS, "classifySaasLocalClockRequest"),
+            function_body(APP_JS, "buildSaasLocalClockAnswer"),
+            function_body(APP_JS, "handleSaasCeoCommandSubmit"),
+            f"handleSaasCeoCommandSubmit({json.dumps(message, ensure_ascii=False)});",
+            "console.log(JSON.stringify({ requests, messages }));",
+        ]))
+        self.assertEqual(1, len(result["requests"]), "A date constraint must not swallow the whole merchant task")
+        self.assertEqual(message, result["requests"][0]["text"])
+        self.assertEqual([{"answer": "正在思考", "pending": True}], result["messages"])
+        self.assertFalse(result["requests"][0]["options"]["suppressActiveListingContext"])
+
     def test_clicked_report_id_never_falls_back_to_same_assistant_or_latest_report(self) -> None:
         resolver = function_body(APP_JS, "saasAiCeoMarketResearchTurnForImport")
         result = run_node_json(

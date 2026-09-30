@@ -26473,10 +26473,18 @@ function saasAiCeoProductizedAnswerText(text = "", status = "") {
 }
 
 function classifySaasLocalClockRequest(text = "") {
-  const normalized = String(text || "").trim().toLowerCase();
+  const normalized = String(text || "").trim().toLowerCase()
+    .replace(/^[?？!！。.,，\s]+|[?？!！。.,，\s]+$/g, "")
+    .replace(/^(?:你好|您好)[，,\s]*/, "")
+    .replace(/^(?:请问(?:一下)?|请告诉我|告诉我|麻烦告诉我|我想知道)[，,\s]*/, "")
+    .replace(/(?:你都不知道|你不知道|呢|呀|啊|吗)$/, "").trim();
   if (!normalized) return "";
-  if (/现在几点|几点了|当前时间|现在时间|北京时间|what time|current time|time is it/.test(normalized)) return "time";
-  if (/今天几号|今天日期|今天是几号|今天星期几|今天周几|current date|today'?s date|date today/.test(normalized)) return "date";
+  // Only a whole, standalone clock question may skip the normal task path.
+  // Dates inside instructions, quotations, or mixed questions are not that intent.
+  if (/^(?:现在几点(?:了|钟)?|几点了|当前时间|现在时间|北京时间(?:现在)?(?:是)?(?:几点(?:了|钟)?)?)$/.test(normalized)) return "time";
+  if (/^(?:今天(?:是)?(?:几号|星期几|周几)|今天(?:的)?日期(?:是什么|是多少)?|今日日期|现在是几月几号)$/.test(normalized)) return "date";
+  if (/^(?:please\s+)?(?:tell me\s+)?(?:what time(?: is it)?|(?:what is|what's) (?:the )?(?:current time|time)|current time|time is it)(?:,?\s+please)?$/.test(normalized)) return "time";
+  if (/^(?:please\s+)?(?:tell me\s+)?(?:(?:what is|what's) )?(?:the )?(?:current date|today'?s date|date today)(?:,?\s+please)?$/.test(normalized)) return "date";
   return "";
 }
 

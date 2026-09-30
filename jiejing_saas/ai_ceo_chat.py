@@ -1941,12 +1941,23 @@ def _classify_ai_ceo_route(message: str, *, realtime_kind: str = "") -> str:
 
 
 def _classify_local_clock_request(message: str) -> str:
-    text = _normalized_text(message)
+    # Do not truncate before deciding whether this is the entire request.
+    text = str(message or "").strip().lower()
+    text = re.sub(r"^[?？!！。.,，\s]+|[?？!！。.,，\s]+$", "", text)
+    text = re.sub(r"^(?:你好|您好)[，,\s]*", "", text)
+    text = re.sub(r"^(?:请问(?:一下)?|请告诉我|告诉我|麻烦告诉我|我想知道)[，,\s]*", "", text)
+    text = re.sub(r"(?:你都不知道|你不知道|呢|呀|啊|吗)$", "", text).strip()
     if not text:
         return ""
-    if any(marker in text for marker in ("现在几点", "几点了", "当前时间", "现在时间", "北京时间", "what time", "current time", "time is it")):
+    # Match the whole question, not date/time words inside a merchant task.
+    # Keep this small standalone grammar aligned with the frontend fast path.
+    if re.fullmatch(r"现在几点(?:了|钟)?|几点了|当前时间|现在时间|北京时间(?:现在)?(?:是)?(?:几点(?:了|钟)?)?", text):
         return "time"
-    if any(marker in text for marker in ("今天几号", "今天日期", "今天是几号", "今天星期几", "今天周几", "current date", "today's date", "date today")):
+    if re.fullmatch(r"今天(?:是)?(?:几号|星期几|周几)|今天(?:的)?日期(?:是什么|是多少)?|今日日期|现在是几月几号", text):
+        return "date"
+    if re.fullmatch(r"(?:please\s+)?(?:tell me\s+)?(?:what time(?: is it)?|(?:what is|what's) (?:the )?(?:current time|time)|current time|time is it)(?:,?\s+please)?", text):
+        return "time"
+    if re.fullmatch(r"(?:please\s+)?(?:tell me\s+)?(?:(?:what is|what's) )?(?:the )?(?:current date|today'?s date|date today)(?:,?\s+please)?", text):
         return "date"
     return ""
 

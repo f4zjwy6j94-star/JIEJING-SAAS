@@ -260,7 +260,10 @@ class ProductSearchEvidenceTests(unittest.TestCase):
         self.assertNotIn("marketplace trends", query)
 
     def test_revision_uses_owned_report_sources_without_searching_again(self):
-        message = "修订当前商品调研报告，本轮不要联网检索，沿用上一份报告来源。价格和品牌未验证，不创建 Listing。"
+        message = (
+            "修订当前商品调研报告，本轮不要联网检索，沿用上一份报告来源。"
+            "没有明确日期就写未验证，不要填写今天日期。价格和品牌未验证，不创建 Listing。"
+        )
         answer = "候选商品 1：stainless steel measuring spoons cups set\n[S1] 只能证明存在该商品页面；价格、品牌、销量和供应商资料未验证。"
         class Model:
             provider, model = "deepseek", "test-model"
@@ -287,6 +290,7 @@ class ProductSearchEvidenceTests(unittest.TestCase):
                     conversation_history=history, on_text_delta=streamed.append, active_listing_context={"contract_version": "active_listing_context_v1", "listing_project_identity": project})
             self.assertEqual([], streamed, "Evidence must be checked before sending model prose to the merchant")
             self.assertEqual([], FakeSearch.calls, "An explicit no-search revision must never call a search provider")
+            self.assertNotEqual("local_clock_answered", result["status"], "Date constraints are part of the report task, not a clock question")
             self.assertEqual([sources[0]["url"]], [s["url"] for s in result["source_records"]])
             self.assertEqual("S1", model.calls[0]["web_context"]["source_records"][0]["citation_id"])
             self.assertEqual(sources[0]["captured_at"], result["source_records"][0]["captured_at"])

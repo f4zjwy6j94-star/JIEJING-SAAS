@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -317,6 +318,53 @@ class TimelyEvidenceTests(unittest.TestCase):
         self.assertEqual(result["route"], chat.AI_CEO_ROUTE_GENERAL)
         self.assertEqual(model.usage_summary()["request_count"], 0)
         self.assertEqual(requests, [])
+
+    def test_clock_shortcut_is_standalone_and_frontend_backend_agree(self):
+        cases = {
+            "今天几号": "date", "今天是几号？": "date", "今天星期几": "date",
+            "请问今天周几？": "date", "你好，请告诉我今天的日期是什么。": "date",
+            "今天几号你都不知道？": "date", "今天日期": "date",
+            "What is today's date?": "date", "Current date": "date",
+            "Please tell me the current date, please.": "date",
+            "现在几点": "time", "请问现在几点了？": "time", "北京时间": "time",
+            "北京时间现在是几点钟？": "time", "当前时间": "time",
+            "What time is it?": "time", "What's the current time?": "time",
+            "Please tell me current time, please.": "time",
+            "不要填写今天日期": "", "不要回答今天几号，继续调研量勺": "",
+            "修订报告，日期未知就写未验证，不要填写今天日期。": "",
+            "生成 Listing，检索日期按北京时间记录。": "",
+            "调研 eBay 量勺，当前时间不是成交日期。": "",
+            "请发布这个商品，北京时间为准。": "",
+            "翻译：今天几号？": "", "请解释 current date 在 SQL 中的含义": "",
+            'Translate "what time is it" to Chinese.': "", '"今天几号"': "",
+            "今天几号，另外帮我修改 Listing": "", "今天几号？还有天气怎么样？": "",
+            "北京时间今天纳斯达克收盘多少点": "",
+            "What time does the market close?": "",
+            "What time is it and what is the weather?": "",
+            "Explain the current date format in this file.": "",
+            "Preserve the source date, do not replace it with today's date.": "",
+            "今天日期" + " " * 1200 + "只是报告字段，不要报时，继续修订报告。": "",
+        }
+        source = (Path(__file__).resolve().parents[1] / "app.js").read_text(encoding="utf-8")
+        start = source.index("function classifySaasLocalClockRequest")
+        end = source.index("async function hydrateSaasCeoCommandFromBackend", start)
+        script = source[start:end] + "\nconst queries = " + json.dumps(list(cases), ensure_ascii=False) + ";\n"
+        script += "console.log(JSON.stringify(queries.map(q => ({ kind: classifySaasLocalClockRequest(q), answer: buildSaasLocalClockAnswer(q) }))));"
+        process = subprocess.run(["node", "-"], input=script, text=True, encoding="utf-8", capture_output=True, check=True)
+        frontend = json.loads(process.stdout)
+        for (question, expected), browser in zip(cases.items(), frontend, strict=True):
+            with self.subTest(question=question):
+                self.assertEqual(expected, browser["kind"])
+                self.assertEqual(expected, chat._classify_local_clock_request(question))
+                if not expected:
+                    self.assertIsNone(browser["answer"], "An instruction containing clock words must reach the normal task path")
+                    continue
+                self.assertEqual("local_clock_answered", browser["answer"]["status"])
+                result, _, model, requests = self.run_chat(question, [], "unused", history=HISTORY, fast=True)
+                self.assertEqual("local_clock_answered", result["status"])
+                self.assertEqual(chat.AI_CEO_ROUTE_GENERAL, result["route"])
+                self.assertEqual(0, model.usage_summary()["request_count"])
+                self.assertEqual([], requests)
 
     def test_lookup_then_translation_still_gets_temporal_evidence(self):
         records = [{"title": "Price", "url": "https://example.com/pricing", "content": "Example Pro price is 999 USD."}]
