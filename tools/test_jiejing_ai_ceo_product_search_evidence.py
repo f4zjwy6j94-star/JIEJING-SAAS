@@ -166,6 +166,40 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             del repo
             gc.collect()
 
+    def test_failed_sourced_comparison_cannot_pass_as_generic_candidate_cards(self):
+        bad_answer = "\n\n".join(
+            f"候选商品 {i}：{name}\n竞品参考 [S99]。供应商资料与成交证据未验证。"
+            for i, name in enumerate(PRODUCTS, 1))
+
+        class Model:
+            provider, model, calls = "deepseek", "offline-failed-research", 0
+            def generate_text(self, **kwargs):
+                self.calls += 1
+                return {"text": bad_answer, "model_mode": "live_http_model_text",
+                        "model_configured": True, "bounded_empty_answer_recovery": True}
+
+        with tempfile.TemporaryDirectory(prefix="jiejing-research-fallback-", ignore_cleanup_errors=True) as folder:
+            repo = SaaSRepository(Path(folder) / "fixture.sqlite")
+            account = repo.create_user_with_company(email="research-fallback@example.test",
+                password="unit-test-only-password", company_name="Research fallback fixture")
+            identity = {"user_id": account["user"]["user_id"], "company_id": account["company"]["company_id"]}
+            store = repo.create_store(**identity, payload={"platform": "ebay", "marketplace": "EBAY_US"})
+            model = Model()
+            with patch.object(chat, "PublicSearchProbeAdapter", FakeSearch):
+                result = chat.run_ai_ceo_chat(repository=repo, **identity, store_id=store["store_id"],
+                    message="比较3个候选商品：" + "、".join(PRODUCTS) + "。用商品来源给比较依据，不创建 Listing。",
+                    model_client=model)
+            self.assertEqual(1, model.calls)
+            self.assertEqual(3, len(result["source_records"]))
+            self.assertEqual("model_answer_rejected", result["status"],
+                             "A failed comparison must not be relabelled successful after deleting all evidence")
+            self.assertFalse(result["answer_quality"]["accepted"])
+            self.assertFalse(result["answer_quality"].get("contract_projection_used"))
+            self.assertIn("research_citation_not_in_evidence", result["answer_quality"]["blocked_by"])
+            self.assertNotIn("### 候选商品卡", result["answer"])
+            del repo
+            gc.collect()
+
     def test_terms_after_260_characters_are_not_lost(self):
         message = "先做候选商品市场调研。" + "要求来源清楚、不编造商品事实。" * 22 + "关键词：felt chair pads。"
         query = chat._realtime_search_query(kind="web_search", message=message)
@@ -429,6 +463,24 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             answer=with_own_attribute, source_records=sources, context=context)
         self.assertTrue(quality["accepted"], "A product's own attribute table still supplies its evidence")
 
+    def test_row_comparison_explicit_source_cells_preserve_bare_references(self):
+        sources = [{"citation_id": f"S{i}", "title": name,
+                    "url": f"https://www.ebay.com/itm/12345678900{i}"}
+                   for i, name in enumerate(PRODUCTS, 1)]
+        answer = "| 候选商品 | 来源编号 | 未验证项 |\n|---|---|---|\n" + "\n".join(
+            f"| {name} | S{i} | 成交及商品资料未知 |" for i, name in enumerate(PRODUCTS, 1))
+        context = {"selection_contract": {"candidate_evidence_entry_required": True}}
+        def quality(text):
+            return chat.validate_ai_ceo_answer_quality(message="比较3个原候选商品", route="ebay_workflow",
+                answer=text, source_records=sources, context=context)
+        self.assertTrue(quality(answer)["accepted"], quality(answer))
+        for replacement in ("", "同上", "S99"):
+            self.assertFalse(quality(answer.replace("| S2 |", f"| {replacement} |"))["accepted"])
+        unknown = quality(answer.replace("| S2 |", "| S99 |"))
+        self.assertIn("research_citation_not_in_evidence", unknown["blocked_by"])
+        # An arbitrary model or SKU containing S# is not a citation.
+        self.assertFalse(quality(answer.replace("来源编号", "型号"))["accepted"])
+
     def test_owned_revision_compact_table_survives_real_chat_and_report_save(self):
         message = (
             "修订刚才的候选调研报告，不新建项目。本轮不要联网检索，沿用已保存报告的五条原始来源与原编号、链接和检索日期；"
@@ -437,8 +489,8 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             "S3 多价格不能认作主价，Chef Select 不能写无品牌，已结束商品不能说在售；无成交证据不推断销量。"
             "竞品不是我的商品事实，供应商规格、重量、成本、发货地和图片授权仍未知。不创建 Listing、生图、采购或发布。"
         )
-        answer = "| 候选商品 | 依据 | 未验证项 |\n|---|---|---|\n" + "\n".join(
-            f"| {name} | [S{i}] 仅为竞品页面，不能证明需求稳定 | 成交及真实商品资料未验证 |"
+        answer = "| 候选商品 | 来源依据 | 未验证项 |\n|---|---|---|\n" + "\n".join(
+            f"| {name} | S{i} 仅为竞品页面，不能证明需求稳定 | 成交及真实商品资料未验证 |"
             for i, name in enumerate(PRODUCTS, 1))
         answer += ("\n\n### 未验证项汇总\n品牌、价格与成交量未验证。\n"
                    "### 供应商资料清单（待补）\n材质、规格、重量、成本、发货地及图片授权未知。\n"
@@ -479,6 +531,22 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             self.assertFalse(saved["report"]["listing_import_ready"])
             del repo
             gc.collect()
+
+    def test_grouped_source_cells_are_citations_without_borrowing_other_columns(self):
+        sources = [{"citation_id": f"S{i}", "title": name,
+                    "url": f"https://www.ebay.com/itm/12345678900{i}"}
+                   for i, name in enumerate(PRODUCTS, 1)]
+        answer = "| 候选商品 | 来源编号 | 未验证项 |\n|---|---|---|\n" + "\n".join(
+            f"| {name} | [S{i}、S{i}] | 成交及商品资料未知 |" for i, name in enumerate(PRODUCTS, 1))
+        context = {"selection_contract": {"candidate_evidence_entry_required": True}}
+        def quality(text):
+            return chat.validate_ai_ceo_answer_quality(message="比较3个候选商品", route="ebay_workflow",
+                answer=text, source_records=sources, context=context)
+        self.assertTrue(quality(answer)["accepted"], quality(answer))
+        self.assertIn("research_citation_not_in_evidence", quality(answer.replace("[S2、S2]", "[S2, S99]"))["blocked_by"])
+        transposed = "| 维度 | " + " | ".join(PRODUCTS) + " |\n|---|---|---|---|\n| 来源编号 | [S1、S1] | [S2, S2] | [S3/S3] |\n| 风险 | 未验证 | 未验证 | 未验证 |"
+        self.assertTrue(quality(transposed)["accepted"], quality(transposed))
+        self.assertFalse(quality(transposed.replace("[S2, S2]", "同左"))["accepted"])
 
     def test_owned_transposed_comparison_survives_chat_and_report_without_repair(self):
         message = "修订刚才的候选调研报告，不新建项目。本轮不要联网检索，沿用已保存报告的五条原始来源。比较三个原候选商品：" + "、".join(PRODUCTS) + "。给暂定找货建议，商品事实未知，不创建 Listing、不生图、不发布。"

@@ -19748,6 +19748,44 @@ def _ai_ceo_market_table_product_headers(cells: list[str]) -> list[str]:
     return names
 
 
+def _ai_ceo_market_normalize_source_cell(value: str) -> str:
+    grouped = re.sub(
+        r"\[\s*(S\d+(?:\s*[,，、/;；]\s*S\d+)+)\s*\]",
+        lambda match: " ".join(f"[{ref}]" for ref in dict.fromkeys(re.findall(r"S\d+", match.group(1)))),
+        value,
+    )
+    return re.sub(r"(?<![\w\[])(S\d+)(?![\w\]])", r"[\1]", grouped)
+
+
+def _ai_ceo_market_normalize_source_cells(answer: str) -> str:
+    """Recognize bare S# only inside explicitly labelled comparison source cells."""
+    lines = str(answer or "").replace("*", "").splitlines()
+    source_columns: list[int] = []
+    column_count = 0
+    normalized: list[str] = []
+    for index, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        if not line.startswith("|"):
+            source_columns, column_count = [], 0
+            normalized.append(raw_line)
+            continue
+        if re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+            normalized.append(raw_line)
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if _ai_ceo_market_table_product_column(cells) is not None:
+            source_columns = [i for i, label in enumerate(cells) if re.search(
+                r"来源|引用|依据|证据|source|reference|citation|evidence", label, re.I)]
+            column_count = len(cells) if index + 1 < len(lines) and re.fullmatch(
+                r"\|?\s*[-:|\s]+\|?", lines[index + 1].strip()) else 0
+        elif source_columns and len(cells) == column_count:
+            for column in source_columns:
+                cells[column] = _ai_ceo_market_normalize_source_cell(cells[column])
+            raw_line = "| " + " | ".join(cells) + " |"
+        normalized.append(raw_line)
+    return "\n".join(normalized)
+
+
 def _ai_ceo_market_split_comparison_tables(answer: str) -> tuple[list[tuple[str, str]], list[str]]:
     """Return per-product column blocks and the remaining non-comparison lines."""
     lines = [line.strip() for line in str(answer or "").replace("*", "").splitlines()]
@@ -19783,7 +19821,7 @@ def _ai_ceo_market_split_comparison_tables(answer: str) -> tuple[list[tuple[str,
                 # Bare S# in an explicitly labelled source row is a citation,
                 # not a reason to discard the product or borrow a peer's URL.
                 if re.search(r"来源|引用|依据|证据|source|reference|citation|evidence", row[0], re.I):
-                    value = re.sub(r"(?<![\w\[])(S\d+)(?![\w\]])", r"[\1]", value)
+                    value = _ai_ceo_market_normalize_source_cell(value)
                 attributes.append(f"{row[0]}：{value}")
             result.append((name, f"候选商品：{name}\n" + "\n".join(attributes)))
     remainder.extend(lines[index:])

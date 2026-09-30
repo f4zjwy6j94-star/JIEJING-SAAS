@@ -1121,6 +1121,7 @@ def run_ai_ceo_chat(
                 answer=repair_candidate_answer or answer,
                 context=prompt_context,
                 blocked_by=answer_quality.get("blocked_by") or [],
+                source_records=source_records,
             )
         if projected_answer:
             projected_quality = validate_ai_ceo_answer_quality(
@@ -4549,9 +4550,9 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
     by_url = {_canonical_public_source_url(str(s.get("url") or "")): s for s in records if isinstance(s, dict)}
     allowed_urls = set(by_url)
     blocked = set()
-    from .repository import _ai_ceo_market_split_comparison_tables
+    from .repository import _ai_ceo_market_normalize_source_cells, _ai_ceo_market_split_comparison_tables
 
-    column_candidates, claim_lines = _ai_ceo_market_split_comparison_tables(answer)
+    column_candidates, claim_lines = _ai_ceo_market_split_comparison_tables(_ai_ceo_market_normalize_source_cells(answer))
     for _, block in column_candidates:
         # Price/brand attributes inherit only this product column's explicit
         # references. Formatting must not bypass checks or contaminate peers.
@@ -5281,7 +5282,9 @@ def _candidate_name_matches_exclusion(excluded_name: str, candidate_name: str) -
 
 
 def _selection_candidate_blocks(answer: str, *, candidate_names: list[str] | None = None) -> list[str]:
-    text = _safe_text(answer, limit=12000)
+    from .repository import _ai_ceo_market_normalize_source_cells
+
+    text = _ai_ceo_market_normalize_source_cells(_safe_text(answer, limit=12000))
     pattern = re.compile(
         r"(?:^|\n)\s*(?:[-*]\s*)?(?:#{1,6}\s*)?(?:候选商品|候选品|候选)\s*[一二三四五六七八九十\dA-Z]*\s*[:：.)、-]\s*(?P<name>[^\n]+)",
         flags=re.IGNORECASE,
@@ -5460,11 +5463,20 @@ def _project_selection_answer_to_contract(
     answer: str,
     context: dict[str, Any],
     blocked_by: list[str],
+    source_records: list[dict[str, Any]] | None = None,
 ) -> str:
     """Convert usable candidate names into an honest, fact-minimal merchant answer."""
 
     selection_contract = context.get("selection_contract") if isinstance(context.get("selection_contract"), dict) else {}
     if not selection_contract or not answer:
+        return ""
+    # Once product evidence has been retrieved, deleting every comparison
+    # claim and replacing it with generic search cards is not a successful
+    # research answer. Preserve the failed quality result and its reason.
+    if any(isinstance(record, dict) and (
+        record.get("market_evidence_role") == "item_listing_reference"
+        or re.search(r"https://(?:www\.)?ebay\.com/itm/", str(record.get("url") or ""))
+    ) for record in source_records or []):
         return ""
     unprojectable = {
         "missing_concrete_product_candidates",
