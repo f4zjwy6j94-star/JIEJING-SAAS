@@ -19618,6 +19618,8 @@ def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
     if not text:
         return True
     compact = re.sub(r"\s+", " ", text).strip().lower()
+    if re.search(r"\S\s+(?:vs\.?|versus)\s+\S", compact, flags=re.IGNORECASE):
+        return True
     section_label = re.sub(r"\s*[（(][^()（）]{1,40}[）)]\s*$", "", compact)
     if re.fullmatch(
         r"(?:未验证|未核实|待验证|待核验|待确认|待补)(?:事项|项目|项|事实|资料|信息)?(?:汇总|清单|说明|总结|列表)?|"

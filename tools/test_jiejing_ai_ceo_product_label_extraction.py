@@ -46,6 +46,7 @@ def main() -> None:
     # Actual persisted bad report: metadata headings were projected into cards.
     # Keep legitimate supplier-incomplete drafts available while rejecting these.
     labels = ["未验证项汇总", "供应商资料清单（待补）", "边界说明", "supplier information checklist",
+              "量勺量杯套装 vs 硅胶锅铲 vs 不锈钢咖啡勺", "cups versus spoons",
               "stainless steel measuring cups set", "边界测量仪"]
     blocked_draft_probe = subprocess.run(["node"], input=(
         "const publicRuntimeText = (value) => String(value || '');\n" + invalid_label + "\n"
@@ -59,7 +60,20 @@ def main() -> None:
         + "blocked_by:['supplier_facts_incomplete'],listing_handoff:{listing_fields:{"
         + "product_candidates:[candidate],selected_product_candidate:candidate}}}}); })));\n"
     ), text=True, encoding="utf-8", capture_output=True, check=True)
-    assert json.loads(blocked_draft_probe.stdout.strip()) == [False, False, False, False, True, True], blocked_draft_probe.stdout
+    assert json.loads(blocked_draft_probe.stdout.strip()) == [False, False, False, False, False, False, True, True], blocked_draft_probe.stdout
+    # Do not silently switch to another candidate when the saved selection is
+    # invalid and normalization has discarded it from the visible candidate list.
+    fallback_probe = subprocess.run(["node"], input=(
+        "const publicRuntimeText = value => String(value || '');\n" + invalid_label + "\n"
+        + function_body(app_js, "saasIsConcreteProductLabel") + "\n"
+        + "const valid = {name:'不锈钢量勺量杯套装',selected:true};\n"
+        + "const saasAiCeoListingHandoffFieldsFromReport = () => ({product_candidates:[valid],selected_product_candidate:valid});\n"
+        + "const saasSelectedMarketProductCandidate = c => c[0];\n"
+        + function_body(app_js, "saasAiCeoMarketReportCanStartBlockedListingDraft") + "\n"
+        + "console.log(saasAiCeoMarketReportCanStartBlockedListingDraft({report_type:'ai_ceo.market_research',report:{"
+        + "answer_quality:{accepted:true},selected_product_candidate:{name:'量勺量杯套装 vs 硅胶锅铲 vs 不锈钢咖啡勺'}}}));\n"
+    ), text=True, encoding="utf-8", capture_output=True, check=True)
+    assert fallback_probe.stdout.strip() == "false", fallback_probe.stdout
 
     concise_label = function_body(app_js, "saasAiCeoConciseAnswerProductLabel")
     for marker in ["assistant_text", "lines[0]", "理由", "saasIsConcreteProductLabel"]:

@@ -4646,12 +4646,12 @@ def _selection_answer_constraint_violations(
 
     if selection_contract.get("candidate_evidence_entry_required"):
         candidate_blocks = _selection_candidate_blocks(answer_text, candidate_names=candidate_names)
-        required_count = max(1, _safe_int(selection_contract.get("required_candidate_count") or len(candidates) or 1))
+        required_count = _requested_product_candidate_count(message)
         sources_by_id = {str(record.get("citation_id")): str(record.get("url") or "")
                          for record in source_records or [] if isinstance(record, dict) and record.get("citation_id")}
         inspected_blocks = [block + "\n" + "\n".join(
             sources_by_id[ref] for ref in dict.fromkeys(re.findall(r"\[(S\d+)\]", block)) if ref in sources_by_id
-        ) for block in candidate_blocks[:required_count]]
+        ) for block in candidate_blocks]
         if len(inspected_blocks) < required_count or any(not _candidate_block_has_ebay_evidence_entry(block) for block in inspected_blocks):
             blocked_by.append("missing_candidate_ebay_evidence_entry")
         if any(
@@ -5365,7 +5365,7 @@ def _requested_product_candidate_count(message: str) -> int:
     text = _normalized_text(message)
     numbers = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4}
     count_pattern = r"(?<!\d)([1-4一二两三四])\s*(?:个|款|种)\s*"
-    qualifiers = r"(?:(?:具体|不同|全新|新的|轻小|不带电|非易碎|可选)(?:的)?)*"
+    qualifiers = r"(?:(?:具体|不同|全新|新的|轻小|不带电|非易碎|可选|原有|原来|原始|现有|既有|原)(?:的)?)*"
 
     def count_for(pattern: str) -> int | None:
         match = re.search(pattern, text)

@@ -238,6 +238,9 @@ class ProductSearchEvidenceTests(unittest.TestCase):
         cases = (
             (f"只做候选级联网调研，比较 {comparison}。每个候选最多保留2个来源，推荐一个暂定找货方向。不创建 Listing。", 3),
             ("每个候选给2个链接，比较3个候选商品，最终推荐1个找货方向。", 3),
+            ("比较3个原候选商品：量勺量杯套装、硅胶锅铲、不锈钢咖啡勺。", 3),
+            ("比较三个原有的候选商品，每个保留2个来源。", 3),
+            ("对比3个现有候选商品，最后推荐一个。", 3),
             ("比较三个轻小不带电商品，每个提供两个来源，最终推荐一个方向。", 3),
             ("调研四个候选商品，每个保留1个链接。", 4),
             ("推荐一款具体商品，给出3个来源。", 1),
@@ -250,6 +253,17 @@ class ProductSearchEvidenceTests(unittest.TestCase):
                 self.assertEqual(count, result["required_candidate_count"])
                 if count > len(PRODUCTS):
                     self.assertFalse(result["accepted"], "A genuinely missing candidate must remain blocked")
+
+    def test_comparison_heading_is_not_one_product_or_a_complete_comparison(self):
+        from jiejing_saas.repository import _ai_ceo_market_product_candidates
+        answer = ("候选商品 1：量勺量杯套装 vs 硅胶锅铲 vs 不锈钢咖啡勺\n证据待核实。\n"
+                  "候选商品 2：不锈钢量勺量杯套装\n供应商事实未知。")
+        message = "沿用这5条来源，不联网。比较3个原候选商品：量勺量杯套装、硅胶锅铲、不锈钢咖啡勺。"
+        candidates = _ai_ceo_market_product_candidates(message=message, answer=answer)
+        self.assertEqual(["不锈钢量勺量杯套装"], [c["name"] for c in candidates])
+        quality = chat.validate_ai_ceo_answer_quality(message=message, route="ebay_workflow", answer=answer)
+        self.assertEqual(3, quality["required_candidate_count"])
+        self.assertFalse(quality["accepted"], quality)
 
     def test_no_source_discovery_searches_physical_listings_not_research_tools(self):
         query = chat._realtime_search_query(kind="web_search", message="无货源，帮我选品，eBay美国站轻小不带电，比较3个候选。")
@@ -367,6 +381,10 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             quality = chat.validate_ai_ceo_answer_quality(message="比较3个候选商品，不创建 Listing", route="ebay_workflow",
                 answer=bad, source_records=sources, context=context)
             self.assertFalse(quality["accepted"], quality)
+        stale_contract = {"selection_contract": {**context["selection_contract"], "required_candidate_count": 2}}
+        quality = chat.validate_ai_ceo_answer_quality(message="比较3个原候选商品，不创建 Listing", route="ebay_workflow",
+            answer=answer.replace("[S3]", ""), source_records=sources, context=stale_contract)
+        self.assertFalse(quality["accepted"], "An older count cannot excuse a displayed candidate's missing evidence")
         mixed = f"候选商品 1：{PRODUCTS[0]}\n" + answer.replace("[S1]", "")
         quality = chat.validate_ai_ceo_answer_quality(message="比较3个候选商品，不创建 Listing", route="ebay_workflow",
             answer=mixed, source_records=sources, context=context)
