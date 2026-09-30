@@ -366,6 +366,45 @@ class TimelyEvidenceTests(unittest.TestCase):
                 self.assertEqual(0, model.usage_summary()["request_count"])
                 self.assertEqual([], requests)
 
+    def test_search_instruction_is_not_a_capability_status_question(self):
+        question = "请你联网搜索 eBay 量勺套装，比较三个候选商品，不发布。"
+        answer = "\n".join(
+            f"候选商品 {i}：{name}\n依据：[S1]只有筛选方法，销量、价格、材质、重量、成本及供应商未知。"
+            for i, name in enumerate(("不锈钢量勺套装", "硅胶厨房刮刀", "不锈钢咖啡勺"), 1)
+        )
+        records = [{"title": "Research method", "url": "https://example.test/research", "content": "Verify product evidence before sourcing."}]
+        result, _, model, requests = self.run_chat(question, records, answer)
+        self.assertNotEqual("capability_status_answered", result["status"])
+        self.assertEqual(chat.AI_CEO_ROUTE_EBAY_WORKFLOW, result["route"])
+        self.assertGreater(len(model.calls), 0)
+        self.assertTrue(requests)
+        fast, _, fast_model, fast_requests = self.run_chat(question, records, answer, fast=True)
+        self.assertIsNone(fast)
+        self.assertEqual([], fast_model.calls)
+        self.assertEqual([], fast_requests)
+
+    def test_capability_shortcut_does_not_swallow_other_clauses_or_quotations(self):
+        standalone = ("你现在什么大模型", "你现在有连接网络吗，连接 DeepSeek 吗？", "你能联网搜索吗？",
+                      "你能不能联网？", "AI 连接状态如何？", "请问你用哪个模型？", "Are you connected to the internet?")
+        not_standalone = ("请你联网搜索量勺", "你能联网吗？如果能，请帮我调研 eBay 厨具。",
+                          "翻译：你能联网搜索吗？", "不要查询模型状态，继续修改 Listing。",
+                          "请实时搜索微软最新公告", "Can you search the web for kitchen spoons?",
+                          "Maintain the current report and use web search to verify its sources.")
+        for question in standalone:
+            with self.subTest(question=question):
+                result, _, model, requests = self.run_chat(question, [], "unused")
+                self.assertEqual("capability_status_answered", result["status"])
+                self.assertEqual([], model.calls)
+                self.assertEqual([], requests)
+        for question in not_standalone:
+            with self.subTest(question=question):
+                self.assertEqual("", chat._classify_ai_ceo_capability_request(question))
+
+    def test_clock_does_not_ignore_tail_of_long_request_at_chat_call_site(self):
+        question = "今天日期" + " " * 1200 + "不是问题，请修订商品报告。"
+        fast, _, _, _ = self.run_chat(question, [], "unused", fast=True)
+        self.assertIsNone(fast, "Truncating task context must not turn a longer request into a standalone clock question")
+
     def test_lookup_then_translation_still_gets_temporal_evidence(self):
         records = [{"title": "Price", "url": "https://example.com/pricing", "content": "Example Pro price is 999 USD."}]
         result, deltas, model, requests = self.run_chat("查一下今天的Example Pro价格并翻译成英文", records, "The price is $999.")

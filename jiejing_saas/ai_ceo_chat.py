@@ -556,7 +556,7 @@ def run_ai_ceo_chat(
     )
     if selection_contract:
         context = {**context, "selection_contract": selection_contract}
-    local_clock_kind = _classify_local_clock_request(safe_message)
+    local_clock_kind = _classify_local_clock_request(message)
     if local_clock_kind:
         return {
             "status": "local_clock_answered",
@@ -572,7 +572,7 @@ def run_ai_ceo_chat(
             "runtime_gets_raw_ebay_token": False,
             "secret_exposed": False,
         }
-    capability_kind = _classify_ai_ceo_capability_request(safe_message)
+    capability_kind = _classify_ai_ceo_capability_request(message)
     if capability_kind:
         return {
             "status": "capability_status_answered",
@@ -1302,7 +1302,7 @@ def run_ai_ceo_fast_turn(
         "turn_plan": _public_ai_ceo_turn_plan(authoritative_turn_plan),
         "working_state": authoritative_turn_plan.get("working_state") or {},
     }
-    local_clock_kind = _classify_local_clock_request(safe_message)
+    local_clock_kind = _classify_local_clock_request(message)
     if local_clock_kind:
         return {
             "status": "local_clock_answered",
@@ -1318,7 +1318,7 @@ def run_ai_ceo_fast_turn(
             "runtime_gets_raw_ebay_token": False,
             "secret_exposed": False,
         }
-    capability_kind = _classify_ai_ceo_capability_request(safe_message)
+    capability_kind = _classify_ai_ceo_capability_request(message)
     if capability_kind:
         model_connection = _store_model_connection_context(
             repository=repository,
@@ -1963,47 +1963,35 @@ def _classify_local_clock_request(message: str) -> str:
 
 
 def _classify_ai_ceo_capability_request(message: str) -> str:
-    text = _normalized_text(message)
+    text = str(message or "").strip().lower()
+    text = re.sub(r"^(?:你好|您好)[，,\s]*", "", text)
+    text = re.sub(r"^(?:请问(?:一下)?|请告诉我|告诉我|麻烦告诉我|我想知道)[，,\s]*", "", text)
     if not text:
         return ""
-    subject_markers = ("你", "ai", "aiceo", "ai ceo", "捷境", "deepseek", "大模型")
-    capability_markers = (
-        "连接网络",
-        "接网络",
-        "有联网",
-        "能联网",
-        "联网了吗",
-        "联网搜索",
-        "实时搜索",
-        "连接大模型",
-        "接大模型",
-        "什么大模型",
-        "哪个大模型",
-        "用什么模型",
-        "用哪个模型",
-        "当前模型",
-        "模型状态",
-        "ai 连接",
-        "ai连接",
-        "为什么不可用",
-        "为啥不可用",
-        "怎么不可用",
-        "怎么不能用",
-        "ai 不可用",
-        "ai不可用",
-        "接 deepseek",
-        "连 deepseek",
-        "连接 deepseek",
-        "connected to the internet",
-        "web search",
-        "deepseek connected",
+    # Every clause must ask only about this assistant's connection/model.
+    # "Can you search ... for a product" and quoted questions need normal routing.
+    subject = r"(?:你(?:们)?(?:的)?|ai(?:ceo)?|捷境|deepseek|大模型)?(?:现在|目前|当前)?"
+    chinese_bodies = (
+        r"(?:有|已经|已)?(?:是否|有没有|能不能|可以|能|会)?(?:连(?:接)?(?:到)?(?:网络|deepseek|大模型)|接(?:入)?deepseek|联网(?:搜索)?|实时搜索)(?:了)?(?:吗|没有|呢|呀|啊)?",
+        r"(?:是)?(?:用(?:的)?|使用(?:的)?|接(?:的)?|连接(?:的)?)?(?:什么|哪个|哪种)(?:大模型|模型)(?:吗|呢|呀|啊)?",
+        r"(?:ai)?(?:连接|模型)(?:状态)?(?:是(?:什么|哪个))?(?:怎么样|如何|正常(?:吗)?|可用(?:吗)?|吗)?",
+        r"(?:为什么|为啥|怎么)(?:不可用|不能用|没有联网|不能联网)",
     )
-    question_markers = ("吗", "有没有", "是否", "现在", "状态", "能不能", "可以不", "?")
-    if any(subject in text for subject in subject_markers) and any(marker in text for marker in capability_markers):
-        return "capability_status"
-    if any(marker in text for marker in capability_markers) and any(marker in text for marker in question_markers):
-        return "capability_status"
-    return ""
+    english = (
+        r"(?:are you|is (?:ai|deepseek)) (?:currently )?connected to (?:the )?(?:internet|web|deepseek)",
+        r"can you (?:search (?:the )?web|browse (?:the )?(?:internet|web))",
+        r"(?:what|which) (?:ai )?model (?:are you(?: using)?|do you use)",
+        r"(?:ai|model|web search|deepseek) (?:connection )?status",
+    )
+    clauses = [part.strip() for part in re.split(r"[，,。.;；?？!！\n]+", text) if part.strip()]
+    for clause in clauses:
+        compact = re.sub(r"\s+", "", clause)
+        if any(re.fullmatch(subject + body, compact) for body in chinese_bodies):
+            continue
+        if any(re.fullmatch(pattern, clause) for pattern in english):
+            continue
+        return ""
+    return "capability_status" if clauses else ""
 
 
 def _store_model_connection_context(
