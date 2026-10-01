@@ -10961,6 +10961,8 @@ async function navigateSaasListingWizard(direction) {
   // Capture the current controls before any render replaces them.
   try {
     if (step === 1 || step === 3) {
+      const mediaCopy = step === 3 ? await captureSaasListingMediaCopyTransition(current) : null;
+      if (step === 3 && !mediaCopy) return fail("请先返回上一步核对 Listing 云端版本；图片和当前文案仍保留，本次没有重复生成。");
       const saved = await saveSaasMerchantProductFacts();
       if (!current()) return false;
       if (!saved || state.saasListingProductFactSaveStatus !== "saved") return fail("本步尚未保存到账号，输入已保留。请检查保存提示后重试；如有版本冲突，请先核对最新资料。");
@@ -10968,6 +10970,9 @@ async function navigateSaasListingWizard(direction) {
         const missing = saasListingWizardCoreMissing();
         if (missing.length) return fail(`资料已保存。继续前请确认：${missing.map(saasMerchantProductFactLabel).join("、")}。其他缺项可稍后补充。`);
       } else {
+        if (!(await finishSaasListingMediaCopyTransition(mediaCopy, current))) {
+          return fail("图片资料已保存，文案同步尚未完成。当前文案仍保留，请返回上一步核对云端保存提示；无需重新生成。");
+        }
         const packet = saasMerchantProductFactPacket() || {};
         const facts = { ...packet.source_confirmed_facts, ...packet.merchant_confirmed_facts };
         if (!saasListingWizardImageUrls().length) return fail("还没有关联商品图片。请打开本商品素材，审核后送回 Listing；系统会自动带入图片地址。");
@@ -11002,6 +11007,68 @@ async function navigateSaasListingWizard(direction) {
     record.busy = false;
     if (current()) renderProductListingCenter();
   }
+}
+
+function saasListingMediaCopyFactSignature(packet = {}) {
+  const omitMedia = (facts = {}) => Object.fromEntries(Object.entries(facts)
+    .filter(([key]) => !["image_urls", "image_rights_confirmed"].includes(key)));
+  return JSON.stringify(saasCanonicalJsonValue({
+    product_name: packet.product_name || "", simulation_only: packet.simulation_only === true,
+    source_confirmed_facts: omitMedia(packet.source_confirmed_facts),
+    merchant_confirmed_facts: omitMedia(packet.merchant_confirmed_facts),
+    unknown_facts: [...(packet.unknown_facts || [])].filter(key => !["image_urls", "image_rights_confirmed"].includes(key)).sort(),
+    fact_conflicts: packet.fact_conflicts || [],
+  }));
+}
+
+async function captureSaasListingMediaCopyTransition(isCurrent) {
+  if (!(await hydrateSaasListingCloudCheckpoint({ force: true })) || !isCurrent()) return null;
+  let record = saasListingCloudRecord();
+  if (record?.dirty) await flushSaasListingCloudCheckpoint();
+  record = saasListingCloudRecord();
+  if (!isCurrent() || !record || record.conflict || record.dirty || record.pending || record.write ||
+      !["saved", "current", "idle"].includes(record.status)) return null;
+  return { key: record.context.key, revision: record.revision, baseReportId: record.baseReportId,
+    seq: record.seq, refreshGeneration: saasStateRefreshGeneration,
+    fields: saasListingCloudFields(state.saasListingComposerDraft?.fields),
+    edited: [...saasListingMerchantEditedFields()],
+    factSignature: saasListingMediaCopyFactSignature(saasMerchantProductFactPacket()) };
+}
+
+async function finishSaasListingMediaCopyTransition(before, isCurrent) {
+  const record = saasListingCloudRecord();
+  if (record?.read) await record.read;
+  if (!before || !isCurrent() || !record || record.context.key !== before.key ||
+      before.refreshGeneration !== saasStateRefreshGeneration || record.seq !== before.seq ||
+      record.revision !== before.revision || record.dirty || record.pending || record.write) return false;
+  const draft = state.saasListingComposerDraft;
+  const report = saasListingCloudBaseReport(record.context);
+  if (!saasListingCloudReportMatchesContext(report, record.context) || report.report_type !== "merchant.product_facts" ||
+      report.report_id !== draft?.source_product_fact_report_id ||
+      saasListingMediaCopyFactSignature(saasMerchantProductFactPacket()) !== before.factSignature) return false;
+  const conflict = record.conflict;
+  // Only this just-saved media-only successor may carry the reviewed copy.
+  // A concurrent device's revision/base still requires explicit resolution.
+  if (conflict && (conflict.revision !== before.revision || conflict.baseReportId !== report.report_id ||
+      conflict.checkpoint?.base_report_id !== before.baseReportId ||
+      JSON.stringify(conflict.checkpoint.fields) !== JSON.stringify(before.fields))) return false;
+  record.fields = { ...before.fields, images: saasListingCloudFields(draft.fields).images };
+  record.edited = before.edited;
+  record.baseReportId = report.report_id;
+  record.observedBaseReportId = report.report_id;
+  record.observedRefreshGeneration = saasStateRefreshGeneration;
+  record.conflict = null;
+  record.reviewedBase = before.revision > 0
+    ? { checkpoint_revision: before.revision, current_base_report_id: report.report_id } : null;
+  record.dirty = true;
+  record.status = "pending";
+  persistSaasListingCloudRecord(record);
+  applySaasListingCloudFields(record);
+  // Reuse normal revision-CAS, durable retry and conflict handling. This is a
+  // text checkpoint only, not model validation, image approval or publication.
+  await flushSaasListingCloudCheckpoint();
+  return isCurrent() && record.status === "saved" && !record.dirty && !record.conflict &&
+    record.receipt?.base_report_id === report.report_id;
 }
 
 function renderSaasListingWizardImages(draft) {

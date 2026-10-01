@@ -35,10 +35,10 @@ const otherReport = { ...baseReport, report_id: "checkpoint-other-base", task_id
   report: { ...baseReport.report, product: "Other Tablet Holder", listing_project_identity: otherIdentity,
     listing_handoff: { ...baseReport.report.listing_handoff,
       listing_fields: { ...baseReport.report.listing_handoff.listing_fields, title: "Other project title" } } } };
-let server, browser, base, checkpoint, requests, unexpected, checkpointHandler;
+let server, browser, base, checkpoint, requests, unexpected, checkpointHandler, factHandler;
 
 function resetFixture() {
-  checkpoint = null; requests = []; unexpected = []; checkpointHandler = null;
+  checkpoint = null; requests = []; unexpected = []; checkpointHandler = null; factHandler = null;
 }
 
 function savedCheckpoint(fields, revision = 1) {
@@ -97,6 +97,13 @@ before(async () => {
         && [identity.key, otherIdentity.key].includes(url.searchParams.get("project_id"))) {
       requests.push({ method: "GET", path: url.pathname, query: Object.fromEntries(url.searchParams) });
       return sendJson(res, 200, { merchant_project_status: null });
+    }
+    if (factHandler && req.method === "POST" && url.pathname === `/stores/${storeId}/product-facts`) {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      const request = { method: "POST", path: url.pathname, body: JSON.parse(raw) };
+      requests.push(request);
+      return factHandler(request, res);
     }
     if (![checkpointPath, otherPath].includes(url.pathname) || !["GET", "POST"].includes(req.method)) {
       unexpected.push(`${req.method} ${url.pathname}`);
@@ -181,6 +188,124 @@ async function openDevice(options = {}) {
   }, { companyId, userId, storeId, base, identity: options.identity || identity, originalFields,
     baseReport: options.baseReport || baseReport, visual: options.visual === true });
   return { context, page, errors, consoleIssues };
+}
+
+async function mediaStepFixture(mode = "saved") {
+  resetFixture();
+  const image = "https://cdn.example.test/approved-gold-set.jpg";
+  const packet = { product_name: "Gold wood-handled measuring set", simulation_only: true,
+    merchant_confirmed_facts: { product_name: "Gold wood-handled measuring set", material: "Gold-tone metal and wood",
+      condition: "NEW", image_urls: image, image_rights_confirmed: true },
+    source_confirmed_facts: {}, unknown_facts: ["item_location"] };
+  const facts = { ...structuredClone(baseReport), report_id: "media-facts-before", report_type: "merchant.product_facts",
+    created_at: "2026-09-06T00:00:00Z", report: { listing_project_identity: identity, merchant_product_fact_packet: packet } };
+  let currentBase = baseReport;
+  let interrupted = false;
+  checkpoint = savedCheckpoint({ ...originalFields, title: "Gold-Tone Measuring Set", selling_points: "4 cups\n4 spoons\nWood handles",
+    description: "Eight gold-tone pieces with wood handles", images: image });
+  const originalCopy = structuredClone(checkpoint.fields);
+  checkpointHandler = async (request, res) => {
+    if (request.method === "GET") {
+      sendJson(res, 200, { status: "saved", checkpoint, current_revision: checkpoint.revision,
+        current_base_report_id: currentBase.report_id, current_base_report: currentBase,
+        base_changed: checkpoint.base_report_id !== currentBase.report_id });
+    } else {
+      if (mode === "interrupted" && !interrupted) {
+        interrupted = true;
+        sendJson(res, 503, { error_code: "checkpoint_storage_unavailable" });
+        return true;
+      }
+      if (mode === "concurrent") checkpoint = { ...checkpoint, revision: 2,
+        fields: { ...checkpoint.fields, title: "Other device reviewed copy" } };
+      if (request.body.expected_revision !== checkpoint.revision || request.body.base_report_id !== currentBase.report_id) {
+        sendJson(res, 409, { error_code: "listing_draft_revision_conflict", latest_checkpoint: checkpoint,
+          current_revision: checkpoint.revision, current_base_report_id: currentBase.report_id, current_base_report: currentBase });
+      } else {
+        checkpoint = { ...checkpoint, checkpoint_id: "media-edit-2", revision: checkpoint.revision + 1,
+          base_report_id: currentBase.report_id, mutation_id: request.body.mutation_id,
+          fields: request.body.fields, merchant_edited_fields: request.body.merchant_edited_fields };
+        sendJson(res, 201, { status: "saved", checkpoint });
+      }
+    }
+    return true;
+  };
+  factHandler = (request, res) => {
+    if (mode === "fact-failure") return sendJson(res, 503, { error_code: "product_fact_storage_unavailable" });
+    currentBase = { ...facts, report_id: "media-facts-after", created_at: "2026-09-06T02:00:00Z",
+      report: { ...facts.report, merchant_product_fact_packet: request.body.merchant_product_fact_packet } };
+    if (mode === "changed-facts") currentBase.report.merchant_product_fact_packet.merchant_confirmed_facts.material = "Different material";
+    sendJson(res, 201, { report: currentBase, merchant_product_fact_packet: currentBase.report.merchant_product_fact_packet,
+      listing_project_identity: identity, is_current: true, current_fact_report_id: currentBase.report_id });
+  };
+  const device = await openDevice();
+  await device.page.route(image, route => route.fulfill({ status: 200, contentType: "image/svg+xml",
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="gold"/></svg>' }));
+  await device.page.evaluate(({ facts, packet }) => {
+    state.saasConnected = true;
+    state.saasReports.push(facts);
+    state.saasListingComposerDraft.merchant_product_fact_packet = packet;
+    state.saasListingComposerDraft.source_product_fact_report_id = facts.report_id;
+    setSaasListingWizardStep(3);
+    renderProductListingCenter();
+  }, { facts, packet });
+  await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
+  return { device, originalCopy, latest: () => currentBase };
+}
+
+test("saving image step carries reviewed buyer copy to the saved fact version and a clean device", async () => {
+  const { device, originalCopy, latest } = await mediaStepFixture();
+  let second;
+  try {
+    await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+    await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+    assert.equal(await device.page.evaluate(() => saasListingWizardRecord().step), 4);
+    assert.equal(checkpoint.base_report_id, latest().report_id, "image save must not strand buyer copy on the old fact base");
+    for (const key of ["title", "selling_points", "description"]) assert.equal(checkpoint.fields[key], originalCopy[key]);
+    assert.match(checkpoint.fields.images, /approved-gold-set.jpg/);
+    second = await openDevice({ baseReport: latest() });
+    await second.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
+    for (const key of ["title", "selling_points", "description"]) {
+      assert.equal(await second.page.locator(`[data-saas-listing-draft-field="${key}"]`).inputValue(), originalCopy[key]);
+    }
+    assert.equal(await second.page.evaluate(() => Boolean(saasListingCloudRecord().conflict)), false);
+    assert.equal(requests.filter(x => x.method === "POST" && x.path === checkpointPath).length, 1);
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+    assert.deepEqual(second.errors, []);
+  } finally { if (second) await second.context.close(); await device.context.close(); }
+});
+
+for (const mode of ["concurrent", "fact-failure", "changed-facts", "interrupted"]) {
+  test(`image-step copy continuity fails closed on ${mode}, preserving both content and the current step`, async () => {
+    const { device, originalCopy } = await mediaStepFixture(mode);
+    try {
+      await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+      await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+      assert.equal(await device.page.evaluate(() => saasListingWizardRecord().step), 3);
+      assert.equal(await device.page.evaluate(() => state.saasListingComposerDraft.fields.title), originalCopy.title);
+      if (mode === "concurrent") {
+        assert.equal(checkpoint.fields.title, "Other device reviewed copy");
+        assert.equal(await device.page.evaluate(() => saasListingCloudRecord().status), "conflict");
+      } else if (mode === "interrupted") {
+        // Recreate the in-memory sync layer using only its persisted cache and
+        // a fresh authenticated GET, as a reload does. No force/CAS bypass.
+        await device.page.evaluate(async () => {
+          invalidateSaasListingCloudCheckpointContext();
+          saasListingCloudRecords.clear();
+          await hydrateSaasListingCloudCheckpoint({ force: true });
+          await flushSaasListingCloudCheckpoint();
+        });
+        assert.equal(checkpoint.base_report_id, "media-facts-after");
+        assert.equal(checkpoint.fields.title, originalCopy.title);
+        assert.equal(await device.page.evaluate(() => saasListingCloudRecord().status), "saved");
+        const posts = requests.filter(x => x.method === "POST" && x.path === checkpointPath);
+        assert.equal(posts.length, 2);
+        assert.deepEqual(posts[0].body, posts[1].body, "retry reuses its durable mutation, not another model or fact save");
+      } else assert.equal(requests.filter(x => x.method === "POST" && x.path === checkpointPath).length, 0);
+      assert.deepEqual(unexpected, []);
+      assert.deepEqual(device.errors, []);
+    } finally { await device.context.close(); }
+  });
 }
 
 test("generation edit guard ignores empty checkpoint normalization but preserves real content and legacy-title clears", async () => {
