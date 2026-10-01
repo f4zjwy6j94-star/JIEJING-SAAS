@@ -278,7 +278,7 @@ class ProviderJobRunner:
         )
         creative_job_spec["output_safety_mode"] = "concept_reference_only" if concept_only else "reference_grounded_listing_draft"
         fidelity_instruction = {
-            "fidelity_first": "Preserve the exact product structure, color, material, included parts, proportions and visible brand marks from the reference image. Change only the requested background or lighting.",
+            "fidelity_first": "Preserve the exact product structure, color, material, included parts, proportions and physical brand marks from the reference image. Restrict edits to requested photographic presentation changes; never change the product itself.",
             "balanced": "Preserve the product structure, color, material, included parts and visible brand marks while allowing restrained lighting and background improvements.",
             "creative_exploration": "Create a clearly labeled concept direction. Keep the recognizable product subject, but treat the result as non-listing reference art.",
         }[quality_mode]
@@ -295,6 +295,21 @@ class ProviderJobRunner:
                 f"Do not add new text, letters, numbers, labels, logos, certification icons, or unsupported claims. Preserve existing visible product branding exactly; do not invent or remove it. Avoid: {', '.join(blocked_claims)}."
             )
         )
+        if (not concept_only and reference_image_url and inputs.get("commercial_rights_confirmed") is True
+                and creative_job_spec.get("text_rule") == "no_text_no_numbers_no_certifications"):
+            # The source is explicitly authorised for editing. Graphic overlays
+            # are not physical product facts; preserving them defeats no-text
+            # listing-image requests. This never permits erasing product marks.
+            image_prompt += (
+                " Remove the reference photo's added graphic overlays: headlines, floating capacity labels, "
+                "caption boxes, borders, promotional badges and supplier photography watermarks. "
+                "Keep physical engravings, capacity markings and brand marks on the actual product unchanged. "
+                "Do not replace removed overlays with translated text or new labels. "
+                "For a set, retain every included piece exactly once with its original shape and relative size; "
+                "arrange the complete set as one coherent product photo, not repeated views or a collage. "
+                "If an overlay obscures an uncertain product detail, do not invent that detail. "
+                "Use a clean plain background and restrained shadows; the result remains a draft for visual review."
+            )
         primary_image_intent = " ".join(
             [
                 str(creative_job_spec.get("output_type") or ""),

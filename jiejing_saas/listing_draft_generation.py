@@ -137,7 +137,28 @@ _WEIGHT_VALUE_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 _UNSUPPORTED_NUMERIC_SPEC_PATTERN = re.compile(
-    r"\b\d+(?:\.\d+)?\s*(?:ml|millilit(?:er|re)s?|l|lit(?:er|re)s?|fl\.?\s*oz|mah|wh|w|watts?|v|volts?)\b",
+    r"\b\d+(?:\.\d+)?\s*(?:fl\.?\s*oz|mah|wh|w|watts?|v|volts?)\b",
+    flags=re.IGNORECASE,
+)
+_METRIC_VOLUME_PATTERN = re.compile(
+    r"(?<![\dA-Za-z.+/\-])(?P<values>\d+(?:\.\d+)?(?:\s*(?:[,，、]\s*(?:and\s+)?|&\s*|and\s+)"
+    r"\d+(?:\.\d+)?)*)\s*(?P<unit>millilit(?:er|re)s?|ml|lit(?:er|re)s?|l|毫升|升)(?![A-Za-z])",
+    flags=re.IGNORECASE,
+)
+_ANY_METRIC_VOLUME_PATTERN = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:millilit(?:er|re)s?|ml|lit(?:er|re)s?|l|毫升|升)(?![A-Za-z])",
+    flags=re.IGNORECASE,
+)
+_UNCERTAIN_VOLUME_FACT_PATTERN = re.compile(
+    r"待|未知|未确认|未確認|不含|不包含|不包括|不确定|不確定|不是|不能|无|無|非|"
+    r"假设|假設|估计|估計|可能|约|約|建议|建議|或|"
+    r"\b(?:no|not|without|excluding|except|unknown|unconfirmed|unverified|maybe|perhaps|"
+    r"assumed|estimated|estimate|approximately|approx|suggested|proposed|pending|or|tbc|tbd)\b|[?？]",
+    flags=re.IGNORECASE,
+)
+_AMBIGUOUS_VOLUME_PATTERN = re.compile(
+    r"(?:\d\s*[-–—~～/／]\s*\d|\d,\d{3}(?!\d))[^.;；。\n]*?"
+    r"(?:\b(?:ml|millilit(?:er|re)s?|l|lit(?:er|re)s?)\b|毫升|升)",
     flags=re.IGNORECASE,
 )
 
@@ -1292,6 +1313,8 @@ def _grounded_material_fact_text(value: str) -> str:
 def _numeric_spec_grounding_failure(buyer_text: str, facts: dict[str, Any]) -> bool:
     if _UNSUPPORTED_NUMERIC_SPEC_PATTERN.search(buyer_text):
         return True
+    if _metric_volume_grounding_failure(buyer_text, facts):
+        return True
 
     product_dimensions = _fact_numbers(facts.get("product_dimensions_cm"))
     package_dimensions = _fact_numbers(
@@ -1331,6 +1354,41 @@ def _numeric_spec_grounding_failure(buyer_text: str, facts: dict[str, Any]) -> b
         if not allowed or not _approximately_in(claimed, allowed):
             return True
     return False
+
+
+def _metric_volume_grounding_failure(buyer_text: str, facts: dict[str, Any]) -> bool:
+    """Only explicit metric capacities in confirmed contents ground volume claims.
+
+    Do not mine product names, SKUs, model copy, unconfirmed suggestions, or
+    arbitrary numbers for evidence. Fluid-ounce/cup conversions remain blocked
+    because the measurement system is not established by a metric source.
+    """
+    if _AMBIGUOUS_VOLUME_PATTERN.search(buyer_text):
+        return True
+    claims = list(_METRIC_VOLUME_PATTERN.finditer(buyer_text))
+    if any(not any(claim.start() <= raw.start() and raw.end() <= claim.end() for claim in claims)
+           for raw in _ANY_METRIC_VOLUME_PATTERN.finditer(buyer_text)):
+        return True
+    if not claims:
+        return False
+
+    def capacities(match: re.Match[str]) -> list[float]:
+        unit = match.group("unit").casefold()
+        factor = 1000 if unit in {"l", "liter", "liters", "litre", "litres", "升"} else 1
+        return [float(value) * factor for value in re.findall(r"\d+(?:\.\d+)?", match.group("values"))]
+
+    allowed: list[float] = []
+    # Sentence-level rejection is deliberately conservative: a negated or
+    # uncertain clause cannot authorise one of its numbers by substring match.
+    for clause in re.split(r"[。;；\n]|(?<!\d)\.(?!\d)", str(facts.get("included_items") or "")):
+        if _UNCERTAIN_VOLUME_FACT_PATTERN.search(clause) or _AMBIGUOUS_VOLUME_PATTERN.search(clause):
+            continue
+        for match in _METRIC_VOLUME_PATTERN.finditer(clause):
+            allowed.extend(value for value in capacities(match) if value > 0)
+    return any(
+        value <= 0 or not any(abs(value - known) <= 0.000001 for known in allowed)
+        for claim in claims for value in capacities(claim)
+    )
 
 
 def _fact_numbers(value: Any) -> list[float]:

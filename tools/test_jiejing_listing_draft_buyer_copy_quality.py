@@ -68,7 +68,73 @@ def tablet_packet() -> dict[str, Any]:
     }
 
 
+def check_grounded_measuring_set_capacities() -> None:
+    """Exercise the same buyer-copy boundary used by model parsing and final merge."""
+    def validate(description: str, source: str = "", **packet_extra: Any) -> None:
+        packet = {
+            "merchant_confirmed_facts": {
+                "product_name": "Gold measuring cups and spoons, 8-piece set",
+                "condition": "NEW", "material": "Metal with wooden handles",
+                "included_items": source,
+            },
+            **packet_extra,
+        }
+        _validate_buyer_copy(
+            title="Gold Measuring Cups and Spoons Set with Wooden Handles, 8 Piece",
+            description=description,
+            selling_points=["Four cups and four spoons", "Gold finish", "Wooden handles"],
+            marketplace="EBAY_US", failure_prefix="listing_model_output",
+            merchant_product_fact_packet=packet,
+        )
+
+    source = "4只量杯（250、125、80、60 mL）和4只量勺（15、5、2.5、1.25 mL）。不含展示架。"
+    for description in (
+        "Cups: 250, 125, 80 and 60 mL. Spoons: 15, 5, 2.5 and 1.25 mL.",
+        "Four measuring cups: 250ml, 125ml, 80ml, 60ml.",
+        "Includes a 0.25 litre cup and a 1.25 milliliter spoon.",
+    ):
+        validate(description, source)
+    validate("Includes a 250 mL cup.", "量杯250毫升；量勺15毫升")
+    validate("Includes a 0.25 L cup.", "Cup: 250 millilitres")
+
+    blocked = [
+        ("A 300 mL cup.", source, {}),
+        ("Cups: 300, 125 and 60 mL.", source, {}),
+        ("Cups: 300 / 125 / 60 mL.", source, {}),
+        ("A 250 L cup.", source, {}),
+        ("A -250 mL cup.", source, {}),
+        ("A 1e250 mL cup.", source, {}),
+        ("A 0 mL cup.", source, {}),
+        ("A 1.3 mL spoon.", source, {}),
+        ("A 250 mL cup.", "", {}),
+        ("A 250 mL cup.", "8-piece set, SKU 250", {}),
+        ("A 250 mL cup.", "杯子250ml，容量待确认", {}),
+        ("A 250 mL cup.", "No 250 mL cup included", {}),
+        ("A 250 mL cup.", "Cup capacity maybe 250 mL", {}),
+        ("A 250 mL cup.", "不含250毫升杯", {}),
+        ("A 250 mL cup.", "不是250毫升", {}),
+        ("A 250 mL cup.", "可能250毫升", {}),
+        ("A 250 mL cup.", "250 mL?", {}),
+        ("A 250 mL cup.", "250毫升？", {}),
+        ("A 1 mL spoon.", "Capacity: 1,250 mL", {}),
+        ("A 250 mL cup.", "Cup 250 mL not confirmed", {}),
+        ("A 250 mL cup.", "", {"derived_listing_suggestions": {"included_items": source}}),
+        ("A 5 V powered cup.", source, {}),
+        ("A 250 mAh cup.", source, {}),
+        ("A 2 fl oz spoon.", source, {}),
+    ]
+    for description, facts, extra in blocked:
+        try:
+            validate(description, facts, **extra)
+        except ValueError as exc:
+            if str(exc) != "listing_model_output_ungrounded_numeric_spec":
+                raise
+        else:
+            raise AssertionError(f"ungrounded capacity/other numeric spec escaped: {description!r}, {facts!r}")
+
+
 def main() -> None:
+    check_grounded_measuring_set_capacities()
     credential_shapes = (
         "ghp_" + "A" * 30,
         "AKIA" + "B" * 16,

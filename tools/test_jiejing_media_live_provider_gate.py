@@ -206,10 +206,13 @@ def main() -> int:
             raise AssertionError(f"appearance video must not invent product operation: {live_config.video_prompt}")
         if "Locked facts that must not be changed or invented" not in live_config.image_prompt:
             raise AssertionError("grounded image prompt must preserve immutable product facts")
+        if "Remove the reference photo's added graphic overlays" in live_config.image_prompt:
+            raise AssertionError("overlay removal must require the explicit no-text output rule")
 
         main_image_body = media_job_body(video_requested=False)
         main_image_body["inputs"]["image_count"] = 1
         main_image_body["inputs"]["scene_types"] = ["white_background"]
+        main_image_body["inputs"]["creative_job_spec"]["text_rule"] = "no_text_no_numbers_no_certifications"
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
             main_image = ProviderJobRunner().run(
                 company_id="co_test",
@@ -230,6 +233,23 @@ def main() -> int:
             raise AssertionError("main-image accessory cleanup must preserve only confirmed shipped contents")
         if "Keep any base that is structurally part of the product" not in main_image_prompt:
             raise AssertionError("main-image prop cleanup must preserve a structural product base")
+        for required in (
+            "Remove the reference photo's added graphic overlays",
+            "supplier photography watermarks",
+            "Keep physical engravings, capacity markings and brand marks on the actual product unchanged",
+            "retain every included piece exactly once",
+        ):
+            if required not in main_image_prompt:
+                raise AssertionError(f"authorized no-text source editing lost its cleanup/physical-mark boundary: {required}")
+        main_image_body["inputs"]["image_prompt"] = "Keep the eight-piece set in one clean arrangement."
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
+            ProviderJobRunner().run(company_id="co_test", store_id="store_test", user_id="user_test",
+                task_id="task_custom_source_cleanup", job_id="job_custom_source_cleanup", job_body=main_image_body)
+        custom_prompt = FakeMediaGenerationAdapter.configs[-1].image_prompt
+        if ("Keep the eight-piece set" not in custom_prompt
+                or "supplier photography watermarks" not in custom_prompt
+                or "physical engravings" not in custom_prompt):
+            raise AssertionError("a custom image brief must not bypass the source cleanup/physical-mark boundary")
 
         quality_alias_body = media_job_body(video_requested=False)
         quality_alias_body["inputs"].pop("generation_tier", None)

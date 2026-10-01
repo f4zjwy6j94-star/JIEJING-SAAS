@@ -121,6 +121,30 @@ class BuyerCopyRewriteTests(unittest.TestCase):
                 "mutation_id": str(uuid.uuid4()), "fields": self.fields, "merchant_edited_fields": self.edited})
         return view["current_revision"] + 1
 
+    def test_metric_supplier_capacities_survive_real_rewrite_and_persistence(self):
+        self.packet["derived_listing_suggestions"].update({
+            "product_name": "Gold measuring cups and spoons, 8-piece set",
+            "included_items": "4只量杯（250、125、80、60 mL）和4只量勺（15、5、2.5、1.25 mL）。不含展示架。",
+        })
+        revision = self.save_material_checkpoint("Metal with wooden handles")
+        self.model.output = {
+            "title": "Gold Measuring Cups and Spoons Set with Wooden Handles, 8 Piece",
+            "selling_points": ["Four cups and four spoons", "Gold finish and wooden handles",
+                "Cups: 250, 125, 80 and 60 mL", "Spoons: 15, 5, 2.5 and 1.25 mL"],
+            "description": "An 8-piece measuring set with four cups and four spoons. Largest cup: 250 mL.",
+        }
+        result = self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len(self.model.calls), 1)
+        saved = self.repository.get_report_for_company(company_id=self.company_id,
+            report_id=result["report"]["report_id"])
+        handoff = saved["report"]["listing_handoff"]["listing_fields"]
+        self.assertEqual(handoff["buyer_copy_rewrite"]["fields"]["description"], self.model.output["description"])
+        self.assertTrue(handoff["simulation_only"])
+        for key in set(FIELD_KEYS) - BUYER_FIELDS:
+            self.assertEqual(handoff["buyer_copy_rewrite"]["fields"][key], self.fields[key])
+        self.assertFalse(result["real_platform_writes_enabled"])
+
     def test_explicit_rewrite_replaces_only_three_fields_and_preserves_original_in_report(self):
         before = copy.deepcopy(self.fields)
         default = self.generate()
