@@ -46,7 +46,11 @@ async function optionalFetchLifecycleSmoke(browser, base) {
   const externalRequests = [];
   const pageErrors = [];
   const unhandledRejections = [];
+  const optionalWarnings = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "warning") optionalWarnings.push(message.text());
+  });
   await page.exposeFunction("reportOptionalUnhandledRejection", (reason) => unhandledRejections.push(reason));
   await page.addInitScript(() => {
     window.addEventListener("unhandledrejection", (event) => window.reportOptionalUnhandledRejection(String(event.reason?.message || event.reason)));
@@ -81,6 +85,36 @@ async function optionalFetchLifecycleSmoke(browser, base) {
     if (afterSuccessDeadline.fallbacks !== 0 || afterSuccessDeadline.timeouts.length || afterSuccessDeadline.displayed !== "fixture_ready") {
       throw new Error(`completed optional HTTP success must not later record a timeout or invoke fallback: ${JSON.stringify(afterSuccessDeadline)}`);
     }
+
+    let markStaleReceived;
+    let releaseStaleResponse;
+    const staleReceived = new Promise((resolve) => { markStaleReceived = resolve; });
+    const staleRelease = new Promise((resolve) => { releaseStaleResponse = resolve; });
+    optionalRequestControls.set("/optional-lifecycle/stale-success", { markReceived: markStaleReceived, release: staleRelease });
+    const warningsBeforeCancellation = optionalWarnings.length;
+    await page.evaluate(() => {
+      window.optionalContextCurrent = true;
+      window.optionalRequestResult = optionalSaasFetchFast("/optional-lifecycle/stale-success", () => {
+        window.optionalFallbackCalls += 1;
+        return { status: "unavailable" };
+      }, 5000, { saasRequestIsCurrent: () => window.optionalContextCurrent })
+        .then((value) => ({ value }), (error) => ({ code: error.code }));
+    });
+    await staleReceived;
+    await page.evaluate(() => { window.optionalContextCurrent = false; });
+    releaseStaleResponse();
+    const cancelled = await page.evaluate(async () => ({
+      result: await window.optionalRequestResult,
+      fallbacks: window.optionalFallbackCalls,
+      displayed: document.getElementById("ceoChat").textContent,
+    }));
+    await page.clock.runFor(5001);
+    const cancelledTimeouts = await page.evaluate(() => state.saasOptionalSoftTimeouts);
+    if (cancelled.result.code !== "saas_request_context_changed" || cancelled.fallbacks !== 0 ||
+        cancelled.displayed !== "fixture_ready" || cancelledTimeouts.length || optionalWarnings.length !== warningsBeforeCancellation) {
+      throw new Error(`superseded optional HTTP success must stay cancellation, without fallback, warning, or later timeout: ${JSON.stringify({ cancelled, cancelledTimeouts, optionalWarnings })}`);
+    }
+
     const failed = await page.evaluate(async () => {
       state.saasOptionalSoftTimeouts = [];
       window.optionalFallbackCalls = 0;
@@ -229,7 +263,7 @@ async function main() {
       res.end(appSource);
       return;
     }
-    if (["success", "failure", "late-failure", "late-success", "expired"].some((name) => url.pathname === `/optional-lifecycle/${name}`)) {
+    if (["success", "stale-success", "failure", "late-failure", "late-success", "expired"].some((name) => url.pathname === `/optional-lifecycle/${name}`)) {
       const control = optionalRequestControls.get(url.pathname);
       if (control) {
         control.markReceived();

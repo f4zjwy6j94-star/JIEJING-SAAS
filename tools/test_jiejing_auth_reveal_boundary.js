@@ -717,6 +717,91 @@ test("temporary identity verification failure preserves the login hint and unrev
     "preserving a retryable session must not reveal cached protected data");
 });
 
+test("an obsolete optional history request rejects without reporting a backend outage or applying fallback", async () => {
+  const context = harness();
+  const heldBody = deferred();
+  const readingBody = deferred();
+  const warnings = [];
+  let fallbacks = 0;
+  context.state.saasApiBase = "http://127.0.0.1:0";
+  context.historyRequestCurrent = true;
+  context.setTimeout = setTimeout;
+  context.clearTimeout = clearTimeout;
+  context.console = { warn: (message) => warnings.push(message) };
+  context.historyFallback = () => { fallbacks += 1; return { turns: [] }; };
+  context.recordSaasServerClock = () => {};
+  context.fetch = async () => ({ status: 200, ok: true,
+    headers: { get: () => "application/json" },
+    json: () => { readingBody.resolve(); return heldBody.promise; } });
+  vm.runInContext(["saasFetch", "shouldAttachSaasBearerToken", "optionalSaasFetchFast",
+    "recordOptionalSaasSoftTimeout"].map((name) => extractFunction(name)).join("\n"), context);
+  const pending = run(context, 'optionalSaasFetchFast("/ai-ceo/chat-history?limit=30", historyFallback, 5000, { saasRequestIsCurrent: () => historyRequestCurrent })')
+    .then((value) => ({ value }), (error) => ({ error }));
+  await readingBody.promise;
+  context.historyRequestCurrent = false;
+  heldBody.resolve({ turns: [{ user_text: "STALE_HISTORY_SENTINEL" }] });
+  const outcome = await pending;
+  assert.deepEqual(warnings, [], "intentional context invalidation is not a backend warning");
+  assert.equal(outcome.error?.code, "saas_request_context_changed",
+    "superseded history must remain cancellation, not a successful empty-history fallback");
+  assert.equal(outcome.value, undefined);
+  assert.equal(fallbacks, 0);
+  assert.equal(context.state.saasOptionalSoftTimeouts?.length || 0, 0);
+  assert.equal(context.state.saasSessionExpiryHandled, false);
+});
+
+for (const wrapper of ["optionalSaasFetch", "optionalSaasFetchFast"]) {
+  test(`${wrapper} preserves account cancellation instead of returning another account's fallback`, async () => {
+    const context = harness();
+    const heldResponse = deferred();
+    const started = deferred();
+    const warnings = [];
+    context.state.saasApiBase = "http://127.0.0.1:0";
+    context.setTimeout = setTimeout;
+    context.clearTimeout = clearTimeout;
+    context.console = { warn: (message) => warnings.push(message) };
+    context.fallbackCalls = 0;
+    context.fetch = async () => { started.resolve(); return heldResponse.promise; };
+    context.recordSaasServerClock = () => {};
+    vm.runInContext(["saasFetch", "shouldAttachSaasBearerToken", wrapper, "recordOptionalSaasSoftTimeout"]
+      .map((name) => extractFunction(name)).join("\n"), context);
+    const pending = run(context, `${wrapper}("/ai-ceo/chat-history?limit=30", () => { fallbackCalls += 1; return { turns: [] }; })`)
+      .then((value) => ({ value }), (error) => ({ error }));
+    await started.promise;
+    run(context, "startSaasAccountSwitch()");
+    heldResponse.resolve({ status: 200, ok: true, headers: { get: () => "application/json" },
+      json: async () => ({ turns: [{ user_text: "STALE_ACCOUNT_HISTORY_SENTINEL" }] }) });
+    const outcome = await pending;
+    assert.equal(outcome.error?.code, "saas_account_context_changed");
+    assert.equal(outcome.value, undefined);
+    assert.equal(context.fallbackCalls, 0);
+    assert.deepEqual(warnings, []);
+    assert.equal(context.state.saasUser, null);
+    assert.equal(context.state.saasOptionalSoftTimeouts?.length || 0, 0);
+  });
+
+  test(`${wrapper} still reports a real 503 and returns its unavailable fallback`, async () => {
+    const context = harness();
+    const warnings = [];
+    context.state.saasApiBase = "http://127.0.0.1:0";
+    context.setTimeout = setTimeout;
+    context.clearTimeout = clearTimeout;
+    context.console = { warn: (message) => warnings.push(message) };
+    context.fetch = async () => ({ status: 503, ok: false,
+      headers: { get: () => "application/json" }, text: async () => '{"error":"backend_unavailable"}' });
+    context.recordSaasServerClock = () => {};
+    context.saasBackendErrorMessage = () => "backend_unavailable";
+    vm.runInContext(["saasFetch", "shouldAttachSaasBearerToken", wrapper, "recordOptionalSaasSoftTimeout"]
+      .map((name) => extractFunction(name)).join("\n"), context);
+    const result = await run(context, `${wrapper}("/ai-ceo/chat-history?limit=30", (error) => ({ unavailable: true, status: error.status }))`);
+    assert.equal(result.unavailable, true);
+    assert.equal(result.status, 503);
+    assert.equal(warnings.length, 1, "real outages must not be silently filtered");
+    assert.match(warnings[0], /backend_unavailable/);
+    assert.equal(context.state.saasSessionExpiryHandled, false);
+  });
+}
+
 test("successful headers do not authorize a JSON body arriving after the account changed", async () => {
   const context = harness();
   const heldBody = deferred();

@@ -15486,7 +15486,10 @@ async function optionalSaasFetch(path, fallback) {
   try {
     return await saasFetch(path);
   } catch (error) {
-    if (isSaasUnrecoverableSessionError(error)) throw error;
+    // An obsolete request is cancellation, not an optional backend outage.
+    // Preserve it for the caller's context guard; never apply stale fallback.
+    if (isSaasUnrecoverableSessionError(error) ||
+        error?.code === "saas_account_context_changed" || error?.code === "saas_request_context_changed") throw error;
     console.warn(`[JIEJING optional API skipped] ${path}: ${error.message}`);
     return typeof fallback === "function" ? fallback(error) : fallback;
   }
@@ -15515,7 +15518,9 @@ async function optionalSaasFetchFast(path, fallback, timeoutMs = 5000, options =
   };
   let timer = null;
   const request = saasFetch(path, options).catch((error) => {
-    if (isSaasUnrecoverableSessionError(error)) throw error;
+    // A replaced refresh/account must not become a successful empty response.
+    if (isSaasUnrecoverableSessionError(error) ||
+        error?.code === "saas_account_context_changed" || error?.code === "saas_request_context_changed") throw error;
     console.warn(`[JIEJING optional API skipped] ${path}: ${error.message}`);
     return fallbackValue(error);
   });
