@@ -8487,6 +8487,7 @@ function saasIsInvalidMarketProductLabel(value = "") {
   if (/^(?:如果|假如|若|我(?:会|将|保持|无法|不能)|请(?:你|提供|补充|确认)|本轮(?:仅|只|不)|这次(?:仅|只|不))/.test(lower) && /[，,。；;]/.test(lower)) return true;
   if (/\S\s+(?:vs\.?|versus)\s+\S/i.test(lower)) return true;
   const sectionLabel = lower.replace(/\s*[（(][^()（）]{1,40}[）)]\s*$/, "");
+  if (/^(?:(?:商品|产品)?(?:名称|状态|材质|品牌|型号|产地|尺寸|净重)|包装(?:方式|类型|重量|尺寸)|(?:采购|单件)?成本|(?:建议|计划)?售价|建议库存|库存(?:数量)?|(?:实际)?发货地|处理时间|图片授权|食品接触认证|sku|mpn|(?:product\s+)?(?:name|condition|material|brand|model|origin|dimensions?|size)|(?:net|package)\s+weight|package\s+(?:dimensions?|size)|unit\s+cost|selling\s+price|quantity|handling\s+time)$/i.test(sectionLabel)) return true;
   if (/^(?:(?:未验证|未核实|待验证|待核验|待确认|待补)(?:事项|项目|项|事实|资料|信息)?(?:汇总|清单|说明|总结|列表)?|(?:供应商|商家|商品|货源|采购)?(?:资料|参数|事实|信息)(?:清单|汇总|要求|说明|核验|确认)|(?:证据|操作|交易|流程|执行|任务|本轮)?边界(?:说明|约束|限制)?|(?:(?:supplier|merchant|product|source)\s+)?(?:information|facts?|evidence|verification)\s+(?:checklist|summary|notes|requirements)|(?:unverified|unconfirmed|missing)\s+(?:items|facts|information)|(?:evidence\s+)?boundary\s+(?:notes|explanation))$/i.test(sectionLabel)) return true;
   const invalidExact = new Set([
     "ai ceo 市场调研",

@@ -19645,6 +19645,14 @@ def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
         return True
     section_label = re.sub(r"\s*[（(][^()（）]{1,40}[）)]\s*$", "", compact)
     if re.fullmatch(
+        r"(?:商品|产品)?(?:名称|状态|材质|品牌|型号|产地|尺寸|净重)|包装(?:方式|类型|重量|尺寸)|"
+        r"(?:采购|单件)?成本|(?:建议|计划)?售价|建议库存|库存(?:数量)?|(?:实际)?发货地|处理时间|图片授权|食品接触认证|"
+        r"sku|mpn|(?:product\s+)?(?:name|condition|material|brand|model|origin|dimensions?|size)|"
+        r"(?:net|package)\s+weight|package\s+(?:dimensions?|size)|unit\s+cost|selling\s+price|quantity|handling\s+time",
+        section_label,
+    ):
+        return True
+    if re.fullmatch(
         r"(?:未验证|未核实|待验证|待核验|待确认|待补)(?:事项|项目|项|事实|资料|信息)?(?:汇总|清单|说明|总结|列表)?|"
         r"(?:供应商|商家|商品|货源|采购)?(?:资料|参数|事实|信息)(?:清单|汇总|要求|说明|核验|确认)|"
         r"(?:证据|操作|交易|流程|执行|任务|本轮)?边界(?:说明|约束|限制)?|"

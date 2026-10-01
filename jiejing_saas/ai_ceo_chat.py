@@ -4950,7 +4950,29 @@ def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
         "product selection",
         "what to sell",
     )
-    return any(marker in text for marker in markers)
+    # Selection quality rules must follow affirmative intent, not words inside
+    # boundaries such as "不重新选品" in an existing product's spec revision.
+    # Check occurrences independently so a later affirmative request still wins.
+    modifiers = r"(?:\s|再|重新|重复|继续|直接|立即|自动|帮我|为我|先|去|做|进行|提供|推荐|比较|筛选)*"
+    prior_action = r"(?:联网|调研|搜索|检索|选品|候选商品|候选|产品方向|商品方向)"
+    for marker in markers:
+        for match in re.finditer(re.escape(marker), text):
+            prefix = text[:match.start()]
+            if re.search(
+                r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁|不需要|不必|无须|不允许|不许)"
+                rf"(?:{modifiers}{prior_action}\s*(?:、|或|和|以及|及))*{modifiers}$",
+                prefix,
+            ):
+                continue
+            if re.search(
+                r"\b(?:do not|don't|must not|no|without|stop)\s+"
+                r"(?:(?:new|more|any|further|repeat|repeating|redo|redoing|another|additional)\s+)*$",
+                prefix,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            return True
+    return False
 
 
 def _looks_like_explicit_listing_intake(message: str) -> bool:

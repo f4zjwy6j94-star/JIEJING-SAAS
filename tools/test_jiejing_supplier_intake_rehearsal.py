@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.repository import SaaSRepository
-from jiejing_saas.ai_ceo_chat import build_ai_ceo_turn_plan
+from jiejing_saas.ai_ceo_chat import build_ai_ceo_turn_plan, run_ai_ceo_chat, validate_ai_ceo_answer_quality
+from tools.test_jiejing_ai_ceo_answer_quality_gate import MinimalRepository, SequenceModel
 
 
 PRODUCT = "不锈钢厨房量勺／量杯套装"
@@ -71,6 +74,114 @@ class SupplierIntakeRehearsalTests(unittest.TestCase):
         self.assertNotIn("material", packet["merchant_confirmed_facts"])
         self.assertFalse(packet["listing_readiness"]["ready_for_real_publish"])
         self.assertEqual(report["listing_project_identity"], IDENTITY)
+
+    def test_existing_product_spec_revision_is_not_forced_into_product_selection(self) -> None:
+        message = (
+            "继续当前量勺／量杯项目，不新建项目、不重新选品、不联网。"
+            "请修订刚才的商品规格表，明确作为模拟演练，仅供内部 Listing 与素材流程测试。"
+            f"目标商品：{PRODUCT}。禁止保存eBay草稿、正式发布、采购或付款。"
+        )
+        quality = validate_ai_ceo_answer_quality(
+            message=message, route="ebay_workflow", answer=REHEARSAL_ANSWER,
+            source_records=[], context={},
+        )
+        self.assertTrue(quality["accepted"], quality)
+        self.assertEqual(quality["quality_gate"], "non_selection_answer_present_v1")
+
+    def test_fact_field_names_cannot_replace_the_current_product(self) -> None:
+        report = self.save(
+            f"继续当前项目，不重新选品。目标商品：{PRODUCT}。修订商品规格表，仅供模拟演练。",
+            "### 候选商品卡\n候选商品 1：商品状态\nNew\n候选商品 2：SKU\nTEST-001\n",
+        )
+        self.assertEqual(report["product"], PRODUCT)
+        self.assertEqual([c["name"] for c in report["product_candidates"]], [PRODUCT])
+        stale_report = json.loads(json.dumps(report))
+        stale_report["product"] = "商品状态"
+        stale_report["selected_product_candidate"] = {"candidate_id": "candidate_1", "name": "SKU", "selected": True}
+        stale_report["product_candidates"] = [stale_report["selected_product_candidate"]]
+        stale_fields = stale_report["listing_handoff"]["listing_fields"]
+        stale_fields["title"] = "商品状态"
+        stale_fields["selected_product_candidate"] = stale_report["selected_product_candidate"]
+        stale_fields["product_candidates"] = stale_report["product_candidates"]
+        self.assertFalse(self.frontend_can_import(stale_report))
+
+    def test_no_selection_boundaries_do_not_activate_candidate_quality_rules(self) -> None:
+        for boundary in [
+            "不重新选品", "不要重新选品", "无需推荐候选商品", "不再比较候选",
+            "不要联网或重新选品", "禁止联网、调研和重新选品",
+            "no new product ideas", "do not repeat product selection",
+        ]:
+            with self.subTest(boundary=boundary):
+                quality = validate_ai_ceo_answer_quality(
+                    message=f"继续当前项目，{boundary}。请修订商品规格表，仅供模拟演练。",
+                    route="ebay_workflow", answer=REHEARSAL_ANSWER, source_records=[], context={},
+                )
+                self.assertTrue(quality["accepted"], quality)
+                self.assertEqual(quality["quality_gate"], "non_selection_answer_present_v1")
+
+    def test_affirmative_selection_keeps_its_quality_gate(self) -> None:
+        for message in [
+            "请选品并比较3个候选商品。", "比较原来的3个候选商品，不要重新选品。",
+            "不要联网或重新选品，但请比较这3个候选商品。",
+            "不重新选品；现在改变计划，请重新选品。",
+            "No new product ideas; instead compare the product ideas already proposed.",
+        ]:
+            with self.subTest(message=message):
+                quality = validate_ai_ceo_answer_quality(
+                    message=message, route="ebay_workflow", answer=REHEARSAL_ANSWER,
+                    source_records=[], context={},
+                )
+                self.assertFalse(quality["accepted"], quality)
+                self.assertEqual(quality["quality_gate"], "ebay_product_selection_answer_v2")
+
+    def test_spec_table_survives_chat_and_save_without_candidate_projection(self) -> None:
+        message = (
+            f"继续当前项目，目标商品：{PRODUCT}。不要联网或重新选品。"
+            "请修订商品规格表，仅供模拟演练，不是供应商参数。"
+            "禁止保存eBay草稿、正式发布、采购或付款。"
+        )
+        answer = REHEARSAL_ANSWER.replace(
+            "| 建议售价 |", "| SKU | MSC-SET8-DRILL-001 |\n| 采购成本 | USD 2.50（模拟演练） |\n"
+            "| 建议库存 | 10（模拟演练） |\n| 建议售价 |",
+        )
+        model = SequenceModel([answer])
+        with patch.dict(os.environ, {
+            "JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED": "false",
+            "JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED": "true",
+        }):
+            chat = run_ai_ceo_chat(
+                repository=MinimalRepository(), company_id="test-company", store_id="test-store",
+                user_id="test-user", message=message, model_client=model,
+                active_listing_context={
+                    "contract_version": "active_listing_context_v1",
+                    "product_name": PRODUCT, "listing_project_identity": IDENTITY,
+                    "listing": {"title": PRODUCT, "known_facts": {"product_name": PRODUCT}},
+                },
+            )
+        self.assertEqual(chat["status"], "model_answered", chat)
+        self.assertEqual(chat["answer"], answer.strip())
+        self.assertEqual(model.calls, 1)
+        self.assertEqual(chat["context"]["active_listing_context"]["product_name"], PRODUCT)
+        self.assertFalse(chat["answer_quality"].get("contract_projection_used", False))
+        report = self.save(message, chat["answer"], answer_quality=chat["answer_quality"])
+        self.assertEqual(report["product"], PRODUCT)
+        self.assertEqual(report["listing_project_identity"], IDENTITY)
+        self.assertEqual([c["name"] for c in report["product_candidates"]], [PRODUCT])
+        packet = report["merchant_product_fact_packet"]
+        self.assertTrue(packet["simulation_only"])
+        self.assertEqual(packet["derived_listing_suggestions"]["unit_cost"], "2.50")
+        self.assertEqual(packet["derived_listing_suggestions"]["quantity"], "10")
+        self.assertEqual(packet["derived_listing_suggestions"]["package_weight_g"], "380")
+        self.assertFalse(packet["source_confirmed_facts"])
+        self.assertFalse(packet["listing_readiness"]["ready_for_real_publish"])
+        self.assertTrue(self.frontend_can_import(report))
+
+    def test_legitimate_product_names_containing_field_words_remain_eligible(self) -> None:
+        for name in ["SKU label printer", "商品标签纸", "Stainless Steel Measuring Cups Set"]:
+            with self.subTest(name=name):
+                report = self.save("请比较候选商品。", f"### 候选商品 1：{name}\n待核对供应商规格。")
+                self.assertEqual(report["product"], name)
+                self.assertTrue(self.frontend_can_import(report))
 
     def test_simulation_safety_does_not_depend_on_a_specific_no_publish_phrase(self) -> None:
         report = self.save(
