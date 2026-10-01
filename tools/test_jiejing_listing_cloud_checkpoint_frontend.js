@@ -194,6 +194,7 @@ async function mediaStepFixture(mode = "saved") {
   resetFixture();
   const image = "https://cdn.example.test/approved-gold-set.jpg";
   const packet = { product_name: "Gold wood-handled measuring set", simulation_only: true,
+    source: "authenticated_merchant_request",
     merchant_confirmed_facts: { product_name: "Gold wood-handled measuring set", material: "Gold-tone metal and wood",
       condition: "NEW", image_urls: image, image_rights_confirmed: true },
     source_confirmed_facts: {}, unknown_facts: ["item_location"] };
@@ -263,16 +264,55 @@ test("saving image step carries reviewed buyer copy to the saved fact version an
     for (const key of ["title", "selling_points", "description"]) assert.equal(checkpoint.fields[key], originalCopy[key]);
     assert.match(checkpoint.fields.images, /approved-gold-set.jpg/);
     second = await openDevice({ baseReport: latest() });
+    await second.page.evaluate(() => {
+      restoreSaasListingComposerDraftFromBackendReports({ preferBackendLatest: true });
+      document.querySelector('#view-product').innerHTML = renderSaasListingDraftEditor();
+    });
     await second.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
     for (const key of ["title", "selling_points", "description"]) {
       assert.equal(await second.page.locator(`[data-saas-listing-draft-field="${key}"]`).inputValue(), originalCopy[key]);
     }
     assert.equal(await second.page.evaluate(() => Boolean(saasListingCloudRecord().conflict)), false);
+    assert.equal(await second.page.locator('.saas-listing-v2-draft-head > div > strong').textContent(), originalCopy.title);
+    const rights = await second.page.evaluate(() => {
+      const draft = state.saasListingComposerDraft;
+      const assets = saasListingEbayFieldCoverage(draft).groups.find(group => group.key === "assets");
+      return assets.fields.find(([label]) => label === "素材授权")[1];
+    });
+    assert.equal(rights, true, "the saved image-rights checkbox must agree with the field coverage display after restore");
     assert.equal(requests.filter(x => x.method === "POST" && x.path === checkpointPath).length, 1);
     assert.deepEqual(unexpected, []);
     assert.deepEqual(device.errors, []);
     assert.deepEqual(second.errors, []);
   } finally { if (second) await second.context.close(); await device.context.close(); }
+});
+
+test("image rights display only accepts confirmed facts for the exact currently selected images", async () => {
+  const { device } = await mediaStepFixture();
+  try {
+    const results = await device.page.evaluate(() => {
+      const draft = state.saasListingComposerDraft;
+      const checked = () => saasListingEbayFieldCoverage(draft).groups.find(group => group.key === "assets")
+        .fields.find(([label]) => label === "素材授权")[1];
+      const before = checked();
+      const image = draft.fields.images;
+      draft.fields.images = "https://cdn.example.test/different.jpg";
+      const changed = checked();
+      draft.fields.images = "";
+      const cleared = checked();
+      draft.fields.images = image;
+      draft.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed = false;
+      const unchecked = checked();
+      draft.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed = "true";
+      const string = checked();
+      draft.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed = true;
+      draft.merchant_product_fact_packet.unknown_facts.push("image_rights_confirmed");
+      return { before, changed, cleared, unchecked, string, unknown: checked() };
+    });
+    assert.deepEqual(results, { before: true, changed: false, cleared: false, unchecked: false, string: false, unknown: false });
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
 });
 
 for (const mode of ["concurrent", "fact-failure", "changed-facts", "interrupted"]) {
@@ -1059,6 +1099,30 @@ test("a checkpoint from an older base keeps its conflict copy separate while cur
     assert.equal(await device.page.evaluate(() => saasPublishIntakePrefillValues("").title), "Current base generated title",
       "selecting the newly validated vision-origin report must not turn it into ungenerated manual copy or force another AI run");
     assert.equal(requests.filter((request) => request.method === "POST").length, 0);
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+test("draft heading follows restored and edited title without resurrecting old text or interpreting HTML", async () => {
+  resetFixture();
+  checkpoint = savedCheckpoint({ ...originalFields, title: "Gold-Tone Measuring Set" });
+  const device = await openDevice();
+  try {
+    await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
+    const heading = device.page.locator('.saas-listing-v2-draft-head > div > strong');
+    assert.equal(await heading.textContent(), "Gold-Tone Measuring Set", "cloud restore must update heading and input together");
+    const literal = '<img src=x onerror="throw 1"> Gold set';
+    await device.page.locator('[data-saas-listing-draft-field="title"]').fill(literal);
+    assert.equal(await heading.textContent(), literal, "typing updates the heading as text, not markup");
+    assert.equal(await heading.locator('img').count(), 0);
+    await device.page.evaluate(() => { document.querySelector('#view-product').innerHTML = renderSaasListingDraftEditor(); });
+    assert.equal(await heading.textContent(), literal, "a full rerender uses the current field too");
+    assert.equal(await heading.locator('img').count(), 0);
+    await device.page.locator('[data-saas-listing-draft-field="title"]').fill('');
+    assert.equal(await heading.textContent(), "尚未填写标题", "clearing must not resurrect the generated title");
+    await device.page.evaluate(() => { document.querySelector('#view-product').innerHTML = renderSaasListingDraftEditor(); });
+    assert.equal(await heading.textContent(), "尚未填写标题");
     assert.deepEqual(unexpected, []);
     assert.deepEqual(device.errors, []);
   } finally { await device.context.close(); }

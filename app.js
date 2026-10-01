@@ -9736,6 +9736,17 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
   `;
 }
 
+function saasListingDraftHeading(draft = state.saasListingComposerDraft) {
+  // The editable title is authoritative, including an intentional clear.
+  return String(draft?.fields?.title ?? draft?.title ?? "").trim() || "尚未填写标题";
+}
+
+function syncSaasListingDraftHeading() {
+  document.querySelectorAll("[data-saas-listing-draft-heading]").forEach((heading) => {
+    heading.textContent = saasListingDraftHeading();
+  });
+}
+
 function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
   if (!draft) {
     return "";
@@ -9747,7 +9758,7 @@ function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
       <div class="saas-listing-v2-draft-head">
         <div>
           <span>Listing 草稿</span>
-          <strong>${escapeHtml(draft.title || "新商品 Listing 草稿")}</strong>
+          <strong data-saas-listing-draft-heading>${escapeHtml(saasListingDraftHeading(draft))}</strong>
           <p>先改买家最先看到的标题、卖点和描述；其余信息在辅助参数中补齐，真实发布仍要进确认中心。</p>
         </div>
         <span class="pill green">草稿</span>
@@ -9948,6 +9959,19 @@ function saasListingPublishGapRows(draft = state.saasListingComposerDraft, cover
   ];
 }
 
+function saasListingConfirmedImageRightsForSelection(draft = state.saasListingComposerDraft) {
+  // Display evidence only: never grants media approval or permission to publish.
+  const packet = draft?.merchant_product_fact_packet || {};
+  const facts = { ...(packet.source_confirmed_facts || {}), ...(packet.merchant_confirmed_facts || {}) };
+  const unknown = Array.isArray(packet.unknown_facts) ? packet.unknown_facts : [];
+  if (facts.image_rights_confirmed !== true ||
+      unknown.some(key => ["image_urls", "image_rights_confirmed"].includes(key))) return false;
+  const urls = value => [...new Set((String(value ?? "").match(/https?:\/\/[^\s<>"'，；,;]+/gi) || []))].sort();
+  const confirmed = urls(facts.image_urls);
+  const selected = urls(draft?.fields?.images ?? draft?.publish_prefill?.image_urls);
+  return confirmed.length > 0 && JSON.stringify(confirmed) === JSON.stringify(selected);
+}
+
 function saasListingEbayFieldCoverage(draft = state.saasListingComposerDraft, ctx = saasMerchantWorkbenchContext()) {
   const fields = draft?.fields || {};
   const publishPrefill = draft?.publish_prefill && typeof draft.publish_prefill === "object" ? draft.publish_prefill : {};
@@ -10025,7 +10049,7 @@ function saasListingEbayFieldCoverage(draft = state.saasListingComposerDraft, ct
       title: "图片 URL、授权、用途",
       fields: [
         ["图片 URL", /https?:\/\//i.test(imageText) || mediaWritebackUrls.length > 0, "补 eBay 可访问图片 URL"],
-        ["素材授权", mediaWritebackRightsReady || (/授权|版权|rights|commercial/i.test(imageText) && !/待确认|待审核|待复核|未确认|needs|review|pending/i.test(imageText)), "确认图片来源和商业使用权"],
+        ["素材授权", saasListingConfirmedImageRightsForSelection(draft) || mediaWritebackRightsReady || (/授权|版权|rights|commercial/i.test(imageText) && !/待确认|待审核|待复核|未确认|needs|review|pending/i.test(imageText)), "确认图片来源和商业使用权"],
         ["图片用途", /主图|场景|细节|尺寸|image|photo|素材清单|主图候选/i.test(imageText) || Boolean(mediaWriteback), "标清主图、细节图、尺寸图和场景图"],
       ],
     },
@@ -33740,6 +33764,7 @@ function setSaasListingDraftField(field = "", value = "", options = {}) {
   if (key === "title") {
     state.saasListingComposerDraft.title = safeValue.slice(0, 90) || state.saasListingComposerDraft.title;
     state.saasListingComposerDraft.product = state.saasListingComposerDraft.product || state.saasListingComposerDraft.title;
+    syncSaasListingDraftHeading();
   }
   scheduleSaasListingDraftSnapshotSave();
   if (changed && options?.merchantEdited === true && typeof queueSaasListingCloudCheckpoint === "function") {
@@ -33972,6 +33997,7 @@ function syncSaasListingCloudEditorFields() {
   document.querySelectorAll("[data-saas-listing-draft-field]").forEach((input) => {
     input.value = fields[input.dataset.saasListingDraftField] ?? "";
   });
+  syncSaasListingDraftHeading();
 }
 
 function renderSaasListingCloudCheckpointStatus() {
