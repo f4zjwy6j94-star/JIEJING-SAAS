@@ -13487,8 +13487,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             and getattr(model_client, "jiejing_reasoning_mode", "") == "thinking"
             and urlparse(getattr(model_client, "endpoint", "")).netloc.lower() == "api.deepseek.com"
         ):
-            # This is not a provider/model failover. Only an empty, exhausted
-            # answer may use this isolated client, with the identical BYOK.
+            # This is not a provider/model failover. An exhausted answer with
+            # no body or an incomplete structure may use this isolated client
+            # once, with the identical BYOK and no recursive continuation.
             direct_client = build_model_client_from_byok_secret(
                 provider_key=definition.provider_key,
                 api_key=str(resolved.get("secret_value") or ""),

@@ -1048,6 +1048,7 @@ def run_ai_ceo_chat(
     if (
         not answer_quality.get("accepted")
         and not (result or {}).get("bounded_empty_answer_recovery")
+        and not (result or {}).get("bounded_output_recovery")
         and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True)
     ):
         repair_started_at = time.monotonic()
@@ -1071,15 +1072,16 @@ def run_ai_ceo_chat(
                 "不得重放旧候选卡；明确这不是供应商或可发布证明，并进入供应商事实核验。"
                 if _looks_like_market_evidence_followup(message=safe_message, route=route)
                 else "选品问题必须按要求给出足量的具体候选商品卡，不得回答其他历史问题。"
+                if selection_contract
+                else "继续完成当前商品或当前问题要求的结果，保留本轮格式与阶段边界，不重新选品，不回答其他历史问题。"
             )
             repair_result = model_client.generate_text(
                 system_prompt=(
                     system_prompt
                     + " 上一版回复没有通过本轮问题一致性检查。只回答当前 merchant_message；"
                     + repair_scope_instruction
-                    + "涉及 eBay 规则、政策、图片或发布要求时，必须区分官方强制要求、平台建议和商家最佳实践；"
-                    "每条外部事实使用已有 source_records 的 [S1]、[S2] 等编号引用。"
-                    "没有官方来源支撑时，不得使用‘必须’‘一律’‘绝对’‘禁止’‘会被下架’等断言。"
+                    + "引用外部事实时使用已有 source_records 的 [S1]、[S2] 等编号；没有官方来源，不得编造平台强制规则。"
+                    "商家设定的禁止发布等操作边界是本轮要求，不是平台规则；模拟参数仍标为模拟，未知事实仍标为待核对。"
                     "回答必须以完整句子结束；如果上一版停在半句话，改写成更短的完整答案。"
                     + _model_answer_repair_instruction(
                         answer_quality=answer_quality,
@@ -1190,6 +1192,7 @@ def run_ai_ceo_chat(
                 "initial_retry_count": model_initial_retry_count,
                 "repair_retry_count": repair_retry_count,
                 "contract_projection_used": contract_projection_used,
+                "output_recovery_used": bool((result or {}).get("bounded_output_recovery")),
             },
             "context": prompt_context,
             "model_client": _public_model_context(result, model_client, model_resolution),
@@ -1228,6 +1231,7 @@ def run_ai_ceo_chat(
             "initial_retry_count": model_initial_retry_count,
             "repair_retry_count": repair_retry_count,
             "contract_projection_used": contract_projection_used,
+            "output_recovery_used": bool((result or {}).get("bounded_output_recovery")),
         },
         "context": prompt_context,
         "model_client": _public_model_context(result, model_client, model_resolution),
@@ -1591,6 +1595,12 @@ def build_ai_ceo_chat_prompts(
         system_prompt += " 当前路由是普通咨询：像 DeepSeek 一样直接回答，不创建经营任务，不写长期经营记忆。"
     elif route == AI_CEO_ROUTE_EBAY_WORKFLOW:
         system_prompt += (
+            " 当前路由是 eBay 经营任务：优先交付当前商品或当前问题要求的结果，保持真实写入确认边界。"
+            "商品资料整理或修订直接使用商家要求的表格或字段格式，不额外展开工作计划、候选商品或重复风险说明。"
+            "current_context.store 中 connection_status、connection_authorized、oauth_required 是授权状态的唯一权威依据；store_name 只是展示名称，绝不能根据名称推断授权状态。"
+        )
+        if _looks_like_product_selection_request(message=message, route=route) and not _looks_like_explicit_listing_intake(message):
+            system_prompt += (
             " 当前路由是 eBay 经营任务：输出目标、计划、来源/缺口、风险、需要确认的动作、下一步，并保持真实写入确认边界。"
             "如果商家问“卖什么”“帮我选品”“不知道卖什么”，必须基于市场调研给出 2-4 个候选商品卡；每张卡包含商品名、推荐度评分、为什么有需求、为什么适合 eBay/轻小件、风险和待补资料。"
             "选品类回答必须先输出“候选商品卡”，再写市场调研正文；不要先写长篇市场机会概述，候选商品名必须出现在回答前 500 字内，避免后续 Listing 无法识别具体商品。"
@@ -1604,8 +1614,7 @@ def build_ai_ceo_chat_prompts(
             "不要把蓝牙耳机、充电器、电池、化妆品、保健品、强品牌配件等高合规/高售后/红海类目作为默认候选。"
             "没有可展示来源支撑时，不要写“月销过万”“搜索量很高”等精确热度话术；只能写“需用 eBay 竞品和真实店铺数据复核”。"
             "当商家说明没有供应商、实物或商品参数时，只能提出待验证的产品方向；不得编造材质、重量、尺寸、成本、品牌、型号、包装、物流服务或类目编号。"
-            "current_context.store 中 connection_status、connection_authorized、oauth_required 是授权状态的唯一权威依据；store_name 只是展示名称，绝不能根据名称推断授权状态。"
-        )
+            )
     elif route == AI_CEO_ROUTE_CONFIRMATION:
         system_prompt += " 当前路由是高风险动作：不要声称已执行，只说明需要进入决策中心确认，并列出发布/改价/库存/退款/广告/政策等执行前检查项。"
     elif route == AI_CEO_ROUTE_MERCHANT_RULE:
@@ -3662,17 +3671,24 @@ def _generate_model_text_with_initial_retry(
             timeout_seconds=timeout_seconds,
             on_text_delta=on_text_delta,
         )
-        result = _complete_truncated_model_result(
-            model_client=model_client,
-            result=result,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            route=route,
-            realtime_kind=realtime_kind,
-            on_text_delta=on_text_delta,
+        partial_budget_recovery = bool(
+            empty_answer_client is not None
+            and str((result or {}).get("finish_reason") or "").lower() in {"length", "max_tokens", "max_output_tokens"}
+            and str((result or {}).get("text") or "").strip()
+            and _ai_ceo_answer_completeness_blockers(str((result or {}).get("text") or ""))
         )
+        if not partial_budget_recovery:
+            result = _complete_truncated_model_result(
+                model_client=model_client,
+                result=result,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                route=route,
+                realtime_kind=realtime_kind,
+                on_text_delta=on_text_delta,
+            )
         recovery_client = empty_answer_client or fallback_model_client
-        if _empty_answer_exhausted_output_budget(result) and recovery_client is not None:
+        if (_empty_answer_exhausted_output_budget(result) or partial_budget_recovery) and recovery_client is not None:
             fallback_timeout = _env_int(
                 "JIEJING_AI_CEO_EMPTY_ANSWER_FALLBACK_TIMEOUT_SECONDS",
                 default=min(timeout_seconds, 24 if empty_answer_client else 10),
@@ -3687,8 +3703,9 @@ def _generate_model_text_with_initial_retry(
             )
             fallback_prompt = (
                 system_prompt
-                + " 上一次深度思考耗尽了输出预算但没有生成商家可见正文。"
-                "请直接、简洁地完成当前 merchant_message；未知商品事实继续标为待确认，不得重复分析过程。"
+                + (" 上一次输出预算耗尽，商品表格或正文尚未完成；请从头返回简短、完整的结果，不续写残片。"
+                   if partial_budget_recovery else " 上一次深度思考耗尽了输出预算但没有生成商家可见正文。")
+                + "请直接、简洁地完成当前 merchant_message；未知商品事实继续标为待确认，不得重复分析过程。"
             )
             try:
                 fallback_result = recovery_client.generate_text(
@@ -3697,7 +3714,9 @@ def _generate_model_text_with_initial_retry(
                     temperature=0.1,
                     max_output_tokens=fallback_tokens,
                     timeout_seconds=fallback_timeout,
-                    on_text_delta=on_text_delta,
+                    # A full rewrite replaces the incomplete body; do not
+                    # append its stream to the previous partial answer.
+                    on_text_delta=None if partial_budget_recovery else on_text_delta,
                 )
                 if empty_answer_client is None:
                     fallback_result = _complete_truncated_model_result(
@@ -3713,6 +3732,7 @@ def _generate_model_text_with_initial_retry(
                     # The private recovery's one extra request is a hard cost
                     # boundary: no continuation or answer-repair recursion.
                     fallback_result["bounded_empty_answer_recovery"] = True
+                    fallback_result["bounded_output_recovery"] = True
                 fallback_result["empty_answer_failover_used"] = True
                 fallback_result["primary_finish_reason"] = str(result.get("finish_reason") or "")
                 return fallback_result, _elapsed_ms(started_at), 1, None
@@ -5600,6 +5620,13 @@ def _model_answer_repair_instruction(
     if not blocked_by:
         return ""
     instructions = [f" 本轮修复必须消除这些失败代码：{', '.join(blocked_by)}。"]
+    if any(code in blocked_by for code in (
+        "model_answer_truncated_table", "model_answer_unclosed_code_fence", "model_answer_incomplete_ending",
+    )):
+        instructions.append(
+            "从头返回简短完整的结果，不续写残片；表格必须有完整表头和每一行，不留下孤立竖线或未闭合代码块。"
+            "保留商家指定的字段、数值和模拟标记；未知事实仍待核对，不新增未经证实的参数。"
+        )
     if "connected_store_reported_as_unauthorized" in blocked_by or "connection_status_mismatch" in blocked_by:
         instructions.append("不要声称店铺未授权，也不要改写连接状态；这轮选品无需主动讨论 OAuth。")
     if "listing_scope_exceeded" in blocked_by:
@@ -5615,7 +5642,10 @@ def _model_answer_repair_instruction(
         instructions.append("每个候选分别给一个可点击的 eBay US /sch/i.html?_nkw= 搜索入口或真实 Item ID。")
     if "search_entry_presented_as_demand_evidence" in blocked_by or "unsupported_common_sense_demand_claim" in blocked_by:
         instructions.append("搜索入口不等于成交证明；没有候选级成交记录时，每个候选分别写‘成交证据不足’，不要用常识声称需求稳定。")
-    instructions.append("严格按 selection_contract 输出，不要解释上一版，也不要复制 recent_conversation 里的旧答案。")
+    if selection_contract:
+        instructions.append("严格按 selection_contract 输出，不要解释上一版，也不要复制 recent_conversation 里的旧答案。")
+    else:
+        instructions.append("严格按当前 merchant_message 的任务与格式输出，不要解释上一版，也不要复制旧答案。")
     return "".join(instructions)
 
 
@@ -5625,7 +5655,20 @@ def _model_answer_rejected_fallback(
     source_records: list[dict[str, Any]],
     blocked_by: list[str] | None = None,
 ) -> str:
-    if _looks_like_platform_rule_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW):
+    blocked = {str(item) for item in (blocked_by or [])}
+    if blocked.intersection({
+        "empty_model_answer", "model_answer_truncated_table", "model_answer_unclosed_code_fence",
+        "model_answer_incomplete_ending", "truncated_platform_rule_answer",
+    }):
+        return (
+            "### 本次回答内容不完整\n\n"
+            "回复未形成完整内容，未用于生成或覆盖 Listing。现有项目和已保存资料保持不变。\n\n"
+            "可以在当前项目重试，或继续补充商品资料。本次没有保存 eBay 草稿或执行发布。"
+        )
+    if blocked.intersection({
+        "missing_source_citation_for_platform_rule", "unsupported_absolute_platform_rule_claim",
+        "official_platform_claim_without_official_source",
+    }) or (not blocked and _looks_like_platform_rule_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)):
         official_sources = []
         for index, source in enumerate(source_records[:8], start=1):
             domain = _safe_text(source.get("domain") or _domain_from_url(str(source.get("url") or "")), limit=120)
@@ -5650,7 +5693,12 @@ def _model_answer_rejected_fallback(
         domain = _safe_text(source.get("domain") or "", limit=80)
         source_lines.append(f"[{citation_id}] {title}{f'（{domain}）' if domain else ''}")
     source_text = "\n".join(source_lines) if source_lines else "这次还没有拿到足够的可核验公开来源。"
-    blocked = {str(item) for item in (blocked_by or [])}
+    if not _looks_like_product_selection_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW):
+        return (
+            "### 本次回答未通过校验\n\n"
+            "内容与当前任务或已核对的资料不一致，未用于生成或覆盖 Listing。现有项目和已保存资料保持不变。\n\n"
+            "请在当前项目继续核对资料。本次没有保存 eBay 草稿或执行发布。"
+        )
     reason_lines = []
     reason_map = (
         ("connected_store_reported_as_unauthorized", "错误判断了店铺授权状态"),

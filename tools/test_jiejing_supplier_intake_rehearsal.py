@@ -17,7 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.repository import SaaSRepository
-from jiejing_saas.ai_ceo_chat import build_ai_ceo_turn_plan, run_ai_ceo_chat, validate_ai_ceo_answer_quality
+from jiejing_saas.ai_ceo_chat import (
+    build_ai_ceo_chat_prompts, build_ai_ceo_turn_plan, run_ai_ceo_chat, validate_ai_ceo_answer_quality,
+)
 from tools.test_jiejing_ai_ceo_answer_quality_gate import MinimalRepository, SequenceModel
 
 
@@ -42,6 +44,14 @@ REHEARSAL_ANSWER = """### 模拟演练 · 商品规格表
 | 建议售价 | 约 $12.99 — 演练值 |
 禁止保存 eBay 草稿、正式发布、采购或付款。
 """
+SPEC_REVISION_MESSAGE = (
+    "继续当前量勺／量杯项目，不新建项目、不重新选品、不联网。请修订刚才的商品规格表，"
+    "明确作为受控处理演练，仅供内部 Listing 与素材流程测试，所有规格和数值都不是供应商参数。"
+    f"目标商品：{PRODUCT}。沿用8件套、净重320g、包装重量380g、包装尺寸22×12×5cm；"
+    "商品状态用New，材质用Stainless Steel。请以字段和受控处理演练值两列表格列出。"
+    "真实发货地、供应商品牌、图片授权、食品接触认证仍未验证，不要编造成已确认。"
+    "禁止保存eBay草稿、正式发布、采购或付款。"
+)
 
 
 class SupplierIntakeRehearsalTests(unittest.TestCase):
@@ -87,6 +97,100 @@ class SupplierIntakeRehearsalTests(unittest.TestCase):
         )
         self.assertTrue(quality["accepted"], quality)
         self.assertEqual(quality["quality_gate"], "non_selection_answer_present_v1")
+
+    def run_spec_chat(self, model: SequenceModel, message: str = SPEC_REVISION_MESSAGE) -> dict:
+        with patch.dict(os.environ, {
+            "JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED": "false",
+            "JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED": "true",
+        }):
+            return run_ai_ceo_chat(
+                repository=MinimalRepository(), company_id="test-company", store_id="test-store",
+                user_id="test-user", message=message, model_client=model,
+                active_listing_context={
+                    "contract_version": "active_listing_context_v1", "product_name": PRODUCT,
+                    "listing_project_identity": IDENTITY,
+                    "listing": {"title": PRODUCT, "known_facts": {"product_name": PRODUCT}},
+                },
+            )
+
+    def test_spec_revision_prompt_does_not_request_candidate_cards(self) -> None:
+        system, _ = build_ai_ceo_chat_prompts(
+            message=SPEC_REVISION_MESSAGE, context={}, route="ebay_workflow",
+        )
+        self.assertNotIn("每张卡包含商品名", system)
+        self.assertNotIn("目标、计划、来源/缺口、风险", system)
+        self.assertIn("当前商品", system)
+        selection_system, _ = build_ai_ceo_chat_prompts(
+            message="请选品并比较三个适合 eBay 的商品。", context={}, route="ebay_workflow",
+        )
+        self.assertIn("每张卡包含商品名", selection_system)
+
+    def test_incomplete_spec_repair_stays_on_current_task_and_rejects_if_still_incomplete(self) -> None:
+        model = SequenceModel(["### 商品规格\n|", "### 商品规格\n|"])
+        chat = self.run_spec_chat(model)
+        self.assertEqual(model.calls, 2)
+        repair_prompt = model.system_prompts[1]
+        self.assertNotIn("选品问题必须", repair_prompt)
+        self.assertNotIn("严格按 selection_contract 输出", repair_prompt)
+        self.assertIn("表格", repair_prompt)
+        self.assertIn("模拟", repair_prompt)
+        self.assertEqual(chat["status"], "model_answer_rejected")
+        self.assertIn("model_answer_truncated_table", chat["answer_quality"]["blocked_by"])
+        self.assertIn("内容不完整", chat["answer"])
+        self.assertNotIn("规则回答", chat["answer"])
+        self.assertNotIn("重新生成具体候选", chat["answer"])
+        report = self.save(SPEC_REVISION_MESSAGE, chat["answer"], answer_quality=chat["answer_quality"])
+        self.assertFalse(self.frontend_can_import(report))
+
+    def test_incomplete_spec_repair_can_return_a_valid_simulation_without_reselection(self) -> None:
+        model = SequenceModel(["### 商品规格\n|", REHEARSAL_ANSWER])
+        chat = self.run_spec_chat(model)
+        self.assertEqual(chat["status"], "model_answered")
+        self.assertEqual(chat["answer"], REHEARSAL_ANSWER.strip())
+        self.assertEqual(model.calls, 2)
+        self.assertNotIn("选品问题必须", model.system_prompts[1])
+        report = self.save(SPEC_REVISION_MESSAGE, chat["answer"], answer_quality=chat["answer_quality"])
+        self.assertTrue(report["merchant_product_fact_packet"]["simulation_only"])
+        self.assertTrue(self.frontend_can_import(report))
+        self.assertFalse(report["merchant_product_fact_packet"]["listing_readiness"]["ready_for_real_publish"])
+
+    def test_partial_budget_exhaustion_uses_one_direct_recovery_without_continuation_or_repair(self) -> None:
+        class ExhaustedTableModel(SequenceModel):
+            def generate_text(self, **kwargs: object) -> dict:
+                result = super().generate_text(**kwargs)
+                result["finish_reason"] = "length"
+                return result
+
+        for recovered in [REHEARSAL_ANSWER, "### 商品规格\n|"]:
+            with self.subTest(recovered_complete=recovered == REHEARSAL_ANSWER):
+                model = ExhaustedTableModel(["### 商品规格\n|"])
+                direct = SequenceModel([recovered])
+                model.jiejing_empty_answer_model_client = direct
+                chat = self.run_spec_chat(model)
+                self.assertEqual(model.calls, 1, "do not keep spending on truncated reasoning continuations")
+                self.assertEqual(direct.calls, 1, "direct recovery must remain bounded to one request")
+                self.assertEqual(chat["answer_quality"]["repair_retry_count"], 0)
+                self.assertEqual(chat["answer_quality"]["output_recovery_used"], True)
+                self.assertEqual(chat["status"], "model_answered" if recovered == REHEARSAL_ANSWER else "model_answer_rejected")
+                if recovered != REHEARSAL_ANSWER:
+                    self.assertIn("内容不完整", chat["answer"])
+
+    def test_complete_primary_answer_does_not_use_the_recovery_client(self) -> None:
+        model = SequenceModel([REHEARSAL_ANSWER])
+        direct = SequenceModel([AssertionError("unnecessary recovery")])
+        model.jiejing_empty_answer_model_client = direct
+        chat = self.run_spec_chat(model)
+        self.assertEqual(chat["status"], "model_answered")
+        self.assertEqual(model.calls, 1)
+        self.assertEqual(direct.calls, 0)
+        self.assertFalse(chat["answer_quality"]["output_recovery_used"])
+
+    def test_incomplete_policy_answer_reports_completeness_not_a_source_accusation(self) -> None:
+        model = SequenceModel(["### eBay 官方规则\n|", "### eBay 官方规则\n|"])
+        chat = self.run_spec_chat(model, message="请说明 eBay Listing 主图政策要求。")
+        self.assertEqual(chat["status"], "model_answer_rejected")
+        self.assertIn("内容不完整", chat["answer"])
+        self.assertNotIn("把建议写成了强制规定", chat["answer"])
 
     def test_fact_field_names_cannot_replace_the_current_product(self) -> None:
         report = self.save(
@@ -293,7 +397,7 @@ process.stdout.write(JSON.stringify(saasAiCeoMarketReportCanStartBlockedListingD
                 self.assertNotIn("supplier_source_unavailable", report["blocked_by"])
                 self.assertTrue(self.frontend_can_import(report))
 
-    def test_failed_read_card_explains_the_actual_problem_without_an_import_button(self) -> None:
+    def report_delivery_markup(self, report: dict) -> str:
         script = r"""
 const fs = require('fs');
 const source = fs.readFileSync('app.js', 'utf8');
@@ -303,7 +407,7 @@ const normalizeSaasAiCeoLatestTurn = value => value;
 const saasAiCeoMarketProductLabel = () => 'Test measuring set';
 const saasIsConcreteProductLabel = () => true;
 const escapeHtml = value => String(value);
-const saasAuthoritativeAiCeoMarketReportForTurn = () => ({report:{evidence_status:'supplier_source_unavailable'}});
+const saasAuthoritativeAiCeoMarketReportForTurn = () => ({report: JSON.parse(fs.readFileSync(0, 'utf8'))});
 const saasAiCeoMarketReportCanStartBlockedListingDraft = () => false;
 eval(source.slice(start, end));
 process.stdout.write(renderSaasAiCeoMarketReportDeliveryMarkup({market_report_delivery:{
@@ -311,10 +415,23 @@ process.stdout.write(renderSaasAiCeoMarketReportDeliveryMarkup({market_report_de
   listing_import_ready:false, report_id:'test-report', product:'Test measuring set', source_record_count:3
 }}));
 """
-        result = subprocess.run(["node", "-e", script], text=True, encoding="utf-8", capture_output=True, check=True, cwd=ROOT)
-        self.assertIn("来源页面暂不可读取", result.stdout)
-        self.assertNotIn("补齐候选商品", result.stdout)
-        self.assertNotIn("导入 Listing 草稿", result.stdout)
+        result = subprocess.run(["node", "-e", script], input=json.dumps(report), text=True, encoding="utf-8", capture_output=True, check=True, cwd=ROOT)
+        return result.stdout
+
+    def test_failed_read_card_explains_the_actual_problem_without_an_import_button(self) -> None:
+        markup = self.report_delivery_markup({"evidence_status": "supplier_source_unavailable"})
+        self.assertIn("来源页面暂不可读取", markup)
+        self.assertNotIn("补齐候选商品", markup)
+        self.assertNotIn("导入 Listing 草稿", markup)
+
+    def test_rejected_answer_card_does_not_ask_for_unrelated_product_candidates(self) -> None:
+        markup = self.report_delivery_markup({
+            "answer_quality": {"accepted": False, "blocked_by": ["model_answer_truncated_table"]},
+        })
+        self.assertIn("本次内容未通过校验", markup)
+        self.assertNotIn("补齐候选商品", markup)
+        self.assertNotIn("市场调研已保存", markup)
+        self.assertNotIn("导入 Listing 草稿", markup)
 
 
 if __name__ == "__main__":

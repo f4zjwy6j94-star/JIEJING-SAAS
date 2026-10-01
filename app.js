@@ -25710,6 +25710,17 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
     "这次市场调研";
   const sourceCopy = delivery.source_record_count ? `已带 ${delivery.source_record_count} 条公开来源；` : "";
   const authoritativeReport = saasAuthoritativeAiCeoMarketReportForTurn(latest);
+  if (authoritativeReport?.report?.answer_quality?.accepted === false) {
+    return `
+      <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
+        <div>
+          <span>本次内容未通过校验</span>
+          <strong>${escapeHtml(title)}</strong>
+          <small>本次结果已保留供查看，未导入 Listing；现有商品资料不变。</small>
+        </div>
+      </div>
+    `;
+  }
   if (authoritativeReport?.report?.evidence_status === "supplier_source_unavailable") {
     return `
       <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
