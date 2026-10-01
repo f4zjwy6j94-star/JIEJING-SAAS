@@ -683,5 +683,50 @@ class CheckpointHTTPTests(unittest.TestCase):
         self.assertEqual(self.request(self.path, method="POST", body=self.body)[0], 201)
 
 
+class ProductImageCheckpointHTTPTests(unittest.TestCase):
+    # An independent localhost server keeps these added regression requests out
+    # of the existing suite's rate-limit window. Production limits stay intact.
+    setUpClass = classmethod(CheckpointHTTPTests.setUpClass.__func__)
+    tearDownClass = classmethod(CheckpointHTTPTests.tearDownClass.__func__)
+    request = classmethod(CheckpointHTTPTests.request.__func__)
+    setUp = CheckpointHTTPTests.setUp
+    fact_action = CheckpointHTTPTests.fact_action
+
+    def test_product_image_urls_survive_fact_save_and_cold_report_restore(self):
+        urls = "https://v3b.fal.media/files/b/fixture/gold-set.jpg https://fal.media/files/detail.jpg"
+        action = self.fact_action("Gold-tone metal and wood", self.base_report_id)
+        action["merchant_product_fact_packet"]["merchant_confirmed_facts"].update(
+            image_urls=urls, image_rights_confirmed=True)
+        action["merchant_product_fact_packet"]["simulation_only"] = True
+        status, saved = self.request(f"/stores/{self.store_id}/product-facts", method="POST", body=action)
+        self.assertEqual(status, 201)
+        # Real save receipt and the same cold-start report route used by the browser.
+        for response in (saved, self.request(self.path + self.query)[1]):
+            report = response.get("current_base_report") or response["report"]
+            packet = report["report"]["merchant_product_fact_packet"]
+            self.assertEqual(packet["merchant_confirmed_facts"]["image_urls"].split(), urls.split())
+            self.assertTrue(packet["merchant_confirmed_facts"]["image_rights_confirmed"])
+            self.assertTrue(packet["simulation_only"])
+            self.assertIn("simulation_only_product_facts", packet["blocked_by"])
+            image_sources = [r["url"] for r in packet["source_records"] if r["type"] == "merchant_product_image"]
+            self.assertEqual(image_sources, urls.split())
+        _, replayed = self.request(f"/stores/{self.store_id}/product-facts", method="POST", body=action)
+        self.assertEqual(replayed["report"], saved["report"])
+
+    def test_multiple_reviewed_image_lines_are_not_silently_dropped(self):
+        urls = ["https://v3b.fal.media/files/b/fixture/gold-set.jpg", "https://fal.media/files/detail.jpg"]
+        current_id = self.base_report_id
+        for separator in ("\n", "\r\n"):
+            action = self.fact_action("Gold-tone metal and wood", current_id)
+            action["merchant_product_fact_packet"]["merchant_confirmed_facts"].update(
+                image_urls=separator.join(urls), image_rights_confirmed=True)
+            status, saved = self.request(f"/stores/{self.store_id}/product-facts", method="POST", body=action)
+            self.assertEqual(status, 201)
+            current_id = saved["report"]["report_id"]
+            packet = self.request(self.path + self.query)[1]["current_base_report"]["report"]["merchant_product_fact_packet"]
+            self.assertEqual(packet["merchant_confirmed_facts"].get("image_urls", "").split(), urls)
+            self.assertNotIn("image_urls", packet["unknown_facts"])
+
+
 if __name__ == "__main__":
     unittest.main()

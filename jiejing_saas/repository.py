@@ -19165,6 +19165,11 @@ def normalize_merchant_product_fact_packet(
                     cleaned[key] = True
                 continue
             limit = 2400 if key == "image_urls" else 700 if key == "source_url" else 240
+            if key == "image_urls" and isinstance(raw_value, str):
+                # The image editor/writeback joins multiple URLs with newlines.
+                # Normalize only these separators before the existing strict
+                # text/secret checks; do not silently drop the whole photo set.
+                raw_value = re.sub(r"\r\n|[\r\n]", " ", raw_value)
             text = _safe_ai_ceo_supplier_text(raw_value, limit=limit)
             if not text:
                 continue

@@ -485,6 +485,27 @@ class MediaSettlementContractTest(unittest.TestCase):
 
         self.assertEqual("", browser_payload.get("asset_manifest", [{}])[0].get("url"))
 
+    def test_browser_redaction_preserves_public_urls_outside_media_manifest(self) -> None:
+        url = "https://v3b.fal.media/files/b/fixture/gold-set.jpg"
+        other = "https://fal.media/files/detail.jpg"
+        for separator in ("\n", " ", ",", ";", "，", "；"):
+            urls = separator.join((url, other))
+            with self.subTest(separator=separator):
+                payload = _merchant_safe_replaceable_media_provider({
+                    "merchant_confirmed_facts": {"image_urls": urls},
+                    "source_records": [{"type": "merchant_product_image", "url": url}],
+                    "fields": {"images": urls},
+                    "publish_prefill": {"imageUrls": [url, other]},
+                    "media_provider": "fal",
+                    "diagnostic": "fal driver is replaceable",
+                })
+                self.assertEqual(payload["merchant_confirmed_facts"]["image_urls"], urls)
+                self.assertEqual(payload["source_records"][0]["url"], url)
+                self.assertEqual(payload["fields"]["images"], urls)
+                self.assertEqual(payload["publish_prefill"]["imageUrls"], [url, other])
+                self.assertEqual(payload["media_provider"], "jiejing_media_router")
+                self.assertEqual(payload["diagnostic"], "jiejing_media_router driver is replaceable")
+
     def _reservation(
         self,
         *,

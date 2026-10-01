@@ -1282,6 +1282,13 @@ def _merchant_safe_replaceable_media_provider(value: Any, *, _inside_asset_manif
             for item in value
         ]
     if isinstance(value, str):
+        # Public transport URLs are data, not replaceable driver labels. They
+        # also occur in fact packets, source records and Listing fields, outside
+        # asset_manifest. Preserve a URL-only value/list byte-for-byte; never
+        # extend this exemption to signed/userinfo URLs or diagnostic prose.
+        public_urls = re.split(r"[\s,，；;]+", value.strip())
+        if public_urls and all(_is_safe_public_media_asset_url(url) for url in public_urls):
+            return value
         safe_text = re.sub(r"media\.fal_asset_generation", "media.asset_generation", value, flags=re.IGNORECASE)
         return re.sub(r"\bfal(?:\.ai)?\b", "jiejing_media_router", safe_text, flags=re.IGNORECASE)
     return value
