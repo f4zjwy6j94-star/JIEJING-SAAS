@@ -11480,6 +11480,7 @@ function loadSaasLatestListingProductFacts() {
   projected.fields = { ...(draft.fields || {}) };
   invalidateSaasListingValidationForFactChange(projected, draft.merchant_product_fact_packet || {}, packet);
   projected.source_product_fact_report_id = latest.report_id;
+  delete projected.pending_product_fact_import;
   state.saasListingComposerDraft = projected;
   state.saasProductFactSaveAttempt = null;
   state.saasListingProductFactSaveStatus = "saved";
@@ -15859,6 +15860,17 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
       }
     }
   };
+  const pendingImportDraft = state.saasListingComposerDraft;
+  const pendingImportIdentity = saasNormalizeListingProjectIdentity(pendingImportDraft?.listing_project_identity);
+  if (restoreDetachedDraft && pendingImportIdentity &&
+      (!routeProjectId || routeProjectId === pendingImportIdentity.key) &&
+      pendingImportDraft.pending_product_fact_import === saasListingAiGenerationContextKey(pendingImportDraft) &&
+      factReports.some((item) => item.report_id === pendingImportDraft.source_product_fact_report_id &&
+        saasListingCloudReportMatchesContext(item, { companyId: activeCompanyId, storeId: activeStoreId, identity: pendingImportIdentity }))) {
+    // A reload may retain scoped local edits, but only after authenticated
+    // reports prove the exact fact base. Explicit "load latest" discards them.
+    return pendingImportDraft;
+  }
   if (preferBackendLatest && state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") {
     state.saasListingComposerDraft = null;
     state.saasListingSourceMode = "";
@@ -15873,6 +15885,10 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
   if (state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") {
     if (saasListingDraftHasConcreteProduct(state.saasListingComposerDraft)) {
       const currentDraft = state.saasListingComposerDraft;
+      // A report import is still an unsaved merchant edit. A background read
+      // must not discard its suggestions or silently advance its CAS base.
+      // A newer fact head is shown by the editor's existing conflict guard.
+      if (currentDraft.pending_product_fact_import === saasListingAiGenerationContextKey(currentDraft)) return currentDraft;
       const currentPacket =
         currentDraft.merchant_product_fact_packet && typeof currentDraft.merchant_product_fact_packet === "object"
           ? currentDraft.merchant_product_fact_packet
@@ -16470,6 +16486,8 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
     ]),
     ...(typeof draft.source_product_fact_report_id === "string" && /^[A-Za-z0-9._:-]{0,160}$/.test(draft.source_product_fact_report_id)
       ? { source_product_fact_report_id: draft.source_product_fact_report_id } : {}),
+    ...(typeof draft.pending_product_fact_import === "string" && draft.pending_product_fact_import === saasListingAiGenerationContextKey(draft)
+      ? { pending_product_fact_import: draft.pending_product_fact_import } : {}),
     listing_project_key: identity.key || publicRuntimeText(draft.listing_project_key || "").slice(0, 120),
     listing_project_identity: structuredIdentity,
     selected_product_candidate: selected
@@ -25709,8 +25727,9 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
     delivery.title ||
     "这次市场调研";
   const sourceCopy = delivery.source_record_count ? `已带 ${delivery.source_record_count} 条公开来源；` : "";
+  const savedReport = saasSavedAiCeoMarketReportForTurn(latest);
   const authoritativeReport = saasAuthoritativeAiCeoMarketReportForTurn(latest);
-  if (authoritativeReport?.report?.answer_quality?.accepted === false) {
+  if (latest.status === "model_answer_rejected" || latest.answer_quality?.accepted === false || savedReport?.report?.answer_quality?.accepted === false) {
     return `
       <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
         <div>
@@ -25721,7 +25740,7 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
       </div>
     `;
   }
-  if (authoritativeReport?.report?.evidence_status === "supplier_source_unavailable") {
+  if (savedReport?.report?.evidence_status === "supplier_source_unavailable") {
     return `
       <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
         <div>
@@ -34440,6 +34459,7 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
     }
     if (response.report?.report_id && state.saasListingComposerDraft) {
       state.saasListingComposerDraft.source_product_fact_report_id = String(response.report.report_id);
+      delete state.saasListingComposerDraft.pending_product_fact_import;
       if (typeof clearSaasPendingProductFactEditor === "function") clearSaasPendingProductFactEditor(undefined, { preserveOtherSteps: true });
     }
     if (response.task) state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
@@ -35657,7 +35677,8 @@ async function handleSaasListingSourceAiReport() {
     renderProductListingCenter();
     return false;
   }
-  state.saasListingComposerDraft = importedDraft;
+  state.saasListingComposerDraft = ["ai_ceo.market_research", "market.report"].includes(report.report_type)
+    ? saasListingDraftWithImportBaseline(importedDraft) : importedDraft;
   resetSaasBulkWorkspaceForListingProject();
   state.saasListingSourceMode = "ai_report";
   renderProductListingCenter();
@@ -35779,7 +35800,7 @@ function saasAiCeoMarketReportDeliveryFromRecord(record = null) {
   });
 }
 
-function saasAuthoritativeAiCeoMarketReportForTurn(turn = {}) {
+function saasSavedAiCeoMarketReportForTurn(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   const reportId = String(latest?.market_report_id || "").trim();
   const delivery = latest?.market_report_delivery;
@@ -35802,6 +35823,13 @@ function saasAuthoritativeAiCeoMarketReportForTurn(turn = {}) {
   ) {
     return null;
   }
+  return record || null;
+}
+
+function saasAuthoritativeAiCeoMarketReportForTurn(turn = {}) {
+  const record = saasSavedAiCeoMarketReportForTurn(turn);
+  if (!record) return null;
+  const body = record?.report && typeof record.report === "object" ? record.report : {};
   const handoff = body.listing_handoff && typeof body.listing_handoff === "object" ? body.listing_handoff : {};
   return handoff.ready_for_listing_draft === true || saasAiCeoMarketReportCanStartBlockedListingDraft(record) ? record : null;
 }
@@ -36001,11 +36029,66 @@ function saasAiCeoMarketTurnFromReport(record = null) {
     work_records: Array.isArray(body.work_records) ? body.work_records : [],
     confirmation_items: Array.isArray(body.confirmation_items) ? body.confirmation_items : [],
     source_policy: body.source_policy && typeof body.source_policy === "object" ? body.source_policy : null,
+    answer_quality: body.answer_quality && typeof body.answer_quality === "object" ? body.answer_quality : null,
     market_report_id: record.report_id || "",
     market_report_delivery: saasAiCeoMarketReportDeliveryFromRecord(record),
     listing_project_identity: listingProjectIdentity,
     created_at: record.created_at || new Date().toISOString(),
   });
+}
+
+function saasListingDraftWithImportBaseline(importedDraft, previousDraft = state.saasListingComposerDraft) {
+  if (!importedDraft) return null;
+  const identity = saasNormalizeListingProjectIdentity(importedDraft.listing_project_identity);
+  const previousIdentity = saasNormalizeListingProjectIdentity(previousDraft?.listing_project_identity);
+  const sameProject = saasListingCloudSameIdentity(identity, previousIdentity);
+  const head = identity ? saasLatestObservedListingProductFactReport({
+    companyId: String(state.saasIdentity?.company_id || state.saasCompany?.company_id || ""),
+    storeId: String(activeSaasStore()?.store_id || ""), identity,
+  }) : null;
+  // An intentional report import is a local edit, not a new fact version.
+  // Keep an already-observed base (including an older one); never rebase a
+  // stale editor just because a newer report has arrived in the background.
+  importedDraft.source_product_fact_report_id = sameProject && typeof previousDraft.source_product_fact_report_id === "string"
+    ? previousDraft.source_product_fact_report_id : String(head?.report_id || "");
+  const basePacket = sameProject ? previousDraft.merchant_product_fact_packet : head?.report?.merchant_product_fact_packet;
+  const incomingPacket = importedDraft.merchant_product_fact_packet || {};
+  const union = (left = [], right = []) => Array.from(new Map([...left, ...right].map((item) => [JSON.stringify(item), item])).values());
+  let packet = incomingPacket;
+  if (basePacket) {
+    const confirmed = { ...(basePacket.source_confirmed_facts || {}), ...(basePacket.merchant_confirmed_facts || {}) };
+    packet = {
+      ...basePacket,
+      simulation_only: basePacket.simulation_only === true || incomingPacket.simulation_only === true,
+      source_confirmed_facts: { ...(basePacket.source_confirmed_facts || {}) },
+      merchant_confirmed_facts: { ...(basePacket.merchant_confirmed_facts || {}) },
+      // A revised AI report cannot override confirmed facts. New or changed
+      // values stay suggestions until the merchant explicitly reviews them.
+      derived_listing_suggestions: {
+        ...(basePacket.derived_listing_suggestions || {}),
+        ...(incomingPacket.source_confirmed_facts || {}),
+        ...(incomingPacket.merchant_confirmed_facts || {}),
+        ...(incomingPacket.derived_listing_suggestions || {}),
+      },
+      unknown_facts: union(basePacket.unknown_facts, incomingPacket.unknown_facts)
+        .filter((key) => !saasMerchantProductFactValuePresent(key, confirmed[key])),
+      source_records: union(basePacket.source_records, incomingPacket.source_records),
+      fact_conflicts: union(basePacket.fact_conflicts, incomingPacket.fact_conflicts),
+      field_evidence: { ...(incomingPacket.field_evidence || {}), ...(basePacket.field_evidence || {}) },
+    };
+    packet.fact_scope = packet.simulation_only ? "simulation_rehearsal" : basePacket.fact_scope || "merchant_product";
+  }
+  const draft = applySaasMerchantProductFactPacketToDraft(sameProject ? {
+    ...previousDraft, ...importedDraft, fields: { ...(previousDraft.fields || {}) },
+    publish_prefill: { ...(previousDraft.publish_prefill || {}) },
+    merchant_edited_fields: [...(previousDraft.merchant_edited_fields || [])],
+  } : importedDraft, packet);
+  if (sameProject) {
+    draft.fields = { ...(previousDraft.fields || {}) };
+    invalidateSaasListingValidationForFactChange(draft, basePacket || {}, packet);
+  }
+  draft.pending_product_fact_import = saasListingAiGenerationContextKey(draft);
+  return draft;
 }
 
 function applySaasAiCeoMarketTurnToListing(marketTurn = null, options = {}) {
@@ -36024,7 +36107,9 @@ function applySaasAiCeoMarketTurnToListing(marketTurn = null, options = {}) {
     showActionToast("这份调研还没有可验证的后端工作记录，不能导入 Listing。请刷新 AI CEO 对话后重试。");
     return false;
   }
-  state.saasListingComposerDraft = saasListingDraftFromReport(sourceReport, "ai_ceo_market_report");
+  state.saasListingComposerDraft = saasListingDraftWithImportBaseline(
+    saasListingDraftFromReport(sourceReport, "ai_ceo_market_report"),
+  );
   if (!state.saasListingComposerDraft) {
     showActionToast("这次调研还没有形成可导入的具体商品。请回到 AI CEO 重新生成候选商品卡。");
     return false;

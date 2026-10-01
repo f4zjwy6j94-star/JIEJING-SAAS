@@ -121,6 +121,225 @@ async function withRestorePage(reports, run, options = {}) {
   }
 }
 
+function supplierRevisionReport() {
+  const candidate = { candidate_id: identity.candidate_id, name: product };
+  return {
+    report_id: "supplier-revision", report_type: "ai_ceo.market_research", status: "saved",
+    company_id: companyId, store_id: storeId, created_at: "2026-09-04T01:00:00Z",
+    report: {
+      product, listing_project_identity: identity, merchant_question: "补充当前商品规格，供内部 Listing 演练，不发布。",
+      answer: `商品：${product}\n材质：Stainless Steel\n商品状态：New\n仅为演练值，尚未核验真实商品。`,
+      status: "answered", answer_quality: { accepted: true }, product_candidates: [candidate],
+      selected_product_candidate: candidate,
+      merchant_product_fact_packet: {
+        product_name: product, simulation_only: true, fact_scope: "simulation_rehearsal",
+        source_confirmed_facts: {}, merchant_confirmed_facts: { product_name: product },
+        derived_listing_suggestions: { material: "Stainless Steel", condition: "New", unit_cost: "2.50", currency: "USD" },
+        unknown_facts: ["material", "condition", "unit_cost", "currency", "image_rights_confirmed", "item_location"],
+        source_records: [], fact_conflicts: [], listing_copy: {},
+      },
+      listing_handoff: { ready_for_listing_draft: false, listing_fields: {
+        title: product, product_candidates: [candidate], selected_product_candidate: candidate,
+      } },
+    },
+  };
+}
+
+test("importing a supplier revision retains the existing fact version and shows new suggestions without a false conflict", async () => {
+  const facts = factReport({ report_id: "saved-facts-A" });
+  facts.report.merchant_product_fact_packet = {
+    source: "authenticated_merchant_request", product_name: product,
+    source_confirmed_facts: {}, merchant_confirmed_facts: { product_name: product },
+    derived_listing_suggestions: {}, unknown_facts: ["material", "condition"], listing_copy: {},
+  };
+  const revision = supplierRevisionReport();
+  await withRestorePage([facts, revision], async (page) => {
+    const imported = await page.evaluate(() => {
+      state.saasProtectedStateReady = true;
+      state.saasConnected = true;
+      restoreSaasListingComposerDraftFromBackendReports({ ...window.restoreOptions,
+        reports: state.saasReports.filter((row) => row.report_type === "merchant.product_facts") });
+      renderProductListingCenter();
+      const record = state.saasReports.find((row) => row.report_id === "supplier-revision");
+      const turn = saasAiCeoMarketTurnFromReport(record);
+      return { applied: applySaasAiCeoMarketTurnToListing({ ...turn, rendered_product: record.report.product }, { expectedProduct: record.report.product }), eligibility: saasAiCeoMarketResearchEligibility(turn),
+        label: saasProductLabelForRecord(record), canStart: saasAiCeoMarketReportCanStartBlockedListingDraft(record) };
+    });
+    assert.equal(imported.applied, true, JSON.stringify(imported));
+    assert.equal(await page.locator('[data-saas-product-fact-field="material"]').inputValue(), "Stainless Steel");
+    assert.equal(await page.locator('[data-saas-product-fact-version-warning]').count(), 0,
+      "a report import must not invent a conflict with the fact version that was already loaded");
+    const current = await page.evaluate(() => ({
+      draft: state.saasListingComposerDraft,
+      save: prepareSaasProductFactSaveAttempt(state.saasListingComposerDraft, saasMerchantProductFactPacket()).saveContext,
+    }));
+    assert.equal(current.save.expected_fact_report_id, facts.report_id);
+    assert.deepEqual(current.draft.listing_project_identity, identity);
+    assert.equal(current.draft.merchant_product_fact_packet.simulation_only, true);
+    assert.equal(current.draft.merchant_product_fact_packet.merchant_confirmed_facts.material, undefined);
+  });
+});
+
+test("a supplier revision preserves merchant facts and copy while its unsaved suggestions survive a report refresh", async () => {
+  const facts = factReport({ report_id: "saved-facts-A" });
+  facts.report.merchant_product_fact_packet = {
+    source: "authenticated_merchant_request", product_name: product,
+    source_confirmed_facts: {}, merchant_confirmed_facts: { product_name: product, material: "Aluminum" },
+    derived_listing_suggestions: {}, unknown_facts: ["condition"], listing_copy: {},
+  };
+  await withRestorePage([facts, supplierRevisionReport()], async (page) => {
+    const result = await page.evaluate(() => {
+      state.saasProtectedStateReady = true;
+      state.saasConnected = true;
+      restoreSaasListingComposerDraftFromBackendReports({ ...window.restoreOptions,
+        reports: state.saasReports.filter((row) => row.report_type === "merchant.product_facts") });
+      state.saasListingComposerDraft.fields.title = "My edited product title";
+      state.saasListingComposerDraft.merchant_edited_fields = ["title"];
+      renderProductListingCenter();
+      const record = state.saasReports.find((row) => row.report_id === "supplier-revision");
+      const turn = { ...saasAiCeoMarketTurnFromReport(record), rendered_product: record.report.product };
+      const applied = applySaasAiCeoMarketTurnToListing(turn, { expectedProduct: record.report.product });
+      const beforeRefresh = structuredClone(state.saasListingComposerDraft);
+      restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions);
+      renderProductListingCenter();
+      return { applied, beforeRefresh, afterRefresh: state.saasListingComposerDraft };
+    });
+    assert.equal(result.applied, true);
+    for (const draft of [result.beforeRefresh, result.afterRefresh]) {
+      assert.equal(draft.merchant_product_fact_packet.merchant_confirmed_facts.material, "Aluminum");
+      assert.equal(draft.merchant_product_fact_packet.derived_listing_suggestions.condition, "New");
+      assert.equal(draft.merchant_product_fact_packet.simulation_only, true);
+      assert.equal(draft.source_product_fact_report_id, facts.report_id);
+      assert.equal(draft.fields.title, "My edited product title");
+      assert.deepEqual(draft.merchant_edited_fields, ["title"]);
+    }
+    assert.equal(await page.locator('[data-saas-product-fact-version-warning]').count(), 0);
+  });
+});
+
+test("import does not rebase an older editor when another device has saved newer facts", async () => {
+  const facts = factReport({ report_id: "saved-facts-A" });
+  const newer = factReport({ report_id: "saved-facts-B", created_at: "2026-09-05T01:00:00Z" });
+  await withRestorePage([facts, supplierRevisionReport()], async (page) => {
+    const result = await page.evaluate((newer) => {
+      state.saasProtectedStateReady = true;
+      state.saasConnected = true;
+      restoreSaasListingComposerDraftFromBackendReports({ ...window.restoreOptions,
+        reports: state.saasReports.filter((row) => row.report_type === "merchant.product_facts") });
+      renderProductListingCenter();
+      state.saasReports.push(newer);
+      const record = state.saasReports.find((row) => row.report_id === "supplier-revision");
+      applySaasAiCeoMarketTurnToListing({ ...saasAiCeoMarketTurnFromReport(record), rendered_product: record.report.product },
+        { expectedProduct: record.report.product });
+      restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions);
+      renderProductListingCenter();
+      return prepareSaasProductFactSaveAttempt(state.saasListingComposerDraft, saasMerchantProductFactPacket()).saveContext;
+    }, newer);
+    assert.equal(result.expected_fact_report_id, facts.report_id, "CAS must reject a later save against B, not silently overwrite B");
+    assert.equal(await page.locator('[data-saas-product-fact-version-warning]').count(), 1);
+    assert.equal(await page.locator('[data-saas-product-fact-field="condition"]').inputValue(), "New");
+  });
+});
+
+test("direct report import chooses only the same tenant store and exact origin fact baseline", async () => {
+  const facts = factReport({ report_id: "saved-facts-A" });
+  const foreign = ["company_id", "store_id", "source_report_id", "candidate_id"].map((key, index) => {
+    const row = structuredClone(facts);
+    row.report_id = `foreign-${key}`;
+    row.created_at = `2026-09-1${index}T01:00:00Z`;
+    if (["company_id", "store_id"].includes(key)) row[key] = "different-scope";
+    else row.report.listing_project_identity[key] = "different-origin";
+    return row;
+  });
+  await withRestorePage([...foreign, facts, supplierRevisionReport()], async (page) => {
+    const draft = await page.evaluate(() => {
+      state.saasProtectedStateReady = true;
+      state.saasConnected = true;
+      const record = state.saasReports.find((row) => row.report_id === "supplier-revision");
+      applySaasAiCeoMarketTurnToListing({ ...saasAiCeoMarketTurnFromReport(record), rendered_product: record.report.product },
+        { expectedProduct: record.report.product });
+      return state.saasListingComposerDraft;
+    });
+    assert.equal(draft.source_product_fact_report_id, facts.report_id);
+    assert.deepEqual(draft.listing_project_identity, identity);
+    assert.equal(await page.locator('[data-saas-product-fact-version-warning]').count(), 0);
+  });
+});
+
+test("saving imported suggestions uses the observed base and ends the local import hold only on success", async () => {
+  const facts = factReport({ report_id: "saved-facts-A" });
+  await withRestorePage([facts, supplierRevisionReport()], async (page) => {
+    const requests = [];
+    await page.route(`**/stores/${storeId}/product-facts`, async (route) => {
+      const body = route.request().postDataJSON();
+      requests.push(body);
+      const report = { ...facts, report_id: "saved-import", created_at: "2026-09-06T01:00:00Z",
+        report: { listing_project_identity: identity, merchant_product_fact_packet: body.merchant_product_fact_packet } };
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({
+        is_current: true, listing_project_identity: identity, merchant_product_fact_packet: body.merchant_product_fact_packet, report,
+      }) });
+    });
+    const result = await page.evaluate(async () => {
+      state.saasProtectedStateReady = true;
+      state.saasConnected = true;
+      state.saasApiBase = location.origin;
+      const record = state.saasReports.find((row) => row.report_id === "supplier-revision");
+      applySaasAiCeoMarketTurnToListing({ ...saasAiCeoMarketTurnFromReport(record), rendered_product: record.report.product },
+        { expectedProduct: record.report.product });
+      const saved = await saveSaasMerchantProductFacts();
+      return { saved, draft: state.saasListingComposerDraft };
+    });
+    assert.equal(result.saved, true);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].save_context.expected_fact_report_id, facts.report_id);
+    assert.equal(requests[0].merchant_product_fact_packet.simulation_only, true);
+    assert.equal(result.draft.source_product_fact_report_id, "saved-import");
+    assert.equal(result.draft.pending_product_fact_import, undefined);
+    assert.equal(await page.locator('[data-saas-product-fact-version-warning]').count(), 0);
+  });
+});
+
+test("an authenticated reload resumes a pending import from its scoped local snapshot without losing suggestions", async () => {
+  const facts = factReport({ report_id: "saved-facts-A" });
+  await withRestorePage([facts, supplierRevisionReport()], async (page) => {
+    const draft = await page.evaluate(() => {
+      state.saasProtectedStateReady = true;
+      state.saasConnected = true;
+      const record = state.saasReports.find((row) => row.report_id === "supplier-revision");
+      applySaasAiCeoMarketTurnToListing({ ...saasAiCeoMarketTurnFromReport(record), rendered_product: record.report.product },
+        { expectedProduct: record.report.product });
+      state.saasListingComposerDraft = sanitizeSaasListingComposerDraftSnapshot(state.saasListingComposerDraft);
+      return restoreSaasListingComposerDraftFromBackendReports({ ...window.restoreOptions,
+        preferBackendLatest: true, restoreDetachedDraft: true });
+    });
+    assert.equal(draft.source_product_fact_report_id, facts.report_id);
+    assert.equal(draft.merchant_product_fact_packet.simulation_only, true);
+    assert.equal(draft.merchant_product_fact_packet.derived_listing_suggestions.unit_cost, "2.50");
+    assert.ok(draft.pending_product_fact_import);
+  });
+});
+
+for (const failure of ["rejected", "source_unavailable"]) {
+  test(`a saved ${failure} AI report explains its actual failure through the real non-importable report resolver`, async () => {
+    const report = supplierRevisionReport();
+    if (failure === "rejected") {
+      report.report.status = "model_answer_rejected";
+      report.report.answer_quality = { accepted: false, blocked_by: ["model_answer_truncated_table"] };
+    } else report.report.evidence_status = "supplier_source_unavailable";
+    await withRestorePage([report], async (page) => {
+      const result = await page.evaluate(() => {
+        const turn = saasAiCeoMarketTurnFromReport(state.saasReports[0]);
+        const markup = renderSaasAiCeoMarketReportDeliveryMarkup(turn);
+        document.querySelector('#view-product').innerHTML = markup;
+        return { authoritative: saasAuthoritativeAiCeoMarketReportForTurn(turn), markup };
+      });
+      assert.equal(result.authoritative, null, "failed reports must remain ineligible for import");
+      assert.ok(result.markup.includes(failure === "rejected" ? "本次内容未通过校验" : "来源页面暂不可读取"));
+      assert.doesNotMatch(result.markup, /补齐候选商品|导入 Listing 草稿/);
+    });
+  });
+}
+
 test("reopening a vision-origin project renders its newer validated Listing, not an empty vision draft", async () => {
   const older = listingReport({ report_id: "listing-tablet-v1", created_at: "2026-09-01T12:00:00Z" });
   older.report.listing_handoff.listing_fields.title = "Older Tablet Holder Copy";

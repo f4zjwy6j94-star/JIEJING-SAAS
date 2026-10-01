@@ -401,16 +401,19 @@ process.stdout.write(JSON.stringify(saasAiCeoMarketReportCanStartBlockedListingD
         script = r"""
 const fs = require('fs');
 const source = fs.readFileSync('app.js', 'utf8');
-const start = source.indexOf('function renderSaasAiCeoMarketReportDeliveryMarkup(');
-const end = source.indexOf('\nfunction ', start + 10);
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const state = {saasReports:[{report_id:'test-report',report_type:'ai_ceo.market_research',report:input}]};
 const normalizeSaasAiCeoLatestTurn = value => value;
 const saasAiCeoMarketProductLabel = () => 'Test measuring set';
 const saasIsConcreteProductLabel = () => true;
 const escapeHtml = value => String(value);
-const saasAuthoritativeAiCeoMarketReportForTurn = () => ({report: JSON.parse(fs.readFileSync(0, 'utf8'))});
 const saasAiCeoMarketReportCanStartBlockedListingDraft = () => false;
-eval(source.slice(start, end));
-process.stdout.write(renderSaasAiCeoMarketReportDeliveryMarkup({market_report_delivery:{
+for (const name of ['saasSavedAiCeoMarketReportForTurn','saasAuthoritativeAiCeoMarketReportForTurn','renderSaasAiCeoMarketReportDeliveryMarkup']) {
+  const start = source.indexOf('function ' + name + '(');
+  const end = source.indexOf('\nfunction ', start + 10);
+  eval(source.slice(start, end));
+}
+process.stdout.write(renderSaasAiCeoMarketReportDeliveryMarkup({market_report_id:'test-report',market_report_delivery:{
   structured_report_saved:true, report_type:'ai_ceo.market_research',
   listing_import_ready:false, report_id:'test-report', product:'Test measuring set', source_record_count:3
 }}));
