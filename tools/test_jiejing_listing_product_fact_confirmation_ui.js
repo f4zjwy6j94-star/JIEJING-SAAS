@@ -506,6 +506,8 @@ const baseFunctionNames = [
   "saasListingMerchantEditableFieldKeys",
   "saasListingMerchantEditedFields",
   "saasListingEditableFieldText",
+  "saasListingDraftHeading",
+  "syncSaasListingDraftHeading",
   "setSaasListingDraftField",
   "captureSaasListingDraftEditor",
   "saasListingCurrentDraftFieldsForAi",
