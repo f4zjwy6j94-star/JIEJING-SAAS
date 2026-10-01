@@ -69,7 +69,8 @@ def function_body(source: str, name: str) -> str:
 
 def run_node_json(script: str) -> dict[str, Any]:
     completed = subprocess.run(
-        ["node", "-e", script],
+        ["node", "-"],
+        input=script,
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -84,10 +85,12 @@ def run_node_json(script: str) -> dict[str, Any]:
     return json.loads(output[-1])
 
 
-def listing_restore_fixture_source() -> str:
-    """Include the real supersession guard and its empty local checkpoint cache."""
+def listing_restore_fixture_source(*, has_store_fixture: bool = False) -> str:
+    """Use real restore/context guards, with an explicit legacy no-store fixture."""
     return "\n".join((
         "const saasListingCloudRecords = new Map();",
+        "" if has_store_fixture else "const activeSaasStore = () => null;",
+        function_body(APP_JS, "saasListingAiGenerationContextKey"),
         function_body(APP_JS, "saasListingRewriteReportIsSuperseded"),
         function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports"),
     ))
@@ -1494,7 +1497,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         dependencies = [function_body(APP_JS, name) for name in (
             "saasNormalizeListingProjectIdentity", "saasListingProjectIdentityFromReport",
             "saasCanonicalJsonValue",
-        )] + [listing_restore_fixture_source()]
+        )] + [listing_restore_fixture_source(has_store_fixture=True)]
         result = run_node_json("\n".join([
             "const identity = { key: 'manual-facts-only', source_report_id: '', candidate_id: '' };",
             "const packet = { source: 'authenticated_merchant_request', product_name: 'Foldable Tablet Stand',",
