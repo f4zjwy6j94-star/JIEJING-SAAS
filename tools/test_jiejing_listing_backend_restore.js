@@ -319,6 +319,68 @@ test("an authenticated reload resumes a pending import from its scoped local sna
   });
 });
 
+test("approved media reaches the real image editor, survives a backend refresh, and saves using its fact base", async () => {
+  const facts = factReport({ report_id: "saved-facts-A" });
+  facts.report.merchant_product_fact_packet = { ...listingReport().report.merchant_product_fact_packet,
+    simulation_only: true, unknown_facts: ["image_urls", "image_rights_confirmed", "item_location"] };
+  const url = "https://cdn.example.test/approved-tablet.jpg";
+  const job = { media_job_id: "approved-tablet-media", store_id: storeId, status: "approved_for_listing",
+    live_provider_called: true, updated_at: "2026-09-06T03:00:00Z",
+    job: { job_spec: { inputs: { product_facts: { listing_project_key: identity.key, listing_project_identity: identity,
+      source_asset_id: "supplier-tablet-photo", private_source_transport: "backend_asset_id" } } } },
+    asset_manifest_validation: { status: "manifest_ready" },
+    merchant_review: { decision: "approve_for_listing_draft", reviewed_by: "restore-user",
+      listing_draft_only: true, triggers_real_platform_write: false,
+      confirmations: { fact_consistency_confirmed: true, commercial_rights_confirmed: true, platform_rules_checked: true } },
+    asset_review: { status: "approved_for_listing_draft", listing_use_status: "approved_for_listing_draft",
+      reviewed_at: "2026-09-06T03:00:00Z" },
+    asset_manifest: [{ asset_id: "approved-photo", asset_type: "product_image", url_or_file_path: url,
+      fact_review_status: "confirmed_by_merchant", commercial_use_status: "confirmed_by_merchant",
+      listing_use_status: "approved_for_listing_draft", review_status: "approved_for_listing_draft" }],
+  };
+  await withRestorePage([facts, listingReport()], async (page) => {
+    const requests = [];
+    await page.route("**/media-asset-jobs/approved-tablet-media", route => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({ media_asset_job: job }) }));
+    await page.route(`**/stores/${storeId}/product-facts`, async route => {
+      const body = route.request().postDataJSON(); requests.push(body);
+      const report = { ...facts, report_id: "saved-media-facts", created_at: "2026-09-06T04:00:00Z",
+        report: { listing_project_identity: identity, merchant_product_fact_packet: body.merchant_product_fact_packet } };
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({
+        is_current: true, listing_project_identity: identity, merchant_product_fact_packet: body.merchant_product_fact_packet, report }) });
+    });
+    const selected = await page.evaluate(async job => {
+      state.saasProtectedStateReady = true; state.saasConnected = true; state.saasApiBase = location.origin;
+      restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions);
+      state.saasMediaAssetJobs = [job];
+      const view = document.querySelector("#view-product");
+      view.innerHTML = renderSaasListingWizardImages(state.saasListingComposerDraft);
+      restoreSaasPendingProductFactEditor(view, null);
+      const result = await revalidateAndApplySaasMediaManifestToListingDraft({ entry: "single" });
+      state.saasListingComposerDraft = sanitizeSaasListingComposerDraftSnapshot(state.saasListingComposerDraft);
+      const restored = restoreSaasListingComposerDraftFromBackendReports({ ...window.restoreOptions,
+        preferBackendLatest: true, restoreDetachedDraft: true });
+      view.innerHTML = renderSaasListingWizardImages(restored);
+      restoreSaasPendingProductFactEditor(view, null);
+      return { result, draft: restored, urls: saasListingWizardImageUrls(restored) };
+    }, job);
+    assert(selected.result);
+    assert.deepEqual(selected.urls, [url]);
+    assert.equal(selected.draft.source_product_fact_report_id, facts.report_id);
+    assert.equal(selected.draft.merchant_product_fact_packet.simulation_only, true);
+    assert.equal(await page.locator('[data-saas-product-fact-field="image_urls"]').inputValue(), url);
+    assert.equal(await page.locator('[data-saas-product-fact-field="image_rights_confirmed"]').isChecked(), false);
+    const saved = await page.evaluate(async () => ({ ok: await saveSaasMerchantProductFacts(), draft: state.saasListingComposerDraft }));
+    assert.equal(saved.ok, true);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].save_context.expected_fact_report_id, facts.report_id);
+    assert.equal(requests[0].merchant_product_fact_packet.merchant_confirmed_facts.image_urls, url);
+    assert.equal(requests[0].merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed, undefined);
+    assert.equal(saved.draft.source_product_fact_report_id, "saved-media-facts");
+    assert.equal(saved.draft.pending_product_fact_import, undefined);
+  });
+});
+
 for (const failure of ["rejected", "source_unavailable"]) {
   test(`a saved ${failure} AI report explains its actual failure through the real non-importable report resolver`, async () => {
     const report = supplierRevisionReport();

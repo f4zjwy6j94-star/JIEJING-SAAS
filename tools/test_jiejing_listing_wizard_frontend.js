@@ -341,3 +341,23 @@ test("explicit fact recovery confirms, retains copy and old history, and rejects
     assert.equal(state.saasReports.length, 1);
   }
 });
+
+test("explicit image writeback removes only superseded editor fields and preserves unrelated version conflicts", () => {
+  let restored = null;
+  const view = { saasProductFactEditorGeneration: 4, querySelector: () => null };
+  const pending = { scope: "scope", generation: 4, expectedFactReportId: "facts-A", hasVersionConflict: true,
+    fields: [{ key: "image_urls", value: "" }, { key: "image_rights_confirmed", value: true },
+      { key: "material", value: "Unsaved merchant material" }] };
+  const context = load(["clearSaasPendingProductFactEditor"], {
+    state: { saasListingComposerDraft: { source_product_fact_report_id: "facts-B" } },
+    captureSaasPendingProductFactEditor: () => pending,
+    saasProductFactEditorFields: () => pending.fields,
+    restoreSaasPendingProductFactEditor: (target, value) => { assert.equal(target, view); restored = value; },
+  });
+  context.clearSaasPendingProductFactEditor(view, { replacedKeys: ["image_urls", "image_rights_confirmed"] });
+  assert.deepEqual(Array.from(restored.fields, field => field.key), ["material"]);
+  assert.equal(restored.fields[0].value, "Unsaved merchant material");
+  assert.equal(restored.expectedFactReportId, "facts-A", "image selection cannot silently advance a concurrent fact version");
+  assert.equal(restored.hasVersionConflict, true);
+  assert.equal(restored.generation, 5);
+});

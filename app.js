@@ -4670,12 +4670,39 @@ function applySaasMediaManifestToListingDraft({ entry = "", authoritativeJob = n
     .filter(Boolean)
     .join("\n");
   const publishPrefill = baseDraft.publish_prefill && typeof baseDraft.publish_prefill === "object" ? baseDraft.publish_prefill : {};
+  const previousPacket = saasMerchantProductFactPacket(baseDraft) || {};
+  let mediaFactPacket = baseDraft.merchant_product_fact_packet;
+  let imageSelectionChanged = false;
+  if (imageUrls.length) {
+    // Only this explicit, freshly revalidated action may replace a missing or
+    // revoked image selection. Prefill/cached manifests must not revive it.
+    imageSelectionChanged = JSON.stringify(saasListingWizardImageUrls(baseDraft)) !== JSON.stringify(imageUrls);
+    const sourceFacts = { ...(previousPacket.source_confirmed_facts || {}) };
+    const suggestions = { ...(previousPacket.derived_listing_suggestions || {}) };
+    const confirmed = { ...(previousPacket.merchant_confirmed_facts || {}), image_urls: imageUrls.join("\n") };
+    delete sourceFacts.image_urls;
+    delete suggestions.image_urls;
+    if (imageSelectionChanged) {
+      delete sourceFacts.image_rights_confirmed;
+      delete suggestions.image_rights_confirmed;
+      confirmed.image_rights_confirmed = false;
+    }
+    mediaFactPacket = saasMerchantProductFactPacket({ ...baseDraft, merchant_product_fact_packet: {
+      ...previousPacket, source_confirmed_facts: sourceFacts, derived_listing_suggestions: suggestions,
+      merchant_confirmed_facts: confirmed,
+      unknown_facts: (previousPacket.unknown_facts || []).filter((key) => key !== "image_urls"),
+      field_evidence: { ...(previousPacket.field_evidence || {}), image_urls: {
+        source_type: "merchant_reviewed_media_manifest", merchant_confirmation_received: true,
+      } },
+    } });
+  }
   state.saasListingComposerDraft = {
     ...baseDraft,
     source_type: baseDraft.source_type || "media_asset_writeback",
     source_label: baseDraft.source_label || "素材工坊回写",
     source_media_job_id: mediaJobId,
     media_writeback: writeback,
+    ...(imageUrls.length ? { merchant_product_fact_packet: mediaFactPacket } : {}),
     fields: {
       ...currentFields,
       images: imageSummary,
@@ -4683,6 +4710,7 @@ function applySaasMediaManifestToListingDraft({ entry = "", authoritativeJob = n
     publish_prefill: {
       ...publishPrefill,
       image_urls: imageUrls.join("\n") || publishPrefill.image_urls || "",
+      ...(imageSelectionChanged ? { image_rights_confirmed: false } : {}),
     },
     gaps: Array.from(
       new Set([
@@ -4699,6 +4727,15 @@ function applySaasMediaManifestToListingDraft({ entry = "", authoritativeJob = n
     ),
     safe_local_only: true,
   };
+  if (imageUrls.length) {
+    invalidateSaasListingValidationForFactChange(state.saasListingComposerDraft, previousPacket, mediaFactPacket);
+    // Keep the unsaved selection across ordinary backend refreshes. The normal
+    // fact save clears this marker and still checks the old fact-report version.
+    state.saasListingComposerDraft.pending_product_fact_import = saasListingAiGenerationContextKey();
+    clearSaasPendingProductFactEditor(document.querySelector("#view-product"), {
+      replacedKeys: imageSelectionChanged ? ["image_urls", "image_rights_confirmed"] : ["image_urls"],
+    });
+  }
   state.saasListingSourceMode = state.saasListingSourceMode || "media_asset_writeback";
   saveSaasProtectedStateSnapshot();
   return writeback;
@@ -11572,15 +11609,17 @@ function restoreSaasPendingProductFactEditor(view, pending) {
 
 function clearSaasPendingProductFactEditor(view = document.querySelector("#view-product"), options = {}) {
   if (!view) return;
-  const pending = options.preserveOtherSteps ? captureSaasPendingProductFactEditor(view) : null;
-  const visibleKeys = new Set(saasProductFactEditorFields(view).map((field) => field.key));
-  const retainedFields = (pending?.fields || []).filter((field) => !visibleKeys.has(field.key));
+  const selectiveReplacement = Array.isArray(options.replacedKeys);
+  const pending = options.preserveOtherSteps || selectiveReplacement ? captureSaasPendingProductFactEditor(view) : null;
+  const replacedKeys = new Set(selectiveReplacement ? options.replacedKeys : saasProductFactEditorFields(view).map((field) => field.key));
+  const retainedFields = (pending?.fields || []).filter((field) => !replacedKeys.has(field.key));
   view.saasProductFactEditorGeneration = Number(view.saasProductFactEditorGeneration || 0) + 1;
   delete view.saasProductFactEditorBaseline;
   view.querySelector("[data-saas-product-fact-version-warning]")?.remove();
   if (retainedFields.length) restoreSaasPendingProductFactEditor(view, { ...pending,
     fields: retainedFields, focusedKey: "", generation: view.saasProductFactEditorGeneration,
-    expectedFactReportId: String(state.saasListingComposerDraft?.source_product_fact_report_id || ""), hasVersionConflict: false });
+    expectedFactReportId: selectiveReplacement ? pending.expectedFactReportId : String(state.saasListingComposerDraft?.source_product_fact_report_id || ""),
+    hasVersionConflict: selectiveReplacement ? pending.hasVersionConflict : false });
 }
 
 function captureSaasListingEditorFocus(view) {

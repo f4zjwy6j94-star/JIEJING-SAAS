@@ -246,3 +246,143 @@ test("backend revocation, cross-store scope and network failure all block writeb
     assert.ok(sandbox.__toasts.length > 0, mode);
   }
 });
+
+// Exercise the real revalidation -> apply -> facts -> wizard -> collection seam.
+// A media_writeback snapshot alone used to pass while step 3 still hid the image.
+function writebackWizardHarness(job = approvedJob(), previousImages = "") {
+  const state = { saasMediaAssetJobs: [job], saasListingComposerDraft: {
+    listing_project_key: "listing-project-a", source_product_fact_report_id: "facts-a",
+    product: "Wood Handle Measuring Set", simulation_only: true,
+    fields: { title: "Merchant title", description: "Merchant description", price: "12.99" },
+    publish_prefill: { image_urls: previousImages, price: "12.99" },
+    merchant_product_fact_packet: {
+      simulation_only: true, source_confirmed_facts: { material: "Gold-tone metal and wood" },
+      merchant_confirmed_facts: { product_name: "Wood Handle Measuring Set", condition: "NEW",
+        source_url: "https://supplier.example.test/item", selling_price: "12.99",
+        ...(previousImages ? { image_urls: previousImages, image_rights_confirmed: true } : {}) },
+      unknown_facts: ["image_urls", "image_rights_confirmed", "item_location"],
+    },
+  } };
+  const controls = [];
+  const context = vm.createContext({ state, URL, __requests: [], __snapshots: [], __toasts: [],
+    SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT: "merchant_product_fact_packet_v1",
+    window: { location: { origin: "https://app.example.test", hostname: "app.example.test" } },
+    document: { querySelectorAll: () => controls, querySelector: () => null },
+    activeSaasStore: () => ({ store_id: "store-a" }),
+    activeMediaDraftProductNameForDisplay: () => state.saasListingComposerDraft.product,
+    saasCurrentListingProjectIdentity: () => ({ key: state.saasListingComposerDraft.listing_project_key }),
+    saasListingAiGenerationContextKey: () => "company-a:store-a:listing-project-a",
+    saasMediaAssetJobMatchesListingProject: (item, draft = state.saasListingComposerDraft) =>
+      item?.job?.job_spec?.inputs?.product_facts?.listing_project_key === draft?.listing_project_key,
+    saasMediaAssetJobIsConceptOnly: item => item.concept_only === true,
+    latestSaasMediaAssetJobWithManifest: () => state.saasMediaAssetJobs[0],
+    upsertSaasMediaAssetJobForDisplay: item => { state.saasMediaAssetJobs = [item]; },
+    publicRuntimeText: value => String(value || ""),
+    sanitizeSaasWorkflowFeedbackText: (value, limit = 280) => String(value || "").slice(0, limit),
+    escapeHtml: value => String(value || ""),
+    saasMerchantProductFactLabel: key => key,
+    showActionToast: message => context.__toasts.push(message),
+    saveSaasProtectedStateSnapshot: () => context.__snapshots.push(context.sanitizeSaasListingComposerDraftSnapshot(state.saasListingComposerDraft)),
+    saasFetch: async route => { context.__requests.push(route); return { media_asset_job: job }; },
+  });
+  vm.runInContext(trustSource + gateSource + applySource + revalidationSource, context);
+  for (const name of ["hashString", "saasMediaAssetJobProductFacts", "saasSafeListingAssetUrl",
+    "saasMediaManifestAssetCards", "saasMediaManifestAssetsForListing", "saasMerchantAssetSpecification", "saasMediaWritebackBlockMessage",
+    "parseSaasKeyValueLines", "saasMerchantProductFactDefinitions", "saasMerchantProductFactRequiredKeys",
+    "saasMerchantProductFactValuePresent", "saasMerchantProductFactPacket", "saasMerchantProductFactOrigin",
+    "saasMerchantProductFactProjectedValue", "saasListingWizardImageUrls", "renderSaasMerchantProductFactField",
+    "saasListingMediaWritebackForDraft", "saasListingMediaWritebackImageUrls", "saasListingMediaWritebackRightsReady",
+    "renderSaasListingMediaWritebackPanel", "renderSaasListingWizardImages", "collectSaasMerchantProductFacts",
+    "sanitizeSaasMerchantProductFactValues", "sanitizeSaasMerchantProductFactPacketSnapshot",
+    "pickSaasSnapshotFields", "sanitizeSaasListingPublishPrefillSnapshot", "sanitizeSaasListingMediaWritebackSnapshot",
+    "saasListingMerchantEditableFieldKeys", "saasListingMerchantEditedFields", "sanitizeSaasListingComposerDraftSnapshot",
+    "saasListingItemSpecificsWithMerchantFacts", "applySaasMerchantProductFactPacketToDraft",
+    "saasCanonicalJsonValue", "invalidateSaasListingValidationForFactChange", "clearSaasPendingProductFactEditor"]) {
+    const start = appSource.search(new RegExp(`^(?:async )?function ${name}\\(`, "m"));
+    assert(start >= 0, name);
+    const tail = appSource.slice(start);
+    const next = tail.slice(1).search(/^function |^async function |^const |^let /m);
+    vm.runInContext(next < 0 ? tail : tail.slice(0, next + 1), context);
+  }
+  return { context, state, controls };
+}
+
+test("fresh approved media replaces the missing-image fact and survives wizard save/restore", async () => {
+  const { context, state, controls } = writebackWizardHarness();
+  assert.deepEqual(Array.from(context.saasListingWizardImageUrls()), []);
+  const result = await context.revalidateAndApplySaasMediaManifestToListingDraft({ entry: "single" });
+  const imageUrl = approvedJob().asset_manifest[0].url_or_file_path;
+  assert(result, `backend-approved writeback succeeds: ${context.__toasts.join("; ")}`);
+  assert.deepEqual(Array.from(context.__requests), ["/media-asset-jobs/media-job-approved-a"]);
+  assert.deepEqual(Array.from(context.saasListingWizardImageUrls()), [imageUrl], "step 3 must see the image, not only the success toast");
+  let packet = context.saasMerchantProductFactPacket();
+  assert.equal(packet.merchant_confirmed_facts.image_urls, imageUrl);
+  assert(!packet.unknown_facts.includes("image_urls"));
+  assert(packet.unknown_facts.includes("image_rights_confirmed"), "writeback never checks the final rights checkbox");
+  assert(packet.unknown_facts.includes("item_location"));
+  assert.equal(packet.simulation_only, true);
+  assert.equal(packet.source_confirmed_facts.material, "Gold-tone metal and wood");
+  assert.equal(state.saasListingComposerDraft.fields.title, "Merchant title");
+  assert.equal(state.saasListingComposerDraft.source_product_fact_report_id, "facts-a");
+  assert.equal(context.__snapshots[0].pending_product_fact_import, "company-a:store-a:listing-project-a");
+  const html = context.renderSaasListingWizardImages(state.saasListingComposerDraft);
+  assert.match(html, /已关联 1 张图片/);
+  assert(html.includes(imageUrl));
+  const input = html.match(/<textarea data-saas-product-fact-field="image_urls"([^>]*)>([^<]*)<\/textarea>/);
+  assert(input, "real fact control is rendered");
+  assert.match(input[1], /data-product-fact-confirmed="true"/);
+  controls.push({ type: "textarea", value: input[2], dataset: { saasProductFactField: "image_urls",
+    productFactConfirmed: "true", productFactOriginState: "merchant_confirmed" } });
+  const collected = context.collectSaasMerchantProductFacts();
+  assert.equal(collected.merchantConfirmed.image_urls, imageUrl);
+  packet = context.sanitizeSaasMerchantProductFactPacketSnapshot({ ...packet,
+    merchant_confirmed_facts: collected.merchantConfirmed, unknown_facts: collected.unknownFacts });
+  state.saasListingComposerDraft = context.applySaasMerchantProductFactPacketToDraft(context.__snapshots[0], packet);
+  assert.deepEqual(Array.from(context.saasListingWizardImageUrls()), [imageUrl]);
+  assert.equal(state.saasListingComposerDraft.publish_prefill.image_rights_confirmed, false);
+  assert.equal(state.saasListingComposerDraft.simulation_only, true);
+  // Removing a previously confirmed picture must still revoke stale prefill.
+  controls[0].value = "";
+  controls[0].dataset.productFactUnknown = "true";
+  const revoked = context.collectSaasMerchantProductFacts();
+  state.saasListingComposerDraft.merchant_product_fact_packet = { ...packet,
+    merchant_confirmed_facts: revoked.merchantConfirmed, unknown_facts: revoked.unknownFacts };
+  assert.deepEqual(Array.from(context.saasListingWizardImageUrls()), []);
+});
+
+test("new image selection resets old image rights without promoting videos or rejected jobs", async () => {
+  const replacement = writebackWizardHarness(approvedJob(), "https://cdn.example.test/previous.jpg");
+  await replacement.context.revalidateAndApplySaasMediaManifestToListingDraft();
+  const replacementPacket = replacement.context.saasMerchantProductFactPacket();
+  assert.notEqual(replacementPacket.values.image_rights_confirmed, true);
+  for (const mode of ["video", "revoked", "cross_project", "unreviewed"]) {
+    const job = approvedJob();
+    if (mode === "video") {
+      job.asset_manifest[0].asset_type = "product_video";
+      job.asset_manifest[0].url_or_file_path = "https://cdn.example.test/product.mp4";
+    }
+    if (mode === "revoked") job.status = "needs_rework";
+    if (mode === "cross_project") job.job.job_spec.inputs.product_facts.listing_project_key = "other-project";
+    if (mode === "unreviewed") job.merchant_review.confirmations.commercial_rights_confirmed = false;
+    const { context, state } = writebackWizardHarness(job);
+    const before = JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet);
+    await context.revalidateAndApplySaasMediaManifestToListingDraft();
+    assert.deepEqual(Array.from(context.saasListingWizardImageUrls()), [], mode);
+    assert.equal(JSON.stringify(state.saasListingComposerDraft.merchant_product_fact_packet), before, mode);
+  }
+});
+
+test("a duplicate approved selection keeps its existing confirmation, while changed facts revoke copy validation", async () => {
+  const job = approvedJob();
+  const { context, state } = writebackWizardHarness(job, job.asset_manifest[0].url_or_file_path);
+  state.saasListingComposerDraft.model_generated = true;
+  await context.revalidateAndApplySaasMediaManifestToListingDraft();
+  assert.equal(context.saasMerchantProductFactPacket().values.image_rights_confirmed, true);
+  assert.equal(state.saasListingComposerDraft.model_generated, true, "unchanged image selection is idempotent");
+  const changed = writebackWizardHarness();
+  changed.state.saasListingComposerDraft.model_generated = true;
+  await changed.context.revalidateAndApplySaasMediaManifestToListingDraft();
+  assert.equal(changed.state.saasListingComposerDraft.model_generated, false);
+  assert.equal(changed.state.saasListingComposerDraft.buyer_copy_requires_validated_listing_generation, true);
+  assert.equal(changed.state.saasListingComposerDraft.fields.title, "Merchant title");
+});
