@@ -98,6 +98,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ai_ceo_routing_supplier_http", [sys.executable, "tools/test_jiejing_ai_ceo_routing_supplier_http_red.py"]),
     ("ai_ceo_phase0_contracts", [sys.executable, "tools/test_jiejing_ai_ceo_phase0_red_contracts.py"]),
     ("ai_ceo_listing_fact_boundary", [sys.executable, "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"]),
+    ("supplier_intake_rehearsal", [sys.executable, "tools/test_jiejing_supplier_intake_rehearsal.py"]),
     ("listing_publish_prefill_truth", ["node", "--test", "tools/test_jiejing_listing_publish_prefill_truth.js"]),
     ("listing_media_writeback_persistence", ["node", "--test", "tools/test_jiejing_listing_media_writeback_persistence.js"]),
     ("unpublished_draft_receipt_ui", [sys.executable, "tools/test_jiejing_unpublished_draft_receipt_ui.py"]),

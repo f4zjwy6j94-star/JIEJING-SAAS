@@ -8484,6 +8484,7 @@ function saasIsInvalidMarketProductLabel(value = "") {
   const text = publicRuntimeText(value).replace(/\s+/g, " ").trim();
   if (!text) return true;
   const lower = text.toLowerCase();
+  if (/^(?:如果|假如|若|我(?:会|将|保持|无法|不能)|请(?:你|提供|补充|确认)|本轮(?:仅|只|不)|这次(?:仅|只|不))/.test(lower) && /[，,。；;]/.test(lower)) return true;
   if (/\S\s+(?:vs\.?|versus)\s+\S/i.test(lower)) return true;
   const sectionLabel = lower.replace(/\s*[（(][^()（）]{1,40}[）)]\s*$/, "");
   if (/^(?:(?:未验证|未核实|待验证|待核验|待确认|待补)(?:事项|项目|项|事实|资料|信息)?(?:汇总|清单|说明|总结|列表)?|(?:供应商|商家|商品|货源|采购)?(?:资料|参数|事实|信息)(?:清单|汇总|要求|说明|核验|确认)|(?:证据|操作|交易|流程|执行|任务|本轮)?边界(?:说明|约束|限制)?|(?:(?:supplier|merchant|product|source)\s+)?(?:information|facts?|evidence|verification)\s+(?:checklist|summary|notes|requirements)|(?:unverified|unconfirmed|missing)\s+(?:items|facts|information)|(?:evidence\s+)?boundary\s+(?:notes|explanation))$/i.test(sectionLabel)) return true;
@@ -8818,6 +8819,8 @@ function saasAiCeoMarketReportCanStartBlockedListingDraft(record = null) {
     body.frontend_generated_from_ai_ceo_chat === true ||
     body.safe_local_only === true ||
     body.answer_quality?.accepted === false ||
+    body.evidence_status === "supplier_source_unavailable" ||
+    (Array.isArray(body.blocked_by) && body.blocked_by.includes("supplier_source_unavailable")) ||
     ["model_answer_rejected", "model_call_failed", "session_expired", "source_backed_market_report_draft", "market_report_recovery_draft"].includes(
       String(body.status || record.status || ""),
     )
@@ -23993,13 +23996,22 @@ function saasCeoCommandIntent(text = "") {
 function isSaasCeoHighRiskCommand(text = "") {
   const raw = String(text || "").trim();
   if (!raw) return false;
+  // Keep coordinated prohibitions together; never consume a new imperative.
+  const listAction =
+    "(?:(?:自动|擅自|公开|最终|真实|正式|任何|进行|执行|触发|实际|平台)\\s*){0,3}" +
+    "(?:采购(?:下单|付款)?|(?:保存|创建|写入)\\s*(?:eBay\\s*)?(?:未发布)?草稿|发布|上架|刊登|publish|list it|改价|调整价格|改库存|调整库存|退款|退钱|refund|付款|打款|投广告|开广告|修改政策|承诺买家|保证送达|下架|结束\\s*listing|end\\s*listing|delete\\s*offer|真实写入)";
+  const prohibitedList = new RegExp(
+    "(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)\\s*" +
+      listAction + "(?:\\s*(?:、|或|和|以及|及)\\s*" + listAction + ")+",
+    "gi",
+  );
   const coordinatedNegativeConstraint = new RegExp(
     "(?:本轮|这轮|当前|现在|此次|这次)?\\s*(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)" +
       "(?:(?!(?:但|但是|不过|然后|随后|现在|马上|请|帮我|直接|立即|立刻|真实|正式|[，,。；;！？!?])).){0,32}?" +
       "(?:发布|上架|刊登|publish|list it|改价|调整价格|改库存|调整库存|退款|退钱|refund|付款|采购付款|打款|投广告|开广告|修改政策|承诺买家|保证送达|下架|结束\\s*listing|end\\s*listing|delete\\s*offer|真实写入)",
     "gi",
   );
-  const actionable = raw.replace(
+  const actionable = raw.replace(prohibitedList, "").replace(
     /(?:本轮|这轮|当前|现在|此次|这次)?\s*(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)\s*(?:(?:自动|擅自|公开|最终|真实|正式|直接|立即|立刻|任何|进行|执行|触发|实际|平台)\s*){0,3}(?:发布|上架|刊登|改价|改库存|退款|付款|采购(?:下单)?|投广告|开广告|修改政策|承诺买家|补偿(?:买家)?|重发(?:订单)?|真实写入)/gi,
     "",
   ).replace(coordinatedNegativeConstraint, "");
@@ -25692,6 +25704,17 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
     "这次市场调研";
   const sourceCopy = delivery.source_record_count ? `已带 ${delivery.source_record_count} 条公开来源；` : "";
   const authoritativeReport = saasAuthoritativeAiCeoMarketReportForTurn(latest);
+  if (authoritativeReport?.report?.evidence_status === "supplier_source_unavailable") {
+    return `
+      <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
+        <div>
+          <span>来源页面暂不可读取</span>
+          <strong>${escapeHtml(title)}</strong>
+          <small>未提取到可核对的商品参数；原商品资料保持不变。</small>
+        </div>
+      </div>
+    `;
+  }
   const blockedDraftAvailable =
     delivery.listing_import_ready !== true &&
     Boolean(authoritativeReport && saasAiCeoMarketReportCanStartBlockedListingDraft(authoritativeReport));

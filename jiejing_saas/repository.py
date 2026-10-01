@@ -5761,7 +5761,8 @@ class SaaSRepository:
                 }
             )
         merchant_intent = "ebay_product_research"
-        evidence_status = "source_backed" if source_count else "missing_sources"
+        source_intake_failed = _ai_ceo_supplier_source_intake_failed(message=message, answer=answer)
+        evidence_status = "supplier_source_unavailable" if source_intake_failed else "source_backed" if source_count else "missing_sources"
         turn_plan = chat.get("turn_plan") if isinstance(chat.get("turn_plan"), dict) else {}
         source_mode = str(turn_plan.get("source_mode") or "").strip()
         merchant_product_source_required = source_mode == "merchant_has_no_source"
@@ -5805,6 +5806,8 @@ class SaaSRepository:
         blocked_by: list[str] = []
         if not answer_accepted:
             blocked_by.append("answer_quality_not_ready_for_listing")
+        if source_intake_failed:
+            blocked_by.append("supplier_source_unavailable")
         if not product_candidates:
             blocked_by.append("concrete_candidate_required")
         if not selected_candidate_id or selected_candidate_count != 1:
@@ -5829,7 +5832,9 @@ class SaaSRepository:
             and not blocked_by
         )
         title = f"AI CEO 市场调研：{product}"[:180] if product else "AI CEO 市场调研"
-        if listing_import_ready:
+        if source_intake_failed:
+            summary = "未能读取商品来源页面；本次未提取到可导入的商品参数，原商品资料保持不变。"
+        elif listing_import_ready:
             summary = f"AI CEO 已把“{product}”整理成可导入 Listing 的市场调研。"
         elif product:
             summary = f"AI CEO 已把“{product}”整理成市场调研工作记录；完成来源与供应商事实核验后再进入 Listing 草稿。"
@@ -19613,11 +19618,29 @@ def ai_ceo_market_artifact_eligible(*, message: str, chat: dict[str, Any]) -> bo
     return _looks_like_ai_ceo_market_research_turn(message=message, chat=chat)
 
 
+def _ai_ceo_supplier_source_intake_failed(*, message: str, answer: str) -> bool:
+    """A disclosed URL-read failure is a saved conversation, not an intake result."""
+    if not re.search(r"https?://", message, flags=re.IGNORECASE):
+        return False
+    for line in answer[:800].splitlines():
+        # Conditional guidance is not proof that a read was attempted and failed.
+        if re.search(r"如果|假如|若", line):
+            continue
+        if re.search(
+            r"(?:未(?:能|成功)?|无法|不能|没有)(?:获取|读取|提取|访问|解析)(?:到)?[^。；;，,\n]{0,80}(?:页面|网页|链接|详情|内容)|"
+            r"(?:页面|链接)(?:访问受限|读取失败|无法访问)", line,
+        ):
+            return True
+    return False
+
+
 def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
     text = _sanitize_merchant_ceo_text(value, limit=120).strip(" -:：")
     if not text:
         return True
     compact = re.sub(r"\s+", " ", text).strip().lower()
+    if re.search(r"^(?:如果|假如|若|我(?:会|将|保持|无法|不能)|请(?:你|提供|补充|确认)|本轮(?:仅|只|不)|这次(?:仅|只|不))", compact) and re.search(r"[，,。；;]", compact):
+        return True
     if re.search(r"\S\s+(?:vs\.?|versus)\s+\S", compact, flags=re.IGNORECASE):
         return True
     section_label = re.sub(r"\s*[（(][^()（）]{1,40}[）)]\s*$", "", compact)
@@ -20173,6 +20196,10 @@ def _ai_ceo_should_inherit_market_context(message: str) -> bool:
 
 def _ai_ceo_market_context_reset_requested(message: str) -> bool:
     text = _sanitize_merchant_ceo_text(message, limit=300)
+    text = re.sub(
+        r"(?:不需要|不要|不用|无需|无须|不必|不得|禁止|不)\s*(?:重新(?:选品?|推荐)|换(?:一)?个|另(?:选|换)一个)",
+        " ", text,
+    )
     return bool(re.search(r"换一个|换个|不要这个|这个不合适|重新选|重新推荐|另一个", text))
 
 
@@ -20562,8 +20589,8 @@ def _ai_ceo_simulation_fact_suggestions(*, message: str, answer: str, product: s
     request = _sanitize_merchant_ceo_text(message, limit=2400)
     if not re.search(r"模拟演练|流程演练|受控处理演练|simulation\s+(?:rehearsal|drill)", request, flags=re.IGNORECASE):
         return {}
-    if not re.search(r"不(?:保存|公开|真实)?[^。；;\n]{0,30}(?:eBay\s*)?(?:草稿|发布|写入)|不得[^。；;\n]{0,30}(?:发布|写入)", request, flags=re.IGNORECASE):
-        return {}
+    # Rehearsal values stay simulated even when the merchant omits a separate
+    # no-publish clause. Real-write protection must not depend on that wording.
 
     answer_text = _sanitize_merchant_ceo_text(answer, limit=12000)
     value_sources = (answer_text, request)

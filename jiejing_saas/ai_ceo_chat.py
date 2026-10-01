@@ -4100,6 +4100,18 @@ def _without_negated_high_risk_actions(text: str) -> str:
         r"付款|采购付款|打款|投广告|开广告|修改政策|承诺买家|保证送达|下架|结束\s*listing|"
         r"end\s*listing|delete\s*offer|真实写入"
     )
+    # Strip the complete bounded list before stripping a single action; otherwise
+    # "不要发布、退款或付款" leaves the last two actions looking affirmative.
+    list_action = (
+        rf"(?:(?:自动|擅自|公开|最终|真实|正式|任何|进行|执行|触发|实际|平台)\s*){{0,3}}"
+        rf"(?:采购(?:下单|付款)?|(?:保存|创建|写入)\s*(?:eBay\s*)?(?:未发布)?草稿|{action_terms})"
+    )
+    prohibited_list = re.compile(
+        rf"(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)\s*"
+        rf"{list_action}(?:\s*(?:、|或|和|以及|及)\s*{list_action})+",
+        flags=re.IGNORECASE,
+    )
+    safe_text = prohibited_list.sub(" ", safe_text)
     direct_negation = re.compile(
         rf"(?:本轮|这轮|当前|现在|此次|这次)?\s*"
         rf"(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)\s*"

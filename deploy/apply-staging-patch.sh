@@ -422,6 +422,7 @@ FILES=(
   "tools/test_jiejing_listing_product_fact_confirmation_ui.js"
   "tools/test_jiejing_listing_publish_prefill_truth.js"
   "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"
+  "tools/test_jiejing_supplier_intake_rehearsal.py"
   "tools/test_jiejing_phase2_response_boundary_hardening.py"
   "tools/test_jiejing_ai_ceo_routing_supplier_http_red.py"
   "tools/test_jiejing_ai_ceo_project_trace.py"
@@ -842,6 +843,7 @@ python3 -m py_compile \
   tools/test_jiejing_platform_trial_window.py \
   tools/test_jiejing_postgres_schema_contract.py \
   tools/test_jiejing_ai_ceo_listing_fact_boundary.py \
+  tools/test_jiejing_supplier_intake_rehearsal.py \
   tools/test_jiejing_phase2_response_boundary_hardening.py \
   tools/test_jiejing_ai_ceo_routing_supplier_http_red.py \
   tools/test_jiejing_ai_ceo_phase0_red_contracts.py \
