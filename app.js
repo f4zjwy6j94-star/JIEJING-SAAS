@@ -3619,8 +3619,7 @@ function bindSaasMediaManifestPreviewEvents(view = document.querySelector("#view
   });
 }
 
-function bindRestoredMediaStudioEvents() {
-  const view = document.querySelector("#view-media");
+function bindMediaSourceUploadEvents(view = document.querySelector("#view-media")) {
   if (!view) return;
   const bindOnce = (element, type, handler, key = `${type}HandlerBound`) => {
     if (!element || element.dataset[key]) return;
@@ -3629,6 +3628,14 @@ function bindRestoredMediaStudioEvents() {
   };
   const mediaSourceFileInput = view.querySelector("#mediaSourceFileInput");
   bindOnce(view.querySelector("#mediaBrowseFileButton"), "click", () => mediaSourceFileInput?.click());
+  bindOnce(view.querySelector("#mediaProjectSourceButton"), "click", () => {
+    const draft = state.saasListingComposerDraft;
+    if (!draft?.product || !saasCurrentListingProjectIdentity(draft).key) {
+      showActionToast("请先从选品与上架打开要做图的商品，再补充来源图。");
+      return;
+    }
+    mediaSourceFileInput?.click();
+  });
   bindOnce(mediaSourceFileInput, "change", (event) => {
     void handleMediaSourceFile(event.target.files?.[0], event);
     event.target.value = "";
@@ -3650,6 +3657,17 @@ function bindRestoredMediaStudioEvents() {
     });
     mediaDropPanel.addEventListener("drop", (event) => void handleMediaSourceFile(event.dataTransfer?.files?.[0], event));
   }
+}
+
+function bindRestoredMediaStudioEvents() {
+  const view = document.querySelector("#view-media");
+  if (!view) return;
+  const bindOnce = (element, type, handler, key = `${type}HandlerBound`) => {
+    if (!element || element.dataset[key]) return;
+    element.dataset[key] = "1";
+    element.addEventListener(type, handler);
+  };
+  bindMediaSourceUploadEvents(view);
   view.querySelectorAll(".media-channel-card").forEach((button) => {
     bindOnce(button, "click", () => {
       const mode = button.dataset.mediaChannel || "flow";
@@ -5275,7 +5293,7 @@ function syncSaasMediaProjectDraft(button) {
           : "可以生成本轮素材草稿，生成后先预览再回写 Listing。",
   );
   setText("#mediaLocalPath", "当前使用商品草稿");
-  setText("#mediaLocalPathNote", "如果要处理一张新的货源图，切到独立上传后选择图片。");
+  setText("#mediaLocalPathNote", "点击“上传本商品来源图”补充来源，无需新建商品或切换到独立素材单。");
   const config = readMediaGenerationConfig({ entry: "project" });
   setText(
     "#mediaDecisionSummary",
@@ -13374,6 +13392,7 @@ async function handleMediaSourceFile(file, sourceEvent) {
   setText("#mediaLocalPath", localPath.path);
   setText("#mediaLocalPathNote", `${localPath.note} 文件：${file.name}，大小：${Math.max(1, Math.round(file.size / 1024))} KB。`);
   setText("#mediaDropHint", "正在安全上传商品来源图");
+  setText("#mediaProjectSourceStatus", "正在上传本商品来源图；尚未调用生图服务。");
   setText("#mediaProductionTitle", `商品来源图：${file.name}`);
   setText("#mediaProductionStatus", "正在上传真实来源图 · 尚未调用素材生成服务");
   setText("#mediaProductionNeed", "主图、场景图、详情图、尺寸图和短视频脚本");
@@ -13391,6 +13410,7 @@ async function handleMediaSourceFile(file, sourceEvent) {
     setText("#mediaProductionStatus", "真实来源图已进入安全暂存 · 选择要求后点击生成素材");
     setText("#mediaSourceNote", "素材服务只读取短时签名来源图；生成结果仍需核对实物一致性和图片权利。");
     syncMediaGenerationActionState();
+    setText("#mediaProjectSourceStatus", "来源图已上传。请选择实物保真模式，再点击生成；图片使用权仍需核对。");
     showActionToast("商品来源图已上传。请确认素材要求后点击“生成素材”，不会自动发布。");
   } catch (error) {
     if (!uploadProjectIsCurrent()) return;
@@ -13399,6 +13419,7 @@ async function handleMediaSourceFile(file, sourceEvent) {
     setText("#mediaProductionStatus", "真实来源图尚未上传 · 没有调用素材生成服务");
     setText("#mediaSourceNote", "本机预览不会冒充已上传素材；请检查网络或图片格式后重试。");
     syncMediaGenerationActionState();
+    setText("#mediaProjectSourceStatus", "来源图未上传成功。请重新选择图片；当前商品和 Listing 已保留，未调用生图服务。");
     showActionToast(`图片没有上传成功：${publicRuntimeText(error?.message || error).slice(0, 120)}`);
   }
 }
@@ -14127,6 +14148,15 @@ function syncMediaGenerationActionState(config = readMediaGenerationConfig()) {
   const button = document.querySelector("#mediaGenerateImagesDraft");
   if (!button) return null;
   const groundingGate = saasMediaGenerationGroundingGate(currentMediaStudioProductFacts(config), config);
+  const sourceButton = document.querySelector("#mediaProjectSourceButton");
+  if (sourceButton) {
+    const draft = state.saasListingComposerDraft;
+    sourceButton.disabled = !draft?.product || !saasCurrentListingProjectIdentity(draft).key;
+    sourceButton.textContent = groundingGate.hasGroundedSource ? "更换本商品来源图" : "上传本商品来源图";
+    setText("#mediaProjectSourceStatus", groundingGate.hasGroundedSource
+      ? "当前商品已关联来源图。可选择实物保真模式生成；图片使用权与生成结果仍需审核。"
+      : "选择实拍图或有权使用的供应商图片。保留当前商品和 Listing，上传后不会自动生图。");
+  }
   const latestManifestJob = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
   const writebackGate = saasApprovedMediaWritebackGate(latestManifestJob);
   const hasCurrentSessionBackendEvidence = saasMediaJobHasCurrentSessionBackendEvidence(latestManifestJob);
@@ -14630,7 +14660,7 @@ function syncMediaProjectDraft(button) {
   setText("#mediaRunStatus strong", `已切换到：${title}`);
   setText("#mediaRunStatus p", "可按右侧设置生成素材草稿；不会触发真实发布。");
   setText("#mediaLocalPath", "当前商品草稿");
-  setText("#mediaLocalPathNote", "这是流程导入素材单；如需单独处理桌面的 1688 货源图，切换到“独立上传”通道后拖入图片。批量铺货通过的商品，也会先进入流程导入线。");
+  setText("#mediaLocalPathNote", "点击“上传本商品来源图”补充来源，无需新建商品或切换到独立素材单。");
   const config = readMediaGenerationConfig({ entry: "project" });
   setText(
     "#mediaDecisionSummary",
@@ -49102,30 +49132,7 @@ function bindEvents() {
     showActionToast(meta.primaryToast || `已打开：${meta.primaryLabel}`);
   });
 
-  const mediaDropPanel = document.querySelector("#mediaNewTaskDropPanel");
-  const mediaSourceFileInput = document.querySelector("#mediaSourceFileInput");
-  document.querySelector("#mediaBrowseFileButton")?.addEventListener("click", () => mediaSourceFileInput?.click());
-  mediaSourceFileInput?.addEventListener("change", (event) => {
-    void handleMediaSourceFile(event.target.files?.[0], event);
-    event.target.value = "";
-  });
-  if (mediaDropPanel) {
-    ["dragenter", "dragover"].forEach((type) => {
-      mediaDropPanel.addEventListener(type, (event) => {
-        event.preventDefault();
-        mediaDropPanel.classList.add("is-dragging");
-      });
-    });
-    ["dragleave", "drop"].forEach((type) => {
-      mediaDropPanel.addEventListener(type, (event) => {
-        event.preventDefault();
-        mediaDropPanel.classList.remove("is-dragging");
-      });
-    });
-    mediaDropPanel.addEventListener("drop", (event) => {
-      void handleMediaSourceFile(event.dataTransfer?.files?.[0], event);
-    });
-  }
+  bindMediaSourceUploadEvents();
 
   document.querySelectorAll(".media-channel-card").forEach((button) => {
     button.addEventListener("click", () => {
