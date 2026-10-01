@@ -381,6 +381,17 @@ async function openPage(context, base, consoleErrors, requireListing = true) {
         await page.locator('[data-saas-listing-draft-field="title"]').fill(listingProduct);
         await page.locator('[data-saas-listing-draft-field="selling_points"]').fill("Aluminum construction\nFoldable desktop support\nLocal browser fixture");
         await page.locator('[data-saas-listing-draft-field="description"]').fill("Local inventory-location browser fixture listing.");
+        // This fixture deliberately starts the same project at step 1 again on
+        // its second visit. The prior image step now correctly saved a copy
+        // checkpoint, so re-saving facts is a real older-base conflict. Review
+        // and keep the known fixture copy through its visible action, never
+        // erase the checkpoint or bypass the version gate to reach step 4.
+        const keepReviewedCopy = page.locator('[data-saas-listing-cloud-action="keep-local"]');
+        if (await keepReviewedCopy.isVisible()) {
+          await keepReviewedCopy.click();
+          await page.waitForFunction(() => saasListingCloudRecord()?.status === "saved" && !saasListingCloudRecord()?.conflict,
+            null, { timeout: 10000 });
+        }
       }
       if (step === 3) {
         await page.locator('.saas-listing-wizard-images details > summary').click();
