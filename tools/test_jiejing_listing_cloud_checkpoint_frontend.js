@@ -432,7 +432,7 @@ for (const [lateRead, changed, intakeFirst] of [[false, false], [true, false], [
   } finally { release.resolve(); await device.context.close(); }
 });
 
-async function mediaStepFixture(mode = "saved") {
+async function mediaStepFixture(mode = "saved", step = 3) {
   resetFixture();
   const image = "https://cdn.example.test/approved-gold-set.jpg";
   const packet = { product_name: "Gold wood-handled measuring set", simulation_only: true,
@@ -444,6 +444,7 @@ async function mediaStepFixture(mode = "saved") {
     created_at: "2026-09-06T00:00:00Z", report: { listing_project_identity: identity, merchant_product_fact_packet: packet } };
   let currentBase = baseReport;
   let interrupted = false;
+  let factSaveCount = 0;
   checkpoint = savedCheckpoint({ ...originalFields, title: "Gold-Tone Measuring Set", selling_points: "4 cups\n4 spoons\nWood handles",
     description: "Eight gold-tone pieces with wood handles", images: image });
   const originalCopy = structuredClone(checkpoint.fields);
@@ -474,23 +475,30 @@ async function mediaStepFixture(mode = "saved") {
   };
   factHandler = (request, res) => {
     if (mode === "fact-failure") return sendJson(res, 503, { error_code: "product_fact_storage_unavailable" });
-    currentBase = { ...facts, report_id: "media-facts-after", created_at: "2026-09-06T02:00:00Z",
+    factSaveCount += 1;
+    currentBase = { ...facts, report_id: factSaveCount === 1 ? "media-facts-after" : `media-facts-after-${factSaveCount}`,
+      created_at: `2026-09-06T02:00:${String(factSaveCount).padStart(2, "0")}Z`,
       report: { ...facts.report, merchant_product_fact_packet: request.body.merchant_product_fact_packet } };
     if (mode === "changed-facts") currentBase.report.merchant_product_fact_packet.merchant_confirmed_facts.material = "Different material";
+    if (mode === "changed-images") currentBase.report.merchant_product_fact_packet.merchant_confirmed_facts.image_urls = "https://cdn.example.test/other-image.jpg";
+    if (mode === "revoked-rights") currentBase.report.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed = false;
+    if (mode === "changed-evidence") currentBase.report.merchant_product_fact_packet.field_evidence = {
+      material: { source: "revised_supplier_evidence", status: "needs_review" },
+    };
     sendJson(res, 201, { report: currentBase, merchant_product_fact_packet: currentBase.report.merchant_product_fact_packet,
       listing_project_identity: identity, is_current: true, current_fact_report_id: currentBase.report_id });
   };
   const device = await openDevice();
   await device.page.route(image, route => route.fulfill({ status: 200, contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="gold"/></svg>' }));
-  await device.page.evaluate(({ facts, packet }) => {
+  await device.page.evaluate(({ facts, packet, step }) => {
     state.saasConnected = true;
     state.saasReports.push(facts);
     state.saasListingComposerDraft.merchant_product_fact_packet = packet;
     state.saasListingComposerDraft.source_product_fact_report_id = facts.report_id;
-    setSaasListingWizardStep(3);
+    setSaasListingWizardStep(step);
     renderProductListingCenter();
-  }, { facts, packet });
+  }, { facts, packet, step });
   await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
   return { device, originalCopy, latest: () => currentBase };
 }
@@ -528,6 +536,104 @@ test("saving image step carries reviewed buyer copy to the saved fact version an
     assert.deepEqual(second.errors, []);
   } finally { if (second) await second.context.close(); await device.context.close(); }
 });
+
+test("unchanged product facts continue with reviewed cloud copy instead of asking for version resolution", async () => {
+  const { device, originalCopy, latest } = await mediaStepFixture("saved", 1);
+  let second;
+  try {
+    for (let round = 0; round < 2; round += 1) {
+      await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+      await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+      await device.page.evaluate(async () => { const read = saasListingCloudRecord()?.read; if (read) await read; });
+      assert.equal(await device.page.evaluate(() => saasListingWizardRecord().step), 2);
+      assert.equal(await device.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).count(), 0,
+        "an unchanged save must not manufacture a version conflict");
+      assert.equal(checkpoint.base_report_id, latest().report_id);
+      for (const key of ["title", "selling_points", "description"]) {
+        assert.equal(await device.page.locator(`[data-saas-listing-draft-field="${key}"]`).inputValue(), originalCopy[key]);
+        assert.equal(checkpoint.fields[key], originalCopy[key]);
+      }
+      if (round === 0) await device.page.getByRole("button", { name: "上一步", exact: true }).click();
+    }
+    second = await openDevice({ baseReport: latest() });
+    await second.page.evaluate(async () => {
+      restoreSaasListingComposerDraftFromBackendReports({ preferBackendLatest: true });
+      setSaasListingWizardStep(2);
+      renderProductListingCenter();
+      await hydrateSaasListingCloudCheckpoint({ force: true });
+    });
+    assert.equal(await second.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).count(), 0);
+    for (const key of ["title", "selling_points", "description"]) {
+      assert.equal(await second.page.locator(`[data-saas-listing-draft-field="${key}"]`).inputValue(), originalCopy[key]);
+    }
+    assert.equal(requests.filter(x => x.method === "POST" && x.path === checkpointPath).length, 2);
+    assert.equal(latest().report.merchant_product_fact_packet.simulation_only, true);
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+    assert.deepEqual(second.errors, []);
+  } finally { if (second) await second.context.close(); await device.context.close(); }
+});
+
+test("fact-step copy continuity does not dismiss changed source evidence", async () => {
+  const { device, originalCopy } = await mediaStepFixture("changed-evidence", 1);
+  try {
+    await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+    await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+    await device.page.evaluate(async () => { const read = saasListingCloudRecord()?.read; if (read) await read; });
+    assert.equal(await device.page.evaluate(() => saasListingWizardRecord().step), 2);
+    assert.equal(await device.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).count(), 1);
+    assert.equal(checkpoint.fields.title, originalCopy.title);
+    assert.equal(requests.filter(x => x.method === "POST" && x.path === checkpointPath).length, 0);
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+test("leaving the fact-step visit during its copy read never starts a fact save", async () => {
+  const { device } = await mediaStepFixture("saved", 1);
+  const seen = deferred(), release = deferred();
+  const previousHandler = checkpointHandler;
+  checkpointHandler = async (request, res) => {
+    if (request.method === "GET") { seen.resolve(); await release.promise; }
+    return previousHandler(request, res);
+  };
+  try {
+    await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+    await seen.promise;
+    await device.page.evaluate(() => { saasListingAiGenerationEpoch += 1; });
+    release.resolve();
+    await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+    assert.equal(requests.filter(x => x.method === "POST").length, 0,
+      "a stale visit must stop before any fact or copy write");
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { release.resolve(); await device.context.close(); }
+});
+
+for (const mode of ["concurrent", "fact-failure", "interrupted", "changed-facts", "changed-images", "revoked-rights"]) {
+  test(`fact-step copy continuity preserves review and recovery on ${mode}`, async () => {
+    const { device, originalCopy } = await mediaStepFixture(mode, 1);
+    try {
+      await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+      await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+      await device.page.evaluate(async () => { const read = saasListingCloudRecord()?.read; if (read) await read; });
+      assert.equal(await device.page.evaluate(() => saasListingWizardRecord().step), mode === "fact-failure" ? 1 : 2);
+      assert.equal(await device.page.evaluate(() => state.saasListingComposerDraft.fields.title), originalCopy.title);
+      assert.equal(checkpoint.fields.title, mode === "concurrent" ? "Other device reviewed copy" : originalCopy.title);
+      if (mode === "concurrent" || mode.startsWith("changed-") || mode === "revoked-rights") {
+        assert.equal(await device.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).count(), 1,
+          "a real conflict must be visible at the step that offers resolution");
+        if (mode !== "concurrent") assert.equal(requests.filter(x => x.method === "POST" && x.path === checkpointPath).length, 0);
+      }
+      if (mode === "interrupted") {
+        assert.notEqual(await device.page.evaluate(() => saasListingCloudRecord().status), "saved");
+        assert.equal(checkpoint.base_report_id, baseReport.report_id);
+      }
+      assert.deepEqual(unexpected, []);
+      assert.deepEqual(device.errors, []);
+    } finally { await device.context.close(); }
+  });
+}
 
 test("image rights display only accepts confirmed facts for the exact currently selected images", async () => {
   const { device } = await mediaStepFixture();

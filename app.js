@@ -11013,7 +11013,11 @@ async function navigateSaasListingWizard(direction) {
   // Capture the current controls before any render replaces them.
   try {
     if (step === 1 || step === 3) {
-      const mediaCopy = step === 3 ? await captureSaasListingMediaCopyTransition(current) : null;
+      const hasReviewedCopy = ["title", "selling_points", "description"]
+        .every((key) => String(state.saasListingComposerDraft?.fields?.[key] || "").trim());
+      const mediaCopy = step === 3 || hasReviewedCopy
+        ? await captureSaasListingMediaCopyTransition(current, { includeMedia: step === 1 }) : null;
+      if (!current()) return false;
       if (step === 3 && !mediaCopy) return fail("请先返回上一步核对 Listing 云端版本；图片和当前文案仍保留，本次没有重复生成。");
       const saved = await saveSaasMerchantProductFacts();
       if (!current()) return false;
@@ -11021,6 +11025,15 @@ async function navigateSaasListingWizard(direction) {
       if (step === 1) {
         const missing = saasListingWizardCoreMissing();
         if (missing.length) return fail(`资料已保存。继续前请确认：${missing.map(saasMerchantProductFactLabel).join("、")}。其他缺项可稍后补充。`);
+        // An explicit save creates an immutable fact record even when nothing
+        // changed. Carry reviewed copy only if every fact, including images and
+        // their rights, is unchanged; actual changes still require review.
+        if (mediaCopy && saasListingMediaCopyFactSignature(saasMerchantProductFactPacket(), { includeMedia: true }) === mediaCopy.factSignature &&
+            !(await finishSaasListingMediaCopyTransition(mediaCopy, current))) {
+          // Step 2 is where the existing conflict/retry controls are available.
+          // Its own save gate still prevents advancing with unsynced copy.
+          if (current()) showActionToast("商品资料已保存，文案版本仍需核对。请在下一步查看云端保存提示；现有文案已保留，无需重新生成。");
+        }
       } else {
         if (!(await finishSaasListingMediaCopyTransition(mediaCopy, current))) {
           return fail("图片资料已保存，文案同步尚未完成。当前文案仍保留，请返回上一步核对云端保存提示；无需重新生成。");
@@ -11061,19 +11074,24 @@ async function navigateSaasListingWizard(direction) {
   }
 }
 
-function saasListingMediaCopyFactSignature(packet = {}) {
+function saasListingMediaCopyFactSignature(packet = {}, { includeMedia = false } = {}) {
   const omitMedia = (facts = {}) => Object.fromEntries(Object.entries(facts)
-    .filter(([key]) => !["image_urls", "image_rights_confirmed"].includes(key)));
+    .filter(([key]) => includeMedia || !["image_urls", "image_rights_confirmed"].includes(key)));
   return JSON.stringify(saasCanonicalJsonValue({
     product_name: packet.product_name || "", simulation_only: packet.simulation_only === true,
     source_confirmed_facts: omitMedia(packet.source_confirmed_facts),
     merchant_confirmed_facts: omitMedia(packet.merchant_confirmed_facts),
-    unknown_facts: [...(packet.unknown_facts || [])].filter(key => !["image_urls", "image_rights_confirmed"].includes(key)).sort(),
+    unknown_facts: [...(packet.unknown_facts || [])].filter(key => includeMedia || !["image_urls", "image_rights_confirmed"].includes(key)).sort(),
     fact_conflicts: packet.fact_conflicts || [],
+    ...(includeMedia ? {
+      source_mode: packet.source_mode || "", source_records: packet.source_records || [],
+      field_evidence: packet.field_evidence || {}, vision_contract_version: packet.vision_contract_version || "",
+      buyer_copy_requires_validated_listing_generation: packet.buyer_copy_requires_validated_listing_generation === true,
+    } : {}),
   }));
 }
 
-async function captureSaasListingMediaCopyTransition(isCurrent) {
+async function captureSaasListingMediaCopyTransition(isCurrent, { includeMedia = false } = {}) {
   if (!(await hydrateSaasListingCloudCheckpoint({ force: true })) || !isCurrent()) return null;
   let record = saasListingCloudRecord();
   if (record?.dirty) await flushSaasListingCloudCheckpoint();
@@ -11084,7 +11102,8 @@ async function captureSaasListingMediaCopyTransition(isCurrent) {
     seq: record.seq, refreshGeneration: saasStateRefreshGeneration,
     fields: saasListingCloudFields(state.saasListingComposerDraft?.fields),
     edited: [...saasListingMerchantEditedFields()],
-    factSignature: saasListingMediaCopyFactSignature(saasMerchantProductFactPacket()) };
+    includeMedia,
+    factSignature: saasListingMediaCopyFactSignature(saasMerchantProductFactPacket(), { includeMedia }) };
 }
 
 async function finishSaasListingMediaCopyTransition(before, isCurrent) {
@@ -11097,9 +11116,10 @@ async function finishSaasListingMediaCopyTransition(before, isCurrent) {
   const report = saasListingCloudBaseReport(record.context);
   if (!saasListingCloudReportMatchesContext(report, record.context) || report.report_type !== "merchant.product_facts" ||
       report.report_id !== draft?.source_product_fact_report_id ||
-      saasListingMediaCopyFactSignature(saasMerchantProductFactPacket()) !== before.factSignature) return false;
+      saasListingMediaCopyFactSignature(saasMerchantProductFactPacket(), { includeMedia: before.includeMedia === true }) !== before.factSignature) return false;
   const conflict = record.conflict;
-  // Only this just-saved media-only successor may carry the reviewed copy.
+  // Only this just-saved unchanged-facts (or image-step media-only) successor
+  // may carry the reviewed copy.
   // A concurrent device's revision/base still requires explicit resolution.
   if (conflict && (conflict.revision !== before.revision || conflict.baseReportId !== report.report_id ||
       conflict.checkpoint?.base_report_id !== before.baseReportId ||
