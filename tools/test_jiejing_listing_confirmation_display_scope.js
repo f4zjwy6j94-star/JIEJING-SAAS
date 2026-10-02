@@ -206,6 +206,16 @@ test("late prechecks cannot reappear after edit, project switch, or source updat
   }
 });
 
+test("read-only checks distinguish not-applicable rows from passes and missing data", async () => {
+  const ctx = readonlyFixture();
+  ctx.response.publish_readiness.checks.push({ key: "gpsr_regulatory_fields", label: "GPSR", status: "not_applicable",
+    summary: "当前站点不适用", blocking: false, details: { missing_fields: ["manufacturer", "responsible_person"] } });
+  await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx);
+  const html = vm.runInContext("renderSaasReadonlyPublishCheckResult()", ctx);
+  assert.match(html, /1 项通过，1 项不适用/);
+  assert.doesNotMatch(html, /待补：/);
+});
+
 test("precheck failures and mismatched responses never display a previous success", async () => {
   for (const response of [null, { ...readonlyFixture().response, store_id: "other-store" },
     { ...readonlyFixture().response, real_execution_allowed: true }]) {
@@ -217,4 +227,21 @@ test("precheck failures and mismatched responses never display a previous succes
     assert.match(html, /检查未完成/);
     assert.doesNotMatch(html, /只读检查已完成/);
   }
+});
+
+test("source diagnostics explain simulation without claiming image rights were lost", async () => {
+  const ctx = readonlyFixture();
+  ctx.response.source_blockers = ["simulation_only_product_facts"];
+  ctx.response.publish_readiness.checks = [{ key: "publish_source_rights_evidence", label: "来源与授权",
+    status: "blocked", blocking: true, summary: "缺少来源或授权" }];
+  await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx);
+  const html = vm.runInContext("renderSaasReadonlyPublishCheckResult()", ctx);
+  assert.match(html, /模拟参数，不能作为正式刊登证据/);
+  assert.doesNotMatch(html, /缺少来源或授权/);
+  assert.match(html, /1 项阻断/);
+  ctx.response.source_blockers = ["<script>unknown-secret-shaped-detail</script>"];
+  await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx);
+  const failed = vm.runInContext("renderSaasReadonlyPublishCheckResult()", ctx);
+  assert.match(failed, /来源核验未完成/);
+  assert.doesNotMatch(failed, /unknown-secret-shaped-detail|<script>/);
 });

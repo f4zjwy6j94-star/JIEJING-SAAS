@@ -32229,6 +32229,18 @@ function renderSaasReadonlyPublishCheckResult() {
   if (entry.status === "error") return '<p role="status">检查未完成，请重试；未创建确认单，未执行平台动作。</p>';
   const result = entry.result;
   const checks = result?.publish_readiness?.checks || [];
+  const sourceMessages = {
+    simulation_only_product_facts: "商品包含模拟参数，不能作为正式刊登证据；已保存的图片授权不会因此被清除。",
+    product_fact_report_superseded: "商品资料已更新，请重新加载当前版本后检查。",
+    product_fact_report_not_found: "未找到当前商品的资料记录，请返回商品资料确认保存状态。",
+    product_source_not_attested: "请在商品资料中补充供应商链接或确认商品自有来源。",
+    image_rights_not_attested: "请在商品资料中确认当前图片的商业使用权。",
+    media_job_has_no_approved_assets: "当前素材尚未通过审核，请前往素材工坊核对。",
+    media_job_does_not_cover_requested_assets: "刊登图片与已审核素材不一致，请重新核对关联图片。",
+  };
+  const sourceSummary = [...new Set((result.source_blockers || []).map(code => sourceMessages[code]
+    || (String(code).startsWith("image_rights_uncovered:") ? "部分刊登图片尚无使用授权记录，请核对当前图片。"
+      : "来源核验未完成，请重新加载当前商品并重试；持续失败请联系支持。")))].join(" ");
   const fieldLabels = {
     "listing.sku": "SKU", "listing.title": "标题", "listing.description_html": "商品描述",
     "listing.category_id": "类目", "listing.condition": "商品状态", "listing.price": "售价",
@@ -32238,20 +32250,22 @@ function renderSaasReadonlyPublishCheckResult() {
     "supplier_facts.package_dimensions_cm": "包装尺寸", "supplier_facts.package_dimensions_cm.length": "包装长度",
     "supplier_facts.package_dimensions_cm.width": "包装宽度", "supplier_facts.package_dimensions_cm.height": "包装高度",
     "supplier_facts.material": "材质", "supplier_facts.item_location": "发货地",
-    "asset_manifest.assets": "商品图片", "publish_evidence": "商品来源和图片授权",
+    "asset_manifest.assets": "商品图片", "publish_evidence": "正式刊登的来源与图片证据",
     "finance_review.net_profit_money": "净利润", "account_health.status": "账号状态",
   };
   const blocked = checks.filter(item => item.blocking).length;
+  const notApplicable = checks.filter(item => !item.blocking && item.status === "not_applicable").length;
+  const passed = checks.filter(item => !item.blocking && item.status === "passed").length;
   const review = checks.filter(item => !item.blocking && !["passed", "not_applicable"].includes(item.status)).length;
   return `<section class="saas-backend-preflight-panel" aria-label="系统资料只读检查">
     <div class="saas-backend-preflight-head"><div><span>系统资料检查</span><strong>只读检查已完成</strong>
       <p>${result.simulation_only ? "当前为模拟资料，不能提交 eBay。" : "依据当前资料与已保存的账号、来源记录进行检查。"}未创建确认单，未写入 eBay；正式提交前仍需重新校验和确认。</p></div></div>
-    <p>${checks.length} 项检查：${blocked} 项阻断，${review} 项待核对，${checks.length - blocked - review} 项通过。</p>
+    <p>${checks.length} 项检查：${blocked} 项阻断，${review} 项待核对，${passed} 项通过，${notApplicable} 项不适用。</p>
     <details><summary>查看检查明细</summary><div class="saas-backend-preflight-list">${checks.map(check => `
       <article class="saas-backend-preflight-card ${check.blocking ? "is-red" : check.status === "passed" ? "is-green" : "is-amber"}">
         <strong>${escapeHtml(check.label || "资料检查")} · ${check.blocking ? "阻断" : check.status === "not_applicable" ? "不适用" : check.status === "passed" ? "通过" : "待核对"}</strong>
-        <p>${escapeHtml(check.summary || "请核对当前资料。")}</p>
-        ${check.details?.missing_fields?.length ? `<p>待补：${escapeHtml(check.details.missing_fields.map(key => fieldLabels[key] || "相关必填资料").join("、"))}</p>` : ""}
+        <p>${escapeHtml(check.key === "publish_source_rights_evidence" && sourceSummary ? sourceSummary : check.summary || "请核对当前资料。")}</p>
+        ${check.status !== "not_applicable" && check.details?.missing_fields?.length ? `<p>待补：${escapeHtml(check.details.missing_fields.map(key => fieldLabels[key] || "相关必填资料").join("、"))}</p>` : ""}
         ${(check.details?.validation_issues || []).map(issue => `<p>${escapeHtml(issue.message || "资料无效")}</p>`).join("")}
       </article>`).join("")}</div></details>
   </section>`;

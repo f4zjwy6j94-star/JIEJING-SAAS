@@ -483,8 +483,16 @@ def _get_company_report(
             if str(item.get("store_id") or "") != selected_store_id:
                 continue
             payload = item.get("report") if isinstance(item.get("report"), Mapping) else {}
+            raw_project = payload.get("listing_project_identity")
+            raw_project = raw_project if isinstance(raw_project, Mapping) else {}
+            # Scope first: a legacy/unrelated report must not veto a valid
+            # selected project merely because its own identity is malformed.
+            # Still validate the selected record and all same-project records
+            # strictly, including malformed successors and revoked rights.
+            if str(raw_project.get("key") or "").strip() != selected_project_key:
+                continue
             if (
-                _normalize_project_identity(payload.get("listing_project_identity"))["key"]
+                _normalize_project_identity(raw_project)["key"]
                 == selected_project_key
             ):
                 checkpoints.append(dict(item))

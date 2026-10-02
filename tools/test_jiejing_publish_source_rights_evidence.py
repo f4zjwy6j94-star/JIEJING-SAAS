@@ -178,6 +178,46 @@ def main() -> int:
     assert len(evidence["fingerprint"]) == 64
     assert evidence["secret_exposed"] is False
 
+    # An unrelated legacy record in the same store must not poison every
+    # current project's evidence lookup before its scope has been compared.
+    for unrelated_identity in (None, {}, {"key": "legacy / invalid"},
+                               {"key": "listing-project-other", "candidate_id": "legacy / invalid"}):
+        unrelated = product_fact_report()
+        unrelated["report_id"] = "report-unrelated-legacy"
+        unrelated["created_at"] = "2099-01-01T00:00:00Z"
+        unrelated["report"]["listing_project_identity"] = unrelated_identity
+        scoped = resolve_publish_source_rights_evidence(
+            EvidenceRepository(reports=[unrelated, product_fact_report(image_url=image_url)]),
+            company_id="company-a", store_id="store-a",
+            listing_project_identity={"key": "listing-project-a", "source_id": "market-report-a", "candidate_id": "candidate-a"},
+            asset_manifest={"assets": [{"asset_type": "image", "role": "main", "url": image_url}]},
+            evidence_refs={"product_fact_report_id": "report-product-facts-a"},
+        )
+        assert scoped["status"] == "ready"
+        assert scoped["fingerprint"] == evidence["fingerprint"]
+
+    # A malformed selected record or a same-project successor must still fail
+    # closed; filtering unrelated records must not relax the evidence boundary.
+    for selected_is_invalid in (True, False):
+        malformed = product_fact_report()
+        malformed["report"]["listing_project_identity"] = {
+            "key": "listing-project-a", "source_report_id": "market-report-a", "candidate_id": "invalid / candidate"
+        }
+        if not selected_is_invalid:
+            malformed["report_id"] = "report-current-project-malformed-successor"
+        records = [malformed] if selected_is_invalid else [product_fact_report(), malformed]
+        try:
+            resolve_publish_source_rights_evidence(
+                EvidenceRepository(reports=records), company_id="company-a", store_id="store-a",
+                listing_project_identity={"key": "listing-project-a", "source_id": "market-report-a", "candidate_id": "candidate-a"},
+                asset_manifest={"assets": [{"asset_type": "image", "role": "main", "url": image_url}]},
+                evidence_refs={"product_fact_report_id": "report-product-facts-a"},
+            )
+        except PublishSourceRightsEvidenceError as exc:
+            assert "optional_identifier_invalid" in exc.blockers
+        else:
+            raise AssertionError("malformed current-project evidence must remain blocked")
+
     canonical_manifest = canonicalize_publish_asset_manifest(
         {
             "assets": [

@@ -224,6 +224,16 @@ def main() -> int:
         preview_body["publish_evidence_refs"] = {"product_fact_report_id": product_fact_report_id}
         preview_body["simulation_only"] = True
         with sqlite3.connect(SAAS_DB) as conn:
+            # Legacy same-store history is an isolated local fixture, not a
+            # current-project checkpoint. It must not break the HTTP precheck.
+            legacy = json.loads(conn.execute("select report_json from reports where report_id = ?",
+                                             (product_fact_report_id,)).fetchone()[0])
+            legacy.pop("listing_project_identity", None)
+            conn.execute("""insert into reports
+                (report_id, task_id, runtime_run_id, report_type, title, status, created_at, report_json)
+                select ?, task_id, runtime_run_id, report_type, title, status, ?, ?
+                from reports where report_id = ?""",
+                ("report-unrelated-legacy-intake", "2099-01-01T00:00:00Z", json.dumps(legacy), product_fact_report_id))
             before_preview = [conn.execute(f"select count(*) from {table}").fetchone()[0]
                               for table in ("tasks", "confirmations", "execution_results", "reports")]
         status, preview = post_json_status(
@@ -240,6 +250,8 @@ def main() -> int:
             return fail("readonly simulation must receive full checks without losing its simulation blocker")
         if preview.get("publish_readiness", {}).get("ready_for_platform_adapter") is not False:
             return fail("a preview is never authorization to call a platform adapter")
+        if preview.get("source_blockers"):
+            return fail("unrelated legacy history must not invalidate current-project source evidence")
         preview_fields = next(row for row in preview["publish_readiness"]["checks"] if row["key"] == "field_completeness")
         if preview_fields["blocking"] or preview_fields["details"]["missing_fields"]:
             return fail(f"future confirmation identifiers must not be misreported as missing product data: {preview_fields['details']['missing_fields']}")
