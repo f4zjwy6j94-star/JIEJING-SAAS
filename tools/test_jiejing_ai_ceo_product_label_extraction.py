@@ -176,7 +176,43 @@ def main() -> None:
     command_builder = function_body(app_js, "buildSaasCeoCommand")
     require(command_builder, "research:", "research route contract")
     require(command_builder, 'label: "AI CEO 选品调研"', "research route merchant label")
-    require(command_builder, ".slice(0, 900)", "AI CEO model request keeps the backend-supported instruction length")
+    # The semantic protocol must retain the complete instruction, especially a
+    # trailing prohibition. Over-limit input is rejected rather than truncated.
+    length_boundary_source = "\n".join([
+        command_sanitizer, risk_router, intent_router,
+        function_body(app_js, "hashString"),
+        function_body(app_js, "normalizeSaasCeoCommand"),
+        function_body(app_js, "uniqueSaasCeoRoutes"),
+        command_builder,
+        function_body(app_js, "handleSaasCeoCommandSubmit"),
+    ])
+    length_probe = subprocess.run(["node"], input=(
+        "const assert = require('node:assert/strict');\n"
+        "const publicRuntimeText = value => String(value || '');\n"
+        "const activeSaasStore = () => ({store_id:'length-fixture-store'});\n"
+        "const isSaasModelConfigured = () => true;\n"
+        "const isSaasAuthorizedConnectionStatus = () => true;\n"
+        "let workflowCalls = 0, requestCalls = 0; const toasts = [];\n"
+        "const prepareSaasNewListingProjectRequest = () => { workflowCalls++; throw new Error('overlong input reached workflow'); };\n"
+        "const requestSaasAiCeoChat = () => { requestCalls++; throw new Error('overlong input reached HTTP'); };\n"
+        "const showActionToast = message => toasts.push(message);\n"
+        "const tail = '最后限制：不要创建新项目，不要发布。';\n"
+        "const atLimit = 'x'.repeat(900 - tail.length) + tail;\n"
+        "const overLimit = 'x'.repeat(901 - tail.length) + tail;\n"
+        "const input = {value:overLimit}; const document = {querySelector:() => input};\n"
+        "const state = {saasAiCeoPendingAttachments:[{asset_id:'length-fixture-asset'}],saasListingComposerDraft:{product:'原项目'}};\n"
+        "const stateBefore = JSON.stringify(state);\n"
+        + length_boundary_source
+        + "\nconst command = buildSaasCeoCommand(atLimit, {hasPacket:true});\n"
+        "assert.equal(command.text, atLimit);\n"
+        "assert.equal(buildSaasCeoCommand(overLimit, {}), null);\n"
+        "assert.equal(handleSaasCeoCommandSubmit(overLimit), null);\n"
+        "assert.equal(workflowCalls, 0); assert.equal(requestCalls, 0);\n"
+        "assert.equal(input.value, overLimit); assert.equal(JSON.stringify(state), stateBefore);\n"
+        "assert.equal(toasts.length, 1); assert.match(toasts[0], /900/);\n"
+        "console.log('PASS complete 900-character input and side-effect-free over-limit rejection');\n"
+    ), text=True, encoding="utf-8", capture_output=True, check=False)
+    assert length_probe.returncode == 0, length_probe.stderr or length_probe.stdout
 
     print("PASS jiejing_ai_ceo_product_label_extraction")
 

@@ -67,6 +67,9 @@ if (saasExplicitRecommendedMarketProductLabelFromText("候选商品 1：普通�
     candidate_start = app_js.index("function saasMarketCandidateMatchKey")
     candidate_end = app_js.index("\nfunction saasListingDescriptionFromCandidate", candidate_start)
     candidate_source = app_js[candidate_start:candidate_end]
+    identity_start = app_js.index("function saasNormalizeListingProjectIdentity")
+    identity_end = app_js.index("\nfunction ", identity_start + 1)
+    identity_source = app_js[identity_start:identity_end]
     candidate_script = f"""
 const publicRuntimeText = (value = "") => String(value || "");
 const saasIsInvalidMarketProductLabel = () => false;
@@ -77,10 +80,13 @@ const saasCleanMarketCandidateName = (value = "") => String(value || "")
   .trim()
   .replace(/^[-:：]+|[-:：]+$/g, "")
   .trim();
+{identity_source}
 {candidate_source}
 const rawCandidates = [
-  {{ candidate_id: "candidate_1", name: "冰箱食品收纳整理架", reasons: ["冰箱事实"], selected: false }},
-  {{ candidate_id: "candidate_2", name: "多功能抽屉分隔板", reasons: ["抽屉事实"], selected: true }},
+  {{ candidate_id: "candidate_1", name: "冰箱食品收纳整理架", reasons: ["冰箱事实"], selected: false,
+     listing_project_identity: {{key:"project-fridge",source_report_id:"report-fixture",candidate_id:"candidate_1"}} }},
+  {{ candidate_id: "candidate_2", name: "多功能抽屉分隔板", reasons: ["抽屉事实"], selected: true,
+     listing_project_identity: {{key:"project-drawer",source_report_id:"report-fixture",candidate_id:"candidate_2"}} }},
 ];
 const firstPass = saasNormalizeMarketProductCandidates(rawCandidates, "最终推荐：多功能抽屉分隔板");
 const selected = saasSelectedMarketProductCandidate(firstPass);
@@ -89,6 +95,9 @@ if (selected?.candidate_id !== "candidate_2") {{
 }}
 if (selected?.reasons?.[0] !== "抽屉事实") {{
   throw new Error(`selected facts came from the wrong candidate: ${{selected?.reasons?.[0] || "none"}}`);
+}}
+if (JSON.stringify(selected?.listing_project_identity) !== JSON.stringify(rawCandidates[1].listing_project_identity)) {{
+  throw new Error("selected project identity came from another candidate or was discarded");
 }}
 """
     completed = subprocess.run(
