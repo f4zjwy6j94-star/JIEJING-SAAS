@@ -8332,7 +8332,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
         </div>
         ${renderSaasPublishReadinessStrip(formValues)}
         <p data-saas-publish-intake-draft-status role="status" aria-live="polite">${escapeHtml(saasPublishIntakeDraftStatusText())}</p>
-      <form id="saasPublishIntakeForm" class="saas-publish-intake-form" data-intake-context="${escapeHtml(saasListingCloudContext()?.key || "")}" data-intake-basis="${escapeHtml(JSON.stringify(sanitizeSaasPublishIntakeDraftValues(saasPublishIntakePrefillValues(undefined, { restoreSnapshot: false }))))}">
+      <form id="saasPublishIntakeForm" class="saas-publish-intake-form" data-intake-context="${escapeHtml(saasListingCloudContext()?.key || "")}" data-intake-basis="${escapeHtml(JSON.stringify(saasPublishIntakeSourceBasis()))}">
         ${renderSaasPublishFormGroup("基础信息", "商品目标、SKU、标题和状态。草稿有标题时会自动带入。", [
           renderSaasPublishInputField("商品目标", "product", { value: formValues.product, placeholder: "例如：全新未接触过的硅胶柜门防撞垫" }),
           renderSaasPublishInputField("SKU", "sku", { value: formValues.sku, placeholder: "留空会自动生成 JJ-FRESH-..." }),
@@ -31762,8 +31762,22 @@ function sanitizeSaasPublishIntakeDraftValues(input = {}) {
       ["description_html", "image_urls", "item_specifics"].includes(name) ? 6000 : 800)]));
 }
 
+function saasPublishIntakeAwaitingCloudRead() {
+  const context = saasListingCloudContext();
+  const record = context && saasListingCloudRecords.get(context.key);
+  return Boolean(record && (record.read || (record.fields && (!record.loaded || ["error", "forbidden", "unavailable"].includes(record.status)))));
+}
+
+function saasPublishIntakeSourceBasis() {
+  if (saasPublishIntakeAwaitingCloudRead() && saasPendingPublishIntakeFormContextKey === saasListingCloudContext()?.key && saasPendingPublishIntakeFormBasis) {
+    return saasPendingPublishIntakeFormBasis;
+  }
+  return sanitizeSaasPublishIntakeDraftValues(saasPublishIntakePrefillValues(undefined, { restoreSnapshot: false }));
+}
+
 function saasPublishIntakeDraftStatusText() {
   if (saasPendingPublishIntakeSaveStatus === "error") return "发布表未能保存在此浏览器，请勿刷新或关闭页面。";
+  if (saasPendingPublishIntakeFormValues && saasPublishIntakeAwaitingCloudRead()) return "发布表已保留在此浏览器；云端商品资料尚未核对，暂不能提交。";
   if (saasPendingPublishIntakeSaveStatus === "review") return "商品资料已变更，相关发布信息和费用需重新核对。其余内容保留在此浏览器。";
   if (saasPendingPublishIntakeSaveStatus === "saved") return "发布表已保存在此浏览器；换设备不会同步，发布前仍需核对。";
   return "发布表修改会保存在当前浏览器，不会自动发布。";
@@ -31805,7 +31819,7 @@ function snapshotSaasPublishIntakeFormValues(changedName = "") {
   const context = saasListingCloudContext();
   if (!context || !form || form.dataset.intakeContext !== context.key || typeof FormData !== "function") return currentSaasPendingPublishIntakeValues();
   const values = sanitizeSaasPublishIntakeDraftValues(Object.fromEntries(new FormData(form).entries()));
-  const basis = sanitizeSaasPublishIntakeDraftValues(saasPublishIntakePrefillValues(undefined, { restoreSnapshot: false }));
+  const basis = saasPublishIntakeSourceBasis();
   let renderedBasis = {};
   try { renderedBasis = JSON.parse(form.dataset.intakeBasis || "{}"); } catch { /* Missing source cannot attest to freshness. */ }
   const changedSource = Object.keys(basis).filter((name) => renderedBasis?.[name] !== basis[name]);
@@ -31850,6 +31864,9 @@ function currentSaasPendingPublishIntakeValues(baseValues = null) {
     } catch { /* A malformed or unavailable cache is not a verified draft. */ }
   }
   if (!saasPendingPublishIntakeFormValues) return {};
+  // Startup first restores a generated report, then its newer merchant edit.
+  // Do not discard saved fees against that intermediate, older projection.
+  if (saasPublishIntakeAwaitingCloudRead()) return { ...saasPendingPublishIntakeFormValues };
   const changed = Object.keys(basis).filter((name) => saasPendingPublishIntakeFormBasis?.[name] !== basis[name]);
   if (changed.length) {
     saasPublishIntakeDependentFields(changed).forEach((name) => { delete saasPendingPublishIntakeFormValues[name]; });
@@ -31857,6 +31874,19 @@ function currentSaasPendingPublishIntakeValues(baseValues = null) {
     persistSaasPublishIntakeDraft("review");
   }
   return { ...saasPendingPublishIntakeFormValues };
+}
+
+function syncSaasPublishIntakeAfterCloudRead() {
+  const context = saasListingCloudContext();
+  const form = document.querySelector("#saasPublishIntakeForm");
+  if (!context || !form || form.dataset.intakeContext !== context.key || saasPublishIntakeAwaitingCloudRead()) return;
+  const values = saasPublishIntakePrefillValues();
+  Object.entries(values).forEach(([name, value]) => {
+    const input = form.elements.namedItem(name);
+    if (input && "value" in input) input.value = value;
+  });
+  form.dataset.intakeBasis = JSON.stringify(saasPublishIntakeSourceBasis());
+  document.querySelectorAll("[data-saas-publish-intake-draft-status]").forEach((node) => { node.textContent = saasPublishIntakeDraftStatusText(); });
 }
 
 function clearSaasPendingPublishIntakeSnapshot() {
@@ -34103,7 +34133,8 @@ function applySaasListingCloudFields(record) {
   const draft = state.saasListingComposerDraft;
   draft.fields = { ...(draft.fields || {}), ...record.fields };
   draft.merchant_edited_fields = [...record.edited];
-  invalidateSaasPendingPublishIntakeFields(record.edited);
+  // Restoring an existing checkpoint is not a new edit. Publish-intake recovery
+  // compares its saved source values after this authenticated read completes.
   draft.model_generated = false;
   draft.buyer_copy_status = "merchant_edited_requires_review";
   // Do not clear an existing vision/facts gate, nor invent new publish rights.
@@ -34277,6 +34308,7 @@ async function hydrateSaasListingCloudCheckpoint(options = {}) {
       return false;
     } finally {
       if (record.readEpoch === epoch && record.readRefreshGeneration === refreshGeneration) record.read = null;
+      if (scopeCurrent()) syncSaasPublishIntakeAfterCloudRead();
       if (scopeCurrent() && record.observedBaseReportId !== (saasListingCloudBaseReport(context)?.report_id || "") && !record.read) {
         record.loaded = false;
         if ((saasListingCloudBaseReport(context)?.report_id || "") !== requestBaseId) {

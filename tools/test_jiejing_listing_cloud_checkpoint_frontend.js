@@ -387,6 +387,47 @@ test("publish intake preserves long literal descriptions and image paths while r
   } finally { await device.context.close(); }
 });
 
+for (const [lateRead, changed] of [[false, false], [true, false], [true, true]]) test(`publish intake survives full reload plus ${lateRead ? "delayed" : "completed"} cloud checkpoint hydration${changed ? " with changed source" : ""}`, async () => {
+  resetFixture();
+  checkpoint = savedCheckpoint({ ...originalFields, title: "Saved merchant title", price: "12.99 USD",
+    logistics: "包装重量: 380 g; 包装尺寸: 22x12x5 cm" });
+  checkpoint.merchant_edited_fields = ["title", "price", "logistics"];
+  const device = await openDevice();
+  const release = deferred();
+  try {
+    await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
+    let form = await mountPublishIntake(device.page);
+    await form.locator('[name="shipping_cost"]').fill("4.20");
+    await form.locator('[name="ebay_fee"]').fill("2.07");
+    await form.locator('[name="net_profit"]').fill("3.57");
+    await device.page.reload();
+    await seedDevice(device.page);
+    if (changed) checkpoint = { ...checkpoint, revision: 2, checkpoint_id: "checkpoint-revision-2",
+      fields: { ...checkpoint.fields, price: "19.99 USD", logistics: "包装重量: 700 g; 包装尺寸: 30x20x10 cm" } };
+    if (lateRead) checkpointHandler = async (request) => {
+      if (request.method !== "GET") return false;
+      await release.promise;
+      return false;
+    };
+    await device.page.evaluate(() => { window.intakeCloudRead = hydrateSaasListingCloudCheckpoint({ force: true }); });
+    if (lateRead) {
+      form = await mountPublishIntake(device.page);
+      await form.locator('[name="ad_budget"]').fill("0");
+      release.resolve();
+    }
+    await device.page.evaluate(() => window.intakeCloudRead);
+    if (!lateRead) form = await mountPublishIntake(device.page);
+    assert.equal(await form.locator('[name="title"]').inputValue(), "Saved merchant title");
+    assert.equal(await form.locator('[name="shipping_cost"]').inputValue(), changed ? "" : "4.20", "only actual source changes invalidate saved fees");
+    assert.equal(await form.locator('[name="ebay_fee"]').inputValue(), changed ? "" : "2.07");
+    if (lateRead) assert.equal(await form.locator('[name="ad_budget"]').inputValue(), "0", "typing while the read is pending survives");
+    else assert.equal(await form.locator('[name="net_profit"]').inputValue(), "3.57");
+    assert.equal(requests.filter((request) => request.method === "POST").length, 0);
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { release.resolve(); await device.context.close(); }
+});
+
 async function mediaStepFixture(mode = "saved") {
   resetFixture();
   const image = "https://cdn.example.test/approved-gold-set.jpg";
