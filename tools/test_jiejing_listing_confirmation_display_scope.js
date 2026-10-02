@@ -83,3 +83,71 @@ test("all three single-product panels avoid unscoped fallback confirmations", ()
   assert.doesNotMatch(source, /saasLatestPublishConfirmation\(\)\s*\|\|\s*pendingConfirmations/);
   assert.match(extract("renderSaasProductListingCenter"), /saasListingConfirmationsForCurrentProject\(\)\.filter/);
 });
+
+function preflightFixture() {
+  const ctx = fixture();
+  Object.assign(ctx, {
+    saasPreTestFormSummary: () => ({ hasProduct: true, hasTitle: true, hasSku: true, hasPrice: true,
+      hasCategory: true, hasSpecifics: true, hasImage: true, hasLocation: true, hasProfit: true }),
+    saasAccountHealthSnapshot: () => ({ can_execute_real_writes: true, incident_mode: false }),
+    saasAccountHealthTone: () => "green", latestSaasReportByTypes: () => null,
+    saasMerchantWorkbenchContext: () => ({ hasPacket: true }), escapeHtml: value => String(value ?? ""),
+    renderSaasPublishConfirmationEvidencePanel: () => "", renderSaasBackendPublishPreflightPanel: () => "",
+  });
+  ctx.state.saasListingComposerDraft = { merchant_product_fact_packet: { simulation_only: false } };
+  vm.runInContext([
+    "saasLatestExecutionResult", "saasExecutionResultForConfirmation", "saasPreTestCheckRows",
+    "saasPublishHealthSummary", "renderSaasPreTestCheckGrid", "renderSaasPublishHealthReportPanel",
+    ...(source.includes("function saasListingPublishCheckContext(") ? ["saasListingPublishCheckContext"] : []),
+  ].map(extract).join("\n"), ctx);
+  return ctx;
+}
+
+test("local preflight and source badges cannot borrow a different product's confirmations, execution or readiness", () => {
+  const ctx = preflightFixture();
+  ctx.state.saasConfirmations = [card("old", { item: { listing_project_identity: { key: "project-B" } } })];
+  ctx.state.saasExecutionResults = [{ confirmation_id: "old", action_type: "publish_listing", status: "published_to_ebay" }];
+  ctx.state.saasLastPublishReadiness = { checks: [{ key: "old-check", blocking: false }] };
+  ctx.state.saasPreflightResults = [{ listing_project_key: "project-B", status: "ready" }];
+  const rows = vm.runInContext("saasPreTestCheckRows()", ctx);
+  assert.equal(rows.find(row => row.label.startsWith("10 ")).status, "等待发布确认单");
+  assert.equal(rows.find(row => row.label.startsWith("11 ")).tone, "amber");
+  const html = vm.runInContext("renderSaasPublishHealthReportPanel()", ctx);
+  assert.doesNotMatch(html, /已有确认单|已有执行结果|1\/1 已通过/);
+  assert.equal(ctx.state.saasConfirmations.length, 1, "display filtering never deletes history");
+});
+
+test("only a current-product successful publication gets a green result; failures remain reviewable", () => {
+  const ctx = preflightFixture();
+  ctx.state.saasConfirmations = [card("current")];
+  ctx.state.saasExecutionResults = [{ confirmation_id: "current", action_type: "publish_listing", status: "failed" }];
+  let rows = vm.runInContext("saasPreTestCheckRows()", ctx);
+  assert.equal(rows.find(row => row.label.startsWith("10 ")).tone, "green");
+  assert.equal(rows.find(row => row.label.startsWith("11 ")).tone, "amber");
+  assert.match(rows.find(row => row.label.startsWith("11 ")).status, /未完成发布/);
+  ctx.state.saasExecutionResults[0].status = "published_to_ebay";
+  rows = vm.runInContext("saasPreTestCheckRows()", ctx);
+  assert.equal(rows.find(row => row.label.startsWith("11 ")).tone, "green");
+});
+
+test("simulation local check explicitly blocks eBay even with complete form fields", () => {
+  const ctx = preflightFixture();
+  ctx.state.saasListingComposerDraft.merchant_product_fact_packet.simulation_only = true;
+  const rows = vm.runInContext("saasPreTestCheckRows()", ctx);
+  assert.ok(rows.some(row => row.tone === "red" && /模拟/.test(row.status)));
+});
+
+test("both confirmation buttons explain simulation locally without a request or model action", async () => {
+  const ctx = preflightFixture();
+  ctx.messages = [];
+  ctx.state.saasListingComposerDraft = { model_generated: true, merchant_product_fact_packet: { simulation_only: true } };
+  ctx.requireSaasProtectedSessionForAction = () => true;
+  ctx.showActionToast = message => ctx.messages.push(message);
+  ctx.readSaasPublishIntakeForm = () => { throw new Error("simulation must stop before the publish request"); };
+  vm.runInContext(`async ${extract("createSaasPublishConfirmationFromIntakeForm")}`, ctx);
+  for (const mode of ["publish", "ebay-draft"]) {
+    ctx.mode = mode;
+    assert.equal(await vm.runInContext("createSaasPublishConfirmationFromIntakeForm(mode)", ctx), false);
+    assert.match(ctx.messages.at(-1), /模拟演练.*不能.*eBay/);
+  }
+});

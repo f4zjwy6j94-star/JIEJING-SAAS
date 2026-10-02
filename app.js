@@ -1650,6 +1650,9 @@ const saasInventoryLocationReconciliationAttemptKeys = new Set();
 let saasWechatZeroChargeRehearsalAttempted = false;
 let saasPendingPublishIntakeFormValues = null;
 let saasPendingPublishIntakeFormContextKey = "";
+let saasPendingPublishIntakeFormBasis = null;
+let saasPendingPublishIntakeSavedAt = "";
+let saasPendingPublishIntakeSaveStatus = "empty";
 
 const manualActionDetails = {
   ebay_account: {
@@ -6869,18 +6872,40 @@ function saasPreTestFormSummary(payload = null) {
   };
 }
 
+function saasListingPublishCheckContext() {
+  const confirmation = saasListingConfirmationsForCurrentProject().find((item) => item.action_type === "publish_listing") || null;
+  const projectKey = saasCurrentListingProjectIdentity().key;
+  const latestPreflight = projectKey ? (state.saasPreflightResults || []).find(
+    (item) => item && item.listing_project_key === projectKey,
+  ) || null : null;
+  // Account-wide last-result caches are not evidence for the current product.
+  // The backend stores readiness on the same scoped confirmation it belongs to.
+  const readiness = confirmation?.item?.publish_readiness && typeof confirmation.item.publish_readiness === "object"
+    ? confirmation.item.publish_readiness : {};
+  const execution = confirmation?.confirmation_id
+    ? saasExecutionResultForConfirmation(confirmation.confirmation_id, "publish_listing") : null;
+  return { confirmation, latestPreflight, readiness, execution };
+}
+
 function saasPreTestCheckRows(ctx = saasMerchantWorkbenchContext(), payload = null) {
   const summary = saasPreTestFormSummary(payload);
-  const hasPublishConfirmation = (state.saasConfirmations || []).some((item) => item.action_type === "publish_listing");
-  const latestExecution = saasLatestExecutionResult("publish_listing");
+  const { confirmation, readiness, latestPreflight, execution: latestExecution } = saasListingPublishCheckContext();
+  const hasPublishConfirmation = Boolean(confirmation);
   const hasResult = Boolean(latestExecution);
-  const hasReadiness = Boolean(state.saasLastPublishReadiness);
+  const published = (latestExecution?.result?.status || latestExecution?.status) === "published_to_ebay";
+  const hasReadiness = Boolean(readiness.checks?.length || latestPreflight);
+  const simulationOnly = payload?.simulation_only === true || state.saasListingComposerDraft?.merchant_product_fact_packet?.simulation_only === true;
   const hasPacket = Boolean(ctx.hasPacket);
   const accountHealth = saasAccountHealthSnapshot();
   const accountTone = saasAccountHealthTone(accountHealth);
   const accountReady = Boolean(accountHealth.can_execute_real_writes && !accountHealth.incident_mode);
-  const hasReports = Boolean(latestSaasReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]) || latestSaasReportByTypes(["listing.package", "product.listing"]));
   return [
+    ...(simulationOnly ? [{
+      label: "演练边界",
+      status: "模拟资料，仅供内部演练",
+      tone: "red",
+      summary: "资料、文案和图片可以继续核对；模拟数据不能创建 eBay 草稿或正式发布确认单，不代表真实库存、费用或发货承诺。",
+    }] : []),
     {
       label: "1 店铺连接和店铺资料",
       status: hasPacket ? "已就绪" : state.saasConnected ? "缺店铺资料" : "未登录",
@@ -6943,8 +6968,8 @@ function saasPreTestCheckRows(ctx = saasMerchantWorkbenchContext(), payload = nu
     },
     {
       label: "11 发布结果和复盘",
-      status: hasResult ? "已有执行结果" : "等待 itemId / Listing URL",
-      tone: hasResult ? "green" : "amber",
+      status: published ? "本商品已发布，结果已回填" : hasResult ? "本商品已有执行记录，未完成发布" : "等待 itemId / Listing URL",
+      tone: published ? "green" : "amber",
       summary: "发布后要回填 itemId / Listing URL，并自动安排 1 小时 / 24 小时 / 7 天复盘。",
     },
   ];
@@ -7398,7 +7423,7 @@ function renderSaasBackendPublishPreflightPanel(readiness = {}, ctx = saasMercha
   const checks = Array.isArray(readiness.checks) ? readiness.checks : [];
   const blocked = checks.filter((item) => item && item.blocking).length;
   const readyForAdapter = readiness.ready_for_platform_adapter === true;
-  const latestPublishConfirmation = saasLatestPublishConfirmation();
+  const latestPublishConfirmation = saasListingPublishCheckContext().confirmation;
   const summaryTone = blocked ? "red" : checks.length ? "green" : "amber";
   if (!checks.length) {
     return `
@@ -7514,11 +7539,9 @@ function renderSaasBackendPublishPreflightPanel(readiness = {}, ctx = saasMercha
 }
 
 function renderSaasPublishConfirmationEvidencePanel(readiness = {}, ctx = saasMerchantWorkbenchContext()) {
-  const confirmation = saasLatestPublishConfirmation();
-  const currentProjectKey = saasCurrentListingProjectIdentity().key;
-  const latestPreflight = (state.saasPreflightResults || []).find(
-    (item) => item && typeof item === "object" && (!currentProjectKey || item.listing_project_key === currentProjectKey),
-  ) || {};
+  const scoped = saasListingPublishCheckContext();
+  const confirmation = scoped.confirmation;
+  const latestPreflight = scoped.latestPreflight || {};
   const item = confirmation?.item && typeof confirmation.item === "object" ? confirmation.item : {};
   const evidence = saasCurrentPublishConfirmationEvidence() || {};
   const accountHealth = item.account_health && typeof item.account_health === "object" ? item.account_health : saasAccountHealthSnapshot();
@@ -7595,7 +7618,7 @@ function renderSaasPublishConfirmationEvidencePanel(readiness = {}, ctx = saasMe
 
 function renderSaasPublishHealthReportPanel(ctx = saasMerchantWorkbenchContext(), rows = saasPreTestCheckRows(ctx, null), options = {}) {
   const summary = saasPublishHealthSummary(rows);
-  const readiness = state.saasLastPublishReadiness && typeof state.saasLastPublishReadiness === "object" ? state.saasLastPublishReadiness : {};
+  const { confirmation, readiness } = saasListingPublishCheckContext();
   const backendChecks = Array.isArray(readiness.checks) ? readiness.checks : [];
   const backendBlocking = backendChecks.filter((item) => item && item.blocking).length;
   const accountHealth = saasAccountHealthSnapshot();
@@ -7621,9 +7644,9 @@ function renderSaasPublishHealthReportPanel(ctx = saasMerchantWorkbenchContext()
     },
     {
       label: "确认中心",
-      value: (state.saasConfirmations || []).some((item) => item.action_type === "publish_listing") ? "已有确认单" : "真实动作前必须确认",
+      value: confirmation ? "已有确认单" : "真实动作前必须确认",
       detail: "发布、改价、库存、退款、广告、付款、政策和敏感客服承诺都保留门禁",
-      tone: (state.saasConfirmations || []).some((item) => item.action_type === "publish_listing") ? "green" : "red",
+      tone: confirmation ? "green" : "red",
     },
   ];
   return `
@@ -8099,7 +8122,7 @@ function saasAccountScopedEbayPublishPrefillFromPacket() {
   };
 }
 
-function saasPublishIntakePrefillValues(text = state.saasListingComposerInput || "") {
+function saasPublishIntakePrefillValues(text = state.saasListingComposerInput || "", options = {}) {
   const clean = sanitizeSaasWorkflowFeedbackText(text, 1200);
   const draft = state.saasListingComposerDraft || (clean.trim() ? saasListingComposerDraftFromText(clean) : null);
   const fields = draft?.fields || {};
@@ -8196,7 +8219,13 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     payment_policy_id: publishPrefill.payment_policy_id || accountPrefill.payment_policy_id,
     return_policy_id: publishPrefill.return_policy_id || accountPrefill.return_policy_id,
   };
-  const merged = { ...values, ...(typeof currentSaasPendingPublishIntakeValues === "function" ? currentSaasPendingPublishIntakeValues() : {}) };
+  if (options.restoreSnapshot === false) return values;
+  const merged = { ...values, ...(typeof currentSaasPendingPublishIntakeValues === "function" ? currentSaasPendingPublishIntakeValues(values) : {}) };
+  // A saved form is merchant input, never evidence of validated AI generation.
+  if (buyerCopyRequiresValidatedGeneration) {
+    merged.title = "";
+    merged.description_html = "";
+  }
   // An old form snapshot must not resurrect a subsequently revoked image.
   merged.image_urls = saasMerchantProductFactProjectedValue(draft?.merchant_product_fact_packet || {}, {}, "image_urls", merged.image_urls);
   return merged;
@@ -8302,7 +8331,8 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
           <small>草稿会先自动带入。先补买家能看到和会影响利润的内容，再补 eBay 类目、item specifics 和履约信息。</small>
         </div>
         ${renderSaasPublishReadinessStrip(formValues)}
-      <form id="saasPublishIntakeForm" class="saas-publish-intake-form">
+        <p data-saas-publish-intake-draft-status role="status" aria-live="polite">${escapeHtml(saasPublishIntakeDraftStatusText())}</p>
+      <form id="saasPublishIntakeForm" class="saas-publish-intake-form" data-intake-context="${escapeHtml(saasListingCloudContext()?.key || "")}" data-intake-basis="${escapeHtml(JSON.stringify(sanitizeSaasPublishIntakeDraftValues(saasPublishIntakePrefillValues(undefined, { restoreSnapshot: false }))))}">
         ${renderSaasPublishFormGroup("基础信息", "商品目标、SKU、标题和状态。草稿有标题时会自动带入。", [
           renderSaasPublishInputField("商品目标", "product", { value: formValues.product, placeholder: "例如：全新未接触过的硅胶柜门防撞垫" }),
           renderSaasPublishInputField("SKU", "sku", { value: formValues.sku, placeholder: "留空会自动生成 JJ-FRESH-..." }),
@@ -10326,12 +10356,9 @@ function renderSaasListingPublishFeedbackPanel(
   const summary = saasListingDraftPreflightSummary(draft, ctx, pendingConfirmations);
   const rows = saasPreTestCheckRows(ctx, null);
   const localSummary = saasPublishHealthSummary(rows);
-  const readiness = state.saasLastPublishReadiness && typeof state.saasLastPublishReadiness === "object" ? state.saasLastPublishReadiness : {};
+  const { readiness, latestPreflight, confirmation, execution } = saasListingPublishCheckContext();
   const backendChecks = Array.isArray(readiness.checks) ? readiness.checks : [];
   const backendBlocked = backendChecks.filter((item) => item && item.blocking).length;
-  const latestPreflight = (state.saasPreflightResults || []).find((item) => item && typeof item === "object") || null;
-  const confirmation = saasListingConfirmationsForCurrentProject().find((item) => item.action_type === "publish_listing") || null;
-  const execution = confirmation?.confirmation_id ? saasExecutionResultForConfirmation(confirmation.confirmation_id, "publish_listing") : null;
   const hasBackendReadiness = backendChecks.length > 0 || Boolean(latestPreflight);
   const canOpenConfirm = Boolean(confirmation?.confirmation_id);
   const tone = backendBlocked || localSummary.red ? "red" : hasBackendReadiness || canOpenConfirm ? "green" : "amber";
@@ -10416,12 +10443,9 @@ function renderSaasListingVisiblePublishBridge(
   const summary = saasListingDraftPreflightSummary(draft, ctx, pendingConfirmations);
   const rows = saasPreTestCheckRows(ctx, null);
   const localSummary = saasPublishHealthSummary(rows);
-  const readiness = state.saasLastPublishReadiness && typeof state.saasLastPublishReadiness === "object" ? state.saasLastPublishReadiness : {};
+  const { readiness, latestPreflight, confirmation, execution } = saasListingPublishCheckContext();
   const backendChecks = Array.isArray(readiness.checks) ? readiness.checks : [];
   const backendBlocked = backendChecks.filter((item) => item && item.blocking).length;
-  const latestPreflight = (state.saasPreflightResults || []).find((item) => item && typeof item === "object") || null;
-  const confirmation = saasListingConfirmationsForCurrentProject().find((item) => item.action_type === "publish_listing") || null;
-  const execution = confirmation?.confirmation_id ? saasExecutionResultForConfirmation(confirmation.confirmation_id, "publish_listing") : null;
   const hasBackendReadiness = backendChecks.length > 0 || Boolean(latestPreflight);
   const canOpenConfirm = Boolean(confirmation?.confirmation_id);
   const tone = summary.red || backendBlocked ? "red" : summary.amber || !canOpenConfirm ? "amber" : "green";
@@ -31723,29 +31747,135 @@ async function createSaasProductWorkflowFromBackend(options = {}) {
   }
 }
 
-function snapshotSaasPublishIntakeFormValues() {
-  const form = document.querySelector("#saasPublishIntakeForm");
-  if (!form || typeof FormData !== "function") return currentSaasPendingPublishIntakeValues();
-  saasPendingPublishIntakeFormContextKey = saasListingAiGenerationContextKey();
-  return Object.fromEntries(Array.from(new FormData(form).entries(), ([key, value]) => [String(key), String(value)]));
+// Browser recovery only. Never persist confirmation, generation, image-rights,
+// session, or execution authority in this draft. The server remains authoritative.
+function sanitizeSaasPublishIntakeDraftValues(input = {}) {
+  const names = ["product", "sku", "title", "condition", "category_id", "category_leaf", "price", "currency", "quantity",
+    "merchant_location_key", "inventory_location_key", "inventory_location_name", "inventory_location_city",
+    "inventory_location_state", "inventory_location_country", "item_location", "package_weight_g", "package_length_cm",
+    "package_width_cm", "package_height_cm", "material", "procurement_cost", "shipping_cost", "ebay_fee", "ad_budget",
+    "return_risk_reserve", "exchange_rate", "net_profit", "gross_margin_percent", "item_specifics", "image_urls",
+    "description_html", "fulfillment_policy_id", "payment_policy_id", "return_policy_id"];
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+  return Object.fromEntries(names.filter((name) => Object.hasOwn(input, name) && typeof input[name] === "string")
+    .map((name) => [name, saasListingEditableFieldText(input[name], name,
+      ["description_html", "image_urls", "item_specifics"].includes(name) ? 6000 : 800)]));
 }
 
-function currentSaasPendingPublishIntakeValues() {
-  return saasPendingPublishIntakeFormContextKey === saasListingAiGenerationContextKey() ? saasPendingPublishIntakeFormValues || {} : {};
+function saasPublishIntakeDraftStatusText() {
+  if (saasPendingPublishIntakeSaveStatus === "error") return "发布表未能保存在此浏览器，请勿刷新或关闭页面。";
+  if (saasPendingPublishIntakeSaveStatus === "review") return "商品资料已变更，相关发布信息和费用需重新核对。其余内容保留在此浏览器。";
+  if (saasPendingPublishIntakeSaveStatus === "saved") return "发布表已保存在此浏览器；换设备不会同步，发布前仍需核对。";
+  return "发布表修改会保存在当前浏览器，不会自动发布。";
+}
+
+function persistSaasPublishIntakeDraft(status = "saved") {
+  const context = saasListingCloudContext();
+  if (!context || context.key !== saasPendingPublishIntakeFormContextKey || !saasPendingPublishIntakeFormValues) return false;
+  try {
+    localStorage.setItem(`jiejing_publish_intake_v1:${context.key}`, JSON.stringify({ version: 1, context_key: context.key,
+      saved_at: saasPendingPublishIntakeSavedAt, values: sanitizeSaasPublishIntakeDraftValues(saasPendingPublishIntakeFormValues),
+      basis: saasPendingPublishIntakeFormBasis }));
+    saasPendingPublishIntakeSaveStatus = status;
+    return true;
+  } catch {
+    saasPendingPublishIntakeSaveStatus = "error";
+    return false;
+  }
+}
+
+function saasPublishIntakeDependentFields(changed = []) {
+  const result = new Set(changed);
+  const add = (...names) => names.forEach((name) => result.add(name));
+  if (changed.some((name) => ["price", "currency", "procurement_cost", "quantity"].includes(name))) {
+    add("ebay_fee", "return_risk_reserve", "net_profit", "gross_margin_percent");
+  }
+  if (changed.includes("currency")) add("exchange_rate", "shipping_cost", "ad_budget");
+  if (changed.some((name) => ["item_location", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm", "fulfillment_policy_id"].includes(name))) {
+    add("shipping_cost", "net_profit", "gross_margin_percent");
+  }
+  if (changed.some((name) => ["shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "exchange_rate"].includes(name))) {
+    add("net_profit", "gross_margin_percent");
+  }
+  return [...result];
+}
+
+function snapshotSaasPublishIntakeFormValues(changedName = "") {
+  const form = document.querySelector("#saasPublishIntakeForm");
+  const context = saasListingCloudContext();
+  if (!context || !form || form.dataset.intakeContext !== context.key || typeof FormData !== "function") return currentSaasPendingPublishIntakeValues();
+  const values = sanitizeSaasPublishIntakeDraftValues(Object.fromEntries(new FormData(form).entries()));
+  const basis = sanitizeSaasPublishIntakeDraftValues(saasPublishIntakePrefillValues(undefined, { restoreSnapshot: false }));
+  let renderedBasis = {};
+  try { renderedBasis = JSON.parse(form.dataset.intakeBasis || "{}"); } catch { /* Missing source cannot attest to freshness. */ }
+  const changedSource = Object.keys(basis).filter((name) => renderedBasis?.[name] !== basis[name]);
+  const stale = saasPublishIntakeDependentFields(changedSource);
+  if (changedName && saasPendingPublishIntakeFormContextKey === context.key &&
+      values[changedName] !== saasPendingPublishIntakeFormValues?.[changedName]) {
+    stale.push(...saasPublishIntakeDependentFields([changedName]).filter((name) => name !== changedName));
+  }
+  [...new Set(stale)].forEach((name) => {
+    delete values[name];
+    const input = form.elements.namedItem(name);
+    if (input && "value" in input) input.value = basis[name] || "";
+  });
+  saasPendingPublishIntakeFormContextKey = context.key;
+  saasPendingPublishIntakeFormValues = values;
+  saasPendingPublishIntakeFormBasis = basis;
+  form.dataset.intakeBasis = JSON.stringify(basis);
+  saasPendingPublishIntakeSavedAt = new Date().toISOString();
+  persistSaasPublishIntakeDraft(changedSource.length ? "review" : "saved");
+  document.querySelectorAll("[data-saas-publish-intake-draft-status]").forEach((node) => { node.textContent = saasPublishIntakeDraftStatusText(); });
+  return saasPendingPublishIntakeFormValues;
+}
+
+function currentSaasPendingPublishIntakeValues(baseValues = null) {
+  const context = saasListingCloudContext();
+  if (!context) return {};
+  const basis = sanitizeSaasPublishIntakeDraftValues(baseValues || saasPublishIntakePrefillValues(undefined, { restoreSnapshot: false }));
+  if (saasPendingPublishIntakeFormContextKey !== context.key) {
+    clearSaasPendingPublishIntakeSnapshot();
+    saasPendingPublishIntakeFormContextKey = context.key;
+    try {
+      const raw = localStorage.getItem(`jiejing_publish_intake_v1:${context.key}`);
+      const saved = raw && raw.length <= 128000 ? JSON.parse(raw) : null;
+      const age = Date.now() - Date.parse(saved?.saved_at || "");
+      if (saved?.version === 1 && saved.context_key === context.key && Number.isFinite(age) && age >= -300000 && age <= 14 * 86400000
+          && saved.basis && typeof saved.basis === "object" && !Array.isArray(saved.basis)) {
+        saasPendingPublishIntakeFormValues = sanitizeSaasPublishIntakeDraftValues(saved.values);
+        saasPendingPublishIntakeFormBasis = sanitizeSaasPublishIntakeDraftValues(saved.basis);
+        saasPendingPublishIntakeSavedAt = saved.saved_at;
+        saasPendingPublishIntakeSaveStatus = "saved";
+      }
+    } catch { /* A malformed or unavailable cache is not a verified draft. */ }
+  }
+  if (!saasPendingPublishIntakeFormValues) return {};
+  const changed = Object.keys(basis).filter((name) => saasPendingPublishIntakeFormBasis?.[name] !== basis[name]);
+  if (changed.length) {
+    saasPublishIntakeDependentFields(changed).forEach((name) => { delete saasPendingPublishIntakeFormValues[name]; });
+    saasPendingPublishIntakeFormBasis = basis;
+    persistSaasPublishIntakeDraft("review");
+  }
+  return { ...saasPendingPublishIntakeFormValues };
 }
 
 function clearSaasPendingPublishIntakeSnapshot() {
   saasPendingPublishIntakeFormValues = null;
   saasPendingPublishIntakeFormContextKey = "";
+  saasPendingPublishIntakeFormBasis = null;
+  saasPendingPublishIntakeSavedAt = "";
+  saasPendingPublishIntakeSaveStatus = "empty";
 }
 
 function invalidateSaasPendingPublishIntakeFields(keys = []) {
+  currentSaasPendingPublishIntakeValues();
   if (!saasPendingPublishIntakeFormValues) return;
   const mapping = { title: ["title"], selling_points: ["description_html"], description: ["description_html"],
     category: ["category_id", "category_leaf"], price: ["price", "currency"], images: ["image_urls"],
     item_specifics: ["item_specifics", "material"],
     logistics: ["item_location", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm", "inventory_location_country"] };
-  keys.forEach((key) => (mapping[key] || []).forEach((name) => { delete saasPendingPublishIntakeFormValues[name]; }));
+  saasPublishIntakeDependentFields(keys.flatMap((key) => mapping[key] || [])).forEach((name) => { delete saasPendingPublishIntakeFormValues[name]; });
+  persistSaasPublishIntakeDraft("review");
 }
 
 function readSaasInventoryLocationInput() {
@@ -31881,6 +32011,7 @@ async function executeSaasApprovedInventoryLocation() {
     );
     const locationInput = document.querySelector('#saasPublishIntakeForm [name="merchant_location_key"]');
     if (locationInput) locationInput.value = expectedKey;
+    persistSaasPublishIntakeDraft();
     runSaasPreTestFormCheck();
     showActionToast("eBay 库存位置已创建并回填。现在可以继续生成未发布草稿确认单。");
     return true;
@@ -31947,6 +32078,7 @@ async function reconcileSaasInventoryLocation() {
     );
     const locationInput = document.querySelector('#saasPublishIntakeForm [name="merchant_location_key"]');
     if (locationInput) locationInput.value = expectedKey;
+    persistSaasPublishIntakeDraft();
     runSaasPreTestFormCheck();
     showActionToast("已通过 eBay 只读查询确认库存位置存在并回填；没有发起第二次写入。");
     return true;
@@ -32049,6 +32181,10 @@ async function createSaasPublishConfirmationFromIntakeForm(mode = "publish") {
   if (!requireSaasProtectedSessionForAction()) return false;
   const draftSave = mode === "ebay-draft";
   const currentDraft = state.saasListingComposerDraft;
+  if (currentDraft?.merchant_product_fact_packet?.simulation_only === true) {
+    showActionToast("当前是模拟演练资料，不能创建 eBay 草稿或正式发布确认单。已保存的资料、文案和图片可以继续核对；本次没有写入 eBay。");
+    return false;
+  }
   const requiresValidatedListingGeneration =
     currentDraft?.model_generated !== true &&
     !(typeof saasListingMerchantEditHasValidatedBase === "function" && saasListingMerchantEditHasValidatedBase(currentDraft)) &&
@@ -33796,8 +33932,8 @@ function saasListingCloudFields(fields = {}) {
     saasListingEditableFieldText(fields[key], key)]));
 }
 
-function saasListingEditableFieldText(value, key) {
-  const limit = ["description", "selling_points"].includes(key) ? 1400 : 800;
+function saasListingEditableFieldText(value, key, maxLength = null) {
+  const limit = maxLength ?? (["description", "selling_points"].includes(key) ? 1400 : 800);
   // Merchant content is data, not public UI copy. Retain the existing secret
   // redaction rules without renaming product words, brands or URL paths.
   const clean = String(value ?? "")
@@ -48591,6 +48727,7 @@ function bindEvents() {
   });
 
   document.addEventListener("input", (event) => {
+    if (event.target?.closest?.("#saasPublishIntakeForm")) snapshotSaasPublishIntakeFormValues(event.target.name);
     if (event.target?.id === "saas-model-provider") {
       const provider = saasModelProviderByKey(event.target.value || "");
       const modelInput = document.querySelector("#saas-model-model");

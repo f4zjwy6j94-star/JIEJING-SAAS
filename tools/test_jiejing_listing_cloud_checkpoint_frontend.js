@@ -157,6 +157,11 @@ async function openDevice(options = {}) {
   });
   await page.goto(`${base}/app.html?start=app&qa=public-saas&view=product&project=${identity.key}${options.visual ? "&visual=1" : ""}`);
   assert.equal(await page.evaluate(() => localStorage.length), 0, "new device has no draft or sync cache");
+  await seedDevice(page, options);
+  return { context, page, errors, consoleIssues };
+}
+
+async function seedDevice(page, options = {}) {
   await page.evaluate(({ companyId, userId, storeId, base, identity, originalFields, baseReport, visual }) => {
     window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
     localStorage.setItem(saasStorageKeys.storeId, storeId);
@@ -187,8 +192,200 @@ async function openDevice(options = {}) {
     }
   }, { companyId, userId, storeId, base, identity: options.identity || identity, originalFields,
     baseReport: options.baseReport || baseReport, visual: options.visual === true });
-  return { context, page, errors, consoleIssues };
 }
+
+async function mountPublishIntake(page) {
+  await page.evaluate(() => {
+    document.querySelector("#checkpoint-intake-fixture")?.remove();
+    const host = document.createElement("div"); host.id = "checkpoint-intake-fixture";
+    host.innerHTML = renderSaasPublishConfirmationIntakePanel(undefined, { includeGuide: false });
+    document.body.append(host);
+  });
+  return page.locator("#saasPublishIntakeForm");
+}
+
+test("publish intake saves real input events and restores fees, empty values and location after a full reload", async () => {
+  resetFixture();
+  const device = await openDevice();
+  try {
+    let form = await mountPublishIntake(device.page);
+    const values = { shipping_cost: "4.20", ebay_fee: "2.07", ad_budget: "0", return_risk_reserve: "0.65",
+      exchange_rate: "1", net_profit: "3.57", gross_margin_percent: "27.48",
+      category_leaf: "Measuring Cups & Spoons", merchant_location_key: "SIM-ONLY-WAREHOUSE-001",
+      title: "", condition: "NEW" };
+    for (const [name, value] of Object.entries(values)) {
+      if (name === "condition") await form.locator(`[name="${name}"]`).selectOption(value);
+      else await form.locator(`[name="${name}"]`).fill(value);
+    }
+    await device.page.reload();
+    await seedDevice(device.page);
+    form = await mountPublishIntake(device.page);
+    for (const [name, value] of Object.entries(values)) assert.equal(await form.locator(`[name="${name}"]`).inputValue(), value, name);
+    assert.match(await device.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /已保存在.*浏览器/);
+    assert.doesNotMatch(await device.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /已云端保存/);
+    assert.equal(requests.filter((request) => request.method === "POST").length, 0, "local intake recovery does not submit a model, cloud checkpoint or platform action");
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+test("publish intake is isolated by every account and project anchor and rejects an old rendered form", async () => {
+  resetFixture();
+  const device = await openDevice();
+  try {
+    const form = await mountPublishIntake(device.page);
+    await form.locator('[name="shipping_cost"]').fill("4.20");
+    for (const anchor of ["company", "user", "store", "key", "source_report_id", "candidate_id", "unauthenticated"]) {
+      const actual = await device.page.evaluate((anchor) => {
+        const saved = { company: state.saasIdentity.company_id, user: state.saasIdentity.user_id,
+          stores: state.saasStores, identity: state.saasListingComposerDraft.listing_project_identity,
+          ready: state.saasProtectedStateReady };
+        if (anchor === "company") state.saasIdentity.company_id = "other-company";
+        else if (anchor === "user") state.saasIdentity.user_id = "other-user";
+        else if (anchor === "store") state.saasStores = [{ store_id: "other-store", platform: "ebay" }];
+        else if (anchor === "unauthenticated") state.saasProtectedStateReady = false;
+        else state.saasListingComposerDraft.listing_project_identity = { ...saved.identity, [anchor]: "other-anchor" };
+        clearSaasPendingPublishIntakeSnapshot();
+        const other = saasPublishIntakePrefillValues("").shipping_cost;
+        const oldForm = document.querySelector('#saasPublishIntakeForm [name="shipping_cost"]');
+        oldForm.value = "99.99";
+        oldForm.dispatchEvent(new Event("input", { bubbles: true }));
+        const afterStaleEvent = saasPublishIntakePrefillValues("").shipping_cost;
+        state.saasIdentity.company_id = saved.company; state.saasIdentity.user_id = saved.user;
+        state.saasStores = saved.stores; state.saasListingComposerDraft.listing_project_identity = saved.identity;
+        state.saasProtectedStateReady = saved.ready;
+        clearSaasPendingPublishIntakeSnapshot();
+        return { other, afterStaleEvent, restored: saasPublishIntakePrefillValues("").shipping_cost };
+      }, anchor);
+      assert.equal(actual.other, "", `${anchor}: cannot read A's values`);
+      assert.equal(actual.afterStaleEvent, "", `${anchor}: old DOM cannot write to B`);
+      assert.equal(actual.restored, "4.20", `${anchor}: return to A without losing its draft`);
+    }
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+test("publish intake revalidates against current source fields and clears dependent stale costs durably", async () => {
+  resetFixture();
+  const device = await openDevice();
+  try {
+    let form = await mountPublishIntake(device.page);
+    for (const [name, value] of Object.entries({ title: "Old intake title", price: "12.99", shipping_cost: "4.20", ebay_fee: "2.07", net_profit: "3.57", gross_margin_percent: "27.48" })) {
+      await form.locator(`[name="${name}"]`).fill(value);
+    }
+    await device.page.reload();
+    await seedDevice(device.page);
+    await device.page.evaluate(() => {
+      state.saasListingComposerDraft.fields.title = "New source title";
+      state.saasListingComposerDraft.fields.price = "19.99 USD";
+      state.saasListingComposerDraft.fields.logistics = "包装重量: 700 g; 包装尺寸: 30x20x10 cm";
+    });
+    form = await mountPublishIntake(device.page);
+    assert.equal(await form.locator('[name="title"]').inputValue(), "New source title");
+    assert.equal(await form.locator('[name="price"]').inputValue(), "19.99");
+    for (const name of ["shipping_cost", "ebay_fee", "net_profit", "gross_margin_percent"]) assert.equal(await form.locator(`[name="${name}"]`).inputValue(), "", name);
+    assert.match(await device.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /资料.*变更|重新核对/);
+    await device.page.reload();
+    await seedDevice(device.page);
+    form = await mountPublishIntake(device.page);
+    assert.equal(await form.locator('[name="shipping_cost"]').inputValue(), "", "invalidated values cannot reappear when an older report is replayed");
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+test("publish intake cache cannot restore authority, revive unvalidated buyer copy or silently claim a failed save", async () => {
+  resetFixture();
+  const device = await openDevice();
+  try {
+    let form = await mountPublishIntake(device.page);
+    await form.locator('[name="title"]').fill("Previously entered copy");
+    await form.locator('[name="shipping_cost"]').fill("4.20");
+    const key = await device.page.evaluate(() => Object.keys(localStorage).find((key) => key.startsWith("jiejing_publish_intake_v1:")));
+    assert.ok(key, "input event must durably save the scoped draft");
+    await device.page.evaluate((key) => {
+      const cached = JSON.parse(localStorage.getItem(key));
+      cached.values.simulation_only = "false"; cached.values.image_rights_confirmed = "true";
+      cached.values.access_token = "synthetic-secret"; cached.values.role = "owner";
+      localStorage.setItem(key, JSON.stringify(cached));
+      state.saasListingComposerDraft.buyer_copy_requires_validated_listing_generation = true;
+      state.saasListingComposerDraft.merchant_product_fact_packet = { simulation_only: true };
+      clearSaasPendingPublishIntakeSnapshot();
+    }, key);
+    form = await mountPublishIntake(device.page);
+    assert.equal(await form.locator('[name="title"]').inputValue(), "");
+    const restored = await device.page.evaluate(() => ({ values: currentSaasPendingPublishIntakeValues(),
+      simulation: state.saasListingComposerDraft.merchant_product_fact_packet.simulation_only }));
+    for (const name of ["simulation_only", "image_rights_confirmed", "access_token", "role"]) assert.equal(Object.hasOwn(restored.values, name), false, name);
+    assert.equal(restored.simulation, true);
+    for (const invalid of ["expired", "future", "wrong-scope", "broken"]) {
+      await device.page.evaluate(({ key, invalid }) => {
+        const data = JSON.parse(localStorage.getItem(key));
+        if (invalid === "expired") data.saved_at = new Date(Date.now() - 15 * 86400000).toISOString();
+        if (invalid === "future") data.saved_at = new Date(Date.now() + 600000).toISOString();
+        if (invalid === "wrong-scope") data.context_key = "different-project";
+        localStorage.setItem(key, invalid === "broken" ? "{" : JSON.stringify(data));
+        clearSaasPendingPublishIntakeSnapshot();
+      }, { key, invalid });
+      form = await mountPublishIntake(device.page);
+      assert.equal(await form.locator('[name="shipping_cost"]').inputValue(), "", invalid);
+      await form.locator('[name="shipping_cost"]').fill("4.20");
+    }
+    await device.page.evaluate(() => {
+      Storage.prototype.setItem = function () { throw new DOMException("storage full", "QuotaExceededError"); };
+    });
+    await form.locator('[name="shipping_cost"]').fill("5.00");
+    assert.match(await device.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /未能保存|无法保存/);
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+test("publish intake prevents stale same-project DOM rebasing and invalidates manually changed profit inputs", async () => {
+  resetFixture();
+  const device = await openDevice();
+  try {
+    let form = await mountPublishIntake(device.page);
+    await form.locator('[name="title"]').fill("Old publish title");
+    await form.locator('[name="net_profit"]').fill("3.57");
+    await form.locator('[name="gross_margin_percent"]').fill("27.48");
+    await form.locator('[name="shipping_cost"]').fill("9.00");
+    assert.equal(await form.locator('[name="net_profit"]').inputValue(), "", "editing costs cannot leave a stale profit estimate");
+    assert.equal(await form.locator('[name="gross_margin_percent"]').inputValue(), "");
+    await device.page.evaluate(() => { state.saasListingComposerDraft.fields.title = "New server-projected title"; });
+    await form.locator('[name="ad_budget"]').fill("0");
+    form = await mountPublishIntake(device.page);
+    assert.equal(await form.locator('[name="title"]').inputValue(), "New server-projected title", "typing a fee into an old DOM must not rebase old buyer copy onto newer source facts");
+    assert.equal(await form.locator('[name="shipping_cost"]').inputValue(), "9.00");
+    assert.equal(await form.locator('[name="ad_budget"]').inputValue(), "0");
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+test("publish intake preserves long literal descriptions and image paths while redacting credentials", async () => {
+  resetFixture();
+  const device = await openDevice();
+  try {
+    let form = await mountPublishIntake(device.page);
+    const description = `样例商品 Hermes / 测试 ${"八件金色木柄量勺 ".repeat(240)}`;
+    const url = "https://assets.example.invalid/Hermes/sample-image.jpg";
+    await form.locator('[name="description_html"]').fill(description);
+    await form.locator('[name="image_urls"]').fill(url);
+    await form.locator('[name="inventory_location_name"]').fill("api_key=synthetic-secret-not-a-credential");
+    await device.page.reload();
+    await seedDevice(device.page);
+    form = await mountPublishIntake(device.page);
+    assert.equal(await form.locator('[name="description_html"]').inputValue(), description);
+    assert.equal(await form.locator('[name="image_urls"]').inputValue(), url);
+    const raw = await device.page.evaluate(() => Object.entries(localStorage).filter(([key]) => key.startsWith("jiejing_publish_intake_v1:")).map(([, value]) => value).join(""));
+    assert.doesNotMatch(raw, /synthetic-secret-not-a-credential/);
+    assert.match(raw, /redacted/);
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
 
 async function mediaStepFixture(mode = "saved") {
   resetFixture();
