@@ -15,6 +15,14 @@ CONTRACT_VERSION = "listing_merchant_edit_v1"
 FIELD_KEYS = ("title", "selling_points", "description", "category", "item_specifics",
               "keywords", "price", "images", "logistics", "risk_notes")
 IDENTITY_KEYS = ("key", "source_report_id", "candidate_id")
+PUBLISH_INTAKE_KEYS = (
+    "product", "sku", "title", "condition", "category_id", "category_leaf", "price", "currency", "quantity",
+    "merchant_location_key", "inventory_location_key", "inventory_location_name", "inventory_location_city",
+    "inventory_location_state", "inventory_location_country", "item_location", "package_weight_g", "package_length_cm",
+    "package_width_cm", "package_height_cm", "material", "procurement_cost", "shipping_cost", "ebay_fee", "ad_budget",
+    "return_risk_reserve", "exchange_rate", "net_profit", "gross_margin_percent", "item_specifics", "image_urls",
+    "description_html", "fulfillment_policy_id", "payment_policy_id", "return_policy_id",
+)
 SAFETY = {"model_called": False, "usage_consumed": False,
           "real_platform_writes_enabled": False, "secret_exposed": False}
 
@@ -46,7 +54,8 @@ def normalize_identity(value):
 def _request(project_key, body):
     keys = {"contract_version", "listing_project_identity", "base_report_id", "expected_revision",
             "mutation_id", "fields", "merchant_edited_fields"}
-    if not isinstance(body, dict) or set(body) != keys or body["contract_version"] != CONTRACT_VERSION:
+    if (not isinstance(body, dict) or set(body) not in (keys, keys | {"publish_intake"})
+            or body["contract_version"] != CONTRACT_VERSION):
         raise CheckpointValidationError()
     identity = normalize_identity(body["listing_project_identity"])
     if identity["key"] != project_key:
@@ -76,8 +85,28 @@ def _request(project_key, body):
         raise CheckpointValidationError()
     if contains_secret_like_data(body):
         raise CheckpointValidationError("listing_draft_sensitive_text", 422)
+    if "publish_intake" in body:
+        _validate_publish_intake(body["publish_intake"])
     return {**body, "listing_project_identity": identity, "fields": dict(fields),
             "merchant_edited_fields": sorted(set(edited))}
+
+
+def _validate_publish_intake(value):
+    # Draft input only. Evidence, simulation flags and execution authority are
+    # never accepted here and must still come from their authenticated sources.
+    if not isinstance(value, dict) or set(value) != {"values", "basis"}:
+        raise CheckpointValidationError()
+    for fields in value.values():
+        if not isinstance(fields, dict) or not set(fields).issubset(PUBLISH_INTAKE_KEYS):
+            raise CheckpointValidationError()
+        for key, text in fields.items():
+            limit = 6000 if key in ("description_html", "image_urls", "item_specifics") else 800
+            if not isinstance(text, str) or len(text) > limit or "\x00" in text:
+                raise CheckpointValidationError()
+            try:
+                text.encode("utf-8")
+            except UnicodeEncodeError:
+                raise CheckpointValidationError() from None
 
 
 def _decode(value):
@@ -266,6 +295,17 @@ def save_checkpoint(repository, *, company_id, store_id, user_id, project_key, b
                       "base_report_id": base["report_id"], "fields": body["fields"],
                       "merchant_edited_fields": body["merchant_edited_fields"], "saved_at": created_at,
                       "source": "merchant_edit"}
+        if "publish_intake" in body:
+            checkpoint["publish_intake"] = body["publish_intake"]
+        elif head["checkpoint_id"]:
+            # Older tabs and buyer-copy adoption still use the v1 request.
+            # Omitting the new field must not erase a newer device's form.
+            prior = conn.execute("""select receipt_json from listing_draft_edit_revisions
+                where checkpoint_id = ? and company_id = ? and store_id = ? and project_key = ?""",
+                (head["checkpoint_id"], *scope)).fetchone()
+            prior_receipt = _decode(prior["receipt_json"]) if prior else {}
+            if "publish_intake" in prior_receipt:
+                checkpoint["publish_intake"] = prior_receipt["publish_intake"]
         conn.execute("""insert into listing_draft_edit_revisions
             (checkpoint_id,company_id,store_id,project_key,source_report_id,candidate_id,revision,
              mutation_id,payload_fingerprint,base_report_id,actor_user_id,created_at,receipt_json)

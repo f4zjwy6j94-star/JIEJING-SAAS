@@ -42,6 +42,11 @@ class CheckpointHTTPTests(unittest.TestCase):
              "--output-root", str(cls.root), "--host", "127.0.0.1", "--port", str(port)],
             cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             env={"PYTHONUTF8": "1", "JIEJING_DATABASE_ENGINE": "sqlite", "JIEJING_DATABASE_URL": "",
+                 # This suite intentionally makes hundreds of isolated local
+                 # fixture calls. Rate limiting is tested separately; keep it
+                 # enabled without making test order exhaust a shared budget.
+                 "JIEJING_EXPENSIVE_API_RATE_LIMIT_MAX_PER_IP": "2000",
+                 "JIEJING_EXPENSIVE_API_RATE_LIMIT_MAX_GLOBAL": "4000",
                  "TEMP": str(cls.root), "TMP": str(cls.root), "SYSTEMROOT": "C:\\Windows"},
         )
         deadline = time.monotonic() + 25
@@ -122,6 +127,64 @@ class CheckpointHTTPTests(unittest.TestCase):
                 report_type, "Checkpoint source fixture", status, created_at, json.dumps(payload)))
         return report_id
 
+    def test_publish_intake_roundtrip_preserves_costs_and_explicit_clears(self):
+        before_tasks = self.request("/tasks")[1]
+        before_reports = self.request("/reports")[1]
+        self.body["publish_intake"] = {
+            "values": {"sku": "TEST-8PC", "title": "", "shipping_cost": "4.20", "ad_budget": "0",
+                       "exchange_rate": "1", "item_location": "Test location", "image_urls": "https://example.invalid/product.jpg"},
+            "basis": {"title": "Source title", "shipping_cost": "", "price": "12.99"},
+        }
+        status, saved = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 201, "a scoped publish form must save without creating a publication task")
+        self.assertEqual(saved["checkpoint"]["publish_intake"], self.body["publish_intake"])
+        status, read = self.request(self.path + self.query)
+        self.assertEqual(status, 200)
+        self.assertEqual(read["checkpoint"]["publish_intake"], self.body["publish_intake"])
+        self.assertFalse(saved["model_called"] or saved["usage_consumed"] or saved["real_platform_writes_enabled"])
+        self.assertEqual(self.request("/tasks")[1], before_tasks)
+        self.assertEqual(self.request("/reports")[1], before_reports)
+
+    def test_publish_intake_survives_legacy_clients_and_exact_retry(self):
+        self.body["publish_intake"] = {"values": {"shipping_cost": "4.20", "title": ""}, "basis": {}}
+        status, original = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 201)
+        legacy = copy.deepcopy(self.body)
+        del legacy["publish_intake"]
+        legacy.update(expected_revision=1, mutation_id=str(uuid.uuid4()))
+        legacy["fields"]["title"] = "A later merchant title"
+        status, newer = self.request(self.path, method="POST", body=legacy)
+        self.assertEqual(status, 201)
+        self.assertEqual(newer["checkpoint"]["publish_intake"], self.body["publish_intake"])
+        status, replay = self.request(self.path, method="POST", body=self.body)
+        self.assertEqual(status, 200)
+        self.assertEqual(replay["checkpoint"], original["checkpoint"])
+        self.assertEqual(self.request(self.path + self.query)[1]["checkpoint"], newer["checkpoint"])
+
+    def test_publish_intake_conflict_keeps_both_sides_and_rejects_authority(self):
+        self.body["publish_intake"] = {"values": {"shipping_cost": "4.20"}, "basis": {}}
+        self.assertEqual(self.request(self.path, method="POST", body=self.body)[0], 201)
+        other = copy.deepcopy(self.body)
+        other.update(mutation_id=str(uuid.uuid4()))
+        other["publish_intake"]["values"]["shipping_cost"] = "8.00"
+        status, conflict = self.request(self.path, method="POST", body=other)
+        self.assertEqual(status, 409)
+        self.assertEqual(conflict["latest_checkpoint"]["publish_intake"], self.body["publish_intake"])
+        for bad in (None, {"values": {}, "basis": {}, "ready": True},
+                    {"values": {"simulation_only": "false"}, "basis": {}},
+                    {"values": {}, "basis": {"company_id": "other-company"}},
+                    {"values": {"shipping_cost": 0}, "basis": {}},
+                    {"values": {"sku": "x" * 801}, "basis": {}},
+                    {"values": {"description_html": "x" * 6001}, "basis": {}},
+                    {"values": {"title": "a\u0000b"}, "basis": {}}):
+            with self.subTest(invalid_shape=type(bad).__name__):
+                invalid = {**other, "expected_revision": 1, "publish_intake": bad}
+                self.assertEqual(self.request(self.path, method="POST", body=invalid)[0], 400)
+        secret = {**other, "expected_revision": 1,
+                  "publish_intake": {"values": {"title": "sk-" + "a" * 32}, "basis": {}}}
+        self.assertEqual(self.request(self.path, method="POST", body=secret)[0], 422)
+        self.assertEqual(self.request(self.path + self.query)[1]["current_revision"], 1)
+
     def test_save_then_read_preserves_complete_fields_without_tasks_or_reports(self):
         before_tasks = self.request("/tasks")[1]
         before_reports = self.request("/reports")[1]
@@ -158,14 +221,17 @@ class CheckpointHTTPTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, "real browser-to-HTTP checkpoint smoke failed")
         evidence = json.loads(result.stdout)
         self.assertEqual(evidence["visible_controls"], 8)
-        self.assertEqual(evidence["post_count"], 1)
+        self.assertEqual(evidence["post_count"], 2)
+        self.assertEqual(evidence["restored_publish_fields"], 9)
         self.assertGreaterEqual(evidence["get_count"], 2)
         self.assertEqual(evidence["restored_fields"], 10)
         status, read = self.request(self.path + self.query)
         self.assertEqual(status, 200)
         self.assertEqual(read["checkpoint"]["fields"]["title"], "")
         self.assertEqual(read["checkpoint"]["fields"]["description"], "Merchant FAL description stays exact")
-        self.assertEqual(read["current_revision"], 1)
+        self.assertEqual(read["current_revision"], 2)
+        self.assertEqual(read["checkpoint"]["publish_intake"]["values"]["shipping_cost"], "4.20")
+        self.assertEqual(read["checkpoint"]["publish_intake"]["values"]["title"], "")
         self.assertEqual(self.request("/tasks")[1], before_tasks)
         self.assertEqual(self.request("/reports")[1], before_reports)
 

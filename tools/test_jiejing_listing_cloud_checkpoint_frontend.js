@@ -126,10 +126,12 @@ before(async () => {
     requests.push(request);
     if (checkpointHandler && await checkpointHandler(request, res)) return;
     const revision = body.expected_revision + 1;
+    const publishIntake = body.publish_intake ?? checkpoint?.publish_intake;
     checkpoint = { checkpoint_id: `checkpoint-revision-${revision}`, revision, mutation_id: body.mutation_id,
       company_id: companyId, store_id: storeId, listing_project_identity: identity,
       base_report_id: baseReport.report_id, fields: body.fields, merchant_edited_fields: body.merchant_edited_fields,
-      saved_at: new Date().toISOString(), source: "merchant_edit" };
+      saved_at: new Date().toISOString(), source: "merchant_edit",
+      ...(publishIntake ? { publish_intake: publishIntake } : {}) };
     return sendJson(res, 201, { status: "saved", checkpoint, idempotent_replay: false,
       model_called: false, usage_consumed: false, real_platform_writes_enabled: false, secret_exposed: false });
   });
@@ -205,8 +207,150 @@ async function mountPublishIntake(page) {
   return page.locator("#saasPublishIntakeForm");
 }
 
-test("publish intake saves real input events and restores fees, empty values and location after a full reload", async () => {
+test("publish step has one primary check and reflects the same read-only result and invalidation", async () => {
   resetFixture();
+  const device = await openDevice();
+  try {
+    await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint());
+    const form = await mountPublishIntake(device.page);
+    await device.page.evaluate(() => {
+      const host = document.createElement("div"); host.id = "publish-step-fixture";
+      host.innerHTML = renderSaasListingVisiblePublishBridge(); document.body.prepend(host);
+    });
+    const bridge = device.page.locator('#publish-step-fixture');
+    assert.equal(await bridge.locator('button.primary-action').count(), 1);
+    assert.match(await bridge.textContent(), /检查发布资料/);
+    assert.doesNotMatch(await device.page.locator('#checkpoint-intake-fixture').textContent(), /补完字段后检测当前表单/,
+      "the main flow must not repeat a stale local-check placeholder under the backend result");
+    await form.locator('[name="condition"]').selectOption("NEW");
+    const basicStatus = device.page.locator('.saas-publish-readiness-strip article').filter({ hasText: '基础资料' });
+    assert.match(await basicStatus.textContent(), /已填写/);
+    await device.page.evaluate(() => {
+      state.saasReadonlyPublishCheck = { basis: saasReadonlyPublishCheckBasis(), status: "checked",
+        result: { simulation_only: true, publish_readiness: { checks: [{ key: "source", label: "商品来源", blocking: true, status: "blocked" }] } } };
+      refreshSaasReadonlyPublishCheckView();
+    });
+    assert.match(await bridge.textContent(), /1 项阻断/);
+    assert.doesNotMatch(await bridge.textContent(), /系统体检：待生成|生成确认单后会回填/);
+    assert.match(await device.page.locator('#saasReadonlyPublishCheckResult').textContent(), /1 项阻断/);
+    assert.equal(await bridge.locator('[data-saas-action="create-publish-confirmation"]').count(), 0, "blocked data offers no direct creation shortcut");
+    await form.locator('[name="shipping_cost"]').fill("4.20");
+    assert.match(await bridge.textContent(), /检查发布资料/);
+    assert.doesNotMatch(await bridge.textContent(), /1 项阻断/);
+    await device.page.evaluate(() => {
+      state.saasConnected = true;
+      state.saasReadonlyPublishCheck = { basis: saasReadonlyPublishCheckBasis(), status: "checked",
+        result: { simulation_only: false, source_blockers: [], publish_readiness: {
+          checks: [{ key: "source", label: "商品来源", blocking: false, status: "passed" }] } } };
+      refreshSaasReadonlyPublishCheckView();
+    });
+    assert.equal(await bridge.locator('button.primary-action').getAttribute('data-saas-action'), 'create-publish-confirmation',
+      "next action follows the current backend check, not a contradictory old local projection");
+    assert.equal(await bridge.locator('button.primary-action').isEnabled(), true);
+    await form.locator('[name="shipping_cost"]').fill("5.20");
+    assert.equal(await bridge.locator('button.primary-action').getAttribute('data-saas-action'), 'run-publish-precheck');
+    await device.page.evaluate(() => {
+      state.saasReadonlyPublishCheck = { basis: saasReadonlyPublishCheckBasis(), status: "checking" };
+      refreshSaasReadonlyPublishCheckView();
+    });
+    assert.equal(await bridge.locator('button.primary-action').isDisabled(), true);
+    assert.deepEqual(unexpected, []);
+  } finally { await device.context.close(); }
+});
+
+test("publish intake autosaves through the checkpoint and restores on a clean second device", async () => {
+  resetFixture();
+  const first = await openDevice();
+  let second;
+  try {
+    await first.page.evaluate(() => hydrateSaasListingCloudCheckpoint());
+    const form = await mountPublishIntake(first.page);
+    for (const [name, value] of Object.entries({ shipping_cost: "4.20", ebay_fee: "2.07", ad_budget: "0",
+      return_risk_reserve: "0.65", net_profit: "3.57", gross_margin_percent: "27.48", title: "" })) {
+      await form.locator(`[name="${name}"]`).fill(value);
+    }
+    await waitUntil(() => checkpoint?.publish_intake?.values.shipping_cost === "4.20", "publish form must be persisted to the server, not only localStorage");
+    second = await openDevice();
+    await second.page.evaluate(() => hydrateSaasListingCloudCheckpoint());
+    const restored = await mountPublishIntake(second.page);
+    for (const name of ["shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "net_profit", "gross_margin_percent", "title"]) {
+      assert.equal(await restored.locator(`[name="${name}"]`).inputValue(), checkpoint.publish_intake.values[name], name);
+    }
+    assert.match(await second.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /已云端保存/);
+    assert.equal(requests.filter((entry) => entry.method === "POST").length, 1, "opening the clean device does not create another checkpoint");
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual([...first.errors, ...second.errors], []);
+  } finally { await first.context.close(); if (second) await second.context.close(); }
+});
+
+for (const action of ["use-cloud", "keep-local"]) test(`publish intake conflict ${action} preserves and displays both cost versions`, async () => {
+  resetFixture();
+  const device = await openDevice();
+  try {
+    await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint());
+    const form = await mountPublishIntake(device.page);
+    await form.locator('[name="shipping_cost"]').fill("4.20");
+    await device.page.evaluate(() => flushSaasListingCloudCheckpoint());
+    const otherIntake = JSON.parse(JSON.stringify(checkpoint.publish_intake));
+    otherIntake.values.shipping_cost = "7.30";
+    checkpoint = { ...savedCheckpoint(checkpoint.fields, 2), publish_intake: otherIntake };
+    checkpointHandler = async (request, res) => {
+      if (request.method !== "POST" || request.body.expected_revision === checkpoint.revision) return false;
+      sendJson(res, 409, { error_code: "listing_draft_revision_conflict", latest_checkpoint: checkpoint,
+        current_revision: checkpoint.revision, current_base_report_id: baseReport.report_id, current_base_report: baseReport });
+      return true;
+    };
+    await form.locator('[name="shipping_cost"]').fill("5.40");
+    await device.page.evaluate(() => flushSaasListingCloudCheckpoint());
+    assert.equal(await form.locator('[name="shipping_cost"]').inputValue(), "5.40");
+    const status = device.page.locator('[data-saas-publish-cloud-slot]');
+    assert.match(await status.textContent(), /物流成本[\s\S]*7\.30/);
+    assert.equal(checkpoint.publish_intake.values.shipping_cost, "7.30");
+    await status.locator(`[data-saas-listing-cloud-action="${action}"]`).click();
+    await device.page.waitForFunction(() => !saasListingCloudRecord().conflict && !saasListingCloudRecord().dirty);
+    assert.equal(await form.locator('[name="shipping_cost"]').inputValue(), action === "use-cloud" ? "7.30" : "5.40");
+    assert.equal(checkpoint.publish_intake.values.shipping_cost, action === "use-cloud" ? "7.30" : "5.40");
+    if (action === "use-cloud") {
+      assert.match(await device.page.locator('[data-saas-listing-cloud-slot]').textContent(), /物流成本[\s\S]*5\.40/,
+        "cloud choice leaves a readable local form backup, not just the buyer copy");
+      assert.equal(checkpoint.revision, 2, "using cloud does not create a write");
+    } else assert.equal(checkpoint.revision, 3, "explicit local choice uses the current CAS revision");
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+test("publish intake legacy local migration is explicit and repeated saves do not add unchanged revisions", async () => {
+  resetFixture();
+  const device = await openDevice();
+  try {
+    await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint());
+    await device.page.evaluate(() => {
+      saasPendingPublishIntakeFormContextKey = saasListingCloudContext().key;
+      saasPendingPublishIntakeFormValues = { shipping_cost: "4.20", title: "" };
+      saasPendingPublishIntakeFormBasis = saasPublishIntakeSourceBasis();
+      persistSaasPublishIntakeDraft();
+    });
+    await mountPublishIntake(device.page);
+    assert.equal(requests.filter(request => request.method === "POST").length, 0);
+    const save = device.page.locator('[data-saas-listing-cloud-action="save-publish-intake"]');
+    await save.click();
+    await device.page.waitForFunction(() => saasListingCloudRecord().status === "saved" && !saasListingCloudRecord().read);
+    assert.equal(checkpoint.publish_intake.values.shipping_cost, "4.20");
+    await save.click();
+    await device.page.evaluate(() => flushSaasListingCloudCheckpoint());
+    assert.equal(requests.filter(request => request.method === "POST").length, 1);
+    assert.deepEqual(device.errors, []);
+    assert.deepEqual(unexpected, []);
+  } finally { await device.context.close(); }
+});
+
+test("publish intake keeps unsynced inputs through a full reload when cloud saving is unavailable", async () => {
+  resetFixture();
+  checkpointHandler = async (request, res) => {
+    if (request.method !== "POST") return false;
+    sendJson(res, 503, { error: "temporary fixture outage" }); return true;
+  };
   const device = await openDevice();
   try {
     let form = await mountPublishIntake(device.page);
@@ -222,9 +366,9 @@ test("publish intake saves real input events and restores fees, empty values and
     await seedDevice(device.page);
     form = await mountPublishIntake(device.page);
     for (const [name, value] of Object.entries(values)) assert.equal(await form.locator(`[name="${name}"]`).inputValue(), value, name);
-    assert.match(await device.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /已保存在.*浏览器/);
+    assert.match(await device.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /已保留|本机发布资料|尚未同步/);
     assert.doesNotMatch(await device.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /已云端保存/);
-    assert.equal(requests.filter((request) => request.method === "POST").length, 0, "local intake recovery does not submit a model, cloud checkpoint or platform action");
+    assert.equal(checkpoint, null, "an unavailable save must not invent a server receipt");
     assert.deepEqual(unexpected, []);
     assert.deepEqual(device.errors, []);
   } finally { await device.context.close(); }
@@ -277,11 +421,10 @@ test("publish intake revalidates against current source fields and clears depend
     }
     await device.page.reload();
     await seedDevice(device.page);
-    await device.page.evaluate(() => {
-      state.saasListingComposerDraft.fields.title = "New source title";
-      state.saasListingComposerDraft.fields.price = "19.99 USD";
-      state.saasListingComposerDraft.fields.logistics = "包装重量: 700 g; 包装尺寸: 30x20x10 cm";
-    });
+    await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint());
+    await device.page.locator('[data-saas-listing-draft-field="title"]').fill("New source title");
+    await device.page.locator('[data-saas-listing-draft-field="price"]').fill("19.99 USD");
+    await device.page.locator('[data-saas-listing-draft-field="logistics"]').fill("包装重量: 700 g; 包装尺寸: 30x20x10 cm");
     form = await mountPublishIntake(device.page);
     assert.equal(await form.locator('[name="title"]').inputValue(), "New source title");
     assert.equal(await form.locator('[name="price"]').inputValue(), "19.99");
@@ -934,7 +1077,7 @@ test("409 preserves both versions and keeping local uses the latest revision wit
   } finally { await device.context.close(); }
 });
 
-test("a timed-out POST keeps local edits and the visible retry sends the exact same mutation and payload", async () => {
+test("a timed-out POST keeps copy and publish intake; visible retry sends the exact same mutation and payload", async () => {
   resetFixture();
   const releaseLostPost = deferred();
   let lostFirstPost = false;
@@ -951,18 +1094,25 @@ test("a timed-out POST keeps local edits and the visible retry sends the exact s
     await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
     await device.page.locator('[data-saas-listing-draft-field="title"]').fill("Text retained through timeout");
     await device.page.locator('[data-saas-listing-draft-field="category"]').fill("");
+    const form = await mountPublishIntake(device.page);
+    await form.locator('[name="shipping_cost"]').fill("4.20");
+    await form.locator('[name="title"]').fill("");
     assert.equal(await device.page.evaluate(() => flushSaasListingCloudCheckpoint()), false);
-    const status = device.page.locator("[data-saas-listing-cloud-status]");
+    const status = device.page.locator("[data-saas-publish-cloud-slot] [data-saas-listing-cloud-status]");
     assert.match(await status.textContent(), /暂未同步.*保留在本机/);
     assert.doesNotMatch(await status.textContent(), /已云端保存/);
     assert.equal(await device.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Text retained through timeout");
     assert.equal(await device.page.locator('[data-saas-listing-draft-field="category"]').inputValue(), "");
+    assert.equal(await form.locator('[name="shipping_cost"]').inputValue(), "4.20");
+    assert.equal(await form.locator('[name="title"]').inputValue(), "");
     releaseLostPost.resolve();
-    await device.page.locator('[data-saas-listing-cloud-action="retry"]').click();
+    await status.locator('[data-saas-listing-cloud-action="retry"]').click();
     await device.page.waitForFunction(() => document.querySelector("[data-saas-listing-cloud-status]").textContent.includes("已云端保存"));
     const posts = requests.filter((request) => request.method === "POST");
     assert.equal(posts.length, 2);
     assert.deepEqual(posts[1].body, posts[0].body, "uncertain retry reuses the complete frozen mutation, including explicit blanks");
+    assert.equal(posts[1].body.publish_intake.values.shipping_cost, "4.20");
+    assert.equal(posts[1].body.publish_intake.values.title, "");
     assert.deepEqual(unexpected, []);
     assert.deepEqual(device.errors, []);
   } finally {
@@ -986,14 +1136,20 @@ test("recent-task A to B to A switches reject the old save receipt while preserv
     }, { baseReport, otherReport });
     await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
     await device.page.locator('[data-saas-listing-draft-field="title"]').fill("A before leaving, save pending");
+    let form = await mountPublishIntake(device.page);
+    await form.locator('[name="shipping_cost"]').fill("4.20");
     await device.page.evaluate(() => { window.oldASave = flushSaasListingCloudCheckpoint(); });
     await waitUntil(() => requests.some((request) => request.method === "POST"), "A save reaches HTTP");
     assert.equal(await device.page.evaluate((taskId) => openSaasRecentProductTask(taskId), otherReport.task_id), true);
     assert.equal(await device.page.evaluate(() => saasCurrentListingProjectIdentity().key), otherIdentity.key);
     assert.equal(await device.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "Other project title");
+    form = await mountPublishIntake(device.page);
+    assert.equal(await form.locator('[name="shipping_cost"]').inputValue(), "", "project B cannot inherit A's shipping cost");
     assert.equal(await device.page.evaluate((taskId) => openSaasRecentProductTask(taskId), baseReport.task_id), true);
     assert.equal(await device.page.evaluate(() => saasCurrentListingProjectIdentity().key), identity.key);
     await device.page.locator('[data-saas-listing-draft-field="title"]').fill("New A input after returning");
+    form = await mountPublishIntake(device.page);
+    await form.locator('[name="shipping_cost"]').fill("5.40");
     // Keep the old POST held beyond the actual one-second debounce. Releasing
     // it before the timer fires misses a lost wake-up in the single-flight path.
     await device.page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 1250)));
@@ -1006,6 +1162,8 @@ test("recent-task A to B to A switches reject the old save receipt while preserv
     await device.page.waitForFunction(() => document.querySelector("[data-saas-listing-cloud-status]").textContent.includes("已云端保存"), null, { timeout: 8000 });
     const finalPost = requests.filter((request) => request.method === "POST").at(-1);
     assert.equal(finalPost.body.fields.title, "New A input after returning", "new A input eventually autosaves after the old promise releases its single-flight slot");
+    assert.equal(finalPost.body.publish_intake.values.shipping_cost, "5.40");
+    assert.equal(await form.locator('[name="shipping_cost"]').inputValue(), "5.40");
     assert.equal(finalPost.body.expected_revision, 1);
     assert.equal(await device.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), "New A input after returning");
     assert.equal(requests.filter((request) => request.method === "POST" && request.path === otherPath).length, 0);
@@ -1044,6 +1202,7 @@ test("merchant editing a vision-origin Listing with matching validated backend f
 test("switching accounts while a checkpoint GET is pending never restores the previous account's draft", async () => {
   resetFixture();
   checkpoint = savedCheckpoint({ ...originalFields, title: "Previous account cloud-only text" });
+  checkpoint.publish_intake = { values: { shipping_cost: "7.30" }, basis: {} };
   const releaseGet = deferred();
   checkpointHandler = async (request) => { if (request.method === "GET") await releaseGet.promise; return false; };
   const device = await openDevice();
@@ -1055,11 +1214,15 @@ test("switching accounts while a checkpoint GET is pending never restores the pr
     assert.equal(await device.page.evaluate(() => window.previousAccountRead), false);
     const stateAfter = await device.page.evaluate(() => ({ draft: state.saasListingComposerDraft,
       company: state.saasCompany, user: state.saasUser, identity: state.saasIdentity,
+      intake: saasPendingPublishIntakeFormValues,
+      intakeCacheKeys: Object.keys(localStorage).filter((key) => key.startsWith("jiejing_publish_intake_v1:")),
       checkpointCacheKeys: Object.keys(localStorage).filter((key) => key.startsWith("jiejing_listing_cloud_v1:")) }));
     assert.equal(stateAfter.draft, null);
     assert.equal(stateAfter.company, null);
     assert.equal(stateAfter.user, null);
     assert.equal(stateAfter.identity, null);
+    assert.equal(stateAfter.intake, null);
+    assert.deepEqual(stateAfter.intakeCacheKeys, [], "late GET cannot restore the prior account's publishing fields");
     assert.deepEqual(stateAfter.checkpointCacheKeys, [], "late GET must not persist data after account ownership ended");
     assert.doesNotMatch(await device.page.locator("body").textContent(), /Previous account cloud-only text/);
     assert.equal(requests.filter((request) => request.method === "POST").length, 0);

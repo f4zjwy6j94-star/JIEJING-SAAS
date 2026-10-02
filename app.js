@@ -8082,7 +8082,7 @@ function renderSaasPublishPreflightGuide(ctx = saasMerchantWorkbenchContext()) {
   `;
 }
 
-function renderSaasPublishPretestResultSlot(ctx = saasMerchantWorkbenchContext()) {
+function renderSaasPublishPretestResultSlot(ctx = saasMerchantWorkbenchContext(), options = {}) {
   const rows = Array.isArray(state.saasPreTestCheck?.rows) ? state.saasPreTestCheck.rows : [];
   if (rows.length) {
     return `
@@ -8091,6 +8091,7 @@ function renderSaasPublishPretestResultSlot(ctx = saasMerchantWorkbenchContext()
       </div>
     `;
   }
+  if (options.showEmpty === false) return '<div id="saasPreTestLiveResult" class="saas-listing-pretest-result"></div>';
   return `
     <div id="saasPreTestLiveResult" class="saas-listing-pretest-result">
       <article class="saas-listing-pretest-empty">
@@ -8294,7 +8295,7 @@ function renderSaasPublishReadinessStrip(formValues = {}) {
           <article class="is-${tone}">
             <span>${escapeHtml(label)}</span>
             <strong>${done >= total ? "已填写" : "待补"}</strong>
-            <small>${done >= total ? "可继续核对" : "展开表单补充"}</small>
+            <small>${done >= total ? "可继续核对" : "在下方补充"}</small>
           </article>
         `;
       }).join("")}
@@ -8314,19 +8315,21 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
       <div class="saas-publish-intake-head">
         <div>
           <span>上架资料</span>
-          <strong>把草稿变成可体检的发布包</strong>
-          <p>按顺序补齐基础、价格利润、素材描述、平台参数和物流履约；检测不会真实发布，生成确认单后仍进决策中心。</p>
+          <strong>核对上架信息</strong>
+          <p>商品、费用、图片与履约信息集中在此。检查通过后，再前往确认中心审核发布。</p>
         </div>
-        <div class="saas-publish-intake-actions">
-          <button class="secondary-action" type="button" data-saas-action="run-pretest-check">检测当前资料</button>
-          <button class="secondary-action" type="button" data-saas-action="run-publish-precheck" ${!state.saasConnected || state.saasLoading ? "disabled" : ""}>系统检查资料</button>
+        <details class="saas-publish-intake-advanced">
+          <summary>库存位置与其他提交方式</summary>
+          <div class="saas-publish-intake-actions">
+          <button class="secondary-action" type="button" data-saas-action="run-pretest-check">查看本地资料检查</button>
           <button class="secondary-action" type="button" data-saas-action="create-ebay-inventory-location-confirmation" ${disabled ? "disabled" : ""}>生成库存位置确认单</button>
           <button class="secondary-action" type="button" data-saas-action="execute-ebay-inventory-location" ${disabled || !approvedInventoryLocation || manualInventoryLocation ? "disabled" : ""}>执行已批准的库存位置创建</button>
           ${manualInventoryLocation ? `<button class="secondary-action" type="button" data-saas-action="reconcile-ebay-inventory-location" ${disabled ? "disabled" : ""}>只读核对 eBay 库存位置</button>` : ""}
-          <button class="primary-action" type="button" data-saas-action="create-ebay-draft-confirmation" ${disabled ? "disabled" : ""}>生成未发布 eBay 草稿确认单</button>
-          <button class="primary-action" type="button" data-saas-action="create-publish-confirmation" ${disabled ? "disabled" : ""}>生成发布确认单</button>
-        </div>
+          <button class="secondary-action" type="button" data-saas-action="create-ebay-draft-confirmation" ${disabled ? "disabled" : ""}>生成未发布 eBay 草稿确认单</button>
+          </div>
+        </details>
       </div>
+      ${includeGuide ? `<button class="primary-action" type="button" data-saas-action="run-publish-precheck" ${!state.saasConnected || state.saasLoading ? "disabled" : ""}>检查发布资料</button>` : ""}
       <div id="saasReadonlyPublishCheckResult" aria-live="polite">${renderSaasReadonlyPublishCheckResult()}</div>
       ${includeGuide ? renderSaasPublishPreflightGuide(ctx) : ""}
       <section class="saas-publish-raw-form-details" aria-label="上架资料补全清单">
@@ -8336,6 +8339,8 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
         </div>
         ${renderSaasPublishReadinessStrip(formValues)}
         <p data-saas-publish-intake-draft-status role="status" aria-live="polite">${escapeHtml(saasPublishIntakeDraftStatusText())}</p>
+        <button class="secondary-action compact-action" type="button" data-saas-listing-cloud-action="save-publish-intake">保存到云端</button>
+        <div data-saas-publish-cloud-slot></div>
       <form id="saasPublishIntakeForm" class="saas-publish-intake-form" data-intake-context="${escapeHtml(saasListingCloudContext()?.key || "")}" data-intake-basis="${escapeHtml(JSON.stringify(saasPublishIntakeSourceBasis()))}">
         ${renderSaasPublishFormGroup("基础信息", "商品目标、SKU、标题和状态。草稿有标题时会自动带入。", [
           renderSaasPublishInputField("商品目标", "product", { value: formValues.product, placeholder: "例如：全新未接触过的硅胶柜门防撞垫" }),
@@ -8408,7 +8413,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
         ], { step: "05" })}
       </form>
       </section>
-      ${renderSaasPublishPretestResultSlot(ctx)}
+      ${renderSaasPublishPretestResultSlot(ctx, { showEmpty: false })}
     </section>
   `;
 }
@@ -10444,7 +10449,6 @@ function renderSaasListingVisiblePublishBridge(
   pendingConfirmations = [],
 ) {
   if (!draft) return "";
-  const summary = saasListingDraftPreflightSummary(draft, ctx, pendingConfirmations);
   const rows = saasPreTestCheckRows(ctx, null);
   const localSummary = saasPublishHealthSummary(rows);
   const { readiness, latestPreflight, confirmation, execution } = saasListingPublishCheckContext();
@@ -10452,48 +10456,56 @@ function renderSaasListingVisiblePublishBridge(
   const backendBlocked = backendChecks.filter((item) => item && item.blocking).length;
   const hasBackendReadiness = backendChecks.length > 0 || Boolean(latestPreflight);
   const canOpenConfirm = Boolean(confirmation?.confirmation_id);
-  const tone = summary.red || backendBlocked ? "red" : summary.amber || !canOpenConfirm ? "amber" : "green";
-  const localStatus = localSummary.red ? "先补红项" : localSummary.amber ? "可继续核对" : "资料较完整";
+  const entry = state.saasReadonlyPublishCheck?.basis === saasReadonlyPublishCheckBasis() ? state.saasReadonlyPublishCheck : null;
+  const checks = entry?.status === "checked" ? entry.result?.publish_readiness?.checks || [] : [];
+  const blocked = checks.filter((item) => item.blocking).length;
+  const passed = checks.filter((item) => !item.blocking && item.status === "passed").length;
+  const review = checks.filter((item) => !item.blocking && !["passed", "not_applicable"].includes(item.status)).length;
+  const simulationOnly = entry?.result?.simulation_only === true;
+  const ready = checks.length > 0 && blocked === 0 && review === 0 && !simulationOnly &&
+    !(entry.result?.source_blockers || []).length;
+  const checking = entry?.status === "checking";
+  const tone = blocked || simulationOnly ? "red" : ready ? "green" : "amber";
+  const action = ready ? "create-publish-confirmation" : "run-publish-precheck";
+  const actionLabel = checking ? "正在检查…" : ready ? "生成发布确认单" : "检查发布资料";
+  const headline = checking ? "正在核对当前资料" : checks.length ?
+    (ready ? "资料检查通过，请审核发布内容" : "检查已完成，请处理未通过项") : entry?.status === "error" ? "检查未完成，请重试" : "核对资料后，提交发布确认";
   return `
     <section class="saas-listing-visible-publish-bridge" aria-label="Listing 发布闭环提示" data-listing-visible-publish-bridge="listing_visible_publish_bridge_v1">
       <section class="saas-listing-preflight-bridge is-${escapeHtml(tone)} is-compact" aria-label="Listing 发布前体检" data-listing-preflight-bridge="listing_preflight_bridge_visible_v1">
         <div class="saas-listing-preflight-head">
           <div>
-            <span>发布前体检</span>
-            <strong>草稿下一步不是直接发布，是先体检再生成确认单</strong>
-            <p>${escapeHtml(summary.copy)} 本地体检会先看商品事实、图片、价格、物流和店铺资料；生成确认单后再进入确认中心。</p>
+            <span>发布前检查</span>
+            <strong>${escapeHtml(headline)}</strong>
+            <p>${simulationOnly ? "当前商品包含模拟资料，不能提交 eBay。" : "核对商品、费用、素材与店铺状态。"}检查不会发布商品；正式发布仍需确认并重新校验。</p>
           </div>
-          <em>${summary.green}/${summary.total} 项已有线索</em>
+          <em>${checks.length ? `${passed}/${checks.length} 项通过` : checking ? "检查中" : "待检查"}</em>
         </div>
         <div class="saas-listing-preflight-summary" aria-label="发布前资料状态">
-          <span class="${summary.red ? "is-red" : "is-green"}">资料缺口 ${summary.red}</span>
-          <span class="${summary.amber ? "is-amber" : "is-green"}">待核对 ${summary.amber}</span>
-          <span class="is-green">本地体检：${escapeHtml(localStatus)}</span>
-          <span class="${hasBackendReadiness ? "is-green" : "is-amber"}">系统体检：${hasBackendReadiness ? "已回填" : "待生成"}</span>
+          ${checks.length ? `<span class="${blocked ? "is-red" : "is-green"}">${blocked} 项阻断</span>
+          <span class="${review ? "is-amber" : "is-green"}">${review} 项待核对</span>
+          <span class="is-green">${passed} 项通过</span>` : `<span class="is-amber">${checking ? "正在检查当前商品" : "填写下方资料后，点击检查发布资料"}</span>`}
         </div>
         <div class="saas-listing-preflight-actions">
-          <button class="primary-action" type="button" data-saas-action="focus-publish-intake">补发布资料</button>
-          <button class="secondary-action" type="button" data-saas-action="run-pretest-check">本地体检</button>
-          <button class="secondary-action" type="button" data-saas-action="create-publish-confirmation" ${!summary.readyForConfirmation || state.saasLoading ? "disabled" : ""}>生成确认单</button>
+          <button class="primary-action" type="button" data-saas-action="${action}" ${!state.saasConnected || state.saasLoading || checking ? "disabled" : ""}>${actionLabel}</button>
+          <button class="secondary-action" type="button" data-saas-action="focus-publish-intake">编辑发布资料</button>
         </div>
       </section>
 
-      <section class="saas-listing-publish-feedback is-${escapeHtml(tone)} is-compact" aria-label="Listing 发布回执" data-listing-publish-feedback="listing_publish_feedback_visible_v1">
+      ${canOpenConfirm ? `<section class="saas-listing-publish-feedback is-${escapeHtml(tone)} is-compact" aria-label="Listing 发布回执" data-listing-publish-feedback="listing_publish_feedback_visible_v1">
         <div class="saas-listing-publish-feedback-head">
           <div>
             <span>发布回执</span>
-            <strong>${canOpenConfirm ? "确认单已接入 Listing 流程" : "生成确认单后会回填系统体检"}</strong>
-            <p>这里把本地体检、系统体检、确认中心和发布回执串起来。安全边界保持不变：你确认前不写 eBay、不付款、不改库存。</p>
+            <strong>已保存的确认记录</strong>
+            <p>以下为已有确认单及其执行记录；修改发布资料后需重新检查，已有记录不代表新资料已通过。</p>
           </div>
-          <em>${canOpenConfirm ? "确认中心可打开" : "等待确认单"}</em>
+          <em>可在确认中心查看</em>
         </div>
         ${renderSaasListingPublishLoopTracker({ localSummary, hasBackendReadiness, backendBlocked, confirmation, execution })}
         <div class="saas-listing-publish-feedback-actions">
-          <button class="secondary-action" type="button" data-saas-action="run-pretest-check">重新本地体检</button>
-          <button class="secondary-action" type="button" data-saas-action="create-publish-confirmation" ${!summary.readyForConfirmation || state.saasLoading ? "disabled" : ""}>生成确认单并体检</button>
-          <button class="primary-action" type="button" data-saas-action="open-confirm" ${canOpenConfirm ? "" : "disabled"}>打开确认中心</button>
+          <button class="secondary-action" type="button" data-saas-action="open-confirm">查看已有确认记录</button>
         </div>
-      </section>
+      </section>` : ""}
     </section>
   `;
 }
@@ -11133,6 +11145,7 @@ async function finishSaasListingMediaCopyTransition(before, isCurrent) {
   record.reviewedBase = before.revision > 0
     ? { checkpoint_revision: before.revision, current_base_report_id: report.report_id } : null;
   record.dirty = true;
+  record.copyDirty = true;
   record.status = "pending";
   persistSaasListingCloudRecord(record);
   applySaasListingCloudFields(record);
@@ -31772,8 +31785,8 @@ async function createSaasProductWorkflowFromBackend(options = {}) {
   }
 }
 
-// Browser recovery only. Never persist confirmation, generation, image-rights,
-// session, or execution authority in this draft. The server remains authoritative.
+// Editable draft only. Neither local nor cloud persistence grants confirmation,
+// generation, image-rights, session, or execution authority.
 function sanitizeSaasPublishIntakeDraftValues(input = {}) {
   const names = ["product", "sku", "title", "condition", "category_id", "category_leaf", "price", "currency", "quantity",
     "merchant_location_key", "inventory_location_key", "inventory_location_name", "inventory_location_city",
@@ -31804,10 +31817,57 @@ function saasPublishIntakeSourceBasis() {
 
 function saasPublishIntakeDraftStatusText() {
   if (saasPendingPublishIntakeSaveStatus === "error") return "发布表未能保存在此浏览器，请勿刷新或关闭页面。";
+  const cloud = saasListingCloudRecord();
+  if (cloud?.conflict) return "云端商品资料已变更；本机发布资料已保留，请核对两个版本后再保存。";
+  if (saasPendingPublishIntakeSaveStatus === "review") return "商品资料已变更，相关发布信息和费用需重新核对。其余内容已保留。";
+  if (cloud?.status === "saving") return "正在保存发布资料到云端，请稍候。";
+  if (cloud?.dirty) return ["error", "forbidden", "unavailable"].includes(cloud.status)
+    ? "发布资料尚未同步；本机修改已保留，请重试或检查登录状态。" : "发布资料已保留，等待云端保存。";
   if (saasPendingPublishIntakeFormValues && saasPublishIntakeAwaitingCloudRead()) return "发布表已保留在此浏览器；云端商品资料尚未核对，暂不能提交。";
-  if (saasPendingPublishIntakeSaveStatus === "review") return "商品资料已变更，相关发布信息和费用需重新核对。其余内容保留在此浏览器。";
-  if (saasPendingPublishIntakeSaveStatus === "saved") return "发布表已保存在此浏览器；换设备不会同步，发布前仍需核对。";
-  return "发布表修改会保存在当前浏览器，不会自动发布。";
+  if (cloud?.loaded && cloud.status === "saved" && cloud.receipt?.publish_intake &&
+      saasListingCloudSamePublishIntake(cloud.receipt.publish_intake, saasPublishIntakeCloudSnapshot())) {
+    return "发布资料已云端保存，可在其他设备继续；保存不会发布到 eBay。";
+  }
+  if (saasPendingPublishIntakeSaveStatus === "saved") return "已有本机发布资料，点击保存到云端后可在其他设备继续。";
+  return "发布资料修改后自动保存到云端，不会自动发布。";
+}
+
+function saasListingCloudPublishIntake(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+      Object.keys(raw).length !== 2 || !Object.hasOwn(raw, "values") || !Object.hasOwn(raw, "basis")) return null;
+  const result = {};
+  for (const name of ["values", "basis"]) {
+    const fields = raw[name];
+    if (!fields || typeof fields !== "object" || Array.isArray(fields)) return null;
+    const clean = sanitizeSaasPublishIntakeDraftValues(fields);
+    if (Object.keys(clean).length !== Object.keys(fields).length ||
+        Object.entries(clean).some(([key, value]) => value !== fields[key])) return null;
+    result[name] = clean;
+  }
+  return result;
+}
+
+function saasListingCloudSamePublishIntake(a, b) {
+  return JSON.stringify(saasCanonicalJsonValue(a || null)) === JSON.stringify(saasCanonicalJsonValue(b || null));
+}
+
+function saasPublishIntakeCloudSnapshot() {
+  const context = saasListingCloudContext();
+  if (!context || context.key !== saasPendingPublishIntakeFormContextKey || !saasPendingPublishIntakeFormValues) return null;
+  return { values: sanitizeSaasPublishIntakeDraftValues(saasPendingPublishIntakeFormValues),
+    basis: sanitizeSaasPublishIntakeDraftValues(saasPendingPublishIntakeFormBasis || {}) };
+}
+
+function applySaasPublishIntakeCloudRecord(record, { resetAbsent = false } = {}) {
+  if (saasListingCloudContext()?.key !== record?.context.key) return;
+  const intake = record.publishIntake;
+  if (!intake && !resetAbsent) return; // An old server receipt must not erase an un-migrated browser form.
+  if (!saasListingCloudSamePublishIntake(intake, saasPublishIntakeCloudSnapshot())) state.saasReadonlyPublishCheck = null;
+  saasPendingPublishIntakeFormContextKey = record.context.key;
+  saasPendingPublishIntakeFormValues = sanitizeSaasPublishIntakeDraftValues(intake?.values || {});
+  saasPendingPublishIntakeFormBasis = sanitizeSaasPublishIntakeDraftValues(intake?.basis || saasPublishIntakeSourceBasis());
+  saasPendingPublishIntakeSavedAt = new Date().toISOString();
+  persistSaasPublishIntakeDraft();
 }
 
 function persistSaasPublishIntakeDraft(status = "saved") {
@@ -31870,6 +31930,8 @@ function snapshotSaasPublishIntakeFormValues(changedName = "") {
   form.dataset.intakeBasis = JSON.stringify(basis);
   saasPendingPublishIntakeSavedAt = new Date().toISOString();
   persistSaasPublishIntakeDraft(changedSource.length ? "review" : "saved");
+  if (changedName) queueSaasListingCloudCheckpoint({ publishIntakeOnly: true });
+  document.querySelectorAll(".saas-publish-readiness-strip").forEach((node) => { node.outerHTML = renderSaasPublishReadinessStrip(values); });
   document.querySelectorAll("[data-saas-publish-intake-draft-status]").forEach((node) => { node.textContent = saasPublishIntakeDraftStatusText(); });
   return saasPendingPublishIntakeFormValues;
 }
@@ -31903,6 +31965,11 @@ function currentSaasPendingPublishIntakeValues(baseValues = null) {
     saasPublishIntakeDependentFields(changed).forEach((name) => { delete saasPendingPublishIntakeFormValues[name]; });
     saasPendingPublishIntakeFormBasis = basis;
     persistSaasPublishIntakeDraft("review");
+    const cloud = saasListingCloudRecord(context);
+    if (cloud?.publishIntake) {
+      cloud.publishIntake = saasPublishIntakeCloudSnapshot();
+      persistSaasListingCloudRecord(cloud);
+    }
   }
   return { ...saasPendingPublishIntakeFormValues };
 }
@@ -31917,7 +31984,9 @@ function syncSaasPublishIntakeAfterCloudRead() {
     if (input && "value" in input) input.value = value;
   });
   form.dataset.intakeBasis = JSON.stringify(saasPublishIntakeSourceBasis());
+  document.querySelectorAll(".saas-publish-readiness-strip").forEach((node) => { node.outerHTML = renderSaasPublishReadinessStrip(values); });
   document.querySelectorAll("[data-saas-publish-intake-draft-status]").forEach((node) => { node.textContent = saasPublishIntakeDraftStatusText(); });
+  refreshSaasReadonlyPublishCheckView();
 }
 
 function clearSaasPendingPublishIntakeSnapshot() {
@@ -32294,8 +32363,11 @@ function renderSaasReadonlyPublishCheckResult() {
 function refreshSaasReadonlyPublishCheckView() {
   const slot = document.querySelector("#saasReadonlyPublishCheckResult");
   if (slot) slot.innerHTML = renderSaasReadonlyPublishCheckResult();
+  document.querySelectorAll('[data-listing-visible-publish-bridge="listing_visible_publish_bridge_v1"]').forEach(bridge => {
+    bridge.outerHTML = renderSaasListingVisiblePublishBridge();
+  });
   document.querySelectorAll('[data-saas-action="run-publish-precheck"]').forEach(button => {
-    button.disabled = state.saasReadonlyPublishCheck?.status === "checking";
+    button.disabled = !state.saasConnected || state.saasLoading || state.saasReadonlyPublishCheck?.status === "checking";
   });
 }
 
@@ -34190,10 +34262,13 @@ function saasListingCloudReceipt(raw, context) {
   if (!raw.fields || Object.keys(raw.fields).length !== keys.length || keys.some((key) => typeof raw.fields[key] !== "string")) return null;
   const fields = saasListingCloudFields(raw.fields);
   if (keys.some((key) => fields[key] !== raw.fields[key])) return null;
+  const intake = Object.hasOwn(raw, "publish_intake") ? saasListingCloudPublishIntake(raw.publish_intake) : null;
+  if (Object.hasOwn(raw, "publish_intake") && !intake) return null;
   return { checkpoint_id: raw.checkpoint_id, revision: raw.revision, mutation_id: raw.mutation_id,
     company_id: context.companyId, store_id: context.storeId, listing_project_identity: context.identity,
     base_report_id: raw.base_report_id, fields, merchant_edited_fields: saasListingMerchantEditedFields(raw),
-    saved_at: String(raw.saved_at || "").slice(0, 80), source: "merchant_edit" };
+    saved_at: String(raw.saved_at || "").slice(0, 80), source: "merchant_edit",
+    ...(intake ? { publish_intake: intake } : {}) };
 }
 
 function saasListingCloudRecord(context = saasListingCloudContext()) {
@@ -34203,8 +34278,8 @@ function saasListingCloudRecord(context = saasListingCloudContext()) {
     try { cached = JSON.parse(localStorage.getItem(`jiejing_listing_cloud_v1:${context.key}`) || "null"); } catch { /* Preserve damaged storage; do not trust it. */ }
     const valid = cached?.contract_version === SAAS_LISTING_CLOUD_CONTRACT && cached.context_key === context.key;
     const record = { context, loaded: false, status: "loading", revision: 0, baseReportId: "", fields: null,
-      edited: [], dirty: false, seq: 0, pending: null, receipt: null, conflict: null, reviewedBase: null,
-      supersededCheckpoint: null, backups: [], timer: null, read: null, write: null };
+      edited: [], dirty: false, copyDirty: false, seq: 0, pending: null, receipt: null, conflict: null, reviewedBase: null,
+      supersededCheckpoint: null, publishIntake: null, backups: [], timer: null, read: null, write: null };
     // Source-selection exclusions come only from authenticated reads in this
     // live scope, never from browser storage or another account's history.
     record.supersededRewriteReportIds = new Set();
@@ -34212,8 +34287,10 @@ function saasListingCloudRecord(context = saasListingCloudContext()) {
       record.revision = Number.isSafeInteger(cached.revision) && cached.revision >= 0 ? cached.revision : 0;
       record.baseReportId = /^[A-Za-z0-9._:-]{1,160}$/.test(cached.base_report_id || "") ? cached.base_report_id : "";
       record.fields = cached.fields ? saasListingCloudFields(cached.fields) : null;
+      record.publishIntake = saasListingCloudPublishIntake(cached.publish_intake);
       record.edited = saasListingMerchantEditedFields({ merchant_edited_fields: cached.merchant_edited_fields });
       record.dirty = cached.dirty === true && Boolean(record.fields);
+      record.copyDirty = record.dirty && cached.copy_dirty !== false;
       record.receipt = saasListingCloudReceipt(cached.receipt, context);
       if (Number.isSafeInteger(cached.reviewed_base?.checkpoint_revision) && cached.reviewed_base.checkpoint_revision > 0 &&
           /^[A-Za-z0-9._:-]{1,160}$/.test(cached.reviewed_base.current_base_report_id || "")) {
@@ -34222,6 +34299,7 @@ function saasListingCloudRecord(context = saasListingCloudContext()) {
       }
       record.backups = Array.isArray(cached.backups) ? cached.backups.slice(0, 20).map((item) => ({
         fields: saasListingCloudFields(item.fields), base_report_id: String(item.base_report_id || "").slice(0, 160),
+        publish_intake: saasListingCloudPublishIntake(item.publish_intake),
         saved_at: String(item.saved_at || "").slice(0, 80) })) : [];
       const pending = cached.pending;
       if (record.dirty && pending?.contract_version === SAAS_LISTING_CLOUD_CONTRACT &&
@@ -34232,6 +34310,9 @@ function saasListingCloudRecord(context = saasListingCloudContext()) {
         record.pending = { contract_version: SAAS_LISTING_CLOUD_CONTRACT, listing_project_identity: context.identity,
           expected_revision: pending.expected_revision, mutation_id: pending.mutation_id, base_report_id: pending.base_report_id,
           fields: saasListingCloudFields(pending.fields), merchant_edited_fields: saasListingMerchantEditedFields(pending) };
+        const pendingIntake = saasListingCloudPublishIntake(pending.publish_intake);
+        if (pendingIntake) record.pending.publish_intake = pendingIntake;
+        else if (Object.hasOwn(pending, "publish_intake")) record.pending = null;
       }
     }
     saasListingCloudRecords.set(context.key, record);
@@ -34244,7 +34325,8 @@ function persistSaasListingCloudRecord(record) {
     localStorage.setItem(`jiejing_listing_cloud_v1:${record.context.key}`, JSON.stringify({
       contract_version: SAAS_LISTING_CLOUD_CONTRACT, context_key: record.context.key,
       revision: record.revision, base_report_id: record.baseReportId, fields: record.fields,
-      merchant_edited_fields: record.edited, dirty: record.dirty, pending: record.pending,
+      publish_intake: record.publishIntake,
+      merchant_edited_fields: record.edited, dirty: record.dirty, copy_dirty: record.copyDirty, pending: record.pending,
       receipt: record.receipt, reviewed_base: record.reviewedBase, backups: record.backups }));
     record.storageFailed = false;
   } catch { record.storageFailed = true; }
@@ -34264,6 +34346,7 @@ function applySaasListingCloudFields(record) {
   const draft = state.saasListingComposerDraft;
   draft.fields = { ...(draft.fields || {}), ...record.fields };
   draft.merchant_edited_fields = [...record.edited];
+  applySaasPublishIntakeCloudRecord(record);
   // Restoring an existing checkpoint is not a new edit. Publish-intake recovery
   // compares its saved source values after this authenticated read completes.
   draft.model_generated = false;
@@ -34282,6 +34365,7 @@ function restoreSaasFreshListingCloudProjection() {
   const receipt = saasListingCloudReceipt(record.receipt, record.context);
   if (!receipt || receipt.revision !== record.revision || receipt.base_report_id !== baseId ||
       JSON.stringify(receipt.fields) !== JSON.stringify(record.fields) ||
+      !saasListingCloudSamePublishIntake(receipt.publish_intake, record.publishIntake) ||
       JSON.stringify(receipt.merchant_edited_fields) !== JSON.stringify(record.edited)) return false;
   // Core loading can read this authenticated checkpoint before extended reports
   // rebuild the draft. Restore only that current receipt, never generated copy
@@ -34305,15 +34389,26 @@ function renderSaasListingCloudCheckpointStatus() {
     item_specifics: "商品属性", keywords: "搜索关键词", price: "商品价格", images: "商品图片", logistics: "物流资料", risk_notes: "风险提示" };
   const renderFields = (fields = {}) => `<dl style="min-width:0;max-width:100%">${saasListingMerchantEditableFieldKeys().map((key) =>
     `<dt>${escapeHtml(fieldLabels[key])}</dt><dd style="margin:0 0 0.6em;white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(fields[key] === "" ? "已清空" : fields[key] ?? "暂无内容")}</dd>`).join("")}</dl>`;
+  const intakeLabels = { product: "商品目标", sku: "SKU", title: "刊登标题", condition: "商品状态",
+    category_id: "类目 ID", category_leaf: "类目名称", price: "售价", currency: "币种", quantity: "库存",
+    merchant_location_key: "库存位置", inventory_location_key: "新库存位置标识", inventory_location_name: "新库存位置名称",
+    inventory_location_city: "城市", inventory_location_state: "省或州", inventory_location_country: "国家代码",
+    item_location: "发货地", package_weight_g: "包装重量", package_length_cm: "包装长度", package_width_cm: "包装宽度",
+    package_height_cm: "包装高度", material: "材质", procurement_cost: "采购成本", shipping_cost: "物流成本",
+    ebay_fee: "平台费用", ad_budget: "广告预算", return_risk_reserve: "退货预留", exchange_rate: "汇率",
+    net_profit: "净利润", gross_margin_percent: "毛利率", item_specifics: "刊登属性", image_urls: "刊登图片",
+    description_html: "刊登描述", fulfillment_policy_id: "配送政策", payment_policy_id: "付款政策", return_policy_id: "退货政策" };
+  const renderIntake = (intake) => !intake ? "" : `<h4>上架资料</h4><dl style="min-width:0;max-width:100%">${Object.entries(intake.values).map(([key, value]) =>
+    `<dt>${escapeHtml(intakeLabels[key] || "相关资料")}</dt><dd style="margin:0 0 0.6em;white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(value === "" ? "已清空" : value)}</dd>`).join("")}</dl>`;
   const messages = { loading: "正在读取云端草稿", saving: "正在保存到云端", saved: "已云端保存",
     idle: "修改后自动保存到云端", current: "已使用最新商品资料，修改后自动保存", pending: "修改已保留，等待云端保存", error: "暂未同步，修改仍保留在本机",
     unavailable: "先保存商品资料，才能关联云端草稿", conflict: "检测到其他更新，请核对后选择保留哪一版", forbidden: "当前账号不能保存，请检查登录状态和编辑权限" };
   const olderBase = Boolean(record.conflict?.checkpoint && record.conflict.checkpoint.base_report_id !== record.conflict.baseReportId);
-  const details = record.conflict ? `<details style="min-width:0;max-width:100%"><summary>${olderBase ? "查看之前云端保存的编辑（基于旧商品资料）" : "查看云端内容（本机修改仍在编辑框中）"}</summary>${renderFields(record.conflict.checkpoint?.fields)}</details>
+  const details = record.conflict ? `<details style="min-width:0;max-width:100%"><summary>${olderBase ? "查看之前云端保存的编辑（基于旧商品资料）" : "查看云端内容（本机修改仍在编辑框中）"}</summary>${renderFields(record.conflict.checkpoint?.fields)}${renderIntake(record.conflict.checkpoint?.publish_intake)}</details>
     <button type="button" class="secondary-action" data-saas-listing-cloud-action="use-cloud">${olderBase ? "使用最新资料版本，保留本机副本" : "使用云端版本，保留本机副本"}</button>
     <button type="button" class="secondary-action" data-saas-listing-cloud-action="keep-local">保留本机修改并重新保存</button>` : "";
-  const backups = record.backups.length ? `<details style="min-width:0;max-width:100%"><summary>查看保留的本机副本（${record.backups.length}）</summary>${record.backups.map((item, index) => `<h4>本机副本 ${index + 1}</h4>${renderFields(item.fields)}`).join("")}</details>` : "";
-  const previousCloud = !record.conflict && record.supersededCheckpoint ? `<details style="min-width:0;max-width:100%"><summary>查看之前云端保存的编辑（基于旧商品资料）</summary>${renderFields(record.supersededCheckpoint.fields)}</details>` : "";
+  const backups = record.backups.length ? `<details style="min-width:0;max-width:100%"><summary>查看保留的本机副本（${record.backups.length}）</summary>${record.backups.map((item, index) => `<h4>本机副本 ${index + 1}</h4>${renderFields(item.fields)}${renderIntake(item.publish_intake)}`).join("")}</details>` : "";
+  const previousCloud = !record.conflict && record.supersededCheckpoint ? `<details style="min-width:0;max-width:100%"><summary>查看之前云端保存的编辑（基于旧商品资料）</summary>${renderFields(record.supersededCheckpoint.fields)}${renderIntake(record.supersededCheckpoint.publish_intake)}</details>` : "";
   return `<div class="saas-product-facts-simulation-note" role="status" aria-live="polite" data-saas-listing-cloud-status>
     <strong>${escapeHtml(record.storageFailed ? "本机存储已满，请保持页面打开并重试云端保存" : messages[record.status] || messages.idle)}</strong>
     <span>仅保存当前商品的编辑，不调用 AI、不扣素材点、不写入 eBay。</span>
@@ -34323,6 +34418,8 @@ function renderSaasListingCloudCheckpointStatus() {
 function updateSaasListingCloudStatus(record) {
   if (saasListingCloudContext()?.key !== record?.context.key) return;
   document.querySelectorAll("[data-saas-listing-cloud-slot]").forEach((slot) => { slot.innerHTML = renderSaasListingCloudCheckpointStatus(); });
+  document.querySelectorAll("[data-saas-publish-intake-draft-status]").forEach((slot) => { slot.textContent = saasPublishIntakeDraftStatusText(); });
+  document.querySelectorAll("[data-saas-publish-cloud-slot]").forEach((slot) => { slot.innerHTML = record.conflict || record.backups.length || ["error", "forbidden", "unavailable"].includes(record.status) ? renderSaasListingCloudCheckpointStatus() : ""; });
 }
 
 function ensureSaasListingCloudCheckpoint() {
@@ -34379,12 +34476,15 @@ async function hydrateSaasListingCloudCheckpoint(options = {}) {
       record.observedRefreshGeneration = refreshGeneration;
       const hasEdits = record.dirty || record.seq !== initialSeq || Boolean(record.conflict);
       const exactPending = checkpoint && record.pending && checkpoint.mutation_id === record.pending.mutation_id &&
-        JSON.stringify(checkpoint.fields) === JSON.stringify(record.pending.fields);
+        JSON.stringify(checkpoint.fields) === JSON.stringify(record.pending.fields) &&
+        (!record.pending.publish_intake || saasListingCloudSamePublishIntake(checkpoint.publish_intake, record.pending.publish_intake));
       if (exactPending) {
         record.revision = checkpoint.revision;
         record.receipt = checkpoint;
         record.pending = null;
-        if (JSON.stringify(record.fields) === JSON.stringify(checkpoint.fields)) record.dirty = false;
+        if (JSON.stringify(record.fields) === JSON.stringify(checkpoint.fields) &&
+            saasListingCloudSamePublishIntake(record.publishIntake, checkpoint.publish_intake)) record.dirty = false;
+        if (JSON.stringify(record.fields) === JSON.stringify(checkpoint.fields)) record.copyDirty = false;
       }
       const olderBase = Boolean(checkpoint && (payload.base_changed === true || checkpoint.base_report_id !== latestBase));
       const reviewedBase = olderBase && record.reviewedBase?.checkpoint_revision === payload.current_revision &&
@@ -34392,6 +34492,13 @@ async function hydrateSaasListingCloudCheckpoint(options = {}) {
       record.supersededCheckpoint = reviewedBase ? checkpoint : null;
       const conflicts = (hasEdits && !exactPending && (payload.current_revision !== record.revision || (record.baseReportId && record.baseReportId !== latestBase))) ||
         (olderBase && !reviewedBase);
+      // Editing costs while the first GET is pending is not a buyer-copy edit.
+      // Keep those inputs but restore the authenticated current copy, not the
+      // generated projection captured before the GET completed.
+      if (record.dirty && !record.copyDirty && checkpoint && !olderBase) {
+        record.fields = checkpoint.fields;
+        record.edited = checkpoint.merchant_edited_fields;
+      }
       record.loaded = true;
       if (conflicts) {
         if (record.dirty) applySaasListingCloudFields(record);
@@ -34414,6 +34521,7 @@ async function hydrateSaasListingCloudCheckpoint(options = {}) {
         } else if (checkpoint && !reviewedBase) {
           record.fields = checkpoint.fields;
           record.edited = checkpoint.merchant_edited_fields;
+          record.publishIntake = checkpoint.publish_intake || null;
           record.receipt = checkpoint;
           record.status = "saved";
           applySaasListingCloudFields(record);
@@ -34454,17 +34562,24 @@ async function hydrateSaasListingCloudCheckpoint(options = {}) {
   return record.read;
 }
 
-function queueSaasListingCloudCheckpoint() {
+function queueSaasListingCloudCheckpoint(options = {}) {
   const context = saasListingCloudContext();
   const record = saasListingCloudRecord(context);
   if (!record || !state.saasPermissions?.includes("create_task")) return false;
-  record.fields = saasListingCloudFields(state.saasListingComposerDraft?.fields);
-  record.edited = saasListingMerchantEditedFields();
+  if (!options.publishIntakeOnly || !record.fields || record.loaded) {
+    record.fields = saasListingCloudFields(state.saasListingComposerDraft?.fields);
+    record.edited = saasListingMerchantEditedFields();
+  }
+  if (!options.publishIntakeOnly) record.copyDirty = true;
+  const intake = saasPublishIntakeCloudSnapshot();
+  if (intake) record.publishIntake = intake;
   record.seq += 1;
   record.dirty = true;
   if (!record.baseReportId) record.baseReportId = saasListingCloudBaseReport(context)?.report_id || "";
-  state.saasListingComposerDraft.model_generated = false;
-  state.saasListingComposerDraft.buyer_copy_status = "merchant_edited_requires_review";
+  if (!options.publishIntakeOnly) {
+    state.saasListingComposerDraft.model_generated = false;
+    state.saasListingComposerDraft.buyer_copy_status = "merchant_edited_requires_review";
+  }
   if (!record.conflict) record.status = "pending";
   persistSaasListingCloudRecord(record);
   if (record.timer) clearTimeout(record.timer);
@@ -34507,6 +34622,7 @@ async function flushSaasListingCloudCheckpointRecord(context, record) {
       base_report_id: record.baseReportId, expected_revision: record.revision,
       mutation_id: globalThis.crypto?.randomUUID?.() || `edit_${Date.now()}_${Math.random().toString(36).slice(2)}`,
       fields: { ...record.fields }, merchant_edited_fields: [...record.edited] };
+    if (record.publishIntake) record.pending.publish_intake = record.publishIntake;
   }
   const request = record.pending;
   record.status = "saving";
@@ -34520,11 +34636,15 @@ async function flushSaasListingCloudCheckpointRecord(context, record) {
       const checkpoint = saasListingCloudReceipt(payload.checkpoint, context);
       if (payload.status !== "saved" || !checkpoint || checkpoint.mutation_id !== request.mutation_id ||
           checkpoint.base_report_id !== request.base_report_id || checkpoint.revision !== request.expected_revision + 1 ||
-          JSON.stringify(checkpoint.fields) !== JSON.stringify(request.fields)) throw new Error("invalid_checkpoint_receipt");
+          JSON.stringify(checkpoint.fields) !== JSON.stringify(request.fields) ||
+          (request.publish_intake && !saasListingCloudSamePublishIntake(checkpoint.publish_intake, request.publish_intake))) throw new Error("invalid_checkpoint_receipt");
       record.pending = null;
       record.revision = checkpoint.revision;
       record.receipt = checkpoint;
-      record.dirty = JSON.stringify(record.fields) !== JSON.stringify(request.fields);
+      if (!request.publish_intake && !record.publishIntake) record.publishIntake = checkpoint.publish_intake || null;
+      record.dirty = JSON.stringify(record.fields) !== JSON.stringify(request.fields) ||
+        !saasListingCloudSamePublishIntake(record.publishIntake, checkpoint.publish_intake);
+      record.copyDirty = record.copyDirty && JSON.stringify(record.fields) !== JSON.stringify(request.fields);
       record.status = record.dirty ? "pending" : "saved";
       persistSaasListingCloudRecord(record);
       updateSaasListingCloudStatus(record);
@@ -34555,6 +34675,15 @@ async function flushSaasListingCloudCheckpointRecord(context, record) {
 }
 
 async function resolveSaasListingCloudCheckpoint(action = "retry") {
+  if (action === "save-publish-intake") {
+    snapshotSaasPublishIntakeFormValues();
+    const saved = saasListingCloudRecord();
+    if (saved?.loaded && !saved.dirty && !saved.pending && !saved.conflict && saved.status === "saved" &&
+        JSON.stringify(saved.fields) === JSON.stringify(saasListingCloudFields(state.saasListingComposerDraft?.fields)) &&
+        saasListingCloudSamePublishIntake(saved.receipt?.publish_intake, saasPublishIntakeCloudSnapshot())) return true;
+    if (!saasPublishIntakeCloudSnapshot() || !queueSaasListingCloudCheckpoint({ publishIntakeOnly: true })) return false;
+    return flushSaasListingCloudCheckpoint();
+  }
   const record = saasListingCloudRecord();
   if (!record) return false;
   const key = record.context.key;
@@ -34569,13 +34698,15 @@ async function resolveSaasListingCloudCheckpoint(action = "retry") {
       updateSaasListingCloudStatus(record);
       return false;
     }
-    record.backups.push({ fields: saasListingCloudFields(record.fields), base_report_id: record.baseReportId, saved_at: new Date().toISOString() });
+    record.backups.push({ fields: saasListingCloudFields(record.fields), publish_intake: record.publishIntake,
+      base_report_id: record.baseReportId, saved_at: new Date().toISOString() });
     persistSaasListingCloudRecord(record);
     if (record.storageFailed) { updateSaasListingCloudStatus(record); return false; }
     if (conflict.checkpoint?.base_report_id === conflict.baseReportId) {
       record.fields = conflict.checkpoint.fields;
       record.edited = conflict.checkpoint.merchant_edited_fields;
       record.receipt = conflict.checkpoint;
+      record.publishIntake = conflict.checkpoint.publish_intake || null;
       record.reviewedBase = null;
       record.supersededCheckpoint = null;
       applySaasListingCloudFields(record);
@@ -34584,12 +34715,15 @@ async function resolveSaasListingCloudCheckpoint(action = "retry") {
       record.fields = saasListingCloudFields(state.saasListingComposerDraft?.fields);
       record.edited = [];
       record.receipt = null;
+      record.publishIntake = conflict.checkpoint?.publish_intake || null;
       record.reviewedBase = conflict.checkpoint ? { checkpoint_revision: conflict.revision, current_base_report_id: conflict.baseReportId } : null;
       record.supersededCheckpoint = conflict.checkpoint;
       syncSaasListingCloudEditorFields();
       saveSaasProtectedStateSnapshot();
     }
     record.dirty = false;
+    record.copyDirty = false;
+    applySaasPublishIntakeCloudRecord(record, { resetAbsent: true });
     record.status = record.receipt ? "saved" : record.supersededCheckpoint ? "current" : "idle";
   } else if (action === "keep-local") {
     record.dirty = true;
@@ -34602,6 +34736,7 @@ async function resolveSaasListingCloudCheckpoint(action = "retry") {
   record.pending = null;
   persistSaasListingCloudRecord(record);
   updateSaasListingCloudStatus(record);
+  syncSaasPublishIntakeAfterCloudRead();
   return record.dirty ? flushSaasListingCloudCheckpoint() : true;
 }
 
@@ -35209,7 +35344,10 @@ async function saveSaasListingBuyerCopyRewriteCheckpoint(report, rewrite, baseli
       record.conflict = null;
       record.reviewedBase = null;
       record.supersededCheckpoint = null;
-      if (!newEdits) { record.fields = receipt.fields; record.edited = receipt.merchant_edited_fields; }
+      if (!newEdits) {
+        record.fields = receipt.fields; record.edited = receipt.merchant_edited_fields;
+        record.publishIntake = receipt.publish_intake || null; record.copyDirty = false;
+      }
       record.dirty = newEdits;
       record.loaded = true;
       record.observedBaseReportId = report.report_id;

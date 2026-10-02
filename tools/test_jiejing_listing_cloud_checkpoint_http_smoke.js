@@ -111,18 +111,41 @@ async function main() {
     assert.equal(receipt.checkpoint.base_report_id, fixture.base_report.report_id);
     assert.deepEqual(receipt.checkpoint.listing_project_identity, fixture.identity);
     assert.equal(receipt.model_called || receipt.usage_consumed || receipt.real_platform_writes_enabled, false);
+    await first.page.evaluate(() => flushSaasListingCloudCheckpoint());
+    async function mountIntake(page) {
+      await page.evaluate(() => {
+        const slot = document.createElement("div");
+        slot.innerHTML = renderSaasPublishConfirmationIntakePanel(undefined, { includeGuide: false });
+        document.body.append(slot);
+      });
+      return page.locator("#saasPublishIntakeForm");
+    }
+    const intakeValues = { shipping_cost: "4.20", ebay_fee: "2.07", ad_budget: "0", return_risk_reserve: "0.65",
+      exchange_rate: "1", net_profit: "3.57", gross_margin_percent: "27.48", merchant_location_key: "LOCAL-ONLY-TEST", title: "" };
+    const firstIntake = await mountIntake(first.page);
+    const intakePosted = first.page.waitForResponse((item) => new URL(item.url()).pathname === checkpointPath
+      && item.request().method() === "POST", { timeout: 10000 });
+    for (const [name, value] of Object.entries(intakeValues)) await firstIntake.locator(`[name="${name}"]`).fill(value);
+    const intakeResponse = await intakePosted;
+    assert.equal(intakeResponse.status(), 201);
+    const intakeReceipt = await intakeResponse.json();
+    for (const [name, value] of Object.entries(intakeValues)) assert.equal(intakeReceipt.checkpoint.publish_intake.values[name], value, name);
+    await first.page.evaluate(() => flushSaasListingCloudCheckpoint());
     await first.context.close();
     const second = await device();
     await second.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
     for (const key of visibleKeys) assert.equal(await second.page.locator(`[data-saas-listing-draft-field="${key}"]`).inputValue(), edited[key]);
     assert.deepEqual(await second.page.evaluate(() => state.saasListingComposerDraft.fields), edited);
-    assert.equal(requests.filter((item) => item.method === "POST").length, 1);
+    const secondIntake = await mountIntake(second.page);
+    for (const [name, value] of Object.entries(intakeValues)) assert.equal(await secondIntake.locator(`[name="${name}"]`).inputValue(), value, name);
+    assert.match(await second.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /已云端保存/);
+    assert.equal(requests.filter((item) => item.method === "POST").length, 2);
     for (const request of requests.filter((item) => item.method === "GET")) {
       assert.deepEqual(request.query, { source_report_id: fixture.identity.source_report_id, candidate_id: fixture.identity.candidate_id });
     }
     assert.deepEqual(forbidden, []); assert.deepEqual(errors, []);
     await second.context.close();
-    process.stdout.write(JSON.stringify({ visible_controls: 8, restored_fields: 10, post_count: 1,
+    process.stdout.write(JSON.stringify({ visible_controls: 8, restored_fields: 10, restored_publish_fields: Object.keys(intakeValues).length, post_count: 2,
       get_count: requests.filter((item) => item.method === "GET").length, external_requests: 0, page_errors: 0 }));
   } finally {
     if (browser) await browser.close();

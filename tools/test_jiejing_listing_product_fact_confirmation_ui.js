@@ -1898,12 +1898,15 @@ test("fact module copy requires an explicit AI generation action after saving", 
   });
 });
 
-test("all Listing confirmation entrances share real draft readiness while local preflight stays available", async () => {
+// The current four-step bridge uses the backend read-only check, covered by the
+// full-app cloud checkpoint browser suite. These legacy advanced panels retain
+// their original local guard and never bypass the server confirmation gate.
+test("legacy advanced confirmation entrances retain draft guards and local preflight", async () => {
   await withProductFactPage(async (page) => {
     await page.addScriptTag({ content: [
       "saasListingMediaWritebackForDraft", "saasListingMediaWritebackImageUrls", "saasListingMediaWritebackRightsReady",
       "saasListingDraftPreflightSummary", "renderSaasListingPreflightBridgePanel",
-      "renderSaasListingPublishFeedbackPanel", "renderSaasListingVisiblePublishBridge",
+      "renderSaasListingPublishFeedbackPanel",
       "saasPreTestPayloadText", "saasPreTestDuplicateSignal", "saasPreTestFormSummary", "saasPreTestCheckRows",
       "saasPublishHealthSummary", "saasAccountHealthSnapshot", "saasAccountHealthTone",
       "saasLatestExecutionResult", "saasExecutionResultForConfirmation", "saasLatestPublishConfirmation",
@@ -1929,13 +1932,12 @@ test("all Listing confirmation entrances share real draft readiness while local 
         state.saasLoading = scenario === "loading";
         document.querySelector("#product-fact-test-root").innerHTML =
           renderSaasListingPreflightBridgePanel(draft, ctx, []) +
-          renderSaasListingPublishFeedbackPanel(draft, ctx, []) +
-          renderSaasListingVisiblePublishBridge(draft, ctx, []);
+          renderSaasListingPublishFeedbackPanel(draft, ctx, []);
       }, scenario);
       const buttons = await page.locator('[data-saas-action="create-publish-confirmation"]').evaluateAll(
         (elements) => elements.map((element) => ({ text: element.textContent.trim(), disabled: element.disabled })),
       );
-      assert.deepEqual(buttons.map((button) => button.text), ["生成确认单", "生成确认单并体检", "生成确认单", "生成确认单并体检"]);
+      assert.deepEqual(buttons.map((button) => button.text), ["生成确认单", "生成确认单并体检"]);
       const expectedDisabled = scenario !== "ready";
       assert.equal(buttons[0].disabled, expectedDisabled, `${scenario}: ordinary entrance is the existing reference`);
       for (const button of buttons) {
@@ -1944,7 +1946,7 @@ test("all Listing confirmation entrances share real draft readiness while local 
       const localPreflight = await page.locator('[data-saas-action="run-pretest-check"]').evaluateAll(
         (elements) => elements.map((element) => element.disabled),
       );
-      assert.deepEqual(localPreflight, [false, false, false, false], `${scenario}: local preflight must remain available`);
+      assert.deepEqual(localPreflight, [false, false], `${scenario}: local preflight must remain available`);
     }
   });
 });
