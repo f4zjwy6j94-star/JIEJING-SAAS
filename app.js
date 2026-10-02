@@ -31764,7 +31764,9 @@ function sanitizeSaasPublishIntakeDraftValues(input = {}) {
 
 function saasPublishIntakeAwaitingCloudRead() {
   const context = saasListingCloudContext();
-  const record = context && saasListingCloudRecords.get(context.key);
+  // First paint may precede the editor's queued read. Load the scoped cached
+  // checkpoint record before deciding that generated fields are authoritative.
+  const record = context && saasListingCloudRecord(context);
   return Boolean(record && (record.read || (record.fields && (!record.loaded || ["error", "forbidden", "unavailable"].includes(record.status)))));
 }
 

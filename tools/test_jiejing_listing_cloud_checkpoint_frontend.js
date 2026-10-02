@@ -162,7 +162,7 @@ async function openDevice(options = {}) {
 }
 
 async function seedDevice(page, options = {}) {
-  await page.evaluate(({ companyId, userId, storeId, base, identity, originalFields, baseReport, visual }) => {
+  await page.evaluate(({ companyId, userId, storeId, base, identity, originalFields, baseReport, visual, intakeFirst }) => {
     window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
     localStorage.setItem(saasStorageKeys.storeId, storeId);
     localStorage.setItem("jiejing_saas_backend_session_hint", "1");
@@ -182,6 +182,7 @@ async function seedDevice(page, options = {}) {
     state.saasDetachedListingProjectDrafts = {};
     state.view = "product";
     bindEvents();
+    if (intakeFirst) renderSaasPublishConfirmationIntakePanel(undefined, { includeGuide: false });
     document.querySelector("#view-product").innerHTML = renderSaasListingDraftEditor();
     if (visual) {
       document.documentElement.classList.add("app-ready");
@@ -191,7 +192,7 @@ async function seedDevice(page, options = {}) {
       document.querySelectorAll(".view").forEach((view) => view.classList.toggle("is-active", view.id === "view-product"));
     }
   }, { companyId, userId, storeId, base, identity: options.identity || identity, originalFields,
-    baseReport: options.baseReport || baseReport, visual: options.visual === true });
+    baseReport: options.baseReport || baseReport, visual: options.visual === true, intakeFirst: options.intakeFirst === true });
 }
 
 async function mountPublishIntake(page) {
@@ -387,7 +388,7 @@ test("publish intake preserves long literal descriptions and image paths while r
   } finally { await device.context.close(); }
 });
 
-for (const [lateRead, changed] of [[false, false], [true, false], [true, true]]) test(`publish intake survives full reload plus ${lateRead ? "delayed" : "completed"} cloud checkpoint hydration${changed ? " with changed source" : ""}`, async () => {
+for (const [lateRead, changed, intakeFirst] of [[false, false], [true, false], [true, true], [false, false, true]]) test(`publish intake survives full reload plus ${lateRead ? "delayed" : "completed"} cloud checkpoint hydration${changed ? " with changed source" : ""}${intakeFirst ? " after first render" : ""}`, async () => {
   resetFixture();
   checkpoint = savedCheckpoint({ ...originalFields, title: "Saved merchant title", price: "12.99 USD",
     logistics: "包装重量: 380 g; 包装尺寸: 22x12x5 cm" });
@@ -401,7 +402,7 @@ for (const [lateRead, changed] of [[false, false], [true, false], [true, true]])
     await form.locator('[name="ebay_fee"]').fill("2.07");
     await form.locator('[name="net_profit"]').fill("3.57");
     await device.page.reload();
-    await seedDevice(device.page);
+    await seedDevice(device.page, { intakeFirst });
     if (changed) checkpoint = { ...checkpoint, revision: 2, checkpoint_id: "checkpoint-revision-2",
       fields: { ...checkpoint.fields, price: "19.99 USD", logistics: "包装重量: 700 g; 包装尺寸: 30x20x10 cm" } };
     if (lateRead) checkpointHandler = async (request) => {
@@ -422,6 +423,9 @@ for (const [lateRead, changed] of [[false, false], [true, false], [true, true]])
     assert.equal(await form.locator('[name="ebay_fee"]').inputValue(), changed ? "" : "2.07");
     if (lateRead) assert.equal(await form.locator('[name="ad_budget"]').inputValue(), "0", "typing while the read is pending survives");
     else assert.equal(await form.locator('[name="net_profit"]').inputValue(), "3.57");
+    const intakeStatus = await device.page.locator('[data-saas-publish-intake-draft-status]').textContent();
+    if (changed) assert.match(intakeStatus, /资料已变更/);
+    else assert.doesNotMatch(intakeStatus, /资料已变更/, "unchanged cloud recovery must not claim the merchant changed product facts");
     assert.equal(requests.filter((request) => request.method === "POST").length, 0);
     assert.deepEqual(unexpected, []);
     assert.deepEqual(device.errors, []);
