@@ -319,6 +319,24 @@ def main() -> None:
     assert isolated_new_project["answer"] == new_project_answer, isolated_new_project
     assert isolated_new_project["answer_quality"]["accepted"] is True, isolated_new_project
     assert isolated_new_project["answer_quality"].get("context_correction_used") is not True, isolated_new_project
+    colon_project_message = (
+        "新建一个独立商品项目：银色木柄15mL咖啡量勺，单只装。"
+        "使用我刚上传的供应商授权图片，先识别商品资料并整理可核对的字段，"
+        "不修改原来的金色8件套项目。这是内部流程测试；"
+        "图片没提供的尺寸、重量、成本和库存先列为待补，不要当成真实参数。"
+        "本次只做到发布前，不发布、不采购、不付款。"
+    )
+    colon_project_answer = (
+        "银色木柄15mL咖啡量勺，单只装。图片文字标注304不锈钢与相思木，尚需核对；"
+        "新商品SKU未指定、图片使用权待核对、尺寸重量成本库存待补。"
+        "原金色8件套项目保持不变，本次不执行平台发布。"
+    )
+    colon_quality = validate_ai_ceo_answer_quality(
+        message=colon_project_message, route="ebay_workflow",
+        answer=colon_project_answer, context=second_pass_context,
+    )
+    assert colon_quality["accepted"] is True, colon_quality
+    assert colon_quality["quality_gate"] != "active_listing_state_consistency_v1", colon_quality
     assert _explicit_new_listing_project_request(new_project_message) is True
     assert _explicit_new_listing_project_request("请创建一个全新的 Listing 项目。") is True
     assert _explicit_new_listing_project_request("请另起一个独立商品项目。") is True

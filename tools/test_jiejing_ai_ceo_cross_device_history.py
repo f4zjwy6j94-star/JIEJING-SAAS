@@ -33,11 +33,15 @@ RUNTIME_DB = OUT / "runtime.sqlite"
 ARCHIVE_HTTP_BOOTSTRAP = r'''
 import runpy, sys, time
 from jiejing_saas import api_server as api
+from tools.ai_ceo_semantic_test_fixture import PLANNER_PROMPT_PREFIX, semantic_decision_json
 class ArchiveFixtureModel:
     name = "archive_fixture_model"
     model = "archive-fixture"
     endpoint = ""
     def generate_text(self, **kwargs):
+        if kwargs.get("system_prompt", "").startswith(PLANNER_PROMPT_PREFIX):
+            return {"text": semantic_decision_json(intent="chat"), "finish_reason": "stop",
+                    "_usage": {"input_tokens": 11, "output_tokens": 21, "total_tokens": 32}}
         time.sleep(0.15)
         answer = "毛利是销售收入减去商品的直接成本；净利还要扣除物流、平台费用、营销和其他经营成本。先明确口径，再用同一时间范围比较，避免把收入增长误认为利润增长。"
         callback = kwargs.get("on_text_delta")
@@ -470,6 +474,8 @@ def headers(token: str | None = None) -> dict[str, str]:
 
 
 def request_json(url: str, *, token: str | None = None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    if payload is not None and "/merchant-ceo/chat" in url:
+        payload = {**payload, "semantic_dispatch_contract": "ai_ceo_semantic_dispatch_v1"}
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(
         url,
@@ -574,8 +580,8 @@ def main() -> int:
                          "client_now": "2026-09-05T12:00:00+08:00", "client_timezone": "Asia/Shanghai",
                          "chat_archive_contract": "server_finalized_chat_archive_v1"},
             )
-            if response.get("ai_ceo_chat", {}).get("status") != "local_clock_answered":
-                return fail("archive fixture must use the zero-provider local clock route")
+            if response.get("ai_ceo_chat", {}).get("status") != "model_answered":
+                return fail("archive fixture must complete the semantic planner and hermetic answer model")
             archive_responses.append(response)
         archive_page = request_json(f"{base_url}/ai-ceo/chat-history", token=archive_account)["ai_ceo_chat_history"]
         archive_turns = list(archive_page["turns"])
@@ -618,6 +624,7 @@ def main() -> int:
             return fail("canonical browser sync or legacy clock request duplicated the server archive")
 
         streaming_body = {"idempotency_key": "archive-streamed-response", "message": "解释一下毛利和净利的区别。",
+            "semantic_dispatch_contract": "ai_ceo_semantic_dispatch_v1",
             "chat_archive_contract": "server_finalized_chat_archive_v1"}
         request = urllib.request.Request(f"{base_url}/stores/{archive_store}/merchant-ceo/chat?stream=1",
             data=json.dumps(streaming_body).encode(), headers=headers(archive_account), method="POST")

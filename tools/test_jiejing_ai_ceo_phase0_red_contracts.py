@@ -135,6 +135,9 @@ def frontend_chat_archive_dependencies() -> str:
         "compareSaasAiCeoThreadTurns",
         "uniqueSaasAiCeoThreadTurns",
         "saasAiCeoThreadTurnMergeScore",
+        "normalizeSaasAiCeoSemanticDispatch",
+        "saasAiCeoSemanticDispatchMatchesRequest",
+        "saasAiCeoSemanticIdentityEquals",
     )
     return "\n".join([
         "const SAAS_AI_CEO_INITIAL_VISIBLE_TURNS = 12; let saasAiCeoHistoryEpoch = 0;",
@@ -167,6 +170,8 @@ def request_json(
     payload: dict[str, Any] | None = None,
     token: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
+    if payload is not None and "/merchant-ceo/chat" in url:
+        payload = {**payload, "semantic_dispatch_contract": "ai_ceo_semantic_dispatch_v1"}
     headers = {"accept": "application/json"}
     if payload is not None:
         headers["content-type"] = "application/json"
@@ -260,6 +265,7 @@ def fault_injection_sitecustomize(fault_mode: str) -> str:
     return f'''\
 from jiejing_saas import api_server as _api
 from jiejing_saas.repository import SaaSRepository as _Repository
+from tools.ai_ceo_semantic_test_fixture import PLANNER_PROMPT_PREFIX, semantic_decision_json
 
 _FAULT_MODE = {fault_mode!r}
 _SENTINEL = "private raw internal failure text must never escape"
@@ -270,6 +276,9 @@ class _SuccessfulModelClient:
     endpoint = ""
 
     def generate_text(self, **kwargs):
+        if kwargs.get("system_prompt", "").startswith(PLANNER_PROMPT_PREFIX):
+            return {{"text": semantic_decision_json(intent="chat"), "finish_reason": "stop",
+                     "_usage": {{"input_tokens": 9, "output_tokens": 20, "total_tokens": 29}}}}
         callback = kwargs.get("on_text_delta")
         text = "捷境帮助跨境电商商家整理经营信息并形成可审核的工作草稿。"
         if callable(callback):
@@ -320,6 +329,8 @@ if _FAULT_MODE == "provider_execution_exception":
         endpoint = ""
 
         def generate_text(self, **kwargs):
+            if kwargs.get("system_prompt", "").startswith(PLANNER_PROMPT_PREFIX):
+                return _SuccessfulModelClient().generate_text(**kwargs)
             raise TimeoutError(_SENTINEL)
 
     def _provider_failure_model(self, **kwargs):
@@ -334,6 +345,8 @@ if _FAULT_MODE == "provider_empty_answer":
         endpoint = ""
 
         def generate_text(self, **kwargs):
+            if kwargs.get("system_prompt", "").startswith(PLANNER_PROMPT_PREFIX):
+                return _SuccessfulModelClient().generate_text(**kwargs)
             return {{"text": "", "finish_reason": "length", "model_mode": "live_http_model_text",
                 "_usage": {{"input_tokens": 100, "output_tokens": 2400, "total_tokens": 2500}}}}
 
@@ -345,7 +358,7 @@ if _FAULT_MODE == "provider_empty_answer":
 if _FAULT_MODE == "pre_model_after_reservation_exception":
     def _fail_before_provider_entry(*args, **kwargs):
         raise RuntimeError(_SENTINEL)
-    _api.run_ai_ceo_chat = _fail_before_provider_entry
+    _api.plan_ai_ceo_turn = _fail_before_provider_entry
 
 if _FAULT_MODE == "model_task_creation_exception":
     _original_create_task = _Repository.create_task
@@ -372,7 +385,7 @@ if _FAULT_MODE == "command_persistence_exception":
     def _save_command_then_fail(self, *args, **kwargs):
         call_count = int(getattr(self, "_red_command_save_count", 0)) + 1
         self._red_command_save_count = call_count
-        if call_count >= 2:
+        if call_count >= 1:
             raise RuntimeError(_SENTINEL)
         return _original_save_command(self, *args, **kwargs)
     _Repository.save_merchant_ceo_command = _save_command_then_fail
@@ -564,7 +577,7 @@ class AiCeoBackendAuthorityRedTests(unittest.TestCase):
             expected_stage="model_provider", expected_error_type="empty_model_answer")
         tasks = [row for row in result["tasks"] if row.get("task_type") == "merchant_ceo_chat"]
         self.assertEqual(tasks[0]["output"]["ai_ceo_chat"]["blocked_by"], ["empty_model_answer"])
-        self.assertEqual(result["model_usage_rows"][0]["request_count"], 1)
+        self.assertEqual(result["model_usage_rows"][0]["request_count"], 2, "planner and failed answer are both provider usage")
         self.assertEqual(int(result["platform_trial_quota"].get("used") or 0), 0)
 
     def test_pre_provider_failure_releases_trial_reservation(self) -> None:
@@ -1081,7 +1094,7 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
             "const requests = []; const messages = [];",
             "const state = { saasLastCeoCommand: null, saasAiCeoLatestTurn: null, view: 'cockpit' };",
             "const saasMerchantWorkbenchContext = () => ({});",
-            "const buildSaasCeoCommand = (text) => ({ id: 'revision', text, route: 'ebay_workflow' });",
+            "const buildSaasAiCeoPendingCommand = (text) => ({ id: 'revision', text, route: 'general_chat' });",
             "const normalizeSaasCeoCommand = (value) => value;",
             "const normalizeSaasAiCeoLatestTurn = (value) => value && typeof value === 'object' ? value : null;",
             "const prepareSaasNewListingProjectRequest = (text) => ({ active: false, blocked: false, commandText: text, sourceAssetIds: [] });",
@@ -1105,7 +1118,8 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
         self.assertEqual(1, len(result["requests"]), "A date constraint must not swallow the whole merchant task")
         self.assertEqual(message, result["requests"][0]["text"])
         self.assertEqual([{"answer": "正在思考", "pending": True}], result["messages"])
-        self.assertFalse(result["requests"][0]["options"]["suppressActiveListingContext"])
+        self.assertIsNot(result["requests"][0]["options"].get("suppressActiveListingContext"), True)
+        self.assertTrue(result["requests"][0]["options"]["semanticDispatch"])
 
     def test_clicked_report_id_never_falls_back_to_same_assistant_or_latest_report(self) -> None:
         resolver = function_body(APP_JS, "saasAiCeoMarketResearchTurnForImport")
@@ -1202,7 +1216,7 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
                     "const events = [];",
                     "const state = { saasLastCeoCommand: null, saasCeoCommandChatVisible: false, saasAiCeoLatestTurn: null, view: 'cockpit' };",
                     "const saasMerchantWorkbenchContext = () => ({});",
-                    "const buildSaasCeoCommand = (text) => ({ id: 'cmd-1', text, route: 'general_chat', memory_policy: 'transient_no_long_term_memory' });",
+                    "const buildSaasAiCeoPendingCommand = (text) => ({ id: 'cmd-1', text, route: 'general_chat', memory_policy: 'transient_no_long_term_memory' });",
                     "const persistSaasLastCeoCommand = () => null;",
                     "const recordSaasCeoCommandSourceRecord = () => null;",
                     "const hashString = () => 1;",
@@ -1243,7 +1257,7 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
                     "let syncCount = 0; let renderedAnswer = '';",
                     "const state = { saasLastCeoCommand: null, saasCeoCommandChatVisible: false, saasAiCeoLatestTurn: null, saasReports: [], view: 'other' };",
                     "const saasMerchantWorkbenchContext = () => ({});",
-                    "const buildSaasCeoCommand = (text) => ({ id: 'cmd-503', text, route: 'ebay_workflow', memory_policy: 'transient_no_long_term_memory' });",
+                    "const buildSaasAiCeoPendingCommand = (text) => ({ id: 'cmd-503', text, route: 'general_chat', memory_policy: 'transient_no_long_term_memory' });",
                     "const persistSaasLastCeoCommand = () => null; const recordSaasCeoCommandSourceRecord = () => null;",
                     "const hashString = () => 1; const buildSaasLocalClockAnswer = () => null; const addCeoMessage = () => null;",
                     "const scheduleSaasAiCeoPendingWatchdog = () => null; const updateCeoAssistantStreamingMessage = () => null;",

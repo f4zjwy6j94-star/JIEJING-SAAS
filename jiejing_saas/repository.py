@@ -3035,6 +3035,7 @@ class SaaSRepository:
         idempotency_key: str,
         payload_fingerprint: str,
         archive_context: dict[str, Any] | None = None,
+        compatible_payload_fingerprints: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         """Atomically claim one tenant-scoped AI CEO chat request."""
         self.initialize()
@@ -3095,8 +3096,13 @@ class SaaSRepository:
             or request_task.get("task_type") != "ai_ceo_chat_request"
             or existing_input.get("idempotency_key_hash") != scope_hash
         ):
+            # A key collision from another authenticated user must not expose
+            # even the original request's identifier.
             return {"claim_state": "conflict", "request_task": {}}
-        if existing_input.get("payload_fingerprint") != normalized_fingerprint:
+        compatible_fingerprints = {value for value in compatible_payload_fingerprints
+                                  if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)}
+        if (existing_input.get("payload_fingerprint") != normalized_fingerprint
+                and existing_input.get("payload_fingerprint") not in compatible_fingerprints):
             return {"claim_state": "conflict", "request_task": {}}
         if int(inserted.rowcount or 0) == 1:
             return {"claim_state": "claimed", "request_task": request_task}
@@ -3285,6 +3291,8 @@ class SaaSRepository:
         if not turn:
             raise ValueError("AI CEO terminal archive is empty")
         turn["archive_contract"] = "server_finalized_chat_archive_v1"
+        if isinstance(response_payload.get("semantic_dispatch"), dict):
+            turn["semantic_dispatch"] = response_payload["semantic_dispatch"]
         self._merge_ai_ceo_chat_turn(conn, company_id=str(request_row["company_id"]),
                                     user_id=str(request_row["user_id"]), turn=turn, server_finalized=True)
         return {**response_payload, "ai_ceo_chat_history_turn": {
@@ -5642,7 +5650,12 @@ class SaaSRepository:
 
         self.initialize()
         safe_listing_project_identity = normalize_listing_project_identity(listing_project_identity)
-        if not _looks_like_ai_ceo_market_research_turn(message=message, chat=chat) and not safe_listing_project_identity:
+        from .ai_ceo_semantic_plan import is_semantic_plan
+        semantic_plan = chat.get("turn_plan") if isinstance(chat.get("turn_plan"), dict) else {}
+        semantic = is_semantic_plan(semantic_plan)
+        if semantic and (semantic_plan.get("status") != "ready" or semantic_plan.get("save_artifact") is not True):
+            return None
+        if not semantic and not _looks_like_ai_ceo_market_research_turn(message=message, chat=chat) and not safe_listing_project_identity:
             return None
         answer = _sanitize_merchant_ceo_text(chat.get("answer"), limit=5000)
         if not answer:
@@ -5671,12 +5684,21 @@ class SaaSRepository:
             else str(chat.get("status") or "") not in rejected_statuses
         )
         product_candidates = _ai_ceo_market_product_candidates(message=message, answer=answer) if answer_accepted else []
+        if semantic and semantic_plan.get("project_action") == "none":
+            # Research suggestions are unselected options. Their server-issued
+            # identities become active only after an explicit merchant choice.
+            for candidate in product_candidates:
+                candidate_id = str(candidate.get("candidate_id") or "")
+                candidate["listing_project_identity"] = {
+                    "key": "listing-project-" + hashlib.sha256(f"{report_id}|{candidate_id}".encode()).hexdigest()[:32],
+                    "source_report_id": report_id, "candidate_id": candidate_id,
+                }
         has_current_turn_product_candidates = bool(product_candidates)
-        if answer_accepted and not product_candidates and _ai_ceo_market_context_reset_requested(message):
+        if not semantic and answer_accepted and not product_candidates and _ai_ceo_market_context_reset_requested(message):
             return None
         selection_mode = "current_turn" if product_candidates else "none"
         selected_candidate = _select_ai_ceo_market_candidate(answer=answer, candidates=product_candidates)
-        if answer_accepted and not product_candidates:
+        if not semantic and answer_accepted and not product_candidates:
             history_candidates, history_selected = _ai_ceo_market_context_from_history(conversation_history)
             requested_index = _ai_ceo_followup_candidate_index(message)
             if history_candidates and (requested_index is not None or _ai_ceo_should_inherit_market_context(message)):
@@ -5694,7 +5716,7 @@ class SaaSRepository:
             answer_accepted
             and safe_listing_project_identity
             and active_listing_product
-            and not has_current_turn_product_candidates
+            and (semantic or not has_current_turn_product_candidates)
         ):
             candidate_id = (
                 str(safe_listing_project_identity.get("candidate_id") or "").strip()
@@ -5707,7 +5729,7 @@ class SaaSRepository:
                 "score": int(selected_candidate.get("score") or 88),
                 "reasons": ["继续当前商品项目；不得按本轮回复标题新建重复项目。"],
                 "price_band": str(selected_candidate.get("price_band") or ""),
-                "source": "authenticated_active_listing_context",
+                "source": "server_semantic_project_binding" if semantic else "authenticated_active_listing_context",
                 "selected": True,
                 "missing_facts": ["SKU", "图片 URL", "采购成本", "重量尺寸", "eBay 类目", "店铺政策"],
                 "ready_for_listing_draft": True,
@@ -5739,6 +5761,12 @@ class SaaSRepository:
             if isinstance(listing_fields.get("merchant_product_fact_packet"), dict)
             else {}
         )
+        if semantic and safe_listing_project_identity:
+            authoritative = self.resolve_ai_ceo_listing_context(company_id=task["company_id"],
+                store_id=task["store_id"], identity=safe_listing_project_identity)
+            if authoritative.get("merchant_product_fact_packet"):
+                merchant_product_fact_packet = authoritative["merchant_product_fact_packet"]
+                listing_fields["merchant_product_fact_packet"] = merchant_product_fact_packet
         for record in merchant_product_fact_packet.get("source_records", []):
             if not isinstance(record, dict) or not record.get("url"):
                 continue
@@ -5751,7 +5779,7 @@ class SaaSRepository:
         selected_candidate_id = str(selected_candidate.get("candidate_id") or "")
         candidate_count = len(product_candidates)
         report_listing_project_identity = safe_listing_project_identity
-        if not report_listing_project_identity and product and selected_candidate_id:
+        if not semantic and not report_listing_project_identity and product and selected_candidate_id:
             project_seed = f"{report_id}|{selected_candidate_id}"
             report_listing_project_identity = normalize_listing_project_identity(
                 {
@@ -5849,6 +5877,8 @@ class SaaSRepository:
             "merchant_product_source_required": merchant_product_source_required,
             "source_type": "ai_ceo_chat",
             "source_command_id": command_id or "",
+            **({"semantic_dispatch": _redact_secret_like(chat.get("semantic_dispatch") or {}),
+                "turn_plan": _redact_secret_like(semantic_plan)} if semantic else {}),
             "listing_project_identity": report_listing_project_identity or None,
             "product": product,
             "product_candidates": product_candidates,
@@ -6151,6 +6181,106 @@ class SaaSRepository:
             and {field('merchant_product_fact_save.contract_version')} = 'merchant_product_fact_save_v1' limit 1""",
             (company_id, store_id, *(project.get(key, "") for key in keys))).fetchone() is not None
 
+    def resolve_ai_ceo_listing_context(
+        self, *, company_id: str, store_id: str, identity: dict[str, str],
+    ) -> dict[str, Any]:
+        """Resolve a full project anchor from scoped durable evidence, never browser facts."""
+        project = normalize_listing_project_identity(identity)
+        if not project or not all(project.values()):
+            return {}
+        self.initialize()
+        with self._connect() as conn:
+            fact = self._merchant_product_fact_scope_report(conn, company_id, store_id, project, facts_only=True)
+            evidence = fact or self._merchant_product_fact_scope_report(conn, company_id, store_id, project)
+            selected_research_candidate = None
+            if evidence is None:
+                row = conn.execute("""select r.*, t.company_id, t.store_id from reports r
+                    join tasks t on t.task_id = r.task_id
+                    where t.company_id = ? and t.store_id = ? and r.report_id = ? and r.status = 'saved'""",
+                    (company_id, store_id, project["source_report_id"])).fetchone()
+                if row is None:
+                    return {}
+                source_body = _load_json_field(row["report_json"])
+                if normalize_listing_project_identity(source_body.get("listing_project_identity")) != project:
+                    if row["report_type"] != "ai_ceo.market_research":
+                        return {}
+                    selected_research_candidate = next((item for item in source_body.get("product_candidates", [])
+                        if isinstance(item, dict) and item.get("candidate_id") == project["candidate_id"]
+                        and normalize_listing_project_identity(item.get("listing_project_identity")) == project), None)
+                    if selected_research_candidate is None:
+                        return {}
+                evidence = row
+            payload = _load_json_field(evidence["report_json"])
+            packet = payload.get("merchant_product_fact_packet") or {}
+            if selected_research_candidate is not None:
+                name = str(selected_research_candidate.get("name") or "")[:120]
+                packet = normalize_merchant_product_fact_packet({"product_name": name,
+                    "derived_listing_suggestions": {"product_name": name}}, source="backend_semantic_research_candidate")
+            confirmed = {**(packet.get("source_confirmed_facts") or {}), **(packet.get("merchant_confirmed_facts") or {})}
+            return {"contract_version": "active_listing_context_v1", "source": "server_verified_project_evidence",
+                    "listing_project_identity": project,
+                    "product_name": str(packet.get("product_name") or payload.get("product") or "")[:120],
+                    "listing": {"known_facts": confirmed, "missing_fact_keys": packet.get("unknown_facts") or []},
+                    "fact_report_id": str(fact["report_id"]) if fact is not None else "",
+                    "merchant_product_fact_packet": packet}
+
+    def save_ai_ceo_semantic_product_facts(
+        self, *, task: dict[str, Any], packet: dict[str, Any], listing_project_identity: dict[str, str],
+        expected_fact_report_id: str, new_project: bool = False, semantic_dispatch: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append model suggestions with the same store lock/version check as merchant saves."""
+        project = normalize_listing_project_identity(listing_project_identity)
+        if not project or not all(project.values()):
+            raise ProductFactSaveValidationError("product_fact_invalid_project")
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock = " for update" if self.database_engine == "postgres" else ""
+            if not conn.execute("select store_id from stores where company_id = ? and store_id = ?" + lock,
+                                (task["company_id"], task["store_id"])).fetchone():
+                raise KeyError("store not found or not accessible")
+            current = self._merchant_product_fact_scope_report(conn, task["company_id"], task["store_id"], project, facts_only=True)
+            current_id = str(current["report_id"]) if current is not None else ""
+            if current_id != expected_fact_report_id:
+                raise ProductFactSaveConflict({"error_code": "product_fact_version_conflict", "current_fact_report_id": current_id,
+                    "current_fact_report": self._report_row_to_dict(current) if current is not None else None, "secret_exposed": False})
+            previous = (_load_json_field(current["report_json"]).get("merchant_product_fact_packet") or {}) if current is not None else {}
+            merged = {**packet,
+                      "merchant_confirmed_facts": dict(previous.get("merchant_confirmed_facts") or {}),
+                      "source_confirmed_facts": dict(previous.get("source_confirmed_facts") or {}),
+                      "derived_listing_suggestions": {**(previous.get("derived_listing_suggestions") or {}), **(packet.get("derived_listing_suggestions") or {})},
+                      "source_records": [*(previous.get("source_records") or []), *(packet.get("source_records") or [])]}
+            if previous:
+                merged["product_name"] = previous.get("product_name") or packet.get("product_name")
+                merged["simulation_only"] = previous.get("simulation_only") is True
+                known = set(merged["merchant_confirmed_facts"]) | set(merged["source_confirmed_facts"])
+                merged["unknown_facts"] = [key for key in dict.fromkeys([*(previous.get("unknown_facts") or []), *(packet.get("unknown_facts") or [])]) if key not in known]
+                merged["listing_copy"] = previous.get("listing_copy") or {}
+                merged["field_evidence"] = {**(previous.get("field_evidence") or {}),
+                    **{key: value for key, value in (packet.get("field_evidence") or {}).items() if key not in known}}
+                merged["pending_field_evidence"] = {**(previous.get("pending_field_evidence") or {}),
+                    **{key: value for key, value in (packet.get("field_evidence") or {}).items() if key in known}}
+                conflicts = [*(previous.get("fact_conflicts") or []), *(packet.get("fact_conflicts") or [])]
+                confirmed = {**merged["source_confirmed_facts"], **merged["merchant_confirmed_facts"]}
+                for key, value in (packet.get("derived_listing_suggestions") or {}).items():
+                    if key in confirmed and str(confirmed[key]) != str(value):
+                        conflicts.append({"field": key, "values": [str(confirmed[key]), str(value)],
+                            "reason": "本轮资料建议与已确认资料不同；保留已确认值，等待商家核对。"})
+                merged["fact_conflicts"] = conflicts
+                merged["blocked_by"] = list(dict.fromkeys([
+                    *(item for item in [*(previous.get("blocked_by") or []), *(packet.get("blocked_by") or [])]
+                      if not str(item).startswith("merchant_product_fact_missing:") or str(item).split(":", 1)[1] not in known),
+                    *("merchant_product_fact_conflict:" + str(item["field"]) for item in conflicts),
+                ]))
+                merged["listing_readiness"] = {**(previous.get("listing_readiness") or {}),
+                    "ready_for_real_publish": False,
+                    **({"ready_for_listing_generation": False} if conflicts else {})}
+            return self.save_merchant_product_fact_report(task=task, packet=merged,
+                listing_project_identity=project, _connection=conn,
+                _report_id=project["source_report_id"] if new_project else None,
+                _semantic_dispatch=semantic_dispatch)
+
     def save_merchant_product_fact_report(
         self,
         *,
@@ -6160,6 +6290,7 @@ class SaaSRepository:
         _connection: Any = None,
         _report_id: str | None = None,
         _created_at: str | None = None,
+        _semantic_dispatch: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist one authenticated merchant product-fact checkpoint."""
 
@@ -6198,6 +6329,8 @@ class SaaSRepository:
         }
         if safe_listing_project_identity:
             report_payload["listing_project_identity"] = safe_listing_project_identity
+        if isinstance(_semantic_dispatch, dict):
+            report_payload["semantic_dispatch"] = _redact_secret_like(_semantic_dispatch)
         with nullcontext(_connection) if _connection is not None else self._connect() as conn:
             if _connection is None:
                 if self.database_engine != "postgres":
@@ -6237,7 +6370,8 @@ class SaaSRepository:
                 tags=[
                     "merchant.product_facts",
                     "listing_handoff",
-                    "ai_extracted_from_merchant_image" if vision_extracted else "merchant_confirmed",
+                    "ai_extracted_from_merchant_image" if vision_extracted else
+                    "ai_proposed_product_facts" if isinstance(_semantic_dispatch, dict) else "merchant_confirmed",
                 ],
                 memory={
                     "report_id": report_id,
@@ -6273,6 +6407,8 @@ class SaaSRepository:
             "report_id": report_id,
             "task_id": task["task_id"],
             "runtime_run_id": "merchant_product_facts",
+            "company_id": task["company_id"],
+            "store_id": task["store_id"],
             "report_type": "merchant.product_facts",
             "title": title,
             "status": "saved",
@@ -18234,6 +18370,11 @@ class SaaSRepository:
         turn["store_id"] = str(row["store_id"] or turn.get("store_id") or "")
         turn["created_at"] = str(row["created_at"] or turn.get("created_at") or "")
         turn["updated_at"] = str(row["updated_at"] or turn.get("updated_at") or "")
+        if isinstance(payload, dict) and payload.get("archive_contract") == "server_finalized_chat_archive_v1":
+            dispatch = payload.get("semantic_dispatch")
+            if (isinstance(dispatch, dict) and dispatch.get("company_id") == str(row["company_id"])
+                    and dispatch.get("store_id") == str(row["store_id"] or "")):
+                turn["semantic_dispatch"] = _redact_secret_like(dispatch)
         turn["secret_exposed"] = False
         return turn
 

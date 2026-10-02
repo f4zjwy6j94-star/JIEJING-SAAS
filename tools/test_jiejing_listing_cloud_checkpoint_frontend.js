@@ -577,12 +577,30 @@ for (const [lateRead, changed, intakeFirst] of [[false, false], [true, false], [
 
 async function mediaStepFixture(mode = "saved", step = 3) {
   resetFixture();
+  const normalizedSources = mode.startsWith("normalized-source-records");
+  const visionGeneratedCopy = mode === "vision-generated-copy";
   const image = "https://cdn.example.test/approved-gold-set.jpg";
   const packet = { product_name: "Gold wood-handled measuring set", simulation_only: true,
     source: "authenticated_merchant_request",
     merchant_confirmed_facts: { product_name: "Gold wood-handled measuring set", material: "Gold-tone metal and wood",
       condition: "NEW", image_urls: image, image_rights_confirmed: true },
     source_confirmed_facts: {}, unknown_facts: ["item_location"] };
+  if (visionGeneratedCopy) {
+    Object.assign(packet, { source: "backend_product_vision_extraction", source_mode: "merchant_source_supplied",
+      vision_contract_version: "jiejing_ai_ceo_product_vision_intake_v1",
+      buyer_copy_requires_validated_listing_generation: true, unknown_facts: [] });
+    Object.assign(packet.merchant_confirmed_facts, { source_url: "https://supplier.example.test/gold-set",
+      sku: "SIM-GOLD-SET", package_weight_g: "380", package_length_cm: "22", package_width_cm: "12",
+      package_height_cm: "5", unit_cost: "2.50", selling_price: "12.99", currency: "USD", quantity: "10",
+      item_location: "CN / Shenzhen" });
+  }
+  if (normalizedSources) {
+    packet.merchant_confirmed_facts.source_url = "https://supplier.example.test/gold-set";
+    packet.source_records = [
+      { type: "merchant_product_link", url: packet.merchant_confirmed_facts.source_url, rights_status: "not_applicable", secret_exposed: false },
+      { type: "merchant_product_image", url: image, rights_status: "merchant_confirmed", secret_exposed: false },
+    ];
+  }
   const facts = { ...structuredClone(baseReport), report_id: "media-facts-before", report_type: "merchant.product_facts",
     created_at: "2026-09-06T00:00:00Z", report: { listing_project_identity: identity, merchant_product_fact_packet: packet } };
   let currentBase = baseReport;
@@ -591,6 +609,15 @@ async function mediaStepFixture(mode = "saved", step = 3) {
   checkpoint = savedCheckpoint({ ...originalFields, title: "Gold-Tone Measuring Set", selling_points: "4 cups\n4 spoons\nWood handles",
     description: "Eight gold-tone pieces with wood handles", images: image });
   const originalCopy = structuredClone(checkpoint.fields);
+  if (visionGeneratedCopy) {
+    checkpoint.merchant_edited_fields = [];
+    currentBase = structuredClone(baseReport);
+    currentBase.report.product = packet.product_name;
+    currentBase.report.merchant_product_fact_packet = structuredClone(packet);
+    currentBase.report.listing_handoff.listing_fields = { ...originalCopy,
+      selling_points: originalCopy.selling_points.split("\n"), description_seed: originalCopy.description };
+  }
+  const validatedBase = structuredClone(currentBase);
   checkpointHandler = async (request, res) => {
     if (request.method === "GET") {
       sendJson(res, 200, { status: "saved", checkpoint, current_revision: checkpoint.revision,
@@ -622,6 +649,15 @@ async function mediaStepFixture(mode = "saved", step = 3) {
     currentBase = { ...facts, report_id: factSaveCount === 1 ? "media-facts-after" : `media-facts-after-${factSaveCount}`,
       created_at: `2026-09-06T02:00:${String(factSaveCount).padStart(2, "0")}Z`,
       report: { ...facts.report, merchant_product_fact_packet: request.body.merchant_product_fact_packet } };
+    if (normalizedSources) {
+      // The real fact API rebuilds link/image evidence from confirmed facts;
+      // it omits empty snapshot defaults and adds its own safety metadata.
+      currentBase.report.merchant_product_fact_packet.source_records = structuredClone(packet.source_records);
+      const evidence = currentBase.report.merchant_product_fact_packet.source_records;
+      if (mode.endsWith("-url")) evidence[0].url = "https://supplier.example.test/different-set";
+      if (mode.endsWith("-rights")) evidence[1].rights_status = "pending_merchant_confirmation";
+      if (mode.endsWith("-hash")) evidence[1].sha256 = "b".repeat(64);
+    }
     if (mode === "changed-facts") currentBase.report.merchant_product_fact_packet.merchant_confirmed_facts.material = "Different material";
     if (mode === "changed-images") currentBase.report.merchant_product_fact_packet.merchant_confirmed_facts.image_urls = "https://cdn.example.test/other-image.jpg";
     if (mode === "revoked-rights") currentBase.report.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed = false;
@@ -634,17 +670,51 @@ async function mediaStepFixture(mode = "saved", step = 3) {
   const device = await openDevice();
   await device.page.route(image, route => route.fulfill({ status: 200, contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="gold"/></svg>' }));
-  await device.page.evaluate(({ facts, packet, step }) => {
+  await device.page.evaluate(({ facts, packet, step, normalizedSources, visionGeneratedCopy, validatedBase }) => {
     state.saasConnected = true;
+    if (visionGeneratedCopy) {
+      state.saasReports = [validatedBase];
+      Object.assign(state.saasListingComposerDraft, { source_type: "ai_ceo_product_vision",
+        buyer_copy_requires_validated_listing_generation: true });
+    }
     state.saasReports.push(facts);
-    state.saasListingComposerDraft.merchant_product_fact_packet = packet;
+    state.saasListingComposerDraft.merchant_product_fact_packet = normalizedSources
+      ? sanitizeSaasMerchantProductFactPacketSnapshot(packet) : packet;
     state.saasListingComposerDraft.source_product_fact_report_id = facts.report_id;
     setSaasListingWizardStep(step);
     renderProductListingCenter();
-  }, { facts, packet, step });
+  }, { facts, packet, step, normalizedSources, visionGeneratedCopy, validatedBase });
   await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
-  return { device, originalCopy, latest: () => currentBase };
+  return { device, originalCopy, validatedBase, latest: () => currentBase };
 }
+
+test("saving images and reopening a vision-generated draft preserves buyer copy without another model call", async () => {
+  const { device, originalCopy, validatedBase, latest } = await mediaStepFixture("vision-generated-copy");
+  let second;
+  try {
+    await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+    await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+    assert.equal(await device.page.evaluate(() => saasListingWizardRecord().step), 4);
+    assert.equal(await device.page.locator('#saasPublishIntakeForm [name="title"]').inputValue(), originalCopy.title);
+    assert.match(await device.page.locator('#saasPublishIntakeForm [name="description_html"]').inputValue(), /Eight gold-tone pieces/);
+    assert.deepEqual(checkpoint.merchant_edited_fields, [], "an image save is not a buyer-copy edit");
+    second = await openDevice({ baseReport: latest() });
+    await second.page.evaluate(async validatedBase => {
+      state.saasReports.push(validatedBase);
+      restoreSaasListingComposerDraftFromBackendReports({ preferBackendLatest: true });
+      await hydrateSaasListingCloudCheckpoint({ force: true });
+      setSaasListingWizardStep(4);
+      renderProductListingCenter();
+    }, validatedBase);
+    assert.equal(await second.page.locator('#saasPublishIntakeForm [name="title"]').inputValue(), originalCopy.title);
+    assert.match(await second.page.locator('#saasPublishIntakeForm [name="description_html"]').inputValue(), /Eight gold-tone pieces/);
+    assert.equal(requests.some(request => /generate|confirmation/.test(request.path)), false);
+    assert.equal(await second.page.evaluate(() => state.saasListingComposerDraft.simulation_only), true);
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+    assert.deepEqual(second.errors, []);
+  } finally { if (second) await second.context.close(); await device.context.close(); }
+});
 
 test("saving image step carries reviewed buyer copy to the saved fact version and a clean device", async () => {
   const { device, originalCopy, latest } = await mediaStepFixture();
@@ -716,6 +786,39 @@ test("unchanged product facts continue with reviewed cloud copy instead of askin
     assert.deepEqual(second.errors, []);
   } finally { if (second) await second.context.close(); await device.context.close(); }
 });
+
+test("reopened unchanged facts tolerate source-record representation defaults without a version conflict", async () => {
+  const { device, originalCopy, latest } = await mediaStepFixture("normalized-source-records", 1);
+  try {
+    await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+    await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+    await device.page.evaluate(async () => { const read = saasListingCloudRecord()?.read; if (read) await read; });
+    assert.equal(await device.page.evaluate(() => saasListingWizardRecord().step), 2);
+    assert.equal(await device.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).count(), 0,
+      "snapshot defaults and response-only safety metadata are not changed source evidence");
+    assert.equal(checkpoint.base_report_id, latest().report_id);
+    for (const key of ["title", "selling_points", "description"]) assert.equal(checkpoint.fields[key], originalCopy[key]);
+    assert.equal(latest().report.merchant_product_fact_packet.simulation_only, true);
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+for (const evidenceChange of ["url", "rights", "hash"]) {
+  test(`source-record normalization still requires review for a real ${evidenceChange} change`, async () => {
+    const { device, originalCopy } = await mediaStepFixture(`normalized-source-records-${evidenceChange}`, 1);
+    try {
+      await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+      await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+      await device.page.evaluate(async () => { const read = saasListingCloudRecord()?.read; if (read) await read; });
+      assert.equal(await device.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).count(), 1);
+      assert.equal(requests.filter(x => x.method === "POST" && x.path === checkpointPath).length, 0);
+      assert.equal(checkpoint.fields.title, originalCopy.title);
+      assert.deepEqual(unexpected, []);
+      assert.deepEqual(device.errors, []);
+    } finally { await device.context.close(); }
+  });
+}
 
 test("fact-step copy continuity does not dismiss changed source evidence", async () => {
   const { device, originalCopy } = await mediaStepFixture("changed-evidence", 1);
@@ -1198,6 +1301,51 @@ test("merchant editing a vision-origin Listing with matching validated backend f
     assert.deepEqual(device.errors, []);
   } finally { await device.context.close(); }
 });
+
+for (const mode of ["matching", "changed-facts", "changed-copy", "other-candidate", "missing-generation"]) {
+  test(`unchanged generated vision copy survives a text checkpoint only with authenticated matching evidence: ${mode}`, async () => {
+    resetFixture();
+    const packet = { product_name: "Foldable Tablet Stand", source: "backend_product_vision_extraction",
+      vision_contract_version: "jiejing_ai_ceo_product_vision_intake_v1",
+      source_confirmed_facts: {}, merchant_confirmed_facts: { product_name: "Foldable Tablet Stand", material: "Aluminum", condition: "NEW" },
+      unknown_facts: ["sku"], fact_conflicts: [], simulation_only: true,
+      buyer_copy_requires_validated_listing_generation: true };
+    const verifiedReport = structuredClone(baseReport);
+    verifiedReport.report.merchant_product_fact_packet = structuredClone(packet);
+    checkpoint = savedCheckpoint(originalFields);
+    checkpoint.merchant_edited_fields = [];
+    checkpointHandler = (request, res) => {
+      if (request.method !== "GET") return false;
+      sendJson(res, 200, { status: "saved", checkpoint, current_revision: 1,
+        current_base_report_id: verifiedReport.report_id, current_base_report: verifiedReport, base_changed: false });
+      return true;
+    };
+    const device = await openDevice({ baseReport: verifiedReport });
+    try {
+      await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
+      await device.page.evaluate(({ packet, mode }) => {
+        const draft = state.saasListingComposerDraft;
+        Object.assign(draft, { source_type: "ai_ceo_product_vision", model_generated: false,
+          buyer_copy_status: "merchant_edited_requires_review", merchant_edited_fields: [],
+          buyer_copy_requires_validated_listing_generation: true, merchant_product_fact_packet: packet });
+        if (mode === "changed-facts") draft.merchant_product_fact_packet.merchant_confirmed_facts.material = "Steel";
+        if (mode === "changed-copy") draft.fields.description = "Unverified replacement copy";
+        if (mode === "other-candidate") state.saasReports[0].report.listing_project_identity.candidate_id = "unrelated-candidate";
+        if (mode === "missing-generation") state.saasReports = [];
+      }, { packet, mode });
+      const form = await mountPublishIntake(device.page);
+      assert.equal(await form.locator('[name="title"]').inputValue(), mode === "matching" ? originalFields.title : "",
+        "a saved unchanged generated text must not disappear, but a checkpoint alone cannot grant validation");
+      if (mode === "matching") assert.match(await form.locator('[name="description_html"]').inputValue(), /Original description/);
+      else assert.equal(await form.locator('[name="description_html"]').inputValue(), "");
+      assert.equal(await device.page.evaluate(() => state.saasListingComposerDraft.model_generated), false,
+        "reading a text checkpoint is not a model call or a new generation proof");
+      assert.equal(requests.filter(request => request.method === "POST").length, 0);
+      assert.deepEqual(unexpected, []);
+      assert.deepEqual(device.errors, []);
+    } finally { await device.context.close(); }
+  });
+}
 
 test("switching accounts while a checkpoint GET is pending never restores the previous account's draft", async () => {
   resetFixture();

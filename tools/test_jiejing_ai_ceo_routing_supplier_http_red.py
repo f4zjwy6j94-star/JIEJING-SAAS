@@ -96,6 +96,16 @@ def listing_restore_fixture_source(*, has_store_fixture: bool = False) -> str:
     ))
 
 
+def chat_request_fixture_source() -> str:
+    """Exercise the real semantic response guards in extracted request fixtures."""
+    return "\n".join(function_body(APP_JS, name) for name in (
+        "saasNormalizeListingProjectIdentity", "normalizeSaasAiCeoSemanticDispatch",
+        "saasAiCeoSemanticIdentityEquals", "saasAiCeoSemanticDispatchMatchesRequest",
+        "saasPendingNewListingProjectOutcomeUnknown", "isSaasUnrecoverableSessionError",
+        "saasTriStateBoolean", "sanitizeSaasAiCeoPlanningSupplierFacts", "requestSaasAiCeoChat",
+    ))
+
+
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -182,8 +192,10 @@ def isolated_backend_env(*, port: int, hook_root: Path) -> dict[str, str]:
 
 def supplier_http_sitecustomize() -> str:
     return r'''
+import json
 from jiejing_saas import ai_ceo_chat as _chat
 from jiejing_saas import api_server as _api
+from tools.ai_ceo_semantic_test_fixture import PLANNER_PROMPT_PREFIX, semantic_decision_json
 
 _ANSWER = """### 候选商品 1：可折叠硅胶漏斗
 推荐度评分：88/100
@@ -203,6 +215,15 @@ class _SuccessfulSelectionModel:
     endpoint = ""
 
     def generate_text(self, **kwargs):
+        if kwargs.get("system_prompt", "").startswith(PLANNER_PROMPT_PREFIX):
+            message = json.loads(kwargs["user_prompt"])["merchant_message"]
+            no_source = message == "请为我的 eBay 美国店铺调研三个轻小不带电的候选商品，我现在没有货源。"
+            return {"text": semantic_decision_json(intent="research", save_artifact=True,
+                candidate_count=3, search="web_search", query="eBay lightweight product candidates",
+                source_mode="merchant_has_no_source" if no_source else "merchant_has_source",
+                research_delivery="candidate_selection",
+                research_queries=[{"subject": "", "query": "eBay lightweight product candidates"}]),
+                "finish_reason": "stop", "_usage": {"input_tokens": 19, "output_tokens": 37, "total_tokens": 56}}
         callback = kwargs.get("on_text_delta")
         if callable(callback):
             callback(_ANSWER)
@@ -230,7 +251,7 @@ def _resolved_model(self, **kwargs):
         "secret_exposed": False,
     }
 
-def _source_backed_context(*, route, message):
+def _source_backed_context(*, route, message, turn_plan=None):
     return {
         "status": "ready",
         "provider": "unit_public_search",
@@ -368,6 +389,7 @@ def run_supplier_http_cases() -> dict[str, Any]:
                         f"{base_url}/stores/{store_id}/merchant-ceo/chat",
                         method="POST",
                         payload={
+                            "semantic_dispatch_contract": "ai_ceo_semantic_dispatch_v1",
                             "message": message,
                             "command": {"id": f"cmd-supplier-{label}", "text": message},
                             "supplier_facts": facts,
@@ -554,10 +576,8 @@ class AiCeoSupplierFactsHttpRedTests(unittest.TestCase):
                 self.assertNotIn("MUST_NOT_LEAK", serialized)
                 if label == "verified":
                     active = ((payload.get("ai_ceo_chat") or {}).get("context") or {}).get("active_listing_context") or {}
-                    self.assertEqual("project-current-http", (active.get("listing_project_identity") or {}).get("key"))
-                    self.assertEqual("JJ-CURRENT-HTTP-01", (active.get("listing") or {}).get("sku"))
-                    self.assertEqual(1, (active.get("media") or {}).get("asset_manifest_count"))
-                    self.assertEqual("245675556011", (active.get("ebay_draft") or {}).get("offer_id"))
+                    self.assertEqual({}, active, "open candidate research must not inherit an unverified browser project")
+                    self.assertEqual("none", (payload.get("semantic_dispatch") or {}).get("project_action"))
 
         self.assertEqual(201, fixture["product_fact_status"])
         product_payload = fixture["product_fact_payload"]
@@ -747,15 +767,23 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         result = run_node_json(
             "\n".join(
                 [
-                    "const state = { saasReports: [], activeMediaDraft: '' };",
+                    "const identity = { key: 'project-vision-facts-a', source_report_id: 'vision-facts-a', candidate_id: '' };",
+                    "const state = { saasReports: [], activeMediaDraft: '', saasCompany: { company_id: 'company-vision' } };",
+                    "const activeSaasStore = () => ({ store_id: 'store-vision' });",
+                    "const saasCurrentMerchantProjectId = () => identity.key;",
                     "const saasListingComposerDraftFromText = () => ({ product: 'Vision Product', title: 'Vision Product', fields: {} });",
                     "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
                     "const saasCurrentListingProjectIdentity = (draft) => ({ key: `project-${draft.source_report_id}`, source_report_id: draft.source_report_id, source_id: draft.source_report_id, candidate_id: '' });",
                     "const publicRuntimeText = (value = '') => String(value || '');",
                     "const saveSaasProtectedStateSnapshot = () => {};",
                     normalize_identity,
+                    function_body(APP_JS, "normalizeSaasAiCeoSemanticDispatch"),
+                    function_body(APP_JS, "saasAiCeoSemanticIdentityEquals"),
+                    function_body(APP_JS, "saasAiCeoSemanticDispatchMatchesRequest"),
                     vision_handoff,
-                    "const draft = applySaasAiCeoProductFactPacket({ product_name: 'Vision Product', listing_copy: {} }, 'merchant images', { report_id: 'vision-facts-a' });",
+                    "const request = { command: { id: 'vision-command', store_id: 'store-vision' }, idempotency_key: 'vision-request', source_asset_ids: ['vision-asset'] };",
+                    "const dispatch = { contract_version: 'ai_ceo_semantic_dispatch_v1', status: 'ready', project_action: 'new', command_id: 'vision-command', idempotency_key: 'vision-request', request_task_id: 'vision-task', company_id: 'company-vision', store_id: 'store-vision', submitted_project_identity: {}, target_project_identity: identity, consumed_source_asset_ids: ['vision-asset'], workflow_target: 'product_intake' };",
+                    "const draft = applySaasAiCeoProductFactPacket({ product_name: 'Vision Product', listing_copy: {} }, 'merchant images', { report_id: 'vision-facts-a', report_type: 'merchant.product_facts', listing_project_identity: identity }, { listingProjectIdentity: identity, semanticDispatch: dispatch, requestPayload: request });",
                     "console.log(JSON.stringify({ draft, activeMediaDraft: state.activeMediaDraft }));",
                 ]
             )
@@ -792,7 +820,10 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "  saasAiCeoSupplierFactAttestation: { supplier_facts: { material: 'STALE-MATERIAL' }, supplier_facts_verified: true }, supplierFactsStatus: 'verified'",
                     "};",
                     "const saasNormalizeMarketProductCandidates = (value) => value;",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    function_body(APP_JS, "saasNormalizeListingProjectIdentity"),
                     "const resetSaasListingPublishEvidenceForNewProject = () => {};",
+                    "const syncSaasProjectRoute = (_view, options) => { state.routeProject = options.projectId; return true; };",
                     "const saasListingEbayTitleFromProduct = (value) => value;",
                     "const resetSaasBulkWorkspaceForListingProject = () => {};",
                     "const saasListingImportedAiCeoMarketInput = () => '';",
@@ -1551,7 +1582,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         request_command_snapshot = function_body(APP_JS, "sanitizeSaasAiCeoRequestCommandSnapshot")
         request_idempotency_key = function_body(APP_JS, "saasAiCeoIdempotencyKey")
         request_envelope = function_body(APP_JS, "buildSaasAiCeoChatRequestEnvelope")
-        request_chat = function_body(APP_JS, "requestSaasAiCeoChat")
+        request_chat = chat_request_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1582,11 +1613,10 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
 
     def test_chat_request_carries_only_the_active_listing_snapshot(self) -> None:
         active_context = function_body(APP_JS, "saasAiCeoActiveListingContext")
-        normalize_identity = function_body(APP_JS, "saasNormalizeListingProjectIdentity")
         request_command_snapshot = function_body(APP_JS, "sanitizeSaasAiCeoRequestCommandSnapshot")
         request_idempotency_key = function_body(APP_JS, "saasAiCeoIdempotencyKey")
         request_envelope = function_body(APP_JS, "buildSaasAiCeoChatRequestEnvelope")
-        request_chat = function_body(APP_JS, "requestSaasAiCeoChat")
+        request_chat = chat_request_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1617,7 +1647,6 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const saasListingMediaWritebackRightsReady = () => true;",
                     "const saasCurrentUnpublishedDraftReceipt = () => ({ offerId: '245675556011', sku: 'JJ-INCENSE-01', executionId: 'exec-incense', confirmationId: 'confirm-incense', status: 'UNPUBLISHED' });",
                     "const publicRuntimeText = (value = '') => String(value || '');",
-                    normalize_identity,
                     active_context,
                     request_command_snapshot,
                     request_idempotency_key,
@@ -1708,7 +1737,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         request_command_snapshot = function_body(APP_JS, "sanitizeSaasAiCeoRequestCommandSnapshot")
         request_idempotency_key = function_body(APP_JS, "saasAiCeoIdempotencyKey")
         request_envelope = function_body(APP_JS, "buildSaasAiCeoChatRequestEnvelope")
-        request_chat = function_body(APP_JS, "requestSaasAiCeoChat")
+        request_chat = chat_request_fixture_source()
         result = run_node_json(
             "\n".join(
                 [
@@ -1734,6 +1763,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "let capturedBody = null;",
                     "const normalizeSaasCeoCommand = (value) => value;",
                     "const hasSaasProtectedSessionCandidate = () => true;",
+                    "const saasAiCeoActiveListingContext = () => ({ contract_version: 'active_listing_context_v1', listing_project_identity: { key: 'manual-project', source_report_id: '', candidate_id: '' } });",
                     "const sanitizeSaasCeoCommandSourceText = (value) => String(value || '');",
                     "const publicRuntimeText = (value = '') => String(value || '');",
                     "const saasAiCeoConversationHistoryForRequest = () => [];",
@@ -1761,7 +1791,8 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertEqual(expected_facts, result.get("ebayPayload", {}).get("supplier_facts"))
         self.assertEqual({}, result.get("unknownFactsPayload"))
         self.assertEqual({}, result.get("shopifyPayload"))
-        self.assertEqual(expected_facts, result.get("capturedBody", {}).get("supplier_facts"))
+        self.assertEqual({**expected_facts, "package_weight_g": "120"}, result.get("capturedBody", {}).get("supplier_facts"))
+        self.assertEqual("ai_ceo_semantic_dispatch_v1", result.get("capturedBody", {}).get("semantic_dispatch_contract"))
         self.assertIs(result.get("capturedBody", {}).get("supplier_facts_verified"), True)
         handler_source = function_body(APP_JS, "handleSourceIntakeAction")
         self.assertIn("confirmManualSourceFactsForAiCeo(facts)", handler_source)

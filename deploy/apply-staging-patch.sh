@@ -189,6 +189,8 @@ FILES=(
   "jiejing_saas/billing_wechat_pay.py"
   "jiejing_saas/billing_wechat_pay_rehearsal.py"
   "jiejing_saas/ai_ceo_chat.py"
+  "jiejing_saas/ai_ceo_project_binding.py"
+  "jiejing_saas/ai_ceo_semantic_plan.py"
   "jiejing_saas/market_quote_evidence.py"
   "jiejing_saas/timely_evidence.py"
   "jiejing_saas/listing_draft_generation.py"
@@ -426,6 +428,11 @@ FILES=(
   "tools/test_jiejing_phase2_response_boundary_hardening.py"
   "tools/test_jiejing_ai_ceo_routing_supplier_http_red.py"
   "tools/test_jiejing_ai_ceo_project_trace.py"
+  "tools/ai_ceo_semantic_test_fixture.py"
+  "tools/test_jiejing_ai_ceo_semantic_dispatch.py"
+  "tools/test_jiejing_ai_ceo_semantic_chat.py"
+  "tools/test_jiejing_ai_ceo_semantic_http.py"
+  "tools/test_jiejing_ai_ceo_semantic_dispatch_frontend.js"
   "tools/test_jiejing_current_project_archive_ui.py"
   "tools/test_jiejing_ai_ceo_phase0_red_contracts.py"
   "tools/test_jiejing_ai_ceo_private_empty_answer.py"
@@ -706,6 +713,8 @@ python3 -m py_compile \
   jiejing_saas/billing_webhook.py \
   jiejing_saas/billing_wechat_pay.py \
   jiejing_saas/ai_ceo_chat.py \
+  jiejing_saas/ai_ceo_project_binding.py \
+  jiejing_saas/ai_ceo_semantic_plan.py \
   jiejing_saas/market_quote_evidence.py \
   jiejing_saas/timely_evidence.py \
   jiejing_saas/commercial_launch_gate.py \
@@ -898,6 +907,10 @@ python3 -m py_compile \
   tools/jiejing_edge_cutover_preflight.py \
   tools/test_jiejing_staging_patch_apply_contract.py \
   tools/test_jiejing_saas_ai_ceo_chat_model_boundary.py \
+  tools/ai_ceo_semantic_test_fixture.py \
+  tools/test_jiejing_ai_ceo_semantic_dispatch.py \
+  tools/test_jiejing_ai_ceo_semantic_chat.py \
+  tools/test_jiejing_ai_ceo_semantic_http.py \
   tools/test_jiejing_saas_ai_ceo_platform_model_fallback.py \
   tools/test_jiejing_operational_health_readiness.py \
   tools/test_jiejing_stripe_checkout_portal.py \

@@ -132,10 +132,14 @@ def main() -> None:
     api_source = (ROOT / "jiejing_saas" / "api_server.py").read_text(encoding="utf-8")
     assert "read_for_provider(" in api_source
     assert "product_vision_fact_packet" in api_source
-    vision_save_start = api_source.index("product_vision_report = self.repository.save_merchant_product_fact_report(")
-    vision_save_call = api_source[vision_save_start : vision_save_start + 360]
+    vision_save_start = api_source.index("product_vision_report = self.repository.save_ai_ceo_semantic_product_facts(")
+    vision_save_call = api_source[vision_save_start : vision_save_start + 1200]
     assert "listing_project_identity=listing_project_identity" in vision_save_call, (
         "product vision fact reports must persist the active Listing project identity"
+    )
+    assert "expected_fact_report_id=" in vision_save_call, "semantic vision persistence must retain the fact-version guard"
+    assert api_source.index("turn_plan = plan_ai_ceo_turn(") < api_source.index("product_vision_report = self.repository.save_ai_ceo_semantic_product_facts("), (
+        "semantic planning must precede any product vision fact save"
     )
     print("PASS jiejing_ai_ceo_product_image_intake")
 

@@ -18,6 +18,21 @@ function extractFunction(startMarker, endMarker) {
   return appSource.slice(start, end);
 }
 
+function namedFunctionSource(name) {
+  const start = appSource.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `missing ${name}`);
+  const following = appSource.slice(start + 1).search(/\n(?:async )?function /);
+  assert.notEqual(following, -1, `missing function after ${name}`);
+  return appSource.slice(start, start + 1 + following);
+}
+
+const semanticFactGuardSource = [
+  "saasNormalizeListingProjectIdentity",
+  "normalizeSaasAiCeoSemanticDispatch",
+  "saasAiCeoSemanticIdentityEquals",
+  "saasAiCeoSemanticDispatchMatchesRequest",
+].map(namedFunctionSource).join("\n");
+
 const publishPrefillSource = extractFunction(
   "function saasPublishIntakePrefillValues",
   "\nfunction renderSaasPublishInputField",
@@ -171,7 +186,14 @@ const state = {
   saasListingComposerInput: "",
   saasListingSourceMode: "",
   saasReports: [],
+  saasCompany: { company_id: "vision-company" },
 };
+const publicRuntimeText = (value) => String(value || "");
+const activeSaasStore = () => ({ store_id: "store-vision" });
+const identity = { key: "listing-project-vision", source_report_id: "report-vision", candidate_id: "vision-candidate" };
+const request = { command: { id: "vision-command", store_id: "store-vision" }, idempotency_key: "vision-request", source_asset_ids: ["vision-asset"] };
+const semanticDispatch = { contract_version: "ai_ceo_semantic_dispatch_v1", status: "ready", project_action: "new", company_id: "vision-company", store_id: "store-vision", command_id: request.command.id, idempotency_key: request.idempotency_key, request_task_id: "vision-request-task", submitted_project_identity: {}, target_project_identity: identity, consumed_source_asset_ids: ["vision-asset"], workflow_target: "product_facts" };
+const report = { report_id: "report-vision", report_type: "merchant.product_facts", listing_project_identity: identity };
 const saasListingComposerDraftFromText = () => ({
   product: "Local Seed",
   title: "Local Seed",
@@ -185,12 +207,13 @@ const saasListingComposerDraftFromText = () => ({
 });
 const saasListingItemSpecificsWithMerchantFacts = (current) => String(current || "");
 const saasMerchantProductFactLabel = (key) => String(key || "");
-const saasNormalizeListingProjectIdentity = () => null;
-const saasCurrentListingProjectIdentity = () => ({ key: "listing-project-vision" });
+const saasCurrentListingProjectIdentity = () => identity;
+const saasCurrentMerchantProjectId = () => identity.key;
 const saveSaasProtectedStateSnapshot = () => true;
+${semanticFactGuardSource}
 ${factPacketProjectionSource}
 ${aiCeoProductFactApplySource}
-globalThis.__result = applySaasAiCeoProductFactPacket(globalThis.__packet, "merchant image", null);
+globalThis.__result = applySaasAiCeoProductFactPacket(globalThis.__packet, "merchant image", report, { listingProjectIdentity: identity, semanticDispatch, requestPayload: request });
 `,
     sandbox,
   );

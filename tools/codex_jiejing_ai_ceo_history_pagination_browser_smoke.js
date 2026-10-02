@@ -18,7 +18,7 @@ const turns = Array.from({ length: 75 }, (_, index) => ({
   market_report_id: `report_history_${index + 1}`,
 }));
 const counters = { get: 0, older: 0, sync: 0, expensive: 0, authProbe: 0, authRefresh: 0 };
-const archiveProtocol = { requests: [], syncBodies: [], turns: [], responseStatus: 200, loseFinal: false };
+const archiveProtocol = { requests: [], syncBodies: [], turns: [], finalized: new Map(), responseStatus: 200, loseFinal: false };
 let historyControl = null;
 let server;
 let browser;
@@ -218,15 +218,24 @@ async function main() {
       const body = raw ? JSON.parse(raw) : {};
       if (url.pathname === "/stores/history-store/merchant-ceo/chat") {
         archiveProtocol.requests.push(body);
-        const failure = archiveProtocol.responseStatus >= 400;
-        const requestId = "task_ai_ceo_request_" + crypto.createHash("sha256").update(`ai-ceo-chat-request-v1\0company-archive-user\0history-store\0${body.idempotency_key}`).digest("hex").slice(0, 40);
-        const metadata = { contract_version: "server_finalized_chat_archive_v1", request_task_id: requestId, assistant_id: "ceo-server-" + crypto.createHash("sha256").update(requestId).digest("hex").slice(0, 32), created_at: new Date(Date.UTC(2026, 8, 5, 8, archiveProtocol.requests.length)).toISOString(), archived: true };
-        const chat = { status: failure ? "model_call_failed" : "model_answered", answer: failure ? "模型暂时不可用，这次没有生成新内容。" : "毛利扣除商品直接成本，净利还扣除经营费用。", route: "general_chat" };
-        archiveProtocol.turns.push({ assistant_id: metadata.assistant_id, created_at: metadata.created_at, user_text: body.message, assistant_text: chat.answer, status: chat.status, route: chat.route, store_id: "history-store" });
+        assert.equal(body.semantic_dispatch_contract, "ai_ceo_semantic_dispatch_v1");
+        let finalized = archiveProtocol.finalized.get(body.idempotency_key);
+        if (finalized) assert.deepEqual(body, finalized.request, "reconciliation must replay the identical frozen request");
+        if (!finalized) {
+          const failure = archiveProtocol.responseStatus >= 400;
+          const requestId = "task_ai_ceo_request_" + crypto.createHash("sha256").update(`ai-ceo-chat-request-v1\0company-archive-user\0history-store\0${body.idempotency_key}`).digest("hex").slice(0, 40);
+          const metadata = { contract_version: "server_finalized_chat_archive_v1", request_task_id: requestId, assistant_id: "ceo-server-" + crypto.createHash("sha256").update(requestId).digest("hex").slice(0, 32), created_at: new Date(Date.UTC(2026, 8, 5, 8, archiveProtocol.requests.length)).toISOString(), archived: true };
+          const semanticDispatch = { contract_version: "ai_ceo_semantic_dispatch_v1", status: failure ? "blocked" : "ready", project_action: "none", company_id: "company-archive-user", store_id: "history-store", command_id: body.command.id, idempotency_key: body.idempotency_key, request_task_id: requestId, submitted_project_identity: body.active_listing_context?.listing_project_identity || {}, target_project_identity: {}, consumed_source_asset_ids: [], workflow_target: "" };
+          const chat = { status: failure ? "model_call_failed" : "model_answered", answer: failure ? "模型暂时不可用，这次没有生成新内容。" : "毛利扣除商品直接成本，净利还扣除经营费用。", route: "general_chat", semantic_dispatch: semanticDispatch };
+          archiveProtocol.turns.push({ assistant_id: metadata.assistant_id, created_at: metadata.created_at, user_text: body.message, assistant_text: chat.answer, status: chat.status, route: chat.route, store_id: "history-store", semantic_dispatch: semanticDispatch });
+          const payload = { ai_ceo_chat: chat, ai_ceo_chat_history_turn: metadata, semantic_dispatch: semanticDispatch, ...(failure ? { error_code: "model_call_failed", error: chat.answer } : {}) };
+          finalized = { request: body, status: archiveProtocol.responseStatus, payload };
+          archiveProtocol.finalized.set(body.idempotency_key, finalized);
+        }
         if (archiveProtocol.loseFinal) return send(res, 200, { ai_ceo_chat_request: { status: "outcome_unknown" }, execution_result_known: false, ai_ceo_chat: { status: "request_outcome_unknown", answer: "正在核对本次请求。" } });
-        if (failure) return send(res, archiveProtocol.responseStatus, { ai_ceo_chat: chat, ai_ceo_chat_history_turn: metadata, error_code: "model_call_failed", error: chat.answer });
+        if (finalized.status >= 400) return send(res, finalized.status, finalized.payload);
         res.writeHead(200, { "content-type": "application/x-ndjson" });
-        return res.end(JSON.stringify({ type: "delta", delta: chat.answer }) + "\n" + JSON.stringify({ type: "final", payload: { ai_ceo_chat: chat, ai_ceo_chat_history_turn: metadata } }) + "\n");
+        return res.end(JSON.stringify({ type: "delta", delta: finalized.payload.ai_ceo_chat.answer }) + "\n" + JSON.stringify({ type: "final", payload: finalized.payload }) + "\n");
       }
       if (url.pathname.startsWith("/ai-ceo/chat-history")) {
         if (req.method === "POST") archiveProtocol.syncBodies.push(body);
@@ -540,6 +549,14 @@ async function main() {
   assert.equal(lostFinal.after[2].assistant_id, archiveProtocol.turns[2].assistant_id);
   assert.equal(lostFinal.after[2].status, "model_answered");
   assert.equal(await archivePage.locator("#ceoChat .message.ai").count(), 3);
+  archiveProtocol.loseFinal = false;
+  const reconciled = await archivePage.evaluate(async () => {
+    stopSaasPendingNewListingProjectReconciliation();
+    const result = await runSaasPendingNewListingProjectReconcileAttempt({ scheduleNext: false });
+    return { result, pending: state.saasPendingNewListingProjectRequest };
+  });
+  assert.equal(reconciled.pending, null, "the frozen semantic request must resolve before accepting the next command");
+  assert.equal(archiveProtocol.turns.length, 3, "a replay recovers the saved semantic receipt without another execution or archive turn");
   const cryptoRequestCount = archiveProtocol.requests.length;
   const noCrypto = await archivePage.evaluate(async () => {
     Object.defineProperty(window.crypto, "subtle", { configurable: true, value: null });
@@ -555,6 +572,7 @@ async function main() {
   cases.push("server_archive_canonical_identity", "server_archive_no_sync_duplicate", "frozen_request_archive_protocol_compatibility");
   cases.push("failed_response_archive_identity");
   cases.push("lost_final_recovers_by_request_identity");
+  cases.push("lost_final_reconcile_reuses_frozen_semantic_request");
   cases.push("missing_webcrypto_fails_before_request_or_sync");
   await archivePage.close();
   assert.deepEqual(errors, []);

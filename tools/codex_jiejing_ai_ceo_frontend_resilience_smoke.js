@@ -20,6 +20,14 @@ let lastChatBody = null;
 const chatBodies = [];
 const optionalRequestControls = new Map();
 
+function semanticDispatch(body, action, identity = {}, consumedAssets = []) {
+  return { contract_version: "ai_ceo_semantic_dispatch_v1", status: "ready", project_action: action,
+    command_id: body.command.id, idempotency_key: body.idempotency_key, request_task_id: "task-resilience-semantic",
+    company_id: "resilience-company", store_id: "store-resilience",
+    submitted_project_identity: body.active_listing_context?.listing_project_identity || {},
+    target_project_identity: identity, consumed_source_asset_ids: consumedAssets, workflow_target: "research" };
+}
+
 function json(res, status, body) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -307,8 +315,7 @@ async function main() {
       const body = JSON.parse((await readBody(req)) || "{}");
       lastChatBody = body;
       chatBodies.push(JSON.parse(JSON.stringify(body)));
-      const explicitNewProjectRequest = /新建一个全新的独立商品项目/.test(String(body.message || ""));
-      if (explicitNewProjectRequest && newProjectChatControl) {
+      if (newProjectChatControl) {
         const control = newProjectChatControl;
         const identity = {
           key: control.projectId || "listing-project-tablet-stand",
@@ -362,8 +369,12 @@ async function main() {
           });
           return;
         }
+        const dispatch = semanticDispatch(body, "new", identity, control.productVisionFactPacket ? body.source_asset_ids || [] : []);
         json(res, 201, {
+          semantic_dispatch: dispatch,
           ai_ceo_chat: {
+            semantic_dispatch: dispatch,
+            listing_project_identity: identity,
             status: "model_answered",
             answer: "已为平板电脑支架建立全新的独立商品项目。",
             route: "ebay_workflow",
@@ -379,7 +390,9 @@ async function main() {
             status: "saved",
             created_at: new Date().toISOString(),
             listing_project_identity: identity,
+            semantic_dispatch: dispatch,
             report: {
+              semantic_dispatch: dispatch,
               answer: "已为平板电脑支架建立全新的独立商品项目。",
               merchant_question: body.message || "",
               product: "平板电脑支架",
@@ -406,7 +419,10 @@ async function main() {
             },
             secret_exposed: false,
           },
-          ...(control.productVisionFactPacket ? { product_vision_fact_packet: control.productVisionFactPacket } : {}),
+          ...(control.productVisionFactPacket ? {
+            product_vision_fact_packet: control.productVisionFactPacket,
+            product_vision_report: { report_id: `${identity.source_report_id}-facts`, report_type: "merchant.product_facts", listing_project_identity: identity },
+          } : {}),
           usage_consumed: true,
           listing_created: false,
           real_platform_writes_enabled: false,
@@ -415,8 +431,15 @@ async function main() {
         return;
       }
       const projectMismatch = Boolean(chatResponseProjectId) && chatResponseProjectId !== "listing-project-resilience";
+      const responseIdentity = chatResponseProjectId ? { key: chatResponseProjectId,
+        source_report_id: projectMismatch ? "report-foreign" : "report-resilience",
+        candidate_id: projectMismatch ? "candidate-foreign" : "candidate-resilience" } : {};
+      const dispatch = semanticDispatch(body, chatResponseProjectId ? "current" : "none", responseIdentity,
+        ordinaryProductVisionFactPacket && chatResponseProjectId ? body.source_asset_ids || [] : []);
       json(res, 200, {
+        semantic_dispatch: dispatch,
         ai_ceo_chat: {
+          semantic_dispatch: dispatch,
           status: "answered",
           answer: "已继续当前商品项目的下一轮选品调研。",
           route: "ebay_workflow",
@@ -439,7 +462,10 @@ async function main() {
             candidate_id: "candidate-foreign",
           },
         } : null,
-        ...(ordinaryProductVisionFactPacket ? { product_vision_fact_packet: ordinaryProductVisionFactPacket } : {}),
+        ...(ordinaryProductVisionFactPacket ? {
+          product_vision_fact_packet: ordinaryProductVisionFactPacket,
+          product_vision_report: { report_id: "report-resilience-facts", report_type: "merchant.product_facts", listing_project_identity: responseIdentity },
+        } : {}),
         request_message: body.message || "",
         secret_exposed: false,
       });
@@ -762,7 +788,7 @@ async function main() {
         created_at: new Date(Date.now() - 60_000).toISOString(),
       }];
       handleSaasCeoCommandSubmit(
-        "请新建一个全新的独立商品项目，不复用任何历史项目。目标商品：平板电脑支架。请完成 eBay US 市场调研。",
+        "新建一个独立商品项目：平板电脑支架。请完成 eBay US 市场调研，不复用任何历史项目。",
       );
     });
     await newProjectRequestReceived;
@@ -840,13 +866,13 @@ async function main() {
     }));
     newProjectChatControl = null;
     if (
-      newProjectBeforeResponse.routeProjectId ||
-      newProjectBeforeResponse.currentProjectId ||
-      newProjectBeforeResponse.taskContextProjectId ||
-      newProjectRequestIdentity ||
-      newProjectConversationHistory.length
+      newProjectBeforeResponse.routeProjectId !== "listing-project-resilience" ||
+      newProjectBeforeResponse.currentProjectId !== "listing-project-resilience" ||
+      newProjectBeforeResponse.taskContextProjectId !== "listing-project-resilience" ||
+      newProjectRequestIdentity?.key !== "listing-project-resilience" ||
+      newProjectConversationHistory.length !== 1
     ) {
-      throw new Error(`a brand-new project request must detach the previous project before POST: ${JSON.stringify({
+      throw new Error(`a request must preserve the previous project and send reference context until a server semantic decision: ${JSON.stringify({
         beforeResponse: newProjectBeforeResponse,
         requestIdentity: newProjectRequestIdentity,
         conversationHistory: newProjectConversationHistory,
@@ -944,6 +970,8 @@ async function main() {
     }));
     const newProjectIntentBoundaryMatrix = await page.evaluate(() => ({
       approvals: [
+        "新建一个独立商品项目：银色木柄15mL咖啡量勺，单只装。使用我刚上传的供应商授权图片，先识别商品资料并整理可核对的字段，不修改原来的金色8件套项目。这是内部流程测试；图片没提供的尺寸、重量、成本和库存先列为待补，不要当成真实参数。本次只做到发布前，不发布、不采购、不付款。",
+        "新建商品项目: 银色木柄咖啡量勺。",
         "我确定要创建一个全新商品项目",
         "我确认要新开一个全新商品项目",
         "按这个方案新建一个全新商品项目",
@@ -972,6 +1000,10 @@ async function main() {
         "就这样创建一个全新商品项目",
       ].map((text) => ({ text, result: saasExplicitNewListingProjectRequest(text) })),
       consultations: [
+        "不要新建商品项目：银色木柄咖啡量勺。",
+        "新建商品项目：会覆盖旧草稿吗？",
+        "示例，新建商品项目：银色木柄咖啡量勺。",
+        "客户问，新建商品项目：银色木柄咖啡量勺，要什么资料？",
         "新建商品项目收费吗",
         "新建商品项目在哪里操作",
         "新建商品项目多久能完成",
@@ -1145,6 +1177,7 @@ async function main() {
         supplier_facts_verified: true,
         merchant_confirmation_received: true,
       };
+      state.aiCeoTaskContextProjectId = oldIdentity.key;
       handleSaasCeoCommandSubmit(
         "请新建一个全新的独立商品项目。目标商品：平板电脑支架。",
         { sourceAssetIds: ["asset-tablet-source"] },
@@ -1167,11 +1200,11 @@ async function main() {
       recoveryHtml: renderSaasAiCeoRecoveryHintMarkup(state.saasAiCeoLatestTurn),
     }));
     if (
-      failedNewProjectRequestBody.active_listing_context ||
-      (failedNewProjectRequestBody.conversation_history || []).length ||
+      failedNewProjectRequestBody.active_listing_context?.listing_project_identity?.key !== "listing-project-unsaved-old" ||
+      (failedNewProjectRequestBody.conversation_history || []).length !== 1 ||
       !/^[A-Za-z0-9._:-]{8,160}$/.test(failedNewProjectRequestBody.idempotency_key || "") ||
-      failedNewProjectRequestBody.supplier_facts ||
-      failedNewProjectRequestBody.supplier_facts_verified !== undefined ||
+      failedNewProjectRequestBody.supplier_facts?.material !== "OLD_MATERIAL" ||
+      failedNewProjectRequestBody.supplier_facts_verified !== true ||
       JSON.stringify(failedNewProjectRequestBody.source_asset_ids || []) !== JSON.stringify(["asset-tablet-source"]) ||
       failedNewProjectState.routeProjectId !== "listing-project-unsaved-old" ||
       failedNewProjectState.currentProjectId !== "listing-project-unsaved-old" ||
@@ -1181,7 +1214,7 @@ async function main() {
       failedNewProjectState.previousProjectId !== "listing-project-unsaved-old" ||
       failedNewProjectState.contextHtml.includes("正在建立商品任务") ||
       failedNewProjectState.contextHtml.includes("查看任务建立进度") ||
-      !failedNewProjectState.contextHtml.includes("返回本次对话") ||
+      !failedNewProjectState.contextHtml.includes("旧款桌面平板支架") ||
       !failedNewProjectState.recoveryHtml.includes("没有返回可用正文") ||
       failedNewProjectState.recoveryHtml.includes("去 AI 与素材")
     ) {
@@ -1285,7 +1318,7 @@ async function main() {
       waitForResponseRelease: waitForRetriedNewProjectResponseRelease,
     };
     await page.evaluate(() => {
-      handleSaasCeoCommandSubmit("重试");
+      handleSaasCeoCommandSubmit("重试", { retryPendingRequest: true });
     });
     await retriedNewProjectRequestReceived;
     const retriedNewProjectRequestBody = JSON.parse(JSON.stringify(lastChatBody || {}));
@@ -1305,12 +1338,12 @@ async function main() {
     }));
     newProjectChatControl = null;
     if (
-      retriedNewProjectRequestBody.active_listing_context ||
-      (retriedNewProjectRequestBody.conversation_history || []).length ||
+      retriedNewProjectRequestBody.active_listing_context?.listing_project_identity?.key !== "listing-project-unsaved-old" ||
+      !(retriedNewProjectRequestBody.conversation_history || []).length ||
       !/^[A-Za-z0-9._:-]{8,160}$/.test(retriedNewProjectRequestBody.idempotency_key || "") ||
       retriedNewProjectRequestBody.idempotency_key === failedNewProjectRequestBody.idempotency_key ||
-      retriedNewProjectRequestBody.supplier_facts ||
-      retriedNewProjectRequestBody.supplier_facts_verified !== undefined ||
+      retriedNewProjectRequestBody.supplier_facts?.material !== "OLD_MATERIAL" ||
+      retriedNewProjectRequestBody.supplier_facts_verified !== true ||
       JSON.stringify(retriedNewProjectRequestBody.source_asset_ids || []) !== JSON.stringify(["asset-tablet-source"]) ||
       !/平板电脑支架/.test(String(retriedNewProjectRequestBody.message || "")) ||
       retriedNewProjectState.routeProjectId !== "listing-project-tablet-retry" ||
@@ -1435,7 +1468,7 @@ async function main() {
       };
       state.activeFlowKey = "confirm";
       handleSaasCeoCommandSubmit(
-        "请新建一个全新的独立商品项目。目标商品：带图片的平板电脑支架。",
+        "新建一个独立商品项目：带图片的平板电脑支架。",
         { sourceAssetIds: ["asset-visual-tablet"] },
       );
     });
@@ -1469,8 +1502,8 @@ async function main() {
     }));
     newProjectChatControl = null;
     if (
-      visualNewProjectRequestBody.supplier_facts ||
-      visualNewProjectRequestBody.supplier_facts_verified !== undefined ||
+      visualNewProjectRequestBody.supplier_facts?.material !== "OLD_VISUAL_MATERIAL" ||
+      visualNewProjectRequestBody.supplier_facts_verified !== true ||
       JSON.stringify(visualNewProjectRequestBody.source_asset_ids || []) !== JSON.stringify(["asset-visual-tablet"]) ||
       visualNewProjectState.routeProjectId !== "listing-project-visual-tablet" ||
       visualNewProjectState.currentProjectId !== "listing-project-visual-tablet" ||

@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jiejing_runtime.models import now_iso
 from jiejing_runtime.public_search import PublicSearchProbeAdapter, PublicSearchProbeConfig
+from .ai_ceo_semantic_plan import is_semantic_plan
 from .market_quote_evidence import market_quote_answer_quality, new_york_market_time
 from .timely_evidence import (merchant_followup, timely_request_kind, temporal_evidence_contract,
                              source_temporal_evidence, temporal_evidence_fallback,
@@ -350,7 +351,7 @@ def _ai_ceo_recent_entities(history: list[dict[str, Any]]) -> list[str]:
 def _public_ai_ceo_turn_plan(plan: dict[str, Any]) -> dict[str, Any]:
     """Project only auditable, merchant-safe planner fields."""
 
-    return {
+    public = {
         "contract_version": AI_CEO_TURN_PLAN_CONTRACT_VERSION,
         "response_mode": _safe_text(plan.get("response_mode") or "direct_answer", limit=40),
         "route": _safe_text(plan.get("route") or AI_CEO_ROUTE_GENERAL, limit=60),
@@ -381,6 +382,16 @@ def _public_ai_ceo_turn_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "real_platform_writes_enabled": False,
         "secret_exposed": False,
     }
+    if is_semantic_plan(plan):
+        # Preserve the validated decision for artifact eligibility and browser
+        # projection. No model-supplied IDs or authority fields are accepted.
+        for key in ("planner_policy", "status", "intent", "project_action", "product_name", "question",
+                    "search", "query", "read_images", "save_artifact", "candidate_count",
+                    "excluded_candidates", "listing_deferred", "steps", "research_delivery", "research_queries",
+                    "product_fact_proposals"):
+            if key in plan:
+                public[key] = copy.deepcopy(plan[key])
+    return public
 
 
 def normalize_ai_ceo_active_listing_context(value: Any) -> dict[str, Any]:
@@ -520,6 +531,9 @@ def run_ai_ceo_chat(
         and turn_plan.get("contract_version") == AI_CEO_TURN_PLAN_CONTRACT_VERSION
         else build_ai_ceo_turn_plan(safe_message, conversation_history=safe_history)
     )
+    semantic_plan = is_semantic_plan(authoritative_turn_plan)
+    if semantic_plan and authoritative_turn_plan.get("project_action") == "new":
+        safe_history = []
     context = build_ai_ceo_chat_context(
         repository=repository,
         company_id=company_id,
@@ -532,9 +546,15 @@ def run_ai_ceo_chat(
         **context,
         "working_state": authoritative_turn_plan.get("working_state") or {},
         "merchant_product_intake": product_intake_context if isinstance(product_intake_context, dict) else {},
-        "active_listing_context": normalize_ai_ceo_active_listing_context(active_listing_context),
+        "active_listing_context": (
+            normalize_ai_ceo_active_listing_context(active_listing_context)
+            if not semantic_plan or authoritative_turn_plan.get("project_action") == "current" else {}
+        ),
+        **({"semantic_plan": _public_ai_ceo_turn_plan(authoritative_turn_plan)} if semantic_plan else {}),
         "secret_exposed": False,
     }
+    if semantic_plan and authoritative_turn_plan.get("project_action") != "current":
+        context["confirmations"] = {"pending_count": (context.get("confirmations") or {}).get("pending_count", 0)}
     model_context = _public_model_context(None, model_client, model_resolution)
     route_message = _safe_text(authoritative_turn_plan.get("effective_query") or safe_message, limit=1200)
     realtime_kind = _safe_text(authoritative_turn_plan.get("realtime_kind") or "", limit=80)
@@ -544,6 +564,13 @@ def run_ai_ceo_chat(
         "turn_plan": _public_ai_ceo_turn_plan(authoritative_turn_plan),
         "working_state": authoritative_turn_plan.get("working_state") or {},
     }
+    if semantic_plan and authoritative_turn_plan.get("status") != "ready":
+        return {
+            "status": "semantic_clarification_required", "answer": authoritative_turn_plan.get("question") or "请说明你希望处理哪个商品或问题。",
+            "blocked_by": authoritative_turn_plan.get("blocked_by") or ["semantic_plan_not_ready"],
+            "context": context, "model_client": model_context, **route_meta,
+            "frontend_gets_model_api_key": False, "runtime_gets_raw_ebay_token": False, "secret_exposed": False,
+        }
     temporal_contract = temporal_evidence_contract(
         route_message, realtime_kind, now=now_iso(), client_timezone=client_timezone,
     ) if realtime_kind and realtime_kind != "stock_quote" and (
@@ -553,10 +580,11 @@ def run_ai_ceo_chat(
         message=safe_message,
         route=route,
         conversation_history=safe_history,
+        turn_plan=authoritative_turn_plan,
     )
     if selection_contract:
         context = {**context, "selection_contract": selection_contract}
-    local_clock_kind = _classify_local_clock_request(message)
+    local_clock_kind = "" if semantic_plan else _classify_local_clock_request(message)
     if local_clock_kind:
         return {
             "status": "local_clock_answered",
@@ -572,7 +600,7 @@ def run_ai_ceo_chat(
             "runtime_gets_raw_ebay_token": False,
             "secret_exposed": False,
         }
-    capability_kind = _classify_ai_ceo_capability_request(message)
+    capability_kind = "" if semantic_plan else _classify_ai_ceo_capability_request(message)
     if capability_kind:
         return {
             "status": "capability_status_answered",
@@ -589,6 +617,7 @@ def run_ai_ceo_chat(
             on_stage("sources")
         search_started_at = time.monotonic()
         realtime_search = _run_realtime_search(kind=realtime_kind, message=route_message,
+                                             **({"query_override": route_message} if semantic_plan else {}),
                                              **({"temporal_contract": temporal_contract} if temporal_contract else {}))
         if temporal_contract:
             realtime_search["temporal_evidence_contract"] = temporal_contract
@@ -800,7 +829,8 @@ def run_ai_ceo_chat(
     ):
         on_stage("sources")
     default_web_search = (
-        _run_default_web_context_search(route=route, message=safe_message)
+        _run_default_web_context_search(route=route, message=safe_message,
+                                       **({"turn_plan": authoritative_turn_plan} if semantic_plan else {}))
         if _default_web_context_enabled(route=route, message=safe_message, turn_plan=authoritative_turn_plan)
         else {
             "status": "not_requested",
@@ -810,7 +840,7 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
     )
-    if _merchant_reuses_report_sources(safe_message):
+    if (authoritative_turn_plan.get("search") == "reuse" if semantic_plan else _merchant_reuses_report_sources(safe_message)):
         default_web_search = _owned_report_source_context(
             repository=repository, company_id=company_id, store_id=store_id, user_id=user_id,
             history=safe_history, active_context=context["active_listing_context"],
@@ -853,7 +883,7 @@ def run_ai_ceo_chat(
     if model_error is not None:  # pragma: no cover - provider dependent
         exc = model_error
         failure_code, failure_reason = _classify_model_failure(exc)
-        source_backed_answer = _source_backed_market_report_fallback_answer(
+        source_backed_answer = "" if semantic_plan else _source_backed_market_report_fallback_answer(
             message=safe_message,
             route=route,
             default_web_search=default_web_search,
@@ -886,7 +916,7 @@ def run_ai_ceo_chat(
                 "runtime_gets_raw_ebay_token": False,
                 "secret_exposed": False,
             }
-        recovery_answer = _market_report_recovery_draft_answer(
+        recovery_answer = "" if semantic_plan else _market_report_recovery_draft_answer(
             message=safe_message,
             route=route,
             default_web_search=default_web_search,
@@ -946,7 +976,7 @@ def run_ai_ceo_chat(
 
     answer = _clean_answer(result.get("text") if isinstance(result, dict) else "")
     if not answer:
-        source_backed_answer = _source_backed_market_report_fallback_answer(
+        source_backed_answer = "" if semantic_plan else _source_backed_market_report_fallback_answer(
             message=safe_message,
             route=route,
             default_web_search=default_web_search,
@@ -979,7 +1009,7 @@ def run_ai_ceo_chat(
                 "runtime_gets_raw_ebay_token": False,
                 "secret_exposed": False,
             }
-        recovery_answer = _market_report_recovery_draft_answer(
+        recovery_answer = "" if semantic_plan else _market_report_recovery_draft_answer(
             message=safe_message,
             route=route,
             default_web_search=default_web_search,
@@ -1070,7 +1100,8 @@ def run_ai_ceo_chat(
                 else
                 "本轮是既有市场报告的成交证据补证：必须吸收 merchant_message 中的新数字、Item ID 和相对赢家，"
                 "不得重放旧候选卡；明确这不是供应商或可发布证明，并进入供应商事实核验。"
-                if _looks_like_market_evidence_followup(message=safe_message, route=route)
+                if (authoritative_turn_plan.get("research_delivery") == "evidence_comparison" if semantic_plan else
+                    _looks_like_market_evidence_followup(message=safe_message, route=route))
                 else "选品问题必须按要求给出足量的具体候选商品卡，不得回答其他历史问题。"
                 if selection_contract
                 else "继续完成当前商品或当前问题要求的结果，保留本轮格式与阶段边界，不重新选品，不回答其他历史问题。"
@@ -1115,7 +1146,8 @@ def run_ai_ceo_chat(
     contract_projection_used = False
     context_correction_used = False
     if not answer_quality.get("accepted"):
-        if _looks_like_market_evidence_followup(message=safe_message, route=route):
+        if (authoritative_turn_plan.get("research_delivery") == "evidence_comparison" if semantic_plan else
+                _looks_like_market_evidence_followup(message=safe_message, route=route)):
             projected_answer = _project_market_evidence_followup_answer(safe_message)
         else:
             projected_answer = _project_selection_answer_to_contract(
@@ -1185,6 +1217,7 @@ def run_ai_ceo_chat(
                     message=safe_message,
                     source_records=source_records,
                     blocked_by=answer_quality.get("blocked_by") or [],
+                    turn_plan=authoritative_turn_plan,
                 )
             ),
             "answer_quality": {
@@ -1273,6 +1306,10 @@ def run_ai_ceo_fast_turn(
     turn_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Answer routes that do not need merchant model secret resolution."""
+    # Semantic turns are answered by the model after server planning; legacy
+    # fast helpers must not make a second intent decision from the raw text.
+    if is_semantic_plan(turn_plan):
+        return None
     safe_message = _safe_text(message, limit=900)
     if not safe_message:
         return None
@@ -1414,7 +1451,7 @@ def ai_ceo_route_metadata(
 ) -> dict[str, Any]:
     """Return public route and memory metadata for a chat message."""
     safe_message = _safe_text(message, limit=900)
-    realtime = realtime_kind or _classify_external_realtime_request(safe_message)
+    realtime = realtime_kind if route else realtime_kind or _classify_external_realtime_request(safe_message)
     selected_route = route or _classify_ai_ceo_route(safe_message, realtime_kind=realtime)
     labels = {
         AI_CEO_ROUTE_GENERAL: "直接回答",
@@ -1566,6 +1603,7 @@ def build_ai_ceo_chat_prompts(
     conversation_history: list[dict[str, Any]] | None = None,
     turn_plan: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
+    semantic_plan = is_semantic_plan(turn_plan)
     system_prompt = (
         "你是捷境 Jiejing 的 AI CEO，产品定位是 eBay-first AI 经营工作台，不是通用 ERP、Agent 市场或普通聊天机器人。"
         "但你必须具备完整文字大模型的普通咨询能力：翻译、写作、解释概念、经营常识、沟通话术、利润算法、非实时政策理解和普通知识问答，都要自然直接回答，不能因为问题不属于 eBay 就拒答。"
@@ -1599,7 +1637,8 @@ def build_ai_ceo_chat_prompts(
             "商品资料整理或修订直接使用商家要求的表格或字段格式，不额外展开工作计划、候选商品或重复风险说明。"
             "current_context.store 中 connection_status、connection_authorized、oauth_required 是授权状态的唯一权威依据；store_name 只是展示名称，绝不能根据名称推断授权状态。"
         )
-        if _looks_like_product_selection_request(message=message, route=route) and not _looks_like_explicit_listing_intake(message):
+        if (turn_plan.get("research_delivery") == "candidate_selection" if semantic_plan else
+                _looks_like_product_selection_request(message=message, route=route) and not _looks_like_explicit_listing_intake(message)):
             system_prompt += (
             " 当前路由是 eBay 经营任务：输出目标、计划、来源/缺口、风险、需要确认的动作、下一步，并保持真实写入确认边界。"
             "如果商家问“卖什么”“帮我选品”“不知道卖什么”，必须基于市场调研给出 2-4 个候选商品卡；每张卡包含商品名、推荐度评分、为什么有需求、为什么适合 eBay/轻小件、风险和待补资料。"
@@ -1620,6 +1659,22 @@ def build_ai_ceo_chat_prompts(
     elif route == AI_CEO_ROUTE_MERCHANT_RULE:
         system_prompt += " 当前路由是商家规则记忆：确认已理解规则，说明适用范围、例外情况和后续如何在经营任务中使用。"
 
+    if semantic_plan:
+        system_prompt += (
+            " 本轮任务、商品范围、资料来源、搜索需求与阶段边界已由服务器 turn_plan 决定；"
+            "严格使用 intent、project_action、source_mode 和 selection_contract，不再从原文中的关键词另行选择任务。"
+            "project_action=current 才能把 active_listing_context 作为本轮商品事实；"
+            "new/none/clarify 均不得沿用历史商品的 SKU、规格、图片或 Offer。"
+            "候选数量严格使用 selection_contract.required_candidate_count，覆盖通用的数量示例；"
+            "research_delivery=evidence_comparison 时只补证比较并保留商家本轮提交的证据和结论，不重放候选卡；"
+            "single_product_analysis 时围绕已指定单品回答，不额外寻找候选。"
+            "研究中每个候选引用的商品来源必须与该候选相符；research_queries.subject可作为中英文对应名称，"
+            "开放发现没有subject时使用来源可核对的商品名称，不能给一个商品引用另一个商品的证据。"
+            "listing_deferred=true 时不输出 Listing 字段；商家没有货源时只交付待验证方向。"
+            "steps 是有限任务说明，不是执行授权；不得声称已经创建记录或执行真实平台动作。"
+            "product_fact_proposals只包含本条原文可追溯的待确认建议，不是商家确认、供应商证明或图片授权。"
+        )
+
     payload = {
         "merchant_message": message,
         "route": route,
@@ -1630,7 +1685,7 @@ def build_ai_ceo_chat_prompts(
         "current_context": _prompt_context_for_route(context, route),
         "web_context": _prompt_web_context(context),
         "current_model_client": model_context or {},
-        "frontend_command_plan": _safe_command(command) if route != AI_CEO_ROUTE_GENERAL else {},
+        "frontend_command_plan": _safe_command(command) if route != AI_CEO_ROUTE_GENERAL and not semantic_plan else {},
         "recent_conversation": _sanitize_ai_ceo_conversation_history(conversation_history),
         "response_rules": [
             "Use web_context.source_records for current/public facts when web_context.status is ready; do not invent latest facts when sources are missing.",
@@ -1766,7 +1821,8 @@ def _default_web_context_enabled(
     message: str,
     turn_plan: dict[str, Any] | None = None,
 ) -> bool:
-    if _merchant_disallows_web_search(message) or _merchant_reuses_report_sources(message):
+    semantic_plan = is_semantic_plan(turn_plan)
+    if not semantic_plan and (_merchant_disallows_web_search(message) or _merchant_reuses_report_sources(message)):
         return False
     if not _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True):
         return False
@@ -1776,6 +1832,8 @@ def _default_web_context_enabled(
         return False
     if not _safe_text(message, limit=900):
         return False
+    if semantic_plan:
+        return turn_plan.get("status") == "ready" and turn_plan.get("search") not in {"none", "reuse", None}
     if isinstance(turn_plan, dict):
         tools = turn_plan.get("required_tools") if isinstance(turn_plan.get("required_tools"), list) else []
         return bool(turn_plan.get("freshness_required") or tools)
@@ -1797,7 +1855,15 @@ def _run_default_web_context_search(
             "frontend_gets_search_api_key": False,
             "secret_exposed": False,
         }
-    cache_key = _default_web_context_cache_key(route=route, message=message)
+    semantic_plan = is_semantic_plan(turn_plan)
+    search_query = turn_plan.get("effective_query") or turn_plan.get("query") or "" if semantic_plan else message
+    search_kind = turn_plan.get("search") if semantic_plan else "web_search"
+    semantic_product_research = semantic_plan and turn_plan.get("intent") == "research" and search_kind == "web_search"
+    research_queries = turn_plan.get("research_queries") or [] if semantic_product_research else []
+    cache_message = hashlib.sha256(json.dumps(research_queries, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest() if semantic_product_research else search_query
+    cache_key = _default_web_context_cache_key(
+        route=f"{route}:{search_kind}:product" if semantic_product_research else f"{route}:{search_kind}" if semantic_plan else route,
+        message=cache_message)
     cache_ttl_seconds = _env_int("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_CACHE_SECONDS", default=180, minimum=0, maximum=900)
     negative_cache_ttl_seconds = _env_int("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_NEGATIVE_CACHE_SECONDS", default=45, minimum=0, maximum=180)
     if cache_key and (cache_ttl_seconds or negative_cache_ttl_seconds):
@@ -1810,16 +1876,18 @@ def _run_default_web_context_search(
                 cached_result["cache_status"] = "hit" if cached_result.get("used_for_model_prompt") else "hit_no_sources"
                 cached_result["search_latency_ms"] = 0
                 return cached_result
-    budget = _default_web_context_budget(route=route, message=message)
-    product_research = route == AI_CEO_ROUTE_EBAY_WORKFLOW and not _looks_like_explicit_listing_intake(message) and (
+    budget = _default_web_context_budget(route=route, message="" if semantic_plan else message)
+    product_research = semantic_product_research or (not semantic_plan and route == AI_CEO_ROUTE_EBAY_WORKFLOW and not _looks_like_explicit_listing_intake(message) and (
         _looks_like_product_selection_request(message=message, route=route)
         or _looks_like_market_evidence_followup(message=message, route=route)
-    )
+    ))
     search = (
-        _run_product_selection_web_search(message=message, budget=budget)
+        _run_product_selection_web_search(message=message, budget=budget,
+                                         **({"research_queries": research_queries} if semantic_product_research else {}))
         if product_research else _run_realtime_search(
-            kind="web_search", message=message, timeout_seconds=budget["timeout_seconds"],
+            kind=search_kind, message=search_query, timeout_seconds=budget["timeout_seconds"],
             max_results=budget["max_results"], search_depth=budget["search_depth"],
+            **({"query_override": search_query} if semantic_plan else {}),
         )
     )
     records = search.get("source_records") if isinstance(search.get("source_records"), list) else []
@@ -2392,7 +2460,9 @@ def _run_realtime_search(
 ) -> dict[str, Any]:
     provider = _public_search_provider()
     adapter = PublicSearchProbeAdapter()
-    query = _safe_text(query_override, limit=300) or _realtime_search_query(kind=kind, message=message, temporal_contract=temporal_contract)
+    # Semantic queries have already passed the 900-character schema bound.
+    # Keep trailing constraints intact at the actual provider boundary.
+    query = _safe_text(query_override, limit=900) or _realtime_search_query(kind=kind, message=message, temporal_contract=temporal_contract)
     timeout_seconds = (
         _bounded_int(timeout_seconds, default=4, minimum=1, maximum=20)
         if timeout_seconds is not None
@@ -2799,10 +2869,13 @@ def _ebay_product_selection_search_queries(message: str) -> list[str]:
     return [" ".join(dict.fromkeys(constraints))]
 
 
-def _run_product_selection_web_search(*, message: str, budget: dict[str, Any]) -> dict[str, Any]:
+def _run_product_selection_web_search(*, message: str, budget: dict[str, Any],
+                                     research_queries: list[dict[str, str]] | None = None) -> dict[str, Any]:
     """At most three independent, bounded searches; never an extra model call."""
-    queries = _ebay_product_selection_search_queries(message)[:3]
-    candidates = _ebay_product_search_terms(message)
+    # The semantic planner supplies bounded subjects and exact queries. The
+    # same product-source filter, balanced window and coverage report still run.
+    queries = [item["query"] for item in research_queries] if research_queries is not None else _ebay_product_selection_search_queries(message)[:3]
+    candidates = [item["subject"] for item in research_queries] if research_queries is not None else _ebay_product_search_terms(message)
 
     def search(query: str) -> dict[str, Any]:
         try:
@@ -2880,7 +2953,7 @@ def _product_source_matches_candidate(record: dict[str, Any], candidate: str) ->
     """Conservative relevance, not proof of price, availability or a sale."""
     searchable = _normalized_text(f"{record.get('title', '')} {record.get('snippet', '')}")
     if re.search(r"[\u4e00-\u9fff]", candidate):
-        return any(part in searchable for part in re.split(r"[/、]", candidate.lower()) if len(part) >= 2)
+        return any(part.strip() in searchable for part in re.split(r"[/、]", candidate.lower()) if len(part.strip()) >= 2)
     terms = [word.rstrip("s") for word in re.findall(r"[a-z]{3,}", candidate.lower())
              if word not in {"and", "for", "with", "set", "pack", "kit", "the"}]
     source_terms = {word.rstrip("s") for word in re.findall(r"[a-z]{3,}", searchable)}
@@ -4494,11 +4567,18 @@ def validate_ai_ceo_answer_quality(
             "blocked_by": completeness_blockers,
             "secret_exposed": False,
         }
-    active_listing_blockers = (
-        []
-        if _explicit_new_listing_project_request(message)
-        else _active_listing_answer_contradictions(answer=answer, context=context or {})
+    context = context or {}
+    plan = context.get("semantic_plan") or {}
+    semantic_plan = is_semantic_plan(plan)
+    search = context.get("default_web_search") or {}
+    if (semantic_plan and plan.get("intent") == "research" and plan.get("search") == "web_search"
+            and search.get("status") != "ready"):
+        return {"accepted": False, "quality_gate": "product_listing_search_evidence_v1",
+                "blocked_by": search.get("blocked_by") or ["candidate_product_sources_missing"], "secret_exposed": False}
+    check_current_product = (
+        plan.get("project_action") == "current" if semantic_plan else not _explicit_new_listing_project_request(message)
     )
+    active_listing_blockers = _active_listing_answer_contradictions(answer=answer, context=context) if check_current_product else []
     if active_listing_blockers:
         return {
             "accepted": False,
@@ -4507,6 +4587,9 @@ def validate_ai_ceo_answer_quality(
             "secret_exposed": False,
         }
     research_source_blockers = _research_source_answer_blockers(answer, source_records or []) if route == AI_CEO_ROUTE_EBAY_WORKFLOW else []
+    if semantic_plan and plan.get("intent") == "research":
+        research_source_blockers.extend(_semantic_research_candidate_source_blockers(
+            answer=answer, records=source_records or [], plan=plan))
     if research_source_blockers:
         return {"accepted": False, "quality_gate": "research_source_attribution_v1",
                 "blocked_by": research_source_blockers, "secret_exposed": False}
@@ -4515,17 +4598,18 @@ def validate_ai_ceo_answer_quality(
         route=route,
         answer=answer,
         source_records=source_records or [],
+        turn_plan=plan if semantic_plan else None,
     )
     if not source_quality.get("accepted"):
         return source_quality
-    if _looks_like_platform_rule_request(message=message, route=route) and source_records:
+    if not semantic_plan and _looks_like_platform_rule_request(message=message, route=route) and source_records:
         return source_quality
-    if _looks_like_market_evidence_followup(message=message, route=route):
+    if (plan.get("research_delivery") == "evidence_comparison" if semantic_plan else
+            _looks_like_market_evidence_followup(message=message, route=route)):
         return _market_evidence_followup_answer_quality(message=message, answer=answer)
-    if _looks_like_explicit_listing_intake(message) or not _looks_like_product_selection_request(
-        message=message,
-        route=route,
-    ):
+    selection_requested = (plan.get("research_delivery") == "candidate_selection" if semantic_plan else
+        not _looks_like_explicit_listing_intake(message) and _looks_like_product_selection_request(message=message, route=route))
+    if not selection_requested:
         return {
             "accepted": bool(_safe_text(answer, limit=6000)),
             "quality_gate": "non_selection_answer_present_v1",
@@ -4537,10 +4621,10 @@ def validate_ai_ceo_answer_quality(
     try:
         from .repository import _ai_ceo_market_product_candidates
 
-        candidates = _ai_ceo_market_product_candidates(message=message, answer=answer)
+        candidates = _ai_ceo_market_product_candidates(message="" if semantic_plan else message, answer=answer)
     except Exception:
         candidates = []
-    required_count = _requested_product_candidate_count(message)
+    required_count = plan["candidate_count"] if semantic_plan else _requested_product_candidate_count(message)
     candidate_count = len(candidates)
     first_window = _safe_text(answer, limit=900)
     first_candidate_visible = bool(
@@ -4571,6 +4655,94 @@ def validate_ai_ceo_answer_quality(
         "blocked_by": blocked_by or (["model_answer_not_grounded_to_request"] if not accepted else []),
         "secret_exposed": False,
     }
+
+
+def _semantic_research_candidate_source_blockers(*, answer: str, records: list[dict[str, Any]],
+                                               plan: dict[str, Any]) -> list[str]:
+    """Retain candidate-level attribution even for open discovery queries.
+
+    Subjects/queries come from the validated model plan; source matching uses
+    the existing conservative product filter, never a new intent classifier.
+    """
+    product_records = [item for item in records if isinstance(item, dict) and (
+        item.get("market_evidence_role") == "item_listing_reference"
+        or re.search(r"https://(?:www\.)?ebay\.com/itm/", str(item.get("url") or "")))]
+    if not product_records:
+        return []
+    from .repository import _ai_ceo_market_product_candidates
+    names = [item["name"] for item in _ai_ceo_market_product_candidates(message="", answer=answer)]
+    blocks = _selection_candidate_blocks(answer, candidate_names=names)
+    queries = plan.get("research_queries") or []
+    if not names and plan.get("research_delivery") == "single_product_analysis":
+        name = plan.get("product_name") or (queries[0]["subject"] if len(queries) == 1 else "")
+        names, blocks = ([name], [answer]) if name else ([], [])
+    if plan.get("research_delivery") == "evidence_comparison":
+        # Comparisons can mix cards and prose. Bind each following
+        # reference to its explicitly named planned subject, not to whichever
+        # of the globally available sources happens to match another product.
+        from .repository import (_ai_ceo_market_normalize_source_cells, _ai_ceo_market_split_comparison_tables,
+                                 _ai_ceo_market_table_product_column, _clean_ai_ceo_market_candidate_name)
+        table_blocks, remaining_lines = _ai_ceo_market_split_comparison_tables(
+            _ai_ceo_market_normalize_source_cells(answer))
+        prose_lines = []
+        product_column = None
+        for line in remaining_lines:
+            if not line.startswith("|"):
+                product_column = None
+            elif not re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                header_column = _ai_ceo_market_table_product_column(cells)
+                if header_column is not None:
+                    product_column = header_column
+                    continue
+                if product_column is not None and len(cells) > product_column:
+                    name = _clean_ai_ceo_market_candidate_name(cells[product_column])
+                    if name:
+                        table_blocks.append((name, line))
+                        continue
+            prose_lines.append(line)
+        # Reuse the established row/column table ownership. Only the remaining
+        # prose is segmented, so a table's peer sources cannot contaminate a
+        # product, and a correct table cannot conceal a wrong trailing winner.
+        prose = "\n".join(prose_lines)
+        subjects = [item["subject"] for item in queries] + [plan.get("product_name") or ""] + names
+        mentions = [(match.start(), match.end(), alias.strip())
+            for subject in subjects for alias in re.split(r"[/、]", subject) if len(alias.strip()) >= 2
+            for match in re.finditer(re.escape(alias.strip()), prose, flags=re.IGNORECASE)]
+        spans: list[tuple[int, int, str]] = []
+        for start, end, name in sorted(mentions, key=lambda item: (item[0], -item[1])):
+            if not spans or start >= spans[-1][1]:
+                spans.append((start, end, name))
+        # Prefix or wholly unnamed citations have no safe subject binding.
+        # Retain them as an anonymous block so references cannot escape checks.
+        names = [name for name, _ in table_blocks] + [""] + [name for _, _, name in spans]
+        blocks = [block for _, block in table_blocks] + [prose[:spans[0][0]] if spans else prose] + [
+            prose[start:spans[index + 1][0] if index + 1 < len(spans) else len(prose)]
+            for index, (start, _, _) in enumerate(spans)]
+    by_id = {str(item.get("citation_id")): item for item in product_records if item.get("citation_id")}
+    by_url = {_canonical_public_source_url(str(item.get("url") or "")): item for item in product_records}
+    by_item_id = {match.group(1): item for item in product_records
+                  if (match := re.search(r"/itm/(?:[^/]+/)?(\d{9,15})(?:[/?#]|$)", str(item.get("url") or "")))}
+    for name, block in zip(names, blocks):
+        cited = [by_id[ref] for ref in dict.fromkeys(re.findall(r"\[(S\d+)\]", block)) if ref in by_id]
+        for group in re.findall(r"item\s*ids?\s*[:：#]?\s*(\d{9,15}(?:\s*[/,、]\s*\d{9,15})*)", block, flags=re.IGNORECASE):
+            for item_id in re.findall(r"\d{9,15}", group):
+                if item_id not in by_item_id:
+                    return ["research_citation_not_in_evidence"]
+                if by_item_id[item_id] not in cited:
+                    cited.append(by_item_id[item_id])
+        for url in re.findall(r"https?://[^\s\]<>|）)]+", block):
+            record = by_url.get(_canonical_public_source_url(url.rstrip(".,;。；，")))
+            if record is not None and record not in cited:
+                cited.append(record)
+        aliases = [name]
+        for item in queries:
+            subject = item["subject"]
+            if _normalized_candidate_name(name) in {_normalized_candidate_name(part) for part in subject.split("/")}:
+                aliases.append(subject)
+        if any(not any(alias and _product_source_matches_candidate(record, alias) for alias in aliases) for record in cited):
+            return ["research_candidate_source_mismatch"]
+    return []
 
 
 def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]]) -> list[str]:
@@ -4658,6 +4830,8 @@ def _selection_answer_constraint_violations(
     answer_text = _safe_text(answer, limit=12000)
     answer_lower = answer_text.lower()
     blocked_by: list[str] = []
+    plan = context.get("semantic_plan") or {}
+    semantic_plan = is_semantic_plan(plan)
 
     store_context = context.get("store") if isinstance(context.get("store"), dict) else {}
     if store_context.get("connection_authorized") is True and _answer_claims_store_unauthorized(answer_text):
@@ -4666,7 +4840,7 @@ def _selection_answer_constraint_violations(
     if expected_connection_status and _answer_claims_different_connection_status(answer_text, expected_connection_status):
         blocked_by.append("connection_status_mismatch")
 
-    listing_deferred = _merchant_defers_listing(merchant_text)
+    listing_deferred = plan["listing_deferred"] if semantic_plan else _merchant_defers_listing(merchant_text)
     actionable_listing_markers = (
         r"listing\s*(?:草稿\s*)?(?:字段|标题|建议|package)",
         r"item\s+specifics",
@@ -4677,7 +4851,7 @@ def _selection_answer_constraint_violations(
     if listing_deferred and any(re.search(pattern, answer_lower, flags=re.IGNORECASE) for pattern in actionable_listing_markers):
         blocked_by.append("listing_scope_exceeded")
 
-    unknown_facts_explicit = any(
+    unknown_facts_explicit = plan.get("source_mode") != "merchant_has_source" if semantic_plan else any(
         marker in merchant_text
         for marker in (
             "不要编造",
@@ -4709,7 +4883,7 @@ def _selection_answer_constraint_violations(
 
     if selection_contract.get("candidate_evidence_entry_required"):
         candidate_blocks = _selection_candidate_blocks(answer_text, candidate_names=candidate_names)
-        required_count = _requested_product_candidate_count(message)
+        required_count = plan["candidate_count"] if semantic_plan else _requested_product_candidate_count(message)
         sources_by_id = {str(record.get("citation_id")): str(record.get("url") or "")
                          for record in source_records or [] if isinstance(record, dict) and record.get("citation_id")}
         inspected_blocks = [block + "\n" + "\n".join(
@@ -4786,9 +4960,22 @@ def _platform_rule_answer_quality(
     route: str,
     answer: str,
     source_records: list[dict[str, Any]],
+    turn_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     text = _safe_text(answer, limit=12000)
-    if not _looks_like_platform_rule_request(message=message, route=route) or not source_records:
+    semantic_plan = is_semantic_plan(turn_plan)
+    official_claim_markers = ("eBay 规定", "eBay规定", "eBay 要求", "eBay要求", "官方要求", "平台规定", "平台禁止")
+    strong_markers = ("必须", "一律", "绝对", "禁止", "不得", "不允许", "会被下架", "必然下架")
+    # Semantic turns keep the planned task. Check actual platform assertions
+    # against evidence instead of reclassifying a quoted request as policy work.
+    policy_claims_present = any(marker in text for marker in official_claim_markers) or any(
+        re.search(r"ebay|平台|官方", clause, flags=re.IGNORECASE)
+        and any(marker in clause for marker in strong_markers)
+        and "确认中心" not in clause and "决策中心" not in clause
+        for clause in re.split(r"(?<=[。！？；])|\n+", text)
+    )
+    if (not policy_claims_present if semantic_plan else
+            not _looks_like_platform_rule_request(message=message, route=route) or not source_records):
         return {
             "accepted": bool(text),
             "quality_gate": "platform_rule_source_quality_v1",
@@ -4807,11 +4994,12 @@ def _platform_rule_answer_quality(
     valid_ids = {item.upper() for item in valid_ids if item}
     valid_citations = cited_ids & valid_ids
 
-    strong_markers = ("必须", "一律", "绝对", "禁止", "不得", "不允许", "会被下架", "必然下架")
     unsupported_strong_claims = []
     for clause in re.split(r"(?<=[。！？；])|\n+", text):
         compact = clause.strip()
         is_internal_confirmation_boundary = "确认中心" in compact or "决策中心" in compact
+        if semantic_plan and not re.search(r"ebay|平台|官方", compact, flags=re.IGNORECASE):
+            continue
         if compact and not is_internal_confirmation_boundary and any(marker in compact for marker in strong_markers):
             clause_citations = {item.upper() for item in re.findall(r"\[(S\d{1,2})\]", compact, flags=re.IGNORECASE)}
             if not clause_citations.intersection(valid_ids):
@@ -4824,7 +5012,6 @@ def _platform_rule_answer_quality(
         domain = _safe_text(item.get("domain") or _domain_from_url(str(item.get("url") or "")), limit=120).lower()
         if _is_official_ebay_domain(domain):
             official_ids.add(_safe_text(item.get("citation_id") or f"S{index}", limit=20).upper())
-    official_claim_markers = ("eBay 规定", "eBay规定", "eBay 要求", "eBay要求", "官方要求", "平台规定", "平台禁止")
     unsupported_official_claims = []
     for clause in re.split(r"(?<=[。！？；])|\n+", text):
         compact = clause.strip()
@@ -5203,6 +5390,7 @@ def _explicit_new_listing_project_request(message: str) -> bool:
             trimmed_sentence_suffix = sentence_suffix.strip()
             bare_execution = not action_prefix and (
                 not trimmed_sentence_suffix
+                or bool(re.search(r"^[：:]\s*[^\s：:，,。；;！!？?]", trimmed_sentence_suffix))
                 or bool(
                     re.search(
                         r"^(?:[，,]\s*)?(?:目标(?:是|为)|产品(?:是|为)|商品(?:是|为)|品类|类目|名称|sku|规格|参数|售价|成本|数量|面向|用于|用途|要求|其他(?:信息|资料|参数)|独立于|不复用|不要复用|不要|不得|并且|同时|全部|其余|开始|执行|现在开始|就这样)",
@@ -5237,7 +5425,24 @@ def _selection_response_contract(
     message: str,
     route: str,
     conversation_history: list[dict[str, Any]] | None = None,
+    turn_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if is_semantic_plan(turn_plan):
+        if turn_plan.get("research_delivery") != "candidate_selection" or turn_plan.get("status") != "ready":
+            return {}
+        return {
+            "contract_version": "ai_ceo_selection_acceptance_v1",
+            "required_candidate_count": turn_plan["candidate_count"],
+            "excluded_candidate_names": list(turn_plan["excluded_candidates"]),
+            "must_be_new_vs_recent_conversation": bool(turn_plan["excluded_candidates"]),
+            "listing_deferred": turn_plan["listing_deferred"],
+            "unknown_product_facts": turn_plan.get("source_mode") != "merchant_has_source",
+            "candidate_evidence_entry_required": True,
+            "common_sense_demand_claims_forbidden": True,
+            "evidence_rule": "每个候选提供可复核来源；搜索入口不等于成交证明，没有成交记录逐项写成交证据不足。",
+            "unknown_fact_rule": "未知商品参数保持待核；市场竞品信息不是商家的供应商事实。",
+            "secret_exposed": False,
+        }
     # A merchant may explicitly request an internal Listing and state that
     # this turn must *not* rerun product selection.  Listing intake owns that
     # turn; selection acceptance rules would otherwise reject a valid product
@@ -5564,7 +5769,8 @@ def _project_selection_answer_to_contract(
     try:
         from .repository import _ai_ceo_market_product_candidates
 
-        candidates = _ai_ceo_market_product_candidates(message=message, answer=answer)
+        candidates = _ai_ceo_market_product_candidates(
+            message="" if is_semantic_plan(context.get("semantic_plan")) else message, answer=answer)
     except Exception:
         candidates = []
     required_count = max(1, _safe_int(selection_contract.get("required_candidate_count") or 1))
@@ -5654,8 +5860,10 @@ def _model_answer_rejected_fallback(
     message: str,
     source_records: list[dict[str, Any]],
     blocked_by: list[str] | None = None,
+    turn_plan: dict[str, Any] | None = None,
 ) -> str:
     blocked = {str(item) for item in (blocked_by or [])}
+    semantic_plan = is_semantic_plan(turn_plan)
     if blocked.intersection({
         "empty_model_answer", "model_answer_truncated_table", "model_answer_unclosed_code_fence",
         "model_answer_incomplete_ending", "truncated_platform_rule_answer",
@@ -5668,7 +5876,7 @@ def _model_answer_rejected_fallback(
     if blocked.intersection({
         "missing_source_citation_for_platform_rule", "unsupported_absolute_platform_rule_claim",
         "official_platform_claim_without_official_source",
-    }) or (not blocked and _looks_like_platform_rule_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)):
+    }) or (not semantic_plan and not blocked and _looks_like_platform_rule_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)):
         official_sources = []
         for index, source in enumerate(source_records[:8], start=1):
             domain = _safe_text(source.get("domain") or _domain_from_url(str(source.get("url") or "")), limit=120)
@@ -5693,7 +5901,8 @@ def _model_answer_rejected_fallback(
         domain = _safe_text(source.get("domain") or "", limit=80)
         source_lines.append(f"[{citation_id}] {title}{f'（{domain}）' if domain else ''}")
     source_text = "\n".join(source_lines) if source_lines else "这次还没有拿到足够的可核验公开来源。"
-    if not _looks_like_product_selection_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW):
+    if (turn_plan.get("research_delivery") != "candidate_selection" if semantic_plan else
+            not _looks_like_product_selection_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)):
         return (
             "### 本次回答未通过校验\n\n"
             "内容与当前任务或已核对的资料不一致，未用于生成或覆盖 Listing。现有项目和已保存资料保持不变。\n\n"

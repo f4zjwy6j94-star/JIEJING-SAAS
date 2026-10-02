@@ -35,10 +35,13 @@ from .account_health import (
 from .ai_ceo_chat import (
     _explicit_new_listing_project_request,
     ai_ceo_route_metadata,
-    build_ai_ceo_turn_plan,
     build_public_search_capability_status,
     run_ai_ceo_chat,
-    run_ai_ceo_fast_turn,
+)
+from .ai_ceo_semantic_plan import SemanticPlanError, pending_semantic_plan, plan_ai_ceo_turn
+from .ai_ceo_project_binding import (
+    merge_product_fact_proposals, new_project_fact_packet, new_project_identity,
+    semantic_dispatch_receipt, submitted_project_identity,
 )
 from .backup_plan import build_backup_plan
 from .billing_plan import build_billing_plan, build_billing_usage, evaluate_quota_action
@@ -212,7 +215,6 @@ from .repository import (
     ProductFactSaveValidationError,
     SaaSRepository,
     TeamSeatQuotaExceeded,
-    ai_ceo_market_artifact_eligible,
     normalize_ai_ceo_supplier_fact_attestation,
     normalize_listing_project_identity,
     normalize_merchant_product_fact_packet,
@@ -7879,7 +7881,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
-            message = str(body.get("message") or command_body.get("text") or command_body.get("command_text") or "")
+            raw_message = body.get("message") or command_body.get("text") or command_body.get("command_text") or ""
+            message = raw_message if isinstance(raw_message, str) else ""
             raw_source_asset_ids = body.get("source_asset_ids")
             if raw_source_asset_ids is not None and not isinstance(raw_source_asset_ids, list):
                 self._send_error(HTTPStatus.BAD_REQUEST, "商品图片附件格式不正确。")
@@ -7897,27 +7900,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if source_asset_ids and not message.strip():
                 message = "请识别这些商品图片，整理来源事实、冲突项和待核对 Listing 草稿。"
             conversation_history = body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else []
-            turn_plan = build_ai_ceo_turn_plan(message, conversation_history=conversation_history)
+            turn_plan = pending_semantic_plan()
             route_meta = ai_ceo_route_metadata(
                 message,
                 route=str(turn_plan.get("route") or ""),
                 realtime_kind=str(turn_plan.get("realtime_kind") or ""),
             )
-            listing_project_identity = _ai_ceo_listing_project_identity_for_turn(
-                body,
-                route=str(route_meta.get("route") or ""),
-                message=message,
-            )
+            listing_project_identity: dict[str, str] = {}
             active_listing_context = (
                 body.get("active_listing_context")
                 if isinstance(body.get("active_listing_context"), dict)
                 else {}
             )
-            active_listing_product_name = (
-                str(active_listing_context.get("product_name") or "")[:120]
-                if listing_project_identity
-                else ""
+            submitted_identity = submitted_project_identity(active_listing_context)
+            verified_listing_context = self.repository.resolve_ai_ceo_listing_context(
+                company_id=identity["company_id"], store_id=store_id, identity=submitted_identity,
             )
+            active_listing_product_name = ""
+            semantic_status = "blocked"
+            consumed_source_asset_ids: list[str] = []
             supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
                 supplier_facts=body.get("supplier_facts"),
                 supplier_facts_verified=body.get("supplier_facts_verified"),
@@ -7930,7 +7931,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "command": command_body,
                 "conversation_history": conversation_history,
                 "source_asset_ids": source_asset_ids,
-                "listing_project_identity": listing_project_identity,
+                "listing_project_identity": submitted_identity,
                 "active_listing_context": active_listing_context,
                 "supplier_fact_attestation": supplier_fact_attestation,
                 "client_now": str(body.get("client_now") or ""),
@@ -7942,6 +7943,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             if archive_contract:
                 fingerprint_payload["chat_archive_contract"] = archive_contract
+            if body.get("semantic_dispatch_contract"):
+                fingerprint_payload["semantic_dispatch_contract"] = str(body["semantic_dispatch_contract"])
             payload_fingerprint = _ai_ceo_chat_request_fingerprint(
                 secret=self.sessions.secret,
                 canonical_request=fingerprint_payload,
@@ -7958,14 +7961,31 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 idempotency_key=idempotency_key,
                 payload_fingerprint=payload_fingerprint,
                 archive_context={"contract_version": archive_contract, "user_text": message} if archive_contract else None,
+                # Prior releases omitted the project for non-workflow turns.
+                # Compare that old canonical envelope solely for replay; a new
+                # client-less request still stops at the upgrade gate below.
+                compatible_payload_fingerprints=(
+                    (_ai_ceo_chat_request_fingerprint(secret=self.sessions.secret,
+                        canonical_request={**fingerprint_payload, "listing_project_identity": {}}),)
+                    if not body.get("semantic_dispatch_contract") else ()
+                ),
             )
             request_task = request_claim["request_task"]
+            def dispatch_receipt() -> dict[str, Any]:
+                return semantic_dispatch_receipt(plan=turn_plan, status=semantic_status,
+                    command_id=command_id, idempotency_key=idempotency_key,
+                    request_task_id=str(request_task.get("task_id") or request_claim.get("request_task_id") or ""), company_id=identity["company_id"],
+                    store_id=store_id, submitted_identity=submitted_identity,
+                    target_identity=listing_project_identity, consumed_asset_ids=consumed_source_asset_ids)
+
             if request_claim["claim_state"] == "conflict":
                 self._send_json(
                     {
                         "error": "同一幂等标识不能用于不同的 AI CEO 请求。",
                         "error_code": "ai_ceo_idempotency_payload_conflict",
+                        "semantic_dispatch": dispatch_receipt(),
                         "ai_ceo_chat": {
+                            "semantic_dispatch": dispatch_receipt(),
                             "status": "idempotency_payload_conflict",
                             "answer": "这次请求与已保存的同一操作标识不一致，捷境已停止处理。请重新发起本轮任务；本次没有调用模型，也没有生成草稿。",
                             "route": "ebay_workflow",
@@ -7975,7 +7995,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "confirmation_items": [],
                             "blocked_by": ["idempotency_payload_conflict"],
                         },
-                        "request_task_id": request_task.get("task_id"),
+                        "request_task_id": request_task.get("task_id") or request_claim.get("request_task_id"),
                         "usage_consumed": False,
                         "listing_created": False,
                         "real_platform_writes_enabled": False,
@@ -7992,6 +8012,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "request_task_id": request_task.get("task_id"),
                             "retry_after_ms": 1500,
                         },
+                        "semantic_dispatch": dispatch_receipt(),
+                        "ai_ceo_chat": {"status": "in_progress", "semantic_dispatch": dispatch_receipt()},
                         "idempotent_replay": False,
                         "usage_consumed": False,
                         "listing_created": False,
@@ -8002,8 +8024,30 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 )
                 return
             if request_claim["claim_state"] == "replay":
+                if body.get("semantic_dispatch_contract") != "ai_ceo_semantic_dispatch_v1":
+                    # Old clients project archived artifacts without checking
+                    # semantic receipts. Keep the archive intact for read-only
+                    # history, but never deliver executable artifacts to them.
+                    self._send_json({
+                        "error_code": "ai_ceo_client_upgrade_required",
+                        "ai_ceo_chat": {
+                            "status": "client_upgrade_required", "blocked_by": ["ai_ceo_client_upgrade_required"],
+                            "answer": "这条回复已保存在聊天历史。请刷新页面后查看；本次没有重新调用模型或修改商品资料。",
+                            "semantic_dispatch": dispatch_receipt(), **route_meta,
+                        },
+                        "semantic_dispatch": dispatch_receipt(),
+                        "idempotent_replay": True, "archived_response_available": True,
+                        "request_task_id": request_task.get("task_id"),
+                        "usage_consumed": False, "listing_created": False,
+                        "real_platform_writes_enabled": False, "secret_exposed": False,
+                    }, status=HTTPStatus.CONFLICT)
+                    return
                 replay = request_claim.get("replay") if isinstance(request_claim.get("replay"), dict) else {}
                 replay_payload = replay.get("response_payload") if isinstance(replay.get("response_payload"), dict) else {}
+                if not isinstance(replay_payload.get("semantic_dispatch"), dict):
+                    replay_chat = replay_payload.get("ai_ceo_chat") or {}
+                    replay_payload = {**replay_payload, "semantic_dispatch": dispatch_receipt(),
+                        "ai_ceo_chat": {**replay_chat, "semantic_dispatch": dispatch_receipt()}}
                 replay_status = int(replay.get("response_status") or HTTPStatus.OK)
                 if replay_status < 200 or replay_status > 599:
                     replay_status = int(HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -8035,17 +8079,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
             def send_chat_payload(payload: dict[str, Any], status: HTTPStatus) -> None:
                 nonlocal stream_started
+                receipt = dispatch_receipt()
                 chat_payload = payload.get("ai_ceo_chat") if isinstance(payload.get("ai_ceo_chat"), dict) else None
-                if chat_payload is not None and listing_project_identity:
+                if chat_payload is not None:
+                    chat_payload = {key: value for key, value in chat_payload.items() if key != "listing_project_identity"}
                     payload = {
                         **payload,
                         "ai_ceo_chat": {
                             **chat_payload,
-                            "listing_project_identity": listing_project_identity,
+                            "semantic_dispatch": receipt,
+                            **({"listing_project_identity": receipt["target_project_identity"]}
+                               if receipt["target_project_identity"] else {}),
                         },
                     }
                 payload = {
                     **payload,
+                    "semantic_dispatch": receipt,
                     "request_task_id": request_task.get("task_id"),
                     "idempotent_replay": False,
                     "real_platform_writes_enabled": False,
@@ -8085,6 +8134,27 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "secret_exposed": False,
                     }
                 )
+
+            if body.get("semantic_dispatch_contract") != "ai_ceo_semantic_dispatch_v1":
+                send_chat_payload({
+                    "error_code": "ai_ceo_client_upgrade_required", "usage_consumed": False,
+                    "listing_created": False, "ai_ceo_chat": {
+                        "status": "client_upgrade_required", "blocked_by": ["ai_ceo_client_upgrade_required"],
+                        "answer": "AI CEO 的商品隔离已更新，请刷新页面后重新发送这条消息。本次未调用模型，商品资料保持不变。",
+                        **route_meta,
+                    },
+                }, status=HTTPStatus.CONFLICT)
+                return
+            if not isinstance(raw_message, str) or not message.strip() or len(message) > 900:
+                send_chat_payload({
+                    "error_code": "semantic_plan_invalid_message", "usage_consumed": False,
+                    "listing_created": False, "ai_ceo_chat": {
+                        "status": "semantic_plan_blocked", "blocked_by": ["semantic_plan_invalid_message"],
+                        "answer": "请将这条消息控制在 900 字以内并保留完整要求。本次未调用模型，商品资料保持不变。",
+                        **route_meta,
+                    },
+                }, status=HTTPStatus.BAD_REQUEST)
+                return
 
             try:
                 for asset_id in source_asset_ids:
@@ -8155,119 +8225,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_ndjson_event({"type": "delta", "delta": safe_delta, "secret_exposed": False})
 
             command_response = None
-            if command_body:
-                command_response = self.repository.save_merchant_ceo_command(
-                    company_id=identity["company_id"],
-                    store_id=store_id,
-                    user_id=identity["user_id"],
-                    command={**command_body, **route_meta},
-                )
-            fast_chat = None if source_asset_ids else run_ai_ceo_fast_turn(
-                repository=self.repository,
-                company_id=identity["company_id"],
-                store_id=store_id,
-                user_id=identity["user_id"],
-                message=message,
-                client_now=str(body.get("client_now") or ""),
-                client_timezone=str(body.get("client_timezone") or ""),
-                conversation_history=conversation_history,
-                turn_plan=turn_plan,
-            )
-            if fast_chat:
-                fast_chat = attach_supplier_fact_attestation(fast_chat)
-                if command_body and fast_chat.get("answer"):
-                    command_response = self.repository.save_merchant_ceo_command(
-                        company_id=identity["company_id"],
-                        store_id=store_id,
-                        user_id=identity["user_id"],
-                        command={
-                            **command_body,
-                            "ai_reply": fast_chat.get("answer"),
-                            "ai_reply_status": fast_chat.get("status"),
-                            "ai_reply_model": fast_chat.get("model_client"),
-                            "route": fast_chat.get("route"),
-                            "route_label": fast_chat.get("route_label"),
-                            "memory_policy": fast_chat.get("memory_policy"),
-                            "long_term_memory": fast_chat.get("long_term_memory"),
-                            "writes_merchant_rule": fast_chat.get("writes_merchant_rule"),
-                            "decision_center_required": fast_chat.get("decision_center_required"),
-                        },
-                    )
-                task = self.repository.create_task(
-                    company_id=identity["company_id"],
-                    store_id=store_id,
-                    user_id=identity["user_id"],
-                    task_type="merchant_ceo_chat",
-                    title="AI CEO fast chat turn",
-                    input_data={
-                        "message": message,
-                        "command_id": (command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
-                        "route": fast_chat.get("route"),
-                        "route_label": fast_chat.get("route_label"),
-                        "turn_plan": _redact_secret_like(turn_plan),
-                        "memory_policy": fast_chat.get("memory_policy"),
-                        "decision_center_required": bool(fast_chat.get("decision_center_required")),
-                        **(
-                            {"listing_project_identity": listing_project_identity}
-                            if listing_project_identity
-                            else {}
-                        ),
-                        "model_secret_ref": "",
-                        "provider_key": "fast_route",
-                        "model_usage_required": False,
-                        "frontend_gets_model_api_key": False,
-                        "runtime_gets_raw_ebay_token": False,
-                        "real_platform_writes_enabled": False,
-                        "secret_exposed": False,
-                    },
-                )
-                completed_statuses = {
-                    "capability_status_answered",
-                    "local_clock_answered",
-                    "realtime_search_answered",
-                    "realtime_search_answered_without_model",
-                }
-                self.repository.update_task_status(
-                    task_id=task["task_id"],
-                    company_id=identity["company_id"],
-                    status="completed" if fast_chat.get("status") in completed_statuses else "blocked",
-                    output={"ai_ceo_chat": fast_chat, "secret_exposed": False},
-                    audit_summary="AI CEO fast chat turn completed before model secret resolution.",
-                )
-                ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
-                    task=task,
-                    message=message,
-                    chat=fast_chat,
-                    command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
-                    conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
-                    listing_project_identity=listing_project_identity,
-                    active_listing_product_name=active_listing_product_name,
-                )
-                ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
-                send_chat_payload(
-                    {
-                        "ai_ceo_chat": fast_chat,
-                        "merchant_ceo_command": command_response,
-                        "ai_ceo_market_report": ai_ceo_market_report,
-                        "ai_ceo_market_report_delivery": ai_ceo_market_report_delivery,
-                        "model_secret_resolution": {
-                            "status": "not_required_for_fast_route",
-                            "frontend_gets_model_api_key": False,
-                            "secret_exposed": False,
-                        },
-                        "frontend_gets_model_api_key": False,
-                        "runtime_gets_raw_ebay_token": False,
-                        "real_platform_writes_enabled": False,
-                        "secret_exposed": False,
-                    },
-                    status=HTTPStatus.CREATED if fast_chat.get("status") in completed_statuses else HTTPStatus.ACCEPTED,
-                )
-                return
-            command_id = (
-                (command_response or {}).get("command", {}).get("id")
-                if isinstance(command_response, dict)
-                else command_body.get("id")
-            )
             attempt = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=store_id,
@@ -8359,7 +8316,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
             def recover_unexpected_model_attempt(_exc: Exception) -> bool:
                 """Fail closed without leaking an internal exception or stranding the attempt."""
-
+                nonlocal semantic_status
+                semantic_status = "blocked"
                 if attempt_recovery_state.get("terminal") is True:
                     return True
                 model_usage = (
@@ -8463,6 +8421,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                     "secret_exposed": False,
                                 },
                                 "usage_consumed": usage_consumed,
+                                "model_request_count": int(model_usage.get("request_count") or 0),
+                                "semantic_dispatch": dispatch_receipt(),
                                 "secret_exposed": False,
                             },
                             audit_summary="AI CEO model task failed at a categorized boundary.",
@@ -8779,101 +8739,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             product_vision_fact_packet: dict[str, Any] | None = None
             product_vision_report: dict[str, Any] | None = None
             product_vision_task: dict[str, Any] | None = None
-            if source_asset_ids:
-                emit_chat_stage("sources")
-                product_vision_task = self.repository.create_task(
-                    company_id=identity["company_id"],
-                    store_id=store_id,
-                    user_id=identity["user_id"],
-                    task_type="ai_ceo_product_vision",
-                    title=f"AI CEO 商品图片识别（{len(source_asset_ids)} 张）",
-                    input_data={
-                        "contract_version": "jiejing_ai_ceo_product_vision_intake_v1",
-                        "source_assets": product_vision_assets,
-                        "source_asset_count": len(source_asset_ids),
-                        "merchant_message": message[:900],
-                        "provider_key": "fal_vision_backend",
-                        "signed_source_urls_persisted": False,
-                        "frontend_gets_provider_key": False,
-                        "real_platform_writes_enabled": False,
-                        "secret_exposed": False,
-                    },
-                )
-                try:
-                    vision_analysis = fal_product_vision_client_from_env().analyze(
-                        image_urls=product_vision_signed_urls,
-                        merchant_message=message,
-                    )
-                    product_vision_fact_packet = build_product_vision_fact_packet(
-                        analysis=vision_analysis,
-                        merchant_message=message,
-                        source_assets=product_vision_assets,
-                    )
-                    product_vision_report = self.repository.save_merchant_product_fact_report(
-                        task=product_vision_task,
-                        packet=product_vision_fact_packet,
-                        listing_project_identity=listing_project_identity,
-                    )
-                    product_vision_task = self.repository.update_task_status(
-                        task_id=product_vision_task["task_id"],
-                        company_id=identity["company_id"],
-                        status="completed",
-                        output={
-                            "status": "completed",
-                            "report_id": product_vision_report.get("report_id"),
-                            "source_asset_count": len(source_asset_ids),
-                            "product_name": product_vision_fact_packet.get("product_name"),
-                            "conflict_count": len(product_vision_fact_packet.get("fact_conflicts") or []),
-                            "unknown_fact_count": len(product_vision_fact_packet.get("unknown_facts") or []),
-                            "usage": vision_analysis.get("usage") or {},
-                            "signed_source_urls_persisted": False,
-                            "real_platform_writes_enabled": False,
-                            "secret_exposed": False,
-                        },
-                        audit_summary="AI CEO extracted a source-grounded product fact packet from merchant images without a platform write.",
-                    )
-                except ProductVisionError as exc:
-                    product_vision_task = self.repository.update_task_status(
-                        task_id=product_vision_task["task_id"],
-                        company_id=identity["company_id"],
-                        status="failed",
-                        output={
-                            "status": "failed",
-                            "failure_code": exc.code,
-                            "source_asset_count": len(source_asset_ids),
-                            "provider_call_may_have_occurred": exc.code != "vision_provider_not_configured",
-                            "signed_source_urls_persisted": False,
-                            "real_platform_writes_enabled": False,
-                            "secret_exposed": False,
-                        },
-                        audit_summary="AI CEO product image understanding failed at the backend vision boundary.",
-                    )
-                    update_model_attempt(
-                        attempt_state="failed_internal_dependency",
-                        task_status="failed",
-                        failure_code=exc.code,
-                        summary="AI CEO attempt stopped because product image understanding did not complete.",
-                    )
-                    send_chat_payload(
-                        {
-                            "ai_ceo_chat": {
-                                "status": "product_vision_failed",
-                                "blocked_by": [exc.code],
-                                "answer": "商品图片已经安全收到，但本次视觉识别没有完成；没有生成 Listing 草稿，也没有写入 eBay。请稍后重试本轮，不需要重新授权 eBay。",
-                                **route_meta,
-                                "frontend_gets_provider_key": False,
-                                "real_platform_writes_enabled": False,
-                                "secret_exposed": False,
-                            },
-                            "product_vision_task": product_vision_task,
-                            "usage_consumed": False,
-                            "listing_created": False,
-                            "real_platform_writes_enabled": False,
-                            "secret_exposed": False,
-                        },
-                        status=HTTPStatus.BAD_GATEWAY,
-                    )
-                    return
 
             metered_task_id = "task_" + hashlib.sha256(
                 f"ai-ceo-model-task|{identity['company_id']}|{attempt['task_id']}".encode("utf-8")
@@ -9061,34 +8926,114 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             try:
                 metered_model_client = MeteredModelClient(model_secret_resolution["model_client"])
                 attempt_recovery_state["metered_model_client"] = metered_model_client
-                chat = attach_supplier_fact_attestation(
-                    run_ai_ceo_chat(
-                        repository=self.repository,
-                        company_id=identity["company_id"],
-                        store_id=store_id,
-                        user_id=identity["user_id"],
-                        message=message,
-                        model_client=metered_model_client,
-                        client_now=str(body.get("client_now") or ""),
-                        client_timezone=str(body.get("client_timezone") or ""),
-                        command=command_body,
-                        conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
-                        turn_plan=turn_plan,
-                        product_intake_context=(
-                            product_vision_prompt_context(product_vision_fact_packet)
-                            if product_vision_fact_packet
-                            else None
-                        ),
-                        active_listing_context=body.get("active_listing_context"),
-                        model_resolution={
-                            key: value
-                            for key, value in model_secret_resolution.items()
-                            if key not in {"model_client", "secret_value"}
-                        },
-                        on_stage=emit_chat_stage if stream_requested else None,
-                        on_text_delta=emit_text_delta if stream_requested else None,
+                # Planning is the first provider call inside the existing
+                # reservation/metering boundary. No product effects precede it.
+                try:
+                    turn_plan = plan_ai_ceo_turn(
+                        model_client=metered_model_client, message=message,
+                        conversation_history=conversation_history,
+                        active_listing_context=verified_listing_context,
+                        has_source_assets=bool(source_asset_ids),
                     )
-                )
+                except SemanticPlanError as exc:
+                    plan_error = str(exc)
+                    turn_plan = {**pending_semantic_plan(), "status": "blocked",
+                                 "blocked_by": [plan_error]}
+                    chat = {"status": "semantic_plan_blocked", "blocked_by": [plan_error],
+                            "answer": "这次未能可靠确认你的任务和商品目标，原商品资料保持不变。请稍后重试。",
+                            **route_meta, "turn_plan": turn_plan}
+                else:
+                    route_meta = ai_ceo_route_metadata(
+                        message, route=str(turn_plan.get("route") or "general_chat"),
+                        realtime_kind=str(turn_plan.get("realtime_kind") or ""),
+                    )
+                    if turn_plan.get("status") == "clarification_required":
+                        semantic_status = "clarification_required"
+                        chat = {"status": "semantic_clarification_required",
+                                "answer": turn_plan.get("question"), **route_meta,
+                                "turn_plan": turn_plan, "blocked_by": turn_plan.get("blocked_by") or []}
+                    else:
+                        action = str(turn_plan.get("project_action") or "none")
+                        if action == "current":
+                            # Recheck the full scope after the planning latency.
+                            active_listing_context = self.repository.resolve_ai_ceo_listing_context(
+                                company_id=identity["company_id"], store_id=store_id,
+                                identity=submitted_identity,
+                            )
+                            if not active_listing_context:
+                                raise SemanticPlanError("semantic_current_project_unavailable")
+                            listing_project_identity = submitted_identity
+                        elif action == "new":
+                            listing_project_identity = new_project_identity(
+                                company_id=identity["company_id"], store_id=store_id,
+                                request_task_id=str(request_task["task_id"]),
+                            )
+                            active_listing_context = {}
+                            conversation_history = []
+                            supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
+                                supplier_facts={}, supplier_facts_verified=False,
+                                source="authenticated_merchant_request",
+                            )
+                        else:
+                            active_listing_context = {}
+                            listing_project_identity = {}
+                        active_listing_product_name = str(
+                            active_listing_context.get("product_name") or turn_plan.get("product_name") or ""
+                        )[:120]
+                        if turn_plan.get("read_images") is True:
+                            emit_chat_stage("sources")
+                            product_vision_task = self.repository.create_task(
+                                company_id=identity["company_id"], store_id=store_id,
+                                user_id=identity["user_id"], task_type="ai_ceo_product_vision",
+                                title=f"AI CEO 商品图片识别（{len(source_asset_ids)} 张）",
+                                input_data={"contract_version": "jiejing_ai_ceo_product_vision_intake_v1",
+                                    "source_assets": product_vision_assets, "source_asset_count": len(source_asset_ids),
+                                    "provider_key": "fal_vision_backend", "signed_source_urls_persisted": False,
+                                    "real_platform_writes_enabled": False, "secret_exposed": False},
+                            )
+                            try:
+                                vision_analysis = fal_product_vision_client_from_env().analyze(
+                                    image_urls=product_vision_signed_urls, merchant_message=message,
+                                )
+                                product_vision_fact_packet = build_product_vision_fact_packet(
+                                    analysis=vision_analysis, merchant_message=message, source_assets=product_vision_assets,
+                                )
+                                if action == "new":
+                                    product_vision_fact_packet["product_name"] = active_listing_product_name
+                            except ProductVisionError as exc:
+                                self.repository.update_task_status(
+                                    task_id=product_vision_task["task_id"], company_id=identity["company_id"],
+                                    status="failed", output={"failure_code": exc.code, "secret_exposed": False},
+                                    audit_summary="Semantic product image extraction failed without a product write.",
+                                )
+                                raise
+                            self.repository.update_task_status(
+                                task_id=product_vision_task["task_id"], company_id=identity["company_id"],
+                                status="completed", output={"usage": vision_analysis.get("usage") or {},
+                                    "provider_key": "fal_vision_backend", "fact_packet_saved": False,
+                                    "secret_exposed": False},
+                                audit_summary="Semantic product image extraction completed; product persistence awaits the answer.",
+                            )
+                            consumed_source_asset_ids = list(source_asset_ids)
+                        if turn_plan.get("product_fact_proposals"):
+                            product_vision_fact_packet = merge_product_fact_proposals(
+                                product_vision_fact_packet or new_project_fact_packet(active_listing_product_name),
+                                turn_plan["product_fact_proposals"],
+                            )
+                        chat = attach_supplier_fact_attestation(run_ai_ceo_chat(
+                            repository=self.repository, company_id=identity["company_id"], store_id=store_id,
+                            user_id=identity["user_id"], message=message, model_client=metered_model_client,
+                            client_now=str(body.get("client_now") or ""),
+                            client_timezone=str(body.get("client_timezone") or ""), command=command_body,
+                            conversation_history=conversation_history, turn_plan=turn_plan,
+                            product_intake_context=(product_vision_prompt_context(product_vision_fact_packet)
+                                                    if product_vision_fact_packet else None),
+                            active_listing_context=active_listing_context,
+                            model_resolution={key: value for key, value in model_secret_resolution.items()
+                                              if key not in {"model_client", "secret_value"}},
+                            on_stage=emit_chat_stage if stream_requested else None,
+                            on_text_delta=emit_text_delta if stream_requested else None,
+                        ))
                 if product_vision_fact_packet:
                     chat = {
                         **chat,
@@ -9237,23 +9182,65 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         details={"error_type": exc.__class__.__name__, "secret_exposed": False},
                     )
                     raise
-            if command_body and chat.get("answer"):
+            answer_ready = (
+                turn_plan.get("status") == "ready"
+                and chat.get("status") in {"model_answered", "model_answered_non_live",
+                    "model_answered_with_context_correction", "capability_status_answered",
+                    "local_clock_answered", "realtime_search_answered", "realtime_search_answered_without_model"}
+                and (chat.get("answer_quality") or {}).get("accepted", True) is True
+            )
+            if answer_ready:
+                if turn_plan.get("save_artifact") is not True:
+                    product_vision_fact_packet = None
+                if (turn_plan.get("save_artifact") is True and listing_project_identity
+                        and (turn_plan.get("project_action") == "new" or product_vision_fact_packet)):
+                    try:
+                        product_vision_report = self.repository.save_ai_ceo_semantic_product_facts(
+                            task=task, packet=product_vision_fact_packet or new_project_fact_packet(active_listing_product_name),
+                            listing_project_identity=listing_project_identity,
+                            expected_fact_report_id=str(active_listing_context.get("fact_report_id") or ""),
+                            new_project=turn_plan.get("project_action") == "new",
+                            semantic_dispatch={**dispatch_receipt(), "status": "ready",
+                                "target_project_identity": listing_project_identity,
+                                "consumed_source_asset_ids": list(consumed_source_asset_ids),
+                                "workflow_target": str(turn_plan.get("workflow_target") or "")},
+                        )
+                        product_vision_fact_packet = product_vision_report["report"]["merchant_product_fact_packet"]
+                        if product_vision_task:
+                            product_vision_task = self.repository.update_task_status(
+                                task_id=product_vision_task["task_id"], company_id=identity["company_id"], status="completed",
+                                output={"provider_key": "fal_vision_backend", "usage": (product_vision_fact_packet or {}).get("vision_usage") or {},
+                                    "fact_packet_saved": True, "report_id": product_vision_report["report_id"], "secret_exposed": False},
+                                audit_summary="Semantic product suggestions saved after answer validation and fact-version comparison.",
+                            )
+                    except ProductFactSaveConflict:
+                        answer_ready = False
+                        chat = {**chat, "status": "semantic_product_version_conflict",
+                            "answer": "商品资料在本次处理中已有更新。这次图片建议没有覆盖新版本，请刷新后继续。",
+                            "blocked_by": ["product_fact_version_conflict"]}
+                if answer_ready:
+                    semantic_status = "ready"
+            chat = {**chat, "semantic_dispatch": dispatch_receipt()}
+            if command_body and chat.get("answer") and answer_ready:
                 attempt_recovery_state["failure_stage"] = "command_persistence"
                 command_response = self.repository.save_merchant_ceo_command(
                     company_id=identity["company_id"],
                     store_id=store_id,
                     user_id=identity["user_id"],
                     command={
-                        **command_body,
+                        "id": command_id,
+                        "text": message,
+                        "created_at": str(command_body.get("created_at") or ""),
+                        "intent": str(turn_plan.get("intent") or "chat"),
+                        "title": active_listing_product_name or str(route_meta.get("route_label") or "AI CEO"),
+                        "summary": "；".join(turn_plan.get("steps") or []),
+                        "status": "confirmation_required" if turn_plan.get("confirmation_required") else "ready",
+                        "high_risk": turn_plan.get("confirmation_required") is True,
+                        "routes": [],
                         "ai_reply": chat.get("answer"),
                         "ai_reply_status": chat.get("status"),
                         "ai_reply_model": chat.get("model_client"),
-                        "route": chat.get("route"),
-                        "route_label": chat.get("route_label"),
-                        "memory_policy": chat.get("memory_policy"),
-                        "long_term_memory": chat.get("long_term_memory"),
-                        "writes_merchant_rule": chat.get("writes_merchant_rule"),
-                        "decision_center_required": chat.get("decision_center_required"),
+                        **route_meta,
                     },
                 )
             self.repository.update_task_status(
@@ -9287,21 +9274,19 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 usage_consumed=usage_consumed,
                 summary="AI CEO attempt is validating the authoritative backend artifact outcome.",
             )
-            artifact_requested = bool(listing_project_identity) or ai_ceo_market_artifact_eligible(
-                message=message,
-                chat=chat,
-            )
+            artifact_requested = answer_ready and turn_plan.get("save_artifact") is True
             try:
                 ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
                     task=task,
                     message=message,
                     chat=chat,
                     command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
-                    conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
+                    conversation_history=conversation_history,
                     listing_project_identity=listing_project_identity,
                     active_listing_product_name=active_listing_product_name,
-                )
+                ) if artifact_requested else None
             except Exception as exc:
+                semantic_status = "blocked"
                 update_model_attempt(
                     attempt_state="failed_artifact_validation",
                     task_status="failed",

@@ -38,6 +38,22 @@ def main() -> None:
         route="ebay_workflow",
         message="请新建一个独立商品项目，不复用当前香炉项目。",
     ) == {}
+    for message in (
+        "新建一个独立商品项目：银色木柄15mL咖啡量勺，单只装。使用我刚上传的供应商授权图片，先识别商品资料并整理可核对的字段，不修改原来的金色8件套项目。这是内部流程测试；图片没提供的尺寸、重量、成本和库存先列为待补，不要当成真实参数。本次只做到发布前，不发布、不采购、不付款。",
+        "新建商品项目: 银色木柄咖啡量勺。",
+    ):
+        assert _ai_ceo_listing_project_identity_for_turn(
+            request, route="ebay_workflow", message=message,
+        ) == {}, "a colon-delimited new product must not inherit the old project"
+    for message in (
+        "不要新建商品项目：银色木柄咖啡量勺。",
+        "新建商品项目：会覆盖旧草稿吗？",
+        "示例，新建商品项目：银色木柄咖啡量勺。",
+        "客户问，新建商品项目：银色木柄咖啡量勺，要什么资料？",
+    ):
+        assert _ai_ceo_listing_project_identity_for_turn(
+            request, route="ebay_workflow", message=message,
+        ) == IDENTITY, "punctuation must not turn a prohibition or question into execution"
     assert _ai_ceo_listing_project_identity_for_turn(
         request,
         route="ebay_workflow",

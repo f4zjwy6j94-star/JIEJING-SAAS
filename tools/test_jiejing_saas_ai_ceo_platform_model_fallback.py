@@ -19,6 +19,9 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tools.ai_ceo_semantic_test_fixture import PLANNER_PROMPT_PREFIX, semantic_decision_json
+from tools.test_jiejing_ai_ceo_routing_supplier_http_red import SAFE_CHILD_ENV_NAMES
 OUT = ROOT / "output" / "jiejing-saas-ai-ceo-platform-model" / "test"
 SAAS_DB = OUT / "saas-ai-ceo-platform-model.sqlite"
 RUNTIME_DB = OUT / "runtime-ai-ceo-platform-model.sqlite"
@@ -40,11 +43,15 @@ class FakeModelHandler(BaseHTTPRequestHandler):
                 "body": body,
             }
         )
+        messages = body.get("messages") or []
+        system_prompt = str(messages[0].get("content") or "") if messages else ""
+        content = (semantic_decision_json(intent="chat") if system_prompt.startswith(PLANNER_PROMPT_PREFIX)
+                   else "捷境 AI CEO 已通过平台托管 AI 连接回答；本次不会触发 eBay 写入。")
         payload = {
             "choices": [
                 {
                     "message": {
-                        "content": "捷境 AI CEO 已通过平台托管 AI 连接回答；本次不会触发 eBay 写入。"
+                        "content": content
                     },
                     "finish_reason": "stop",
                 }
@@ -87,6 +94,8 @@ def fetch_json(url: str, *, token: str | None = None) -> dict[str, Any]:
 
 
 def post_json(url: str, payload: dict[str, Any], *, token: str | None = None) -> dict[str, Any]:
+    if "/merchant-ceo/chat" in url:
+        payload = {**payload, "semantic_dispatch_contract": "ai_ceo_semantic_dispatch_v1"}
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=body, headers=_headers(token=token), method="POST")
     with urllib.request.urlopen(request, timeout=30) as response:
@@ -119,7 +128,10 @@ def main() -> int:
     model_thread.start()
     saas_port = free_port()
     platform_key = "unit-platform-model-key-not-returned"
-    env = os.environ.copy()
+    env = {key: value for key, value in os.environ.items() if key.upper() in SAFE_CHILD_ENV_NAMES}
+    env.update({"JIEJING_SAAS_ENV": "test", "JIEJING_DATABASE_ENGINE": "sqlite",
+                "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false", "JIEJING_PUBLIC_CHARGING_ALLOWED": "false",
+                "JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED": "0", "JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED": "0"})
     env["JIEJING_BILLING_PROVIDER"] = "stripe_test_mock"
     env["JIEJING_QUOTA_ENFORCEMENT_ENABLED"] = "1"
     env["JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED"] = "1"
@@ -342,13 +354,10 @@ def main() -> int:
             token=token,
         )
         capability_chat = capability_response.get("ai_ceo_chat", {})
-        if capability_chat.get("status") != "capability_status_answered":
-            return fail(f"capability question should answer from platform model status: {capability_chat}")
-        capability_answer = str(capability_chat.get("answer") or "")
-        if "当前捷境账号 AI 已接通" not in capability_answer or "DeepSeek" not in capability_answer:
-            return fail(f"capability answer should explain the active account BYOK connection: {capability_answer}")
-        if FakeModelHandler.calls:
-            return fail("capability question should not call the text model provider")
+        if capability_chat.get("status") != "model_answered" or capability_response.get("model_secret_resolution", {}).get("mode") != "account_byok":
+            return fail("capability consultation must use the semantic planner and the current account BYOK connection")
+        if len(FakeModelHandler.calls) != 2:
+            return fail("capability consultation must meter both planning and answering calls")
 
         # A Listing quality failure may use one automatic repair request, but it
         # remains one merchant-visible Jiejing trial action. The next platform-
