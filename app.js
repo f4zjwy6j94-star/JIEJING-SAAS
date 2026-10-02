@@ -133,6 +133,7 @@ const state = {
   saasPostPublishCockpit: null,
   saasPreflightResults: [],
   saasLastPublishReadiness: null,
+  saasReadonlyPublishCheck: null,
   saasLastPublishRecovery: null,
   saasLastPublishConfirmationEvidence: null,
   saasPreTestCheck: null,
@@ -3891,6 +3892,7 @@ function saasCurrentListingProjectIdentity(draft = state.saasListingComposerDraf
 function resetSaasListingPublishEvidenceForNewProject() {
   setSaasAiCeoTaskContextState("plain_consultation", false);
   state.saasLastPublishReadiness = null;
+  state.saasReadonlyPublishCheck = null;
   state.saasLastPublishConfirmationEvidence = null;
   state.saasPreflightResults = [];
   state.saasPreTestCheck = null;
@@ -8317,6 +8319,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
         </div>
         <div class="saas-publish-intake-actions">
           <button class="secondary-action" type="button" data-saas-action="run-pretest-check">检测当前资料</button>
+          <button class="secondary-action" type="button" data-saas-action="run-publish-precheck" ${!state.saasConnected || state.saasLoading ? "disabled" : ""}>系统检查资料</button>
           <button class="secondary-action" type="button" data-saas-action="create-ebay-inventory-location-confirmation" ${disabled ? "disabled" : ""}>生成库存位置确认单</button>
           <button class="secondary-action" type="button" data-saas-action="execute-ebay-inventory-location" ${disabled || !approvedInventoryLocation || manualInventoryLocation ? "disabled" : ""}>执行已批准的库存位置创建</button>
           ${manualInventoryLocation ? `<button class="secondary-action" type="button" data-saas-action="reconcile-ebay-inventory-location" ${disabled ? "disabled" : ""}>只读核对 eBay 库存位置</button>` : ""}
@@ -8324,6 +8327,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
           <button class="primary-action" type="button" data-saas-action="create-publish-confirmation" ${disabled ? "disabled" : ""}>生成发布确认单</button>
         </div>
       </div>
+      <div id="saasReadonlyPublishCheckResult" aria-live="polite">${renderSaasReadonlyPublishCheckResult()}</div>
       ${includeGuide ? renderSaasPublishPreflightGuide(ctx) : ""}
       <section class="saas-publish-raw-form-details" aria-label="上架资料补全清单">
         <div class="saas-publish-raw-form-head">
@@ -17705,6 +17709,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasMerchantProjectStatus = null;
   state.saasPreflightResults = [];
   state.saasLastPublishReadiness = null;
+  state.saasReadonlyPublishCheck = null;
   state.saasLastPublishRecovery = null;
   state.saasEbayFieldContracts = null;
   state.saasEbayLiveAdapter = null;
@@ -31820,6 +31825,10 @@ function snapshotSaasPublishIntakeFormValues(changedName = "") {
   const form = document.querySelector("#saasPublishIntakeForm");
   const context = saasListingCloudContext();
   if (!context || !form || form.dataset.intakeContext !== context.key || typeof FormData !== "function") return currentSaasPendingPublishIntakeValues();
+  if (changedName) {
+    state.saasReadonlyPublishCheck = null;
+    refreshSaasReadonlyPublishCheckView();
+  }
   const values = sanitizeSaasPublishIntakeDraftValues(Object.fromEntries(new FormData(form).entries()));
   const basis = saasPublishIntakeSourceBasis();
   let renderedBasis = {};
@@ -32206,6 +32215,92 @@ async function createSaasExistingDraftPublishConfirmation(button = null) {
   } finally {
     state.saasLoading = false;
     renderSaasBackendPanel();
+  }
+}
+
+function saasReadonlyPublishCheckBasis() {
+  return JSON.stringify({ context: saasListingCloudContext()?.key || "", source: saasPublishIntakeSourceBasis() });
+}
+
+function renderSaasReadonlyPublishCheckResult() {
+  const entry = state.saasReadonlyPublishCheck;
+  if (!entry || entry.basis !== saasReadonlyPublishCheckBasis()) return "";
+  if (entry.status === "checking") return '<p role="status">正在检查当前资料；不会创建确认单或写入 eBay。</p>';
+  if (entry.status === "error") return '<p role="status">检查未完成，请重试；未创建确认单，未执行平台动作。</p>';
+  const result = entry.result;
+  const checks = result?.publish_readiness?.checks || [];
+  const fieldLabels = {
+    "listing.sku": "SKU", "listing.title": "标题", "listing.description_html": "商品描述",
+    "listing.category_id": "类目", "listing.condition": "商品状态", "listing.price": "售价",
+    "listing.quantity": "库存", "listing.item_specifics": "商品属性", "listing.merchant_location_key": "库存位置",
+    "business_policies.fulfillment_policy_id": "配送政策", "business_policies.payment_policy_id": "付款政策",
+    "business_policies.return_policy_id": "退货政策", "supplier_facts.package_weight_g": "包装重量",
+    "supplier_facts.package_dimensions_cm": "包装尺寸", "supplier_facts.package_dimensions_cm.length": "包装长度",
+    "supplier_facts.package_dimensions_cm.width": "包装宽度", "supplier_facts.package_dimensions_cm.height": "包装高度",
+    "supplier_facts.material": "材质", "supplier_facts.item_location": "发货地",
+    "asset_manifest.assets": "商品图片", "publish_evidence": "商品来源和图片授权",
+    "finance_review.net_profit_money": "净利润", "account_health.status": "账号状态",
+  };
+  const blocked = checks.filter(item => item.blocking).length;
+  const review = checks.filter(item => !item.blocking && !["passed", "not_applicable"].includes(item.status)).length;
+  return `<section class="saas-backend-preflight-panel" aria-label="系统资料只读检查">
+    <div class="saas-backend-preflight-head"><div><span>系统资料检查</span><strong>只读检查已完成</strong>
+      <p>${result.simulation_only ? "当前为模拟资料，不能提交 eBay。" : "依据当前资料与已保存的账号、来源记录进行检查。"}未创建确认单，未写入 eBay；正式提交前仍需重新校验和确认。</p></div></div>
+    <p>${checks.length} 项检查：${blocked} 项阻断，${review} 项待核对，${checks.length - blocked - review} 项通过。</p>
+    <details><summary>查看检查明细</summary><div class="saas-backend-preflight-list">${checks.map(check => `
+      <article class="saas-backend-preflight-card ${check.blocking ? "is-red" : check.status === "passed" ? "is-green" : "is-amber"}">
+        <strong>${escapeHtml(check.label || "资料检查")} · ${check.blocking ? "阻断" : check.status === "not_applicable" ? "不适用" : check.status === "passed" ? "通过" : "待核对"}</strong>
+        <p>${escapeHtml(check.summary || "请核对当前资料。")}</p>
+        ${check.details?.missing_fields?.length ? `<p>待补：${escapeHtml(check.details.missing_fields.map(key => fieldLabels[key] || "相关必填资料").join("、"))}</p>` : ""}
+        ${(check.details?.validation_issues || []).map(issue => `<p>${escapeHtml(issue.message || "资料无效")}</p>`).join("")}
+      </article>`).join("")}</div></details>
+  </section>`;
+}
+
+function refreshSaasReadonlyPublishCheckView() {
+  const slot = document.querySelector("#saasReadonlyPublishCheckResult");
+  if (slot) slot.innerHTML = renderSaasReadonlyPublishCheckResult();
+  document.querySelectorAll('[data-saas-action="run-publish-precheck"]').forEach(button => {
+    button.disabled = state.saasReadonlyPublishCheck?.status === "checking";
+  });
+}
+
+async function runSaasReadonlyPublishPrecheck() {
+  if (state.saasReadonlyPublishCheck?.status === "checking" || !requireSaasProtectedSessionForAction()) return false;
+  const store = activeSaasStore();
+  if (!store?.store_id || !saasListingCloudContext()?.key) return false;
+  snapshotSaasPublishIntakeFormValues();
+  const payload = readSaasPublishIntakeForm();
+  if (!payload) {
+    showActionToast("请先展开当前商品的发布资料表，再检查资料。");
+    return false;
+  }
+  const pending = { basis: saasReadonlyPublishCheckBasis(), status: "checking" };
+  state.saasReadonlyPublishCheck = pending;
+  refreshSaasReadonlyPublishCheckView();
+  try {
+    const result = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/publish-precheck`, {
+      method: "POST", body: JSON.stringify(payload),
+    });
+    if (state.saasReadonlyPublishCheck !== pending || pending.basis !== saasReadonlyPublishCheckBasis()) return false;
+    if (result.read_only !== true || result.store_id !== store.store_id ||
+        result.listing_project_key !== payload.listing_project_identity?.key ||
+        !Array.isArray(result.publish_readiness?.checks) ||
+        ["confirmation_created", "task_created", "platform_write_attempted", "real_execution_allowed"].some(key => result[key] !== false)) {
+      throw new Error("invalid readonly precheck response");
+    }
+    state.saasReadonlyPublishCheck = { ...pending, status: "checked", result };
+    showActionToast("系统检查已完成，未创建确认单，未写入 eBay。");
+    return true;
+  } catch {
+    if (state.saasReadonlyPublishCheck === pending && pending.basis === saasReadonlyPublishCheckBasis()) {
+      state.saasReadonlyPublishCheck = { ...pending, status: "error" };
+      showActionToast("系统检查未完成，请重试；未创建确认单，未执行平台动作。");
+    }
+    return false;
+  } finally {
+    if (state.saasReadonlyPublishCheck === pending) state.saasReadonlyPublishCheck = null;
+    refreshSaasReadonlyPublishCheckView();
   }
 }
 
@@ -37409,6 +37504,10 @@ function handleSaasAction(button) {
   if (action === "open-model-provider-key") {
     const url = button.dataset.providerUrl || "";
     if (url) window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  if (action === "run-publish-precheck") {
+    runSaasReadonlyPublishPrecheck();
     return;
   }
   if (action === "open-official-ebay-seller-registration") {

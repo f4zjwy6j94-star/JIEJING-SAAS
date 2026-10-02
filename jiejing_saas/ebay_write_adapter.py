@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from jiejing_runtime.execution_preflight import validate_publish_evidence
+from jiejing_runtime.execution_preflight import finite_publish_number, validate_publish_evidence, validate_publish_input_values
 
 from .config import SaaSSettings
 from .ebay_http_client import EbayReadOnlyHttpClient, HttpTransport, _urlopen_transport
@@ -252,6 +252,7 @@ def build_publish_readiness(
     expected_company_id: str | None = None,
     expected_store_id: str | None = None,
     expected_listing_project_key: str | None = None,
+    read_only: bool = False,
 ) -> dict[str, Any]:
     """Build a merchant-visible readiness checklist without calling eBay."""
 
@@ -263,7 +264,17 @@ def build_publish_readiness(
     assets = payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), dict) else {}
     preflight_issues = [item for item in preflight.get("issues", []) if isinstance(item, dict)]
     missing = [str(item) for item in preflight.get("missing_fields", []) if str(item).strip()]
+    if read_only:
+        missing = [item for item in missing if item not in {"confirmation_record", "idempotency_key"}]
+    value_issues = validate_publish_input_values(payload)
     checks: list[dict[str, Any]] = []
+
+    if read_only:
+        simulated = payload.get("simulation_only") is True
+        _add_check(checks, key="readonly_execution_boundary", label="执行与确认边界",
+                   status="blocked" if simulated else "needs_attention", blocking=simulated,
+                   summary="当前为模拟资料，不能创建 eBay 执行确认单。" if simulated else "本次仅检查资料；正式执行仍需创建并批准确认单。",
+                   details={"read_only": True, "simulation_only": simulated, "real_execution_allowed": False})
 
     account_health = _account_health_readiness(payload=payload, preflight_issues=preflight_issues, missing_fields=missing)
     _add_check(
@@ -281,7 +292,7 @@ def build_publish_readiness(
         key="field_completeness",
         label="发布字段完整度",
         status="blocked" if missing else "passed",
-        summary="缺少真实发布字段，不能交给 eBay。" if missing else "必填字段已齐，可以进入平台适配器。",
+        summary="缺少真实发布字段，不能交给 eBay。" if missing else "必填字段已填写，仍需通过数值、来源和账号检查。",
         blocking=bool(missing),
         details={"missing_fields": missing, "required_fields": preflight.get("required_fields") or []},
     )
@@ -340,14 +351,19 @@ def build_publish_readiness(
         package_missing.append("supplier_facts.material")
     if not str(supplier.get("item_location") or "").strip():
         package_missing.append("supplier_facts.item_location")
+    package_missing = list(dict.fromkeys(package_missing + [
+        issue["key"] for issue in value_issues if issue["key"].startswith("supplier_facts.")
+    ]))
     _add_check(
         checks,
         key="package_facts",
         label="规格和发货地",
         status="blocked" if package_missing else "passed",
-        summary="缺少重量、尺寸、材质或发货地，不能真实发布。" if package_missing else "重量、尺寸、材质和发货地已齐。",
+        summary="重量、尺寸、材质或发货地缺失或无效，请先修正。" if package_missing else "重量、尺寸、材质和发货地已齐。",
         blocking=bool(package_missing),
-        details={"missing_fields": package_missing},
+        details={"missing_fields": package_missing, "validation_issues": [
+            issue for issue in value_issues if issue["key"].startswith("supplier_facts.")
+        ]},
     )
 
     urls = _image_urls(assets.get("assets"))
@@ -507,13 +523,17 @@ def build_publish_readiness(
     price = listing.get("price") if isinstance(listing.get("price"), dict) else {"value": listing.get("price"), "currency": "USD"}
     unit_price = _float(price.get("value"))
     quantity = _int(listing.get("quantity"))
-    exposure = round(unit_price * quantity, 2) if unit_price is not None and quantity is not None else None
+    exposure = _float(round(unit_price * quantity, 2)) if unit_price is not None and quantity is not None else None
     prior_limit_error = _latest_platform_error(latest_execution_results or [], sku=str(listing.get("sku") or ""))
     price_status = "needs_attention"
     price_summary = "价格或库存数量不完整，不能计算额度占用。"
-    if unit_price is not None and quantity is not None:
+    price_issues = [issue for issue in value_issues if issue["key"].startswith(("listing.price", "listing.quantity"))]
+    if unit_price is not None and quantity is not None and not price_issues:
         price_status = "passed"
         price_summary = f"本次发布预计占用 {price.get('currency') or 'USD'} {exposure:.2f} 的刊登额度。"
+    if price_issues:
+        price_status = "blocked"
+        price_summary = "售价或库存数量无效，请按提示修正后重新检查。"
     if prior_limit_error:
         price_status = "blocked"
         price_summary = "最近一次发布触发 eBay 卖家刊登额度限制；需要降价、降数量或提升额度后再发。"
@@ -523,13 +543,14 @@ def build_publish_readiness(
         label="价格 x 库存额度",
         status=price_status,
         summary=price_summary,
-        blocking=bool(prior_limit_error or unit_price is None or quantity is None),
+        blocking=bool(prior_limit_error or unit_price is None or quantity is None or price_issues),
         details={
             "unit_price": unit_price,
             "currency": price.get("currency") or "USD",
             "quantity": quantity,
             "estimated_listing_amount": exposure,
             "last_platform_error": prior_limit_error or {},
+            "validation_issues": price_issues,
         },
     )
 
@@ -563,9 +584,12 @@ def build_publish_readiness(
         return_risk_reserve=return_risk_reserve,
     )
     profit_blocking = net_profit is None and procurement_cost is None
-    effective_profit = net_profit if net_profit is not None else calculated_profit
+    # A merchant-entered total cannot overrule a loss in the complete costs.
+    effective_profit = calculated_profit if calculated_profit is not None else net_profit
     if effective_profit is not None and effective_profit < 0:
         profit_blocking = True
+    profit_issues = [issue for issue in value_issues if issue["key"].startswith("finance_review.")]
+    profit_blocking = profit_blocking or bool(profit_issues)
     missing_profit_inputs = [
         key
         for key, value in {
@@ -589,6 +613,8 @@ def build_publish_readiness(
             if net_profit is None and procurement_cost is None
             else "净利润为负，发布前必须改价、降成本或暂停。"
             if effective_profit is not None and effective_profit < 0
+            else "费用或净利润不一致，请按检查结果重新核对。"
+            if profit_issues
             else "利润大脑已带入售价、采购、eBay fee、广告、物流、退货风险和汇率口径。"
             if not missing_profit_inputs
             else "利润大脑已启动，但还缺 " + "、".join(missing_profit_inputs) + "，只能进入人工复核。"
@@ -606,6 +632,7 @@ def build_publish_readiness(
             "exchange_rate": exchange_rate,
             "gross_margin_percent": margin,
             "missing_profit_inputs": missing_profit_inputs,
+            "validation_issues": profit_issues,
         },
     )
 
@@ -631,13 +658,14 @@ def build_publish_readiness(
     failure_knowledge = _failure_knowledge_base(latest_execution_results or [], sku=str(listing.get("sku") or ""))
     traffic_light_report = _publish_health_traffic_light_report(checks, preflight=preflight)
     return {
-        "status": "blocked_missing_facts" if blocking_checks else "ready_for_execution",
+        "status": "checked_read_only" if read_only else "blocked_missing_facts" if blocking_checks else "ready_for_execution",
+        "read_only": read_only,
         "action_type": "publish_listing",
         "checks": checks,
         "traffic_light_report": traffic_light_report,
         "backend_evidence_packet": _publish_readiness_evidence_packet(checks, preflight=preflight),
         "blocking_check_count": len(blocking_checks),
-        "ready_for_platform_adapter": not blocking_checks and preflight.get("status") == "ready_for_platform_adapter",
+        "ready_for_platform_adapter": not read_only and not blocking_checks and preflight.get("status") == "ready_for_platform_adapter",
         "retry_rule": "Do not retry after timeout/502 until publish recovery confirms no published offer exists.",
         "post_publish_cockpit_plan": post_publish_cockpit_plan,
         "failure_knowledge_base": failure_knowledge,
@@ -2453,19 +2481,14 @@ def _image_urls(value: Any) -> list[str]:
 
 
 def _int(value: Any) -> int | None:
-    try:
-        if isinstance(value, str) and any(marker in value for marker in ("-", "~", "to")):
-            return None
-        return int(float(str(value).strip()))
-    except (TypeError, ValueError):
+    number = finite_publish_number(value)
+    if number is None or number < 0 or not number.is_integer() or number > 9007199254740991:
         return None
+    return int(number)
 
 
 def _float(value: Any) -> float | None:
-    try:
-        return float(str(value).strip())
-    except (TypeError, ValueError):
-        return None
+    return finite_publish_number(value)
 
 
 def _money_float(value: Any) -> float | None:
@@ -2486,7 +2509,7 @@ def _calculated_contribution_profit(
     values = [unit_price, procurement_cost, shipping_cost, ebay_fee, ad_budget, return_risk_reserve]
     if any(value is None for value in values):
         return None
-    return round(float(unit_price or 0) - float(procurement_cost or 0) - float(shipping_cost or 0) - float(ebay_fee or 0) - float(ad_budget or 0) - float(return_risk_reserve or 0), 2)
+    return _float(round(float(unit_price or 0) - float(procurement_cost or 0) - float(shipping_cost or 0) - float(ebay_fee or 0) - float(ad_budget or 0) - float(return_risk_reserve or 0), 2))
 
 
 def _duplicate_product_findings(

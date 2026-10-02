@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -178,6 +179,7 @@ class ExecutionPreflightChecker:
         if account_health_issue:
             issues.append(account_health_issue.to_dict())
         if action_type in {"publish_listing", "save_ebay_listing_draft"}:
+            issues.extend(validate_publish_input_values(payload))
             evidence_review = validate_publish_evidence(
                 payload,
                 company_id=str(getattr(request, "company_id", "") or ""),
@@ -329,6 +331,76 @@ class ExecutionPreflightChecker:
         if action_type in {"procurement_payment", "purchase_order", "address_write"}:
             return f"Procurement or address execution cannot proceed until {field} is present."
         return f"Execution cannot proceed until {field} is present."
+
+
+def finite_publish_number(value: Any) -> float | None:
+    """Never accept booleans or non-finite values as merchant quantities/money."""
+    if isinstance(value, bool):
+        return None
+    try:
+        amount = float(str(value).strip())
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return amount if math.isfinite(amount) else None
+
+
+def validate_publish_input_values(payload: dict[str, Any]) -> list[dict[str, str]]:
+    """Check sale values independently of presence and merchant approval."""
+    listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+    price = listing.get("price") if isinstance(listing.get("price"), dict) else {"value": listing.get("price"), "currency": "USD"}
+    supplier = payload.get("supplier_facts") if isinstance(payload.get("supplier_facts"), dict) else {}
+    issues: list[dict[str, str]] = []
+    amount = finite_publish_number(price.get("value"))
+    if amount is None or amount <= 0:
+        issues.append(PreflightIssue("listing.price.value", "售价必须是大于 0 的有效数字。").to_dict())
+    quantity = finite_publish_number(listing.get("quantity"))
+    if quantity is None or quantity < 0 or not quantity.is_integer() or quantity > 9007199254740991:
+        issues.append(PreflightIssue("listing.quantity", "库存必须是非负整数，不能截取小数或使用无效数字。").to_dict())
+    if amount is not None and quantity is not None and not math.isfinite(amount * quantity):
+        issues.append(PreflightIssue("listing.price.exposure", "售价与库存的乘积超出可计算范围，请核对输入。").to_dict())
+    if "package_weight_g" in supplier:
+        weight = finite_publish_number(supplier.get("package_weight_g"))
+        if weight is None or weight <= 0:
+            issues.append(PreflightIssue("supplier_facts.package_weight_g", "包装重量必须是大于 0 的有效数字。").to_dict())
+    if "package_dimensions_cm" in supplier:
+        dimensions = supplier.get("package_dimensions_cm")
+        dimensions = dimensions if isinstance(dimensions, dict) else {}
+        for axis in ("length", "width", "height"):
+            size = finite_publish_number(dimensions.get(axis))
+            if size is None or size <= 0:
+                issues.append(PreflightIssue(f"supplier_facts.package_dimensions_cm.{axis}", "包装长、宽、高必须分别填写大于 0 的有效数字。").to_dict())
+    finance = payload.get("finance_review") if isinstance(payload.get("finance_review"), dict) else {}
+    cost_values = []
+    sale_currency = str(price.get("currency") or "USD").strip().upper()
+    for key in ("procurement_cost", "shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "net_profit"):
+        field = f"{key}_money" if f"{key}_money" in finance else key
+        value = finance.get(field)
+        number = finite_publish_number(value.get("value") if isinstance(value, dict) else value)
+        if field in finance:
+            if number is None or number < 0:
+                issues.append(PreflightIssue(f"finance_review.{field}", "费用和净利润必须是非负的有效数字；亏损商品不能直接发布。").to_dict())
+            if isinstance(value, dict) and str(value.get("currency") or sale_currency).strip().upper() != sale_currency:
+                issues.append(PreflightIssue(f"finance_review.{field}.currency", "费用和净利润需按售价币种核对，不能将不同币种直接相减。").to_dict())
+        if key != "net_profit":
+            cost_values.append(number)
+    for key in ("exchange_rate", "gross_margin_percent"):
+        if key in finance:
+            number = finite_publish_number(finance[key])
+            if number is None or (key == "exchange_rate" and number <= 0):
+                message = "汇率必须是大于 0 的有效数字。" if key == "exchange_rate" else "毛利率必须是有效数字。"
+                issues.append(PreflightIssue(f"finance_review.{key}", message).to_dict())
+    declared = finance.get("net_profit_money", finance.get("net_profit"))
+    declared_profit = finite_publish_number(declared.get("value") if isinstance(declared, dict) else declared)
+    if amount is not None and all(value is not None for value in cost_values):
+        calculated_profit = finite_publish_number(round(amount - sum(cost_values), 2))
+        if calculated_profit is None:
+            issues.append(PreflightIssue("finance_review.calculated_contribution_profit", "费用合计超出可计算范围，请核对输入。").to_dict())
+            return issues
+        if calculated_profit < 0:
+            issues.append(PreflightIssue("finance_review.calculated_contribution_profit", "按售价和完整费用计算为亏损，请调整售价或成本后重新核对。").to_dict())
+        if declared_profit is not None and abs(calculated_profit - declared_profit) > 0.011:
+            issues.append(PreflightIssue("finance_review.net_profit_money", "填写的净利润与售价减去费用的计算结果不一致，请重新核对。").to_dict())
+    return issues
 
 
 def validate_publish_evidence(

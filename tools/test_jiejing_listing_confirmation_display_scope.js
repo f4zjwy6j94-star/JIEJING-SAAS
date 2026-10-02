@@ -151,3 +151,70 @@ test("both confirmation buttons explain simulation locally without a request or 
     assert.match(ctx.messages.at(-1), /模拟演练.*不能.*eBay/);
   }
 });
+
+function readonlyFixture() {
+  const ctx = fixture();
+  Object.assign(ctx, {
+    contextKey: "company:user:store-A:project-A", basis: { title: "Current product" },
+    calls: [], messages: [],
+    saasListingCloudContext: () => ({ key: ctx.contextKey }),
+    saasPublishIntakeSourceBasis: () => ctx.basis,
+    snapshotSaasPublishIntakeFormValues: () => {},
+    requireSaasProtectedSessionForAction: () => true,
+    readSaasPublishIntakeForm: () => ({ simulation_only: true, listing_project_identity: { key: "project-A" } }),
+    escapeHtml: value => String(value ?? "").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+    showActionToast: message => ctx.messages.push(message),
+    document: { querySelector: () => null, querySelectorAll: () => [] },
+  });
+  ctx.response = { read_only: true, store_id: "store-A", listing_project_key: "project-A", simulation_only: true,
+    confirmation_created: false, task_created: false, platform_write_attempted: false, real_execution_allowed: false,
+    publish_readiness: { checks: [{ key: "price", label: "Price", status: "passed", summary: "Valid price", blocking: false }] },
+    preflight: { issues: [{ key: "simulation_only", message: "模拟资料", severity: "blocking" }] } };
+  ctx.saasFetch = async (url, options) => { ctx.calls.push({ url, options }); return ctx.response; };
+  vm.runInContext(["saasReadonlyPublishCheckBasis", "renderSaasReadonlyPublishCheckResult", "refreshSaasReadonlyPublishCheckView"].map(extract).join("\n") +
+    `\nasync ${extract("runSaasReadonlyPublishPrecheck")}`, ctx);
+  return ctx;
+}
+
+test("simulation can check on the server without generating or replacing confirmation evidence", async () => {
+  const ctx = readonlyFixture();
+  ctx.state.saasConfirmations = [card("current")];
+  ctx.state.saasLastPublishReadiness = { existing: true };
+  assert.equal(await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx), true);
+  assert.equal(ctx.calls.length, 1);
+  assert.equal(ctx.calls[0].url, "/stores/store-A/publish-precheck");
+  assert.equal(ctx.state.saasConfirmations[0].confirmation_id, "current");
+  assert.equal(ctx.state.saasLastPublishReadiness.existing, true);
+  const html = vm.runInContext("renderSaasReadonlyPublishCheckResult()", ctx);
+  assert.match(html, /只读检查已完成/);
+  assert.match(html, /模拟/);
+  assert.doesNotMatch(html, /已发布|已创建确认单/);
+});
+
+test("late prechecks cannot reappear after edit, project switch, or source update", async () => {
+  for (const change of [ctx => { ctx.state.saasReadonlyPublishCheck = null; },
+    ctx => { ctx.contextKey = "company:user:store-B:project-B"; },
+    ctx => { ctx.basis = { title: "Changed source" }; }]) {
+    const ctx = readonlyFixture();
+    let finish;
+    ctx.saasFetch = () => new Promise(resolve => { finish = resolve; });
+    const pending = vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx);
+    assert.equal(await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx), false, "duplicate click is ignored");
+    change(ctx); finish(ctx.response);
+    assert.equal(await pending, false);
+    assert.doesNotMatch(vm.runInContext("renderSaasReadonlyPublishCheckResult()", ctx), /只读检查已完成/);
+  }
+});
+
+test("precheck failures and mismatched responses never display a previous success", async () => {
+  for (const response of [null, { ...readonlyFixture().response, store_id: "other-store" },
+    { ...readonlyFixture().response, real_execution_allowed: true }]) {
+    const ctx = readonlyFixture();
+    await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx);
+    ctx.saasFetch = async () => { if (!response) throw new Error("connection lost"); return response; };
+    assert.equal(await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx), false);
+    const html = vm.runInContext("renderSaasReadonlyPublishCheckResult()", ctx);
+    assert.match(html, /检查未完成/);
+    assert.doesNotMatch(html, /只读检查已完成/);
+  }
+});

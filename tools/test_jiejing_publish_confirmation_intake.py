@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from copy import deepcopy
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -195,13 +196,96 @@ def main() -> int:
                 },
                 "asset_manifest": {"assets": [{"url": product_image_url}]},
                 "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
-                "finance_review": {"net_profit_money": {"value": "3.25", "currency": "USD"}},
+                "finance_review": {
+                    "procurement_cost_money": {"value": "2.50", "currency": "USD"},
+                    "shipping_cost_money": {"value": "2.25", "currency": "USD"},
+                    "ebay_fee_money": {"value": "1.49", "currency": "USD"},
+                    "ad_budget_money": {"value": "0", "currency": "USD"},
+                    "return_risk_reserve_money": {"value": "0.50", "currency": "USD"},
+                    "exchange_rate": "1.234567",
+                    "net_profit_money": {"value": "3.25", "currency": "USD"},
+                    "gross_margin_percent": "32.53",
+                },
             },
             token=token,
         )
         confirmation = result.get("confirmation", {})
         if confirmation.get("action_type") != "publish_listing" or confirmation.get("status") != "pending":
             return fail(f"publish intake should create a pending publish confirmation: {result}")
+        saved_finance = confirmation.get("item", {}).get("publish_payload", {}).get("finance_review", {})
+        for key, expected in (("ebay_fee_money", "1.49"), ("return_risk_reserve_money", "0.5"), ("ad_budget_money", "0")):
+            if saved_finance.get(key) != {"value": expected, "currency": "USD"}:
+                return fail(f"publish intake must preserve the merchant's {key} in its confirmation snapshot")
+        if saved_finance.get("exchange_rate") != "1.234567":
+            return fail("publish intake must preserve exchange-rate precision, not round it as money")
+        preview_body = deepcopy(confirmation["item"]["publish_payload"])
+        preview_body["listing"]["merchant_location_key"] = "preview-fixture-warehouse"
+        preview_body["listing_project_identity"] = listing_project_identity
+        preview_body["publish_evidence_refs"] = {"product_fact_report_id": product_fact_report_id}
+        preview_body["simulation_only"] = True
+        with sqlite3.connect(SAAS_DB) as conn:
+            before_preview = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                              for table in ("tasks", "confirmations", "execution_results", "reports")]
+        status, preview = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-precheck", preview_body, token=token,
+        )
+        if status != 200 or preview.get("read_only") is not True:
+            return fail("simulation must support a server read-only precheck without creating a confirmation")
+        for key in ("confirmation_created", "task_created", "platform_write_attempted", "real_execution_allowed"):
+            if preview.get(key) is not False:
+                return fail(f"readonly precheck must explicitly keep {key}=false")
+        if not preview.get("publish_readiness", {}).get("checks") or not any(
+            row.get("key") == "simulation_only" for row in preview.get("preflight", {}).get("issues", [])
+        ):
+            return fail("readonly simulation must receive full checks without losing its simulation blocker")
+        if preview.get("publish_readiness", {}).get("ready_for_platform_adapter") is not False:
+            return fail("a preview is never authorization to call a platform adapter")
+        preview_fields = next(row for row in preview["publish_readiness"]["checks"] if row["key"] == "field_completeness")
+        if preview_fields["blocking"] or preview_fields["details"]["missing_fields"]:
+            return fail(f"future confirmation identifiers must not be misreported as missing product data: {preview_fields['details']['missing_fields']}")
+        if "confirmation_record" not in preview["preflight"]["missing_fields"]:
+            return fail("readonly presentation must not weaken the actual execution preflight")
+        with sqlite3.connect(SAAS_DB) as conn:
+            after_preview = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                             for table in ("tasks", "confirmations", "execution_results", "reports")]
+        if before_preview != after_preview:
+            return fail("readonly precheck must not create business records")
+        other = post_json(f"{base_url}/auth/register", {
+            "email": "other-preview@example.test", "password": "local-test-password", "company_name": "Other Preview",
+        })
+        status, _ = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-precheck", preview_body, token=other["token"],
+        )
+        if status != 404:
+            return fail("readonly precheck must not cross company/store scope")
+        for quantity in ("1.5", "Infinity"):
+            invalid_body = deepcopy(confirmation["item"]["publish_payload"])
+            invalid_body["listing_project_identity"] = listing_project_identity
+            invalid_body["publish_evidence_refs"] = {"product_fact_report_id": product_fact_report_id}
+            invalid_body["listing"]["quantity"] = quantity
+            status, checked = post_json_status(
+                f"{base_url}/stores/{store['store_id']}/publish-confirmation", invalid_body, token=token,
+            )
+            if status >= 500 or "listing.quantity" not in {
+                issue.get("key") for issue in checked.get("preflight", {}).get("issues", [])
+            }:
+                return fail("invalid quantity must return an actionable preflight issue, not truncate or crash")
+        for field, value in (
+            ("shipping_cost_money", {"value": "NaN", "currency": "USD"}),
+            ("exchange_rate", "Infinity"),
+        ):
+            invalid_body = deepcopy(confirmation["item"]["publish_payload"])
+            invalid_body["listing_project_identity"] = listing_project_identity
+            invalid_body["publish_evidence_refs"] = {"product_fact_report_id": product_fact_report_id}
+            invalid_body["finance_review"][field] = value
+            status, checked = post_json_status(
+                f"{base_url}/stores/{store['store_id']}/publish-confirmation", invalid_body, token=token,
+            )
+            if status >= 500 or not any(
+                issue.get("key") == f"finance_review.{field}"
+                for issue in checked.get("preflight", {}).get("issues", [])
+            ):
+                return fail(f"provided invalid {field} must not disappear during intake normalization")
         with sqlite3.connect(SAAS_DB) as conn:
             publish_task_status = conn.execute(
                 "select status from tasks where task_id = ?",
@@ -416,6 +500,26 @@ def main() -> int:
             ).fetchone()[0]
         if completed_task_status != "completed_no_platform_write":
             return fail(f"simulated draft task must close instead of remaining queued: {completed_task_status}")
+        # Server evidence remains authoritative even if a browser omits its
+        # simulation marker. This fixture mutation is isolated to this SQLite.
+        simulated_report = json.loads(original_report_json)
+        simulated_report["merchant_product_fact_packet"]["simulation_only"] = True
+        with sqlite3.connect(SAAS_DB) as conn:
+            conn.execute("update reports set report_json = ? where report_id = ?",
+                         (json.dumps(simulated_report), product_fact_report_id))
+        preview_body["simulation_only"] = False
+        status, server_simulation = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-precheck", preview_body, token=token,
+        )
+        if status != 200 or server_simulation.get("simulation_only") is not True:
+            return fail("a browser cannot omit the authoritative simulation boundary during precheck")
+        if "simulation_only_product_facts" not in server_simulation.get("source_blockers", []):
+            return fail("server precheck must identify the authoritative simulated facts")
+        status, blocked_simulation = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-confirmation", preview_body, token=token,
+        )
+        if status != 422 or blocked_simulation.get("confirmation_created") is not False:
+            return fail("readonly precheck must not unlock real confirmation intake for simulated facts")
         with sqlite3.connect(SAAS_DB) as conn:
             conn.execute(
                 "update tasks set status = 'queued' where task_id = ?",

@@ -231,6 +231,110 @@ def main() -> int:
         if valid_preflight.get("status") != "ready_for_platform_adapter":
             return fail(f"valid server evidence should pass {action_type}: {valid_preflight}")
 
+    legacy_price_payload = deepcopy(valid_payload)
+    legacy_price_payload["listing"]["price"] = 14.99
+    legacy_preflight = ExecutionService(demo_mode=False).preflight(
+        _request(action_type="save_ebay_listing_draft", payload=legacy_price_payload)
+    )
+    if legacy_preflight.get("status") != "ready_for_platform_adapter":
+        return fail("valid legacy scalar draft prices must remain supported")
+
+    # A complete object is not necessarily a valid sale. Validate the same
+    # values at the execution boundary, even when source/rights are verified.
+    zero_price_payload = deepcopy(valid_payload)
+    zero_price_payload["listing"]["price"]["value"] = "0"
+    for action_type in ("save_ebay_listing_draft", "publish_listing"):
+        reviewed = ExecutionService(demo_mode=False).preflight(
+            _request(action_type=action_type, payload=zero_price_payload)
+        )
+        if reviewed.get("status") != "blocked_missing_execution_facts":
+            return fail(f"zero selling price must block {action_type} before platform handoff")
+        if "listing.price.value" not in {issue.get("key") for issue in reviewed.get("issues", [])}:
+            return fail("invalid selling price must identify the actionable field")
+
+    numeric_cases = [
+        ("listing.price.value", "NaN"),
+        ("listing.price.value", "Infinity"),
+        ("listing.price.value", "-1"),
+        ("listing.quantity", 1.5),
+        ("listing.quantity", -1),
+        ("listing.quantity", "Infinity"),
+        ("supplier_facts.package_weight_g", 0),
+        ("supplier_facts.package_weight_g", -10),
+        ("supplier_facts.package_dimensions_cm.width", 0),
+        ("supplier_facts.package_dimensions_cm.length", "NaN"),
+    ]
+    for path, value in numeric_cases:
+        invalid_payload = deepcopy(valid_payload)
+        _set_path(invalid_payload, path, value)
+        for action_type in ("save_ebay_listing_draft", "publish_listing"):
+            reviewed = ExecutionService(demo_mode=False).preflight(
+                _request(action_type=action_type, payload=invalid_payload)
+            )
+            if reviewed.get("status") != "blocked_missing_execution_facts" or path not in {
+                issue.get("key") for issue in reviewed.get("issues", [])
+            }:
+                return fail(f"invalid {path} must block {action_type} with a field-specific error")
+        review = build_publish_readiness(invalid_payload, preflight=reviewed)
+        group = "package_facts" if path.startswith("supplier_facts.") else "price_quantity_exposure"
+        if not next(row for row in review["checks"] if row["key"] == group)["blocking"]:
+            return fail(f"readiness must not display an invalid {path} as passed")
+        if review["ready_for_platform_adapter"]:
+            return fail("invalid numerical input must not be ready for a platform adapter")
+
+    losing_payload = deepcopy(valid_payload)
+    losing_payload["finance_review"] = {
+        "procurement_cost_money": {"value": "2.50", "currency": "USD"},
+        "shipping_cost_money": {"value": "25", "currency": "USD"},
+        "ebay_fee_money": {"value": "2.07", "currency": "USD"},
+        "ad_budget_money": {"value": "0", "currency": "USD"},
+        "return_risk_reserve_money": {"value": "0.65", "currency": "USD"},
+        "exchange_rate": "1",
+        "net_profit_money": {"value": "5.57", "currency": "USD"},
+    }
+    reviewed = ExecutionService(demo_mode=False).preflight(
+        _request(action_type="publish_listing", payload=losing_payload)
+    )
+    if reviewed.get("status") != "blocked_missing_execution_facts":
+        return fail("a declared positive profit must not override a loss calculated from complete costs")
+    review = build_publish_readiness(losing_payload, preflight=reviewed)
+    finance_check = next(row for row in review["checks"] if row["key"] == "profit_and_fee_sanity")
+    if not finance_check["blocking"] or finance_check["details"]["effective_profit"] >= 0:
+        return fail("merchant readiness must display and block the calculated loss")
+
+    # Missing optional estimates can require review, but a provided invalid
+    # estimate must never be silently treated as a valid zero or a missing one.
+    for key, value in (
+        ("shipping_cost_money", {"value": "NaN", "currency": "USD"}),
+        ("procurement_cost_money", {"value": "-1", "currency": "USD"}),
+        ("ad_budget_money", {"value": "Infinity", "currency": "USD"}),
+        ("ebay_fee_money", {"value": True, "currency": "USD"}),
+        ("return_risk_reserve_money", {"value": "0.5", "currency": "CNY"}),
+        ("exchange_rate", "0"),
+        ("exchange_rate", "NaN"),
+        ("net_profit_money", {"value": "NaN", "currency": "USD"}),
+    ):
+        invalid_payload = deepcopy(valid_payload)
+        invalid_payload["finance_review"][key] = value
+        reviewed = ExecutionService(demo_mode=False).preflight(
+            _request(action_type="publish_listing", payload=invalid_payload)
+        )
+        if not any(issue.get("key", "").startswith(f"finance_review.{key}") for issue in reviewed["issues"]):
+            return fail(f"invalid provided {key} must return a blocking finance issue")
+        review = build_publish_readiness(invalid_payload, preflight=reviewed)
+        if not next(row for row in review["checks"] if row["key"] == "profit_and_fee_sanity")["blocking"]:
+            return fail(f"invalid provided {key} must also block merchant readiness")
+
+    overflow_payload = deepcopy(valid_payload)
+    overflow_payload["listing"]["price"]["value"] = "1e308"
+    overflow_payload["listing"]["quantity"] = 10
+    overflow_preflight = ExecutionService(demo_mode=False).preflight(
+        _request(action_type="publish_listing", payload=overflow_payload)
+    )
+    if not any(issue.get("key") == "listing.price.exposure" for issue in overflow_preflight["issues"]):
+        return fail("overflowing listing exposure must block before JSON or provider serialization")
+    json.dumps(build_publish_readiness(overflow_payload, preflight=overflow_preflight), allow_nan=False)
+
     invalid_cases = [
         ("contract_version", "old-contract", "publish_evidence.contract_version", True),
         ("status", "pending", "publish_evidence.status", True),

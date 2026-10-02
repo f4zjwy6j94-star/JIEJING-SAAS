@@ -23,6 +23,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 from jiejing_runtime.execution import ExecutionRequest, ExecutionService
+from jiejing_runtime.execution_preflight import finite_publish_number
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
 
 
@@ -5143,12 +5144,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 3 and parts[0] == "stores" and parts[2] in {
+            "publish-precheck",
             "publish-confirmation",
             "ebay-draft-confirmation",
             "existing-draft-publish-confirmation",
         }:
             body = self._read_json_body()
-            if body.get("simulation_only") is True:
+            readonly_precheck = parts[2] == "publish-precheck"
+            if body.get("simulation_only") is True and not readonly_precheck:
                 self._send_error(
                     HTTPStatus.CONFLICT,
                     "simulation_only_listing_cannot_create_ebay_confirmation",
@@ -5235,6 +5238,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "candidate_id": _safe_publish_text(raw_project_identity.get("candidate_id"), limit=120),
                 "secret_exposed": False,
             }
+            evidence_blockers: list[str] = []
             try:
                 # Persist the server-owned project and URL spellings in the
                 # approved payload. Execution preflight must evaluate the same
@@ -5281,16 +5285,58 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     )
                 publish_payload["publish_evidence"] = canonical_publish_evidence
             except PublishSourceRightsEvidenceError as exc:
-                self._send_json(
-                    {
-                        "error": exc.code,
-                        "status": int(_publish_evidence_error_status(exc)),
-                        "blockers": list(exc.blockers),
-                        "confirmation_created": False,
-                        "secret_exposed": False,
-                    },
-                    status=_publish_evidence_error_status(exc),
+                if not readonly_precheck:
+                    self._send_json(
+                        {
+                            "error": exc.code,
+                            "status": int(_publish_evidence_error_status(exc)),
+                            "blockers": list(exc.blockers),
+                            "confirmation_created": False,
+                            "secret_exposed": False,
+                        },
+                        status=_publish_evidence_error_status(exc),
+                    )
+                    return
+                evidence_blockers = list(exc.blockers)
+            if readonly_precheck:
+                # This path deliberately ends before any task, confirmation,
+                # credential resolution, or platform adapter can be reached.
+                request = ExecutionRequest(
+                    action_type="publish_listing", task_id="readonly-publish-precheck",
+                    user_id=identity["user_id"], company_id=identity["company_id"],
+                    store_id=parts[1], platform="ebay", payload=publish_payload,
                 )
+                preflight = ExecutionService(demo_mode=False).preflight(request)
+                simulation_only = body.get("simulation_only") is True or "simulation_only_product_facts" in evidence_blockers
+                if simulation_only:
+                    preflight["issues"].append({"key": "simulation_only", "severity": "blocking",
+                                               "message": "当前为模拟资料，只能检查，不能提交 eBay。"})
+                if evidence_blockers:
+                    preflight["issues"].append({"key": "publish_evidence.source", "severity": "blocking",
+                                               "message": "商品来源或图片授权尚未通过服务器核验，请核对当前商品资料。"})
+                preflight["read_only"] = True
+                preflight["real_execution_allowed"] = False
+                publish_payload["simulation_only"] = simulation_only
+                readiness = build_publish_readiness(
+                    publish_payload, preflight=preflight,
+                    latest_execution_results=latest_execution_results,
+                    recent_confirmations=recent_confirmations,
+                    expected_company_id=identity["company_id"], expected_store_id=parts[1],
+                    expected_listing_project_key=listing_project_identity.get("key") or "",
+                    read_only=True,
+                )
+                readiness["read_only"] = True
+                readiness["ready_for_platform_adapter"] = False
+                self._send_json({
+                    "status": "checked", "read_only": True, "simulation_only": simulation_only,
+                    "listing_project_key": listing_project_identity.get("key") or "",
+                    "store_id": parts[1], "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "preflight": preflight, "publish_readiness": readiness,
+                    "source_blockers": evidence_blockers,
+                    "confirmation_created": False, "task_created": False,
+                    "platform_write_attempted": False, "real_execution_allowed": False,
+                    "secret_exposed": False,
+                })
                 return
             task_title = _safe_publish_text(
                 body.get("product")
@@ -15125,10 +15171,21 @@ def _publish_confirmation_payload_from_body(
     finance = {
         "procurement_cost_money": _safe_publish_money(finance_in.get("procurement_cost_money")),
         "shipping_cost_money": _safe_publish_money(finance_in.get("shipping_cost_money")),
+        "ebay_fee_money": _safe_publish_money(finance_in.get("ebay_fee_money")),
         "ad_budget_money": _safe_publish_money(finance_in.get("ad_budget_money")),
+        "return_risk_reserve_money": _safe_publish_money(finance_in.get("return_risk_reserve_money")),
+        "exchange_rate": _safe_publish_decimal(finance_in.get("exchange_rate"), places=8),
         "net_profit_money": _safe_publish_money(finance_in.get("net_profit_money")),
         "gross_margin_percent": _safe_publish_decimal(finance_in.get("gross_margin_percent")),
     }
+    normalized_finance = {}
+    for key, value in finance.items():
+        raw = finance_in.get(key)
+        raw_value = raw.get("value", raw) if isinstance(raw, dict) else raw
+        # Retain a safe invalid marker when an estimate was supplied but could
+        # not be parsed. Otherwise invalid input becomes an optional omission.
+        if value not in ("", None, {}, []) or raw_value not in (None, ""):
+            normalized_finance[key] = value
     return {
         "source": "merchant_listing_publish_intake",
         "marketplace_id": listing["marketplace_id"],
@@ -15136,7 +15193,7 @@ def _publish_confirmation_payload_from_body(
         "business_policies": {key: value for key, value in business_policies.items() if value},
         "supplier_facts": {key: value for key, value in supplier.items() if value not in ("", None, {}, [])},
         "asset_manifest": {"assets": assets},
-        "finance_review": {key: value for key, value in finance.items() if value not in ("", None, {}, [])},
+        "finance_review": normalized_finance,
         "regulatory": _clean_publish_text_map(regulatory_in, key_limit=80, value_limit=240),
         "publish_payload_inferred": False,
         "secret_exposed": False,
@@ -15163,25 +15220,16 @@ def _safe_publish_condition(value: Any) -> str:
     return text if text in {"NEW", "USED", "LIKE_NEW", "VERY_GOOD", "GOOD", "ACCEPTABLE"} else "NEW"
 
 
-def _safe_publish_decimal(value: Any) -> str:
-    try:
-        text = str(value if value is not None else "").strip()
-        if not text:
-            return ""
-        return f"{float(text):.2f}".rstrip("0").rstrip(".")
-    except (TypeError, ValueError):
-        return ""
+def _safe_publish_decimal(value: Any, *, places: int = 2) -> str:
+    number = finite_publish_number(value)
+    return f"{number:.{places}f}".rstrip("0").rstrip(".") if number is not None else ""
 
 
 def _safe_publish_int(value: Any) -> int | None:
-    try:
-        text = str(value if value is not None else "").strip()
-        if not text:
-            return None
-        number = int(float(text))
-        return number if number >= 0 else None
-    except (TypeError, ValueError):
+    number = finite_publish_number(value)
+    if number is None or number < 0 or not number.is_integer() or number > 9007199254740991:
         return None
+    return int(number)
 
 
 def _safe_publish_money(value: Any) -> dict[str, str] | None:
