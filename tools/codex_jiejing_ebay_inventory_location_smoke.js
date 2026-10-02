@@ -243,11 +243,13 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && url.pathname === checkpointPath) {
     const body = await readBody(req);
+    const publishIntake = body.publish_intake || checkpoint?.publish_intake;
     checkpointRevision += 1;
     checkpoint = { checkpoint_id: `checkpoint-location-${checkpointRevision}`, revision: checkpointRevision,
       mutation_id: body.mutation_id, company_id: companyId, store_id: store.store_id,
       listing_project_identity: listingProjectIdentity, base_report_id: body.base_report_id,
       fields: body.fields, merchant_edited_fields: body.merchant_edited_fields, saved_at: new Date().toISOString(), source: "merchant_edit" };
+    if (publishIntake) checkpoint.publish_intake = publishIntake;
     return sendJson(res, 201, { status: "saved", checkpoint });
   }
   if (req.method === "POST" && url.pathname === "/ai-ceo/chat-history/sync") {
@@ -412,8 +414,16 @@ async function openPage(context, base, consoleErrors, requireListing = true) {
     await publishDetails.waitFor({ state: "attached", timeout: 10000 });
     if (await publishDetails.getAttribute("open") === null) await publishDetails.locator(":scope > summary").click();
     await page.locator("#saasPublishIntakeForm").waitFor({ state: "visible", timeout: 10000 });
+    await openInventoryLocationActions(page);
   }
   return page;
+}
+
+async function openInventoryLocationActions(page) {
+  const advanced = page.locator('details.saas-publish-intake-advanced');
+  await advanced.waitFor({ state: "attached", timeout: 5000 });
+  if (await advanced.getAttribute("open") === null) await advanced.locator(":scope > summary").click();
+  await page.locator('[data-saas-action="create-ebay-inventory-location-confirmation"]:visible').waitFor({ state: "visible", timeout: 5000 });
 }
 
 async function openConfirm(page) {
@@ -537,6 +547,7 @@ async function main() {
     const approvedPublishDetails = page.locator('details[data-listing-publish-flow-details="publish_intake_collapsed_v1"]');
     await approvedPublishDetails.waitFor({ state: "attached", timeout: 5000 });
     if (await approvedPublishDetails.getAttribute("open") === null) await approvedPublishDetails.locator(":scope > summary").click();
+    await openInventoryLocationActions(page);
     const execute = page.locator('[data-saas-action="execute-ebay-inventory-location"]:visible');
     await execute.waitFor({ state: "visible", timeout: 5000 });
     if (await execute.isDisabled()) throw new Error("one exact fresh approval must enable the separate execution action");

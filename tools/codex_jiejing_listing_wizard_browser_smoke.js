@@ -55,9 +55,11 @@ const server = http.createServer(async (req, res) => {
     if (mode === "copy-fail") return send(res, 503, { error: "fixture_checkpoint_unavailable" });
     if (mode === "copy-conflict") return send(res, 409, { latest_checkpoint: checkpoint, current_revision: revision, current_base_report_id: baseReport.report_id, current_base_report: baseReport });
     revision += 1;
+    const publishIntake = payload.publish_intake || checkpoint?.publish_intake;
     checkpoint = { checkpoint_id: `wizard-checkpoint-${revision}`, revision, mutation_id: payload.mutation_id, company_id: company, store_id: store,
       listing_project_identity: identity, base_report_id: payload.base_report_id, fields: payload.fields, merchant_edited_fields: payload.merchant_edited_fields,
       saved_at: new Date().toISOString(), source: "merchant_edit" };
+    if (publishIntake) checkpoint.publish_intake = publishIntake;
     return send(res, 201, { status: "saved", checkpoint });
   }
   unexpected.push(`${req.method} ${url.pathname}`); send(res, 404, { error: "fixture_blocks_other_api" });
