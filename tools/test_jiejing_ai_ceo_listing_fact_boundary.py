@@ -304,7 +304,11 @@ def main() -> None:
     assert certificate_gap_fields["item_specifics"]["Material"] == "待补", certificate_gap_fields
 
     api_server = (ROOT / "jiejing_saas" / "api_server.py").read_text(encoding="utf-8")
-    assert 'if body.get("simulation_only") is True:' in api_server
+    # Only the diagnostic route may inspect simulation data. The real HTTP
+    # intake suite separately verifies all three confirmation routes still
+    # reject it without creating business records.
+    assert 'readonly_precheck = parts[2] == "publish-precheck"' in api_server
+    assert 'if body.get("simulation_only") is True and not readonly_precheck:' in api_server
     assert "simulation_only_listing_cannot_create_ebay_confirmation" in api_server
     assert "simulation_only_listing_cannot_execute_ebay_write" in api_server
     assert 'confirmation_item.get("simulation_only") is True' in api_server
