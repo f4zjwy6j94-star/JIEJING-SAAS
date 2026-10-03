@@ -6259,8 +6259,8 @@ class SaaSRepository:
         self, *, task: dict[str, Any], packet: dict[str, Any], listing_project_identity: dict[str, str],
         expected_fact_report_id: str, new_project: bool = False, semantic_dispatch: dict[str, Any] | None = None,
         simulation_request: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Append model suggestions with the same store lock/version check as merchant saves."""
+    ) -> dict[str, Any] | None:
+        """Append suggestions, or return no artifact for a locked, version-checked audit-only turn."""
         project = normalize_listing_project_identity(listing_project_identity)
         if not project or not all(project.values()):
             raise ProductFactSaveValidationError("product_fact_invalid_project")
@@ -6291,6 +6291,14 @@ class SaaSRepository:
                 raise ProductFactSaveConflict({"error_code": "product_fact_version_conflict", "current_fact_report_id": current_id,
                     "current_fact_report": self._report_row_to_dict(current) if current is not None else None, "secret_exposed": False})
             previous = (_load_json_field(current["report_json"]).get("merchant_product_fact_packet") or {}) if current is not None else {}
+            if (simulation_request is not None and not new_project and current is not None
+                    and previous.get("simulation_only") is True and plan.get("project_action") == "current"
+                    and plan.get("product_fact_proposals") == [] and plan.get("read_images") is False
+                    and (semantic_dispatch or {}).get("consumed_source_asset_ids") == []):
+                # The validated request remains in this turn's task/plan/archive.
+                # Repeating an already active restriction cannot replace the
+                # current packet, its attestation, or the Listing's fact base.
+                return None
             merged = {**packet,
                       "merchant_confirmed_facts": dict(previous.get("merchant_confirmed_facts") or {}),
                       "source_confirmed_facts": dict(previous.get("source_confirmed_facts") or {}),

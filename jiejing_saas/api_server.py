@@ -9015,7 +9015,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                 audit_summary="Semantic product image extraction completed; product persistence awaits the answer.",
                             )
                             consumed_source_asset_ids = list(source_asset_ids)
-                        if turn_plan.get("product_fact_proposals") or turn_plan.get("simulation_request"):
+                        simulation_already_protected = (
+                            turn_plan.get("project_action") == "current"
+                            and bool(active_listing_context.get("fact_report_id"))
+                            and (active_listing_context.get("merchant_product_fact_packet") or {}).get("simulation_only") is True
+                        )
+                        # A repeated restriction is not fresh product intake.
+                        # Persistence still rechecks the current fact version
+                        # under the repository lock after the answer succeeds.
+                        if turn_plan.get("product_fact_proposals") or (turn_plan.get("simulation_request")
+                                and (product_vision_fact_packet or not simulation_already_protected)):
                             proposal_base = product_vision_fact_packet or new_project_fact_packet(active_listing_product_name)
                             if (turn_plan.get("simulation_request") and not product_vision_fact_packet
                                     and turn_plan.get("project_action") == "current"):
@@ -9203,7 +9212,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if turn_plan.get("save_artifact") is not True:
                     product_vision_fact_packet = None
                 if (turn_plan.get("save_artifact") is True and listing_project_identity
-                        and (turn_plan.get("project_action") == "new" or product_vision_fact_packet)):
+                        and (turn_plan.get("project_action") == "new" or product_vision_fact_packet
+                             or turn_plan.get("simulation_request"))):
                     try:
                         product_vision_report = self.repository.save_ai_ceo_semantic_product_facts(
                             task=task, packet=product_vision_fact_packet or new_project_fact_packet(active_listing_product_name),
@@ -9216,7 +9226,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                 "consumed_source_asset_ids": list(consumed_source_asset_ids),
                                 "workflow_target": str(turn_plan.get("workflow_target") or "")},
                         )
-                        product_vision_fact_packet = product_vision_report["report"]["merchant_product_fact_packet"]
+                        # None is a version-checked audit-only turn, not a new
+                        # artifact and not permission to rebind an older report.
+                        product_vision_fact_packet = (product_vision_report["report"]["merchant_product_fact_packet"]
+                                                      if product_vision_report else None)
                         if product_vision_task:
                             product_vision_task = self.repository.update_task_status(
                                 task_id=product_vision_task["task_id"], company_id=identity["company_id"], status="completed",
