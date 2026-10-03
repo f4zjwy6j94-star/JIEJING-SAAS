@@ -421,6 +421,190 @@ test("reopening a vision-origin project renders its newer validated Listing, not
   });
 });
 
+for (const change of ["pending", "withdrawn-rights", "hash", "url", "asset", "distinct-source"]) {
+  test(`source history uses the latest scoped observation without hiding a ${change} change`, async () => {
+    const previous = factReport({ report_id: "previous-source", created_at: "2026-09-03T01:00:00Z" });
+    const originalSource = { type: "merchant_product_image", url: "https://images.example.test/selected.jpg",
+      asset_id: "selected-asset", sha256: "a".repeat(64), rights_status: "merchant_confirmed" };
+    const retainedSource = { type: "merchant_product_image", asset_id: "historical-upload",
+      rights_status: "pending_merchant_confirmation" };
+    previous.report.merchant_product_fact_packet.source_records = [originalSource, retainedSource];
+    previous.report.merchant_product_fact_packet.merchant_confirmed_facts = {
+      product_name: product, material: "Aluminum", condition: "NEW",
+      image_urls: originalSource.url, image_rights_confirmed: true };
+    previous.report.merchant_product_fact_packet.unknown_facts = ["sku"];
+    const current = structuredClone(previous);
+    Object.assign(current, { report_id: "current-source", created_at: "2026-09-04T01:00:00Z" });
+    const newestSource = { ...originalSource, signed_url_persisted: false };
+    if (["pending", "withdrawn-rights"].includes(change)) newestSource.rights_status = "pending_merchant_confirmation";
+    if (change === "hash") newestSource.sha256 = "b".repeat(64);
+    if (["url", "distinct-source"].includes(change)) newestSource.url = "https://images.example.test/replacement.jpg";
+    if (["asset", "distinct-source"].includes(change)) newestSource.asset_id = "replacement-asset";
+    current.report.merchant_product_fact_packet.source_records = [newestSource, retainedSource];
+    if (["pending", "withdrawn-rights"].includes(change)) {
+      current.report.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed = false;
+    }
+    await withRestorePage([current, listingReport(), previous], async (page) => {
+      const result = await page.evaluate((previousPacket) => {
+        const draft = restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions);
+        document.querySelector("#view-product").innerHTML = renderSaasMerchantProductFactsModule(draft);
+        return { draft, previousSignature: saasListingMediaCopyFactSignature(previousPacket, { includeMedia: true }),
+          currentSignature: saasListingMediaCopyFactSignature(draft.merchant_product_fact_packet, { includeMedia: true }) };
+      }, previous.report.merchant_product_fact_packet);
+      const packet = result.draft.merchant_product_fact_packet;
+      assert.deepEqual(packet.source_records[0], newestSource,
+        "the later record wins as a whole, even when an older record has stronger rights or more metadata");
+      assert.equal(packet.source_records.filter(record => record.asset_id === retainedSource.asset_id).length, 1,
+        "distinct historical evidence remains available without duplicate projection");
+      const previousSelected = packet.source_records.filter(record => record.url === originalSource.url && record.asset_id === originalSource.asset_id);
+      assert.equal(previousSelected.length, change === "distinct-source" || ["pending", "withdrawn-rights", "hash"].includes(change) ? 1 : 0);
+      assert.notEqual(result.currentSignature, result.previousSignature, "real source changes remain part of the unchanged-facts guard");
+      if (["pending", "withdrawn-rights"].includes(change)) {
+        assert.equal(packet.merchant_confirmed_facts.image_rights_confirmed, false);
+        assert.equal(await page.locator('[data-saas-product-fact-field="image_rights_confirmed"]').isChecked(), false,
+          "a prior confirmed source must not check the current merchant authorization control");
+        assert.equal(packet.source_records.some(record => record.url === newestSource.url && record.rights_status === "merchant_confirmed"), false);
+      }
+      assert.equal(result.draft.source_product_fact_report_id, current.report_id);
+    });
+  });
+}
+
+test("history merging leaves the latest source snapshot and observation order intact", async () => {
+  const previous = factReport({ report_id: "previous-observations" });
+  const current = structuredClone(previous);
+  Object.assign(current, { report_id: "latest-observations", created_at: "2026-09-03T01:00:00Z" });
+  const url = "https://images.example.test/shared-source.jpg";
+  const sources = [
+    { type: "merchant_product_link", url, rights_status: "not_applicable" },
+    { type: "merchant_product_image", url, asset_id: "tablet-photo", rights_status: "pending_merchant_confirmation" },
+    { type: "merchant_product_image", url, asset_id: "tablet-photo", rights_status: "merchant_confirmed" },
+  ];
+  current.report.merchant_product_fact_packet.source_records = sources;
+  await withRestorePage([current, previous], async (page) => {
+    const draft = await page.evaluate(() => restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions));
+    assert.deepEqual(draft.merchant_product_fact_packet.source_records, sources,
+      "cross-report precedence must not discard or reorder observations already in the latest authoritative report");
+  });
+});
+
+test("known full identity rejects foreign facts while ambiguous key-only cold restore imports neither origin", async () => {
+  const current = factReport({ report_id: "current-pending", created_at: "2026-09-03T01:00:00Z" });
+  const source = { type: "merchant_product_image", url: "https://images.example.test/current.jpg",
+    asset_id: "current-asset", rights_status: "pending_merchant_confirmation" };
+  current.report.merchant_product_fact_packet.source_records = [source];
+  for (const scope of ["company", "store", "project", "source", "candidate"]) {
+    const foreign = structuredClone(current);
+    Object.assign(foreign, { report_id: `foreign-${scope}`, created_at: "2026-09-05T01:00:00Z" });
+    foreign.report.merchant_product_fact_packet.source_records[0].rights_status = "merchant_confirmed";
+    if (scope === "company") foreign.company_id = "different-company";
+    if (scope === "store") foreign.store_id = "different-store";
+    if (scope === "project") foreign.report.listing_project_identity.key = "different-project";
+    if (scope === "source") foreign.report.listing_project_identity.source_report_id = "different-source";
+    if (scope === "candidate") foreign.report.listing_project_identity.candidate_id = "different-candidate";
+    for (const mode of ["cold", "current", "prefer-backend"]) {
+      await withRestorePage([foreign, current, listingReport()], async (page) => {
+        const result = await page.evaluate((mode) => {
+          if (mode !== "cold") state.saasListingComposerDraft = saasListingDraftFromReport(state.saasReports[2], "existing_project");
+          const reportsBefore = JSON.stringify(state.saasReports);
+          const draft = restoreSaasListingComposerDraftFromBackendReports({ ...window.restoreOptions,
+            preferBackendLatest: mode === "prefer-backend" });
+          return { draft, reportsUnchanged: reportsBefore === JSON.stringify(state.saasReports), active: state.saasListingComposerDraft };
+        }, mode);
+        assert.equal(result.reportsUnchanged, true, "ambiguity must not delete or rewrite either source's persisted reports");
+        if (mode === "cold" && ["source", "candidate"].includes(scope)) {
+          assert.equal(result.draft, null, "a route key alone cannot select a different complete origin identity");
+          assert.equal(result.active, null, "neither ambiguous origin may be imported into the editor");
+        } else {
+          assert.deepEqual(result.draft.merchant_product_fact_packet.source_records.find(record => record.url === source.url), source, `${scope}/${mode}`);
+          assert.equal(result.draft.source_product_fact_report_id, current.report_id, `${scope}/${mode}`);
+          assert.deepEqual(result.draft.listing_project_identity, identity, `${scope}/${mode}`);
+        }
+      });
+    }
+  }
+});
+
+test("incomplete source identities cannot seed a cold restore or replace an explicitly empty complete anchor", async () => {
+  for (const missing of ["source_report_id", "candidate_id"]) {
+    const incomplete = structuredClone(factReport({ report_id: `incomplete-${missing}`, created_at: "2026-09-05T01:00:00Z" }));
+    delete incomplete.report.listing_project_identity[missing];
+    incomplete.report.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed = true;
+    await withRestorePage([incomplete], async (page) => {
+      assert.equal(await page.evaluate(() => restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions)), null);
+    });
+    const complete = factReport({ report_id: "explicit-empty-origin" });
+    complete.report.listing_project_identity = { key: identity.key, source_report_id: "", candidate_id: "" };
+    complete.report.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed = false;
+    await withRestorePage([incomplete, complete], async (page) => {
+      const draft = await page.evaluate(() => restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions));
+      assert.deepEqual(draft.listing_project_identity, complete.report.listing_project_identity);
+      assert.equal(draft.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed, false);
+    });
+  }
+});
+
+test("navigating from a different draft to an ambiguous route preserves its local copy without displaying it in the target", async () => {
+  const first = factReport();
+  const second = structuredClone(first);
+  second.report_id = "ambiguous-second-origin";
+  second.report.listing_project_identity.source_report_id = "another-origin";
+  const previous = listingReport({ report_id: "previous-project-listing" });
+  previous.report.listing_project_identity = { ...identity, key: "previous-project" };
+  await withRestorePage([first, second, previous], async (page) => {
+    const result = await page.evaluate(() => {
+      const reportsBefore = JSON.stringify(state.saasReports);
+      state.saasListingComposerDraft = saasListingDraftFromReport(state.saasReports[2], "existing_project");
+      state.saasListingComposerDraft.fields.title = "Unsaved previous project title";
+      state.saasListingComposerDraft.merchant_edited_fields = ["title"];
+      const restored = restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions);
+      renderProductListingCenter();
+      return { restored, active: state.saasListingComposerDraft,
+        retained: detachedSaasListingProjectDraft("previous-project")?.draft,
+        reportsUnchanged: JSON.stringify(state.saasReports) === reportsBefore,
+        visibleDraftControls: document.querySelectorAll('[data-saas-listing-draft-field]').length };
+    });
+    assert.equal(result.restored, null);
+    assert.equal(result.active, null, "a failed restore must not leave the previous project's editable projection on the new route");
+    assert.equal(result.visibleDraftControls, 0);
+    assert.equal(result.retained.fields.title, "Unsaved previous project title", "local copy stays in its existing project-scoped holding area");
+    assert.equal(result.reportsUnchanged, true);
+  });
+});
+
+for (const localOrigin of ["missing-anchor", "unobserved-third-origin"]) {
+  test(`ambiguous cold restore holds ${localOrigin} local copy without leaving an editable same-key projection`, async () => {
+    const first = factReport();
+    const second = structuredClone(first);
+    second.report_id = "second-observed-origin";
+    second.report.listing_project_identity.source_report_id = "second-origin";
+    await withRestorePage([first, second], async (page) => {
+      const result = await page.evaluate((localOrigin) => {
+        state.saasConnected = true; state.saasProtectedStateReady = true;
+        const reportsBefore = JSON.stringify(state.saasReports);
+        const draft = saasListingDraftFromReport(state.saasReports[0], "local_unsaved_draft");
+        draft.listing_project_identity = structuredClone(draft.listing_project_identity);
+        if (localOrigin === "missing-anchor") delete draft.listing_project_identity.source_report_id;
+        else draft.listing_project_identity.source_report_id = localOrigin;
+        draft.fields.title = "UNVERIFIED SAME-KEY LOCAL TITLE";
+        draft.merchant_edited_fields = ["title"];
+        state.saasListingComposerDraft = draft;
+        const restored = restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions);
+        setSaasListingWizardStep(2); renderProductListingCenter();
+        return { restored, active: state.saasListingComposerDraft,
+          retained: detachedSaasListingProjectDraft(draft.listing_project_identity.key)?.draft,
+          reportsUnchanged: JSON.stringify(state.saasReports) === reportsBefore,
+          editableControls: document.querySelectorAll('[data-saas-listing-draft-field]:not([disabled])').length };
+      }, localOrigin);
+      assert.equal(result.restored, null);
+      assert.equal(result.active, null);
+      assert.equal(result.editableControls, 0, "returning null alone must not leave the unverified draft editable on this route");
+      assert.equal(result.retained.fields.title, "UNVERIFIED SAME-KEY LOCAL TITLE");
+      assert.equal(result.reportsUnchanged, true);
+    });
+  });
+}
+
 test("later fact changes and explicit unknowns survive restore and require Listing revalidation", async () => {
   const confirmation = factReport({ report_id: "confirmed-tablet-facts", created_at: "2026-09-03T01:00:00Z" });
   confirmation.report.merchant_product_fact_packet = {
@@ -454,7 +638,7 @@ test("later fact changes and explicit unknowns survive restore and require Listi
   }
 });
 
-test("restore excludes other companies, stores, projects and origin identities before selecting the newest Listing", async () => {
+test("anchored restore excludes other companies, stores, projects and origin identities before selecting the newest Listing", async () => {
   const foreignCases = [
     { company_id: "other-company" },
     { store_id: "other-store" },
@@ -469,7 +653,10 @@ test("restore excludes other companies, stores, projects and origin identities b
       listing_handoff: { ...foreign.report.listing_handoff, listing_fields: { ...foreign.report.listing_handoff.listing_fields, title: "Foreign Product Copy" } },
     };
     await withRestorePage([foreign, factReport(), listingReport()], async (page) => {
-      const draft = await page.evaluate(() => restoreSaasListingComposerDraftFromBackendReports(window.restoreOptions));
+      const draft = await page.evaluate(() => {
+        state.saasListingComposerDraft = saasListingDraftFromReport(state.saasReports[2], "existing_project");
+        return restoreSaasListingComposerDraftFromBackendReports({ ...window.restoreOptions, preferBackendLatest: true });
+      });
       assert.equal(draft.fields.title, title, `foreign scope must not win: ${JSON.stringify(foreignScope)}`);
       assert.equal(draft.listing_project_identity.key, identity.key);
     });

@@ -15924,6 +15924,21 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
     typeof activeSaasStore === "function" ? activeSaasStore()?.store_id || "" : "",
   ).trim();
   const activeCompanyId = String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "").trim();
+  const completeIdentityForRestore = (value) => {
+    if (!value || !["key", "source_report_id", "candidate_id"].every((key) =>
+      Object.prototype.hasOwnProperty.call(value, key) && typeof value[key] === "string")) return null;
+    const identity = saasNormalizeListingProjectIdentity(value);
+    return identity && Object.keys(identity).every((key) => identity[key] === value[key]) ? identity : null;
+  };
+  const previousIdentity = completeIdentityForRestore(state.saasListingComposerDraft?.listing_project_identity);
+  const completeReportIdentity = (item = {}) => {
+    const body = item?.report && typeof item.report === "object" ? item.report : {};
+    const value = [item.listing_project_identity, body.listing_project_identity,
+      body.merchant_product_fact_packet?.listing_project_identity, body.sections?.listing_project_identity]
+      .find((candidate) => saasNormalizeListingProjectIdentity(candidate)?.key);
+    return completeIdentityForRestore(value);
+  };
+  const identityKey = (identity) => JSON.stringify([identity.key, identity.source_report_id, identity.candidate_id]);
   const reportIdentityForRestore = (item = {}) => {
     if (typeof saasListingProjectIdentityFromReport === "function") {
       return saasListingProjectIdentityFromReport(item);
@@ -15932,15 +15947,37 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
     return saasNormalizeListingProjectIdentity(item?.listing_project_identity) ||
       saasNormalizeListingProjectIdentity(body.listing_project_identity);
   };
-  const reportPool = rawReportPool.filter((item) => {
+  let reportPool = rawReportPool.filter((item) => {
     if (saasListingRewriteReportIsSuperseded(item)) return false;
     const reportCompanyId = String(item?.company_id || item?.report?.company_id || "").trim();
     if (activeCompanyId && reportCompanyId && reportCompanyId !== activeCompanyId) return false;
     const reportStoreId = String(item?.store_id || item?.report?.store_id || "").trim();
     if (activeStoreId && reportStoreId !== activeStoreId) return false;
+    const complete = completeReportIdentity(item);
     if (!routeProjectId) return true;
-    return reportIdentityForRestore(item)?.key === routeProjectId;
+    return complete?.key === routeProjectId;
   });
+  // A key alone is not an origin identity. A current complete anchor must also
+  // be corroborated by a report in this scope; an unrelated local snapshot is
+  // not authority. Keep that anchor when refreshing editable values.
+  const restoreIdentity = previousIdentity && reportPool.some((item) => {
+    const complete = completeReportIdentity(item);
+    return complete && identityKey(complete) === identityKey(previousIdentity);
+  }) ? previousIdentity : null;
+  if (restoreIdentity) reportPool = reportPool.filter((item) => {
+    const complete = completeReportIdentity(item);
+    return complete && identityKey(complete) === identityKey(restoreIdentity);
+  });
+  if (routeProjectId && !restoreIdentity && new Set(reportPool.map((item) => identityKey(completeReportIdentity(item)))).size > 1) {
+    // Cold key-only navigation cannot decide between distinct source/candidate
+    // identities. Do not import either one's facts or rights; reports remain intact.
+    if (state.saasListingComposerDraft) {
+      stashSaasCurrentListingProjectDraft();
+      state.saasListingComposerDraft = null;
+      state.saasListingSourceMode = "";
+    }
+    return null;
+  }
   const factReports = reportPool.filter((item) => item?.report_type === "merchant.product_facts");
   const packetValues = (packet = {}) => ({
     ...(packet.derived_listing_suggestions && typeof packet.derived_listing_suggestions === "object" ? packet.derived_listing_suggestions : {}),
@@ -15959,6 +15996,23 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
         const incomingPacket = incomingBody.merchant_product_fact_packet || {};
         const mergeArray = (previous = [], incoming = []) =>
           Array.from(new Map([...previous, ...incoming].map((value) => [JSON.stringify(value), value])).values());
+        const mergeSourceRecords = (previous = [], incoming = []) => {
+          const records = [...incoming];
+          // A later scoped report supersedes an older observation of the same
+          // source, including revoked rights or changed hashes. Keep distinct
+          // historical sources, but never rewrite the latest source snapshot
+          // or collapse a product link and image that share a URL.
+          for (const record of previous) {
+            const url = String(record?.url || "").trim();
+            const assetId = String(record?.asset_id || "").trim();
+            if (records.some((current) =>
+              String(current?.type || "") === String(record?.type || "") &&
+              ((url && String(current?.url || "").trim() === url) ||
+              (assetId && String(current?.asset_id || "").trim() === assetId)))) continue;
+            records.push(record);
+          }
+          return records;
+        };
         const incomingUnknownFacts = new Set(
           Array.isArray(incomingPacket.unknown_facts) ? incomingPacket.unknown_facts.map((key) => String(key || "")) : [],
         );
@@ -15997,7 +16051,7 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
               field_evidence: { ...(previousPacket.field_evidence || {}), ...(incomingPacket.field_evidence || {}) },
               fact_conflicts: mergeArray(previousPacket.fact_conflicts || [], incomingPacket.fact_conflicts || []),
               unknown_facts: Array.isArray(incomingPacket.unknown_facts) ? [...incomingPacket.unknown_facts] : [...(previousPacket.unknown_facts || [])],
-              source_records: mergeArray(previousPacket.source_records || [], incomingPacket.source_records || []),
+              source_records: mergeSourceRecords(previousPacket.source_records || [], incomingPacket.source_records || []),
               blocked_by: Array.isArray(incomingPacket.blocked_by) ? [...incomingPacket.blocked_by] : [...(previousPacket.blocked_by || [])],
             },
           },

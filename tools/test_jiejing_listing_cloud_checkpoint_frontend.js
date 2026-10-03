@@ -657,6 +657,7 @@ async function mediaStepFixture(mode = "saved", step = 3) {
       if (mode.endsWith("-url")) evidence[0].url = "https://supplier.example.test/different-set";
       if (mode.endsWith("-rights")) evidence[1].rights_status = "pending_merchant_confirmation";
       if (mode.endsWith("-hash")) evidence[1].sha256 = "b".repeat(64);
+      if (mode.endsWith("-asset")) evidence[1].asset_id = "replacement-image-asset";
     }
     if (mode === "changed-facts") currentBase.report.merchant_product_fact_packet.merchant_confirmed_facts.material = "Different material";
     if (mode === "changed-images") currentBase.report.merchant_product_fact_packet.merchant_confirmed_facts.image_urls = "https://cdn.example.test/other-image.jpg";
@@ -804,7 +805,7 @@ test("reopened unchanged facts tolerate source-record representation defaults wi
   } finally { await device.context.close(); }
 });
 
-for (const evidenceChange of ["url", "rights", "hash"]) {
+for (const evidenceChange of ["url", "rights", "hash", "asset"]) {
   test(`source-record normalization still requires review for a real ${evidenceChange} change`, async () => {
     const { device, originalCopy } = await mediaStepFixture(`normalized-source-records-${evidenceChange}`, 1);
     try {

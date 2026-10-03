@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 PUBLISH_SOURCE_RIGHTS_CONTRACT_VERSION = "2026-08-31-publish-source-rights-evidence-v1"
+MERCHANT_FACT_SAVE_ATTESTATION_VERSION = "merchant_product_fact_save_attestation_v1"
 
 __all__ = [
     "PUBLISH_SOURCE_RIGHTS_CONTRACT_VERSION",
@@ -52,6 +53,61 @@ class PublishEvidenceRepository(Protocol):
     ) -> list[dict[str, Any]]: ...
 
     def get_media_asset_job(self, *, company_id: str, media_job_id: str) -> dict[str, Any] | None: ...
+
+    def get_task(self, *, company_id: str, task_id: str) -> dict[str, Any] | None: ...
+
+
+def build_merchant_fact_save_attestation(
+    *, report_id: str, task_id: str, company_id: str, store_id: str, user_id: str,
+    listing_project_identity: Mapping[str, Any], packet: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Mint only at the authenticated fact-save boundary, never from model output."""
+    return {
+        "contract_version": MERCHANT_FACT_SAVE_ATTESTATION_VERSION,
+        "authority": "authenticated_product_fact_save",
+        "report_id": report_id, "task_id": task_id, "company_id": company_id,
+        "store_id": store_id, "user_id": user_id,
+        "listing_project_identity": _normalize_project_identity(listing_project_identity),
+        "packet_sha256": hashlib.sha256(json.dumps(
+            packet, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")).hexdigest(),
+    }
+
+
+def valid_merchant_fact_save_attestation(report: Mapping[str, Any], task: Mapping[str, Any]) -> bool:
+    """Cross-check server records; a copied report/model/client assertion is insufficient."""
+    try:
+        payload = report.get("report") or {}
+        packet = payload.get("merchant_product_fact_packet") or {}
+        proof = payload.get("merchant_save_attestation")
+        task_input = task.get("input") or {}
+        task_output = task.get("output") or {}
+        task_id = str(task.get("task_id") or "")
+        report_id = str(report.get("report_id") or "")
+        if not (
+            isinstance(proof, dict) and report.get("status") == "saved"
+            and report.get("report_type") == "merchant.product_facts"
+            and task_id.startswith("task_product_facts_")
+            and report_id == "report_product_facts_" + task_id.removeprefix("task_product_facts_")
+            and report.get("task_id") == task_id
+            and task.get("task_type") == "merchant_product_facts" and task.get("status") == "completed"
+            and task.get("runtime_run_id") is None and bool(task.get("user_id"))
+            and task.get("company_id") == report.get("company_id")
+            and task.get("store_id") == report.get("store_id")
+            and task_output.get("report_id") == report_id
+            and task_input.get("merchant_product_fact_packet") == packet
+            and task_input.get("merchant_save_attestation") == proof
+            and _normalize_project_identity(task_input.get("listing_project_identity"))
+                == _normalize_project_identity(payload.get("listing_project_identity"))
+        ):
+            return False
+        return proof == build_merchant_fact_save_attestation(
+            report_id=report_id, task_id=task_id, company_id=task["company_id"],
+            store_id=task["store_id"], user_id=task["user_id"],
+            listing_project_identity=payload["listing_project_identity"], packet=packet,
+        )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
 
 
 def canonicalize_publish_asset_manifest(asset_manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -98,11 +154,19 @@ def resolve_publish_source_rights_evidence(
     refs = evidence_refs if isinstance(evidence_refs, Mapping) else {}
     report_id = _safe_identifier(refs.get("product_fact_report_id"), field="product_fact_report_id")
     report = _get_company_report(repository, company_id=clean_company_id, report_id=report_id)
+    save_task: dict[str, Any] = {}
+    if (report.get("report") or {}).get("merchant_save_attestation"):
+        # Lookup is company-scoped and never uses an incoming task or assertion.
+        try:
+            save_task = repository.get_task(company_id=clean_company_id, task_id=str(report.get("task_id") or "")) or {}
+        except (AttributeError, KeyError, TypeError, ValueError):
+            save_task = {}
     packet = _validated_product_fact_report(
         report,
         company_id=clean_company_id,
         store_id=clean_store_id,
         project=project,
+        merchant_save_task=save_task,
     )
 
     assets = _normalize_requested_assets(asset_manifest)
@@ -430,6 +494,7 @@ def _validated_product_fact_report(
     company_id: str,
     store_id: str,
     project: Mapping[str, str],
+    merchant_save_task: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if str(report.get("report_type") or "") != "merchant.product_facts":
         raise PublishSourceRightsEvidenceError("publish_evidence_not_ready", "product_fact_report_type_invalid")
@@ -440,7 +505,13 @@ def _validated_product_fact_report(
     if report_project != project:
         raise PublishSourceRightsEvidenceError("publish_evidence_scope_mismatch", "listing_project_mismatch")
     packet = payload.get("merchant_product_fact_packet") if isinstance(payload.get("merchant_product_fact_packet"), dict) else {}
-    if packet.get("source") != "authenticated_merchant_request":
+    # Keep visual provenance intact. New saves prove authentication separately
+    # through the server-owned report AND its completed fact-save task. Legacy
+    # authenticated (non-vision) reports retain their existing validation path.
+    has_attestation = "merchant_save_attestation" in payload
+    if (has_attestation and not valid_merchant_fact_save_attestation(report, merchant_save_task or {})) or (
+        not has_attestation and packet.get("source") != "authenticated_merchant_request"
+    ):
         raise PublishSourceRightsEvidenceError("publish_evidence_not_ready", "product_facts_not_authenticated")
     if packet.get("simulation_only") is True:
         raise PublishSourceRightsEvidenceError("publish_evidence_not_ready", "simulation_only_product_facts")

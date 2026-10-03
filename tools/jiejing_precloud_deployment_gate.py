@@ -117,6 +117,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("listing_grounding_security", [sys.executable, "tools/test_jiejing_listing_grounding_security.py"]),
     ("listing_draft_generation_api", [sys.executable, "tools/test_jiejing_listing_draft_generation_api.py"]),
     ("listing_draft_checkpoint_api", [sys.executable, "tools/test_jiejing_listing_draft_checkpoint_api.py"]),
+    ("product_fact_auth_http", [sys.executable, "tools/test_jiejing_product_fact_auth_http.py"]),
     ("listing_platform_trial_quota", [sys.executable, "tools/test_jiejing_listing_platform_trial_quota.py"]),
     (
         "listing_platform_trial_concurrency",

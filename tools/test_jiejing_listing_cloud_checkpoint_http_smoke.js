@@ -8,6 +8,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
+let diagnostic = { stage: "startup" };
 
 async function main() {
   let input = "";
@@ -30,6 +31,8 @@ async function main() {
     .replace("</body>", '<script src="/app.js"></script></body>');
   const checkpointPath = `/stores/${fixture.store_id}/listing-drafts/${fixture.identity.key}/checkpoint`;
   const statusPath = `/stores/${fixture.store_id}/merchant-project-status`;
+  const factPath = `/stores/${fixture.store_id}/product-facts`;
+  const wizardScenario = fixture.scenario === "unchanged-facts-wizard";
   const requests = [], forbidden = [], errors = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
@@ -40,12 +43,15 @@ async function main() {
     const checkpointRequest = url.pathname === checkpointPath && ["GET", "POST"].includes(req.method);
     const statusRequest = url.pathname === statusPath && req.method === "GET"
       && url.searchParams.size === 1 && url.searchParams.get("project_id") === fixture.identity.key;
-    if (!checkpointRequest && !statusRequest) {
+    const wizardRequest = wizardScenario && ((url.pathname === factPath && req.method === "POST")
+      || (url.pathname === "/reports" && req.method === "GET"));
+    if (!checkpointRequest && !statusRequest && !wizardRequest) {
       forbidden.push("unapproved_request"); res.writeHead(404); return res.end();
     }
     // The browser's real HttpOnly session cookie is forwarded unchanged. The
     // Python server, not this proxy, authenticates and applies all persistence.
-    if (checkpointRequest) requests.push({ method: req.method, query: Object.fromEntries(url.searchParams) });
+    if (checkpointRequest || wizardRequest) requests.push({ method: req.method, path: url.pathname,
+      query: Object.fromEntries(url.searchParams) });
     const upstream = http.request(new URL(req.url, api), { method: req.method, headers: req.headers }, (response) => {
       res.writeHead(response.statusCode, response.headers); response.pipe(res);
     });
@@ -57,6 +63,131 @@ async function main() {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${server.address().port}`;
     browser = await chromium.launch({ headless: true, channel: process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome" });
+    if (wizardScenario) {
+      const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+      await context.addCookies([{ name: "jiejing_saas_session", value: fixture.session_token,
+        url: base, httpOnly: true, sameSite: "Lax" }]);
+      const page = await context.newPage();
+      page.on("pageerror", () => errors.push("page_error"));
+      await page.route("**/*", route => {
+        const url = new URL(route.request().url());
+        if (url.origin === base) return route.continue();
+        if (url.href === "https://media.example.test/approved-gold-set.jpg") return route.fulfill({
+          status: 200, contentType: "image/svg+xml",
+          body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="gold"/></svg>' });
+        forbidden.push("foreign_request"); return route.abort();
+      });
+      const query = new URLSearchParams({ source_report_id: fixture.identity.source_report_id,
+        candidate_id: fixture.identity.candidate_id });
+      async function readCheckpoint() {
+        const response = await context.request.get(`${base}${checkpointPath}?${query}`);
+        assert.equal(response.status(), 200);
+        return response.json();
+      }
+      async function mount(startStep) {
+        await page.goto(`${base}/app.html?start=app&qa=public-saas&view=product&project=${fixture.identity.key}`);
+        await page.evaluate(async ({ fixture, base, startStep }) => {
+          window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
+          localStorage.setItem(saasStorageKeys.storeId, fixture.store_id);
+          localStorage.setItem(saasStorageKeys.sessionHint, "1");
+          localStorage.setItem("jiejing_saas_backend_session_hint", "1");
+          state.saasApiBase = base;
+          state.saasIdentity = fixture.profile.identity; state.saasUser = fixture.profile.user;
+          state.saasCompany = fixture.profile.company; state.saasPermissions = fixture.profile.permissions;
+          state.saasStores = [{ store_id: fixture.store_id, company_id: fixture.profile.identity.company_id,
+            platform: "ebay", marketplace: "EBAY_US", status: "authorized" }];
+          state.saasConnected = true; state.saasProtectedStateReady = true; state.saasProtectedStateFromCache = false;
+          state.saasTasks = []; state.saasListingMode = "single"; state.saasLoading = false;
+          state.saasAccountHealth = { store_id: fixture.store_id, company_id: fixture.profile.identity.company_id,
+            status: "restricted", incident_mode: true, can_execute_real_writes: false };
+          const reports = await saasFetch(`/reports?store_id=${encodeURIComponent(fixture.store_id)}`);
+          state.saasReports = reports.reports;
+          state.saasListingComposerDraft = null; state.saasDetachedListingProjectDrafts = {};
+          state.view = "product"; syncSaasPublicMvpMode(); bindEvents();
+          restoreSaasListingComposerDraftFromBackendReports({ preferBackendLatest: true, projectId: fixture.identity.key });
+          await hydrateSaasListingCloudCheckpoint({ force: true });
+          [entryShell, siteShell, onboardingShell].forEach(shell => shell.classList.add("is-hidden"));
+          appShell.classList.remove("is-hidden"); document.body.classList.remove("site-locked");
+          document.body.dataset.view = "product";
+          document.querySelectorAll(".view").forEach(view => view.classList.toggle("is-active", view.id === "view-product"));
+          setSaasListingWizardStep(startStep); renderProductListingCenter();
+        }, { fixture: { ...fixture, session_token: undefined }, base, startStep });
+        assert.equal(await page.locator(`#view-product [data-listing-wizard-step="${startStep}"]`).isVisible(), true);
+      }
+      async function move(direction, expectedStep) {
+        await page.locator(`#view-product [data-saas-action="listing-wizard-${direction}"]`).click();
+        await page.waitForFunction(() => !saasListingWizardRecord()?.busy);
+        const actual = await page.evaluate(() => ({ step: saasListingWizardRecord()?.step,
+          status: saasListingCloudRecord()?.status, conflict: Boolean(saasListingCloudRecord()?.conflict) }));
+        diagnostic.navigation = actual;
+        assert.equal(actual.step, expectedStep, "wizard navigation must complete through the actual save handlers");
+        assert.equal(await page.locator(`#view-product [data-listing-wizard-step="${expectedStep}"]`).isVisible(), true,
+          "the destination wizard panel must actually be visible");
+      }
+      async function intakeValues() {
+        return page.locator("#saasPublishIntakeForm").evaluate(form => Object.fromEntries(
+          [...form.elements].filter(item => item.name).map(item => [item.name, item.type === "checkbox" ? item.checked : item.value])));
+      }
+      diagnostic.stage = "initial_restore";
+      await mount(2);
+      const sourceProjection = await page.evaluate(() => {
+        const draft = state.saasListingComposerDraft;
+        const report = state.saasReports.find(item => item.report_id === draft.source_product_fact_report_id);
+        return { actual: sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet).source_records,
+          expected: sanitizeSaasMerchantProductFactPacketSnapshot(report.report.merchant_product_fact_packet).source_records };
+      });
+      diagnostic.source_projection_equal = require("node:util").isDeepStrictEqual(sourceProjection.actual, sourceProjection.expected);
+      assert.deepEqual(sourceProjection.actual, sourceProjection.expected,
+        "current authoritative sources must survive history restore without loss or obsolete duplicates");
+      assert.equal(await page.locator('#view-product [data-saas-listing-draft-field="title"]').inputValue(), fixture.expected_copy.title);
+      diagnostic.stage = "copy_to_images";
+      await move("next", 3);
+      diagnostic.stage = "images_to_publish";
+      await move("next", 4);
+      diagnostic.stage = "edit_publish_intake";
+      await page.getByRole("button", { name: "编辑发布资料", exact: true }).click();
+      const firstForm = page.locator("#saasPublishIntakeForm");
+      assert.equal(await firstForm.isVisible(), true);
+      const costs = { shipping_cost: "4.20", ebay_fee: "2.07", ad_budget: "0", return_risk_reserve: "0.65",
+        exchange_rate: "1", net_profit: "3.57", gross_margin_percent: "27.48" };
+      for (const [key, value] of Object.entries(costs)) await firstForm.locator(`[name="${key}"]`).fill(value);
+      await page.locator('#view-product [data-saas-listing-cloud-action="save-publish-intake"]').click();
+      await page.waitForFunction(() => saasListingCloudRecord()?.status === "saved" && !saasListingCloudRecord()?.dirty);
+      const beforeReload = await intakeValues();
+      diagnostic.stage = "cold_reload";
+      await mount(4);
+      assert.deepEqual(await intakeValues(), beforeReload, "all published-form controls must survive the real checkpoint reload");
+      const before = await readCheckpoint();
+      diagnostic.stage = "unchanged_facts_roundtrip";
+      await move("previous", 3); await move("previous", 2); await move("previous", 1);
+      const beforeSignature = await page.evaluate(() => saasListingMediaCopyFactSignature(saasMerchantProductFactPacket(), { includeMedia: true }));
+      await move("next", 2);
+      await page.evaluate(async () => { if (saasListingCloudRecord()?.read) await saasListingCloudRecord().read; });
+      const after = await readCheckpoint();
+      const afterSignature = await page.evaluate(() => saasListingMediaCopyFactSignature(saasMerchantProductFactPacket(), { includeMedia: true }));
+      const oldPacket = before.current_base_report.report.merchant_product_fact_packet;
+      const newPacket = after.current_base_report.report.merchant_product_fact_packet;
+      const packetEqual = require("node:util").isDeepStrictEqual(oldPacket, newPacket);
+      const signatureBefore = JSON.parse(beforeSignature), signatureAfter = JSON.parse(afterSignature);
+      diagnostic = { ...diagnostic, server_packets_equal: packetEqual,
+        before_revision: before.current_revision, after_revision: after.current_revision,
+        base_changed: after.base_changed, base_id_advanced: before.current_base_report_id !== after.current_base_report_id,
+        signature_changed_keys: Object.keys(signatureBefore).filter(key => JSON.stringify(signatureBefore[key]) !== JSON.stringify(signatureAfter[key])),
+        checkpoint_post_count: requests.filter(item => item.method === "POST" && item.path === checkpointPath).length };
+      assert.equal(packetEqual, true, "unchanged UI must persist semantically identical server fact packets");
+      assert.equal(after.base_changed, false, "an unchanged save must not strand the checkpoint on its former fact base");
+      assert.equal(await page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).count(), 0,
+        "an unchanged roundtrip must not ask the merchant to resolve a manufactured conflict");
+      for (const key of ["title", "selling_points", "description"]) {
+        assert.equal(after.checkpoint.fields[key], fixture.expected_copy[key]);
+        assert.equal(await page.locator(`#view-product [data-saas-listing-draft-field="${key}"]`).inputValue(), fixture.expected_copy[key]);
+      }
+      assert.deepEqual(forbidden, []); assert.deepEqual(errors, []);
+      await context.close();
+      process.stdout.write(JSON.stringify({ ...diagnostic, scenario: fixture.scenario,
+        no_conflict: true, external_requests: 0, page_errors: 0, restored_publish_fields: Object.keys(beforeReload).length }));
+      return;
+    }
     const keys = ["title", "selling_points", "description", "category", "item_specifics", "keywords", "price", "images", "logistics", "risk_notes"];
     const visibleKeys = keys.filter((key) => !["keywords", "risk_notes"].includes(key));
     const originalFields = Object.fromEntries(keys.map((key) => [key, `Original ${key}`]));
@@ -154,4 +285,4 @@ async function main() {
   }
 }
 
-main().catch(() => { process.stderr.write("checkpoint_http_browser_smoke_failed\n"); process.exitCode = 1; });
+main().catch(() => { process.stderr.write(JSON.stringify({ error: "checkpoint_http_browser_smoke_failed", ...diagnostic }) + "\n"); process.exitCode = 1; });

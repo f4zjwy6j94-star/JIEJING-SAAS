@@ -403,6 +403,7 @@ FILES=(
   "tools/test_jiejing_listing_grounding_security.py"
   "tools/test_jiejing_listing_draft_generation_api.py"
   "tools/test_jiejing_listing_draft_checkpoint_api.py"
+  "tools/test_jiejing_product_fact_auth_http.py"
   "tools/test_jiejing_listing_platform_trial_quota.py"
   "tools/test_jiejing_listing_platform_trial_concurrency.py"
   "tools/test_jiejing_platform_trial_reservation_lifecycle.py"
@@ -846,6 +847,7 @@ python3 -m py_compile \
   tools/test_jiejing_listing_grounding_security.py \
   tools/test_jiejing_listing_draft_generation_api.py \
   tools/test_jiejing_listing_draft_checkpoint_api.py \
+  tools/test_jiejing_product_fact_auth_http.py \
   tools/test_jiejing_listing_platform_trial_quota.py \
   tools/test_jiejing_listing_platform_trial_concurrency.py \
   tools/test_jiejing_platform_trial_reservation_lifecycle.py \

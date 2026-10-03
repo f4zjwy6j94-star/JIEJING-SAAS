@@ -235,6 +235,94 @@ class CheckpointHTTPTests(unittest.TestCase):
         self.assertEqual(self.request("/tasks")[1], before_tasks)
         self.assertEqual(self.request("/reports")[1], before_reports)
 
+    def _browser_unchanged_fact_roundtrip(self, *, source_is_image=False):
+        """Actual DOM -> fact POST -> checkpoint CAS, including a cold reload."""
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node is required for the real wizard-to-HTTP integration")
+        packet = {
+            "product_name": "Gold wood-handled measuring set", "simulation_only": True,
+            "source": "backend_product_vision_extraction",
+            "vision_contract_version": "jiejing_ai_ceo_product_vision_intake_v1",
+            "buyer_copy_requires_validated_listing_generation": True,
+            "merchant_confirmed_facts": {
+                "product_name": "Gold wood-handled measuring set", "condition": "NEW",
+                "material": "Gold-tone metal and wood", "source_url": "https://supplier.example.test/gold-set",
+                "sku": "SIM-GOLD-SET", "package_weight_g": "380", "package_length_cm": "22",
+                "package_width_cm": "12", "package_height_cm": "5", "unit_cost": "2.50",
+                "selling_price": "12.99", "currency": "USD", "quantity": "10",
+                "item_location": "CN / Shenzhen", "handling_time_days": "3",
+                "image_urls": "https://media.example.test/approved-gold-set.jpg", "image_rights_confirmed": True,
+            },
+            "field_evidence": {"material": {"source_type": "merchant_image", "image_indexes": [0],
+                                             "confidence": 0.9, "merchant_confirmation_received": True}},
+            "source_records": [{"type": "merchant_product_image", "asset_id": "local-historical-upload",
+                                "sha256": "ab" * 32, "original_filename": "fixture.jpg", "source_index": 0,
+                                "width": 640, "height": 640, "rights_status": "pending_merchant_confirmation",
+                                "signed_url_persisted": False}],
+            "fact_conflicts": [],
+        }
+        if source_is_image:
+            packet["merchant_confirmed_facts"]["source_url"] = packet["merchant_confirmed_facts"]["image_urls"]
+        action = self.fact_action("Gold-tone metal and wood", self.base_report_id)
+        action["merchant_product_fact_packet"] = packet
+        status, saved = self.request(f"/stores/{self.store_id}/product-facts", method="POST", body=action)
+        self.assertEqual(status, 201)
+        self.base_report_id = saved["report"]["report_id"]
+        # Minimized production pattern: an older scoped report has the same
+        # selected image URL pending; the current saved packet confirms it.
+        # Restoring history must not revive the obsolete rights observation.
+        historical_id = self.report_fixture("wizard_old_pending", "merchant.product_facts",
+                                            (datetime.now().astimezone() - timedelta(minutes=1)).isoformat())
+        historical = copy.deepcopy(saved["report"]["report"])
+        for record in historical["merchant_product_fact_packet"]["source_records"]:
+            if record.get("url") == packet["merchant_confirmed_facts"]["image_urls"]:
+                record.update(rights_status="pending_merchant_confirmation", signed_url_persisted=False)
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+            conn.execute("update reports set report_json = ? where report_id = ?", (json.dumps(historical), historical_id))
+        fields = {key: "" for key in FIELD_KEYS}
+        fields.update(title="Gold-Tone Measuring Set", selling_points="4 cups\n4 spoons\nWood handles",
+                      description="Eight gold-tone pieces with wood handles", category="Measuring Cups and Spoons",
+                      item_specifics="Material: Gold-tone metal and wood", price="12.99",
+                      images=packet["merchant_confirmed_facts"]["image_urls"], logistics="Shenzhen, China")
+        # Seed a historical generation artifact, not a provider call. All later
+        # reads, fact saves and checkpoint changes use the real HTTP handlers.
+        listing_id = self.report_fixture("wizard_generation", "listing.package", datetime.now().astimezone().isoformat())
+        generated = {"contract_version": "listing_ai_draft_generation_v1", "product": packet["product_name"],
+                     "listing_project_identity": self.identity,
+                     "merchant_product_fact_packet": saved["merchant_product_fact_packet"],
+                     "listing_handoff": {"ready_for_listing_draft": True, "source_mode": "project_scoped_live_model",
+                         "target_report_type": "listing.package", "listing_fields": {
+                             **fields, "selling_points": fields["selling_points"].splitlines(),
+                             "description_seed": fields["description"]}}}
+        with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+            conn.execute("update reports set report_json = ?, runtime_run_id = ? where report_id = ?",
+                         (json.dumps(generated), "listing_draft_generation", listing_id))
+        body = {**self.body, "base_report_id": listing_id, "fields": fields, "merchant_edited_fields": []}
+        self.assertEqual(self.request(self.path, method="POST", body=body)[0], 201)
+        result = subprocess.run(
+            [node, str(ROOT / "tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js")],
+            cwd=ROOT, text=True, encoding="utf-8", capture_output=True, timeout=90,
+            input=json.dumps({"scenario": "unchanged-facts-wizard", "api_base": self.base,
+                              "session_token": self.token, "profile": self.request("/me")[1],
+                              "store_id": self.store_id, "identity": self.identity, "expected_copy": fields}),
+        )
+        # The child emits an allowlisted diagnostic, never a raw exception,
+        # request header, cookie, session value or browser trace.
+        self.assertEqual(result.returncode, 0, "real unchanged-facts wizard failed: " + result.stderr)
+        evidence = json.loads(result.stdout)
+        self.assertEqual(evidence["scenario"], "unchanged-facts-wizard")
+        self.assertTrue(evidence["no_conflict"])
+        self.assertTrue(evidence["server_packets_equal"])
+        self.assertEqual(evidence["restored_publish_fields"], 35)
+        self.assertEqual(evidence["external_requests"], 0)
+        self.assertEqual(evidence["page_errors"], 0)
+
+    def test_browser_unchanged_facts_keep_cloud_copy_after_wizard_roundtrip(self):
+        self._browser_unchanged_fact_roundtrip()
+
+    def test_browser_source_link_and_image_at_same_url_keep_both_authoritative_records(self):
+        self._browser_unchanged_fact_roundtrip(source_is_image=True)
+
     def fact_action(self, material, expected, *, mutation=None, identity=None):
         body = copy.deepcopy(self.fact_body)
         body["listing_project_identity"] = identity or self.identity

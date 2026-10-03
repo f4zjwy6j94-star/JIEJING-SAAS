@@ -45,6 +45,7 @@ from .product_feedback import (
     product_feedback_payload_hash,
 )
 from .security import hash_password, verify_password
+from .publish_source_rights import build_merchant_fact_save_attestation, valid_merchant_fact_save_attestation
 from .sensitive_text import contains_secret_like_data, contains_secret_like_text
 
 
@@ -6054,6 +6055,12 @@ class SaaSRepository:
                       "real_platform_writes_enabled": False, "secret_exposed": False}
         if project:
             task_input["listing_project_identity"] = project
+            # This evidence is minted here, not by the browser or the generic
+            # report writer. Packet.source remains the original provenance.
+            task_input["merchant_save_attestation"] = build_merchant_fact_save_attestation(
+                report_id=report_id, task_id=task_id, company_id=company_id, store_id=store_id,
+                user_id=user_id, listing_project_identity=project, packet=safe_packet,
+            )
         if versioned:
             task_input["merchant_product_fact_save"] = {
                 **save_context,
@@ -6098,6 +6105,26 @@ class SaaSRepository:
             elif versioned and save_context["expected_fact_report_id"] != current_id:
                 raise ProductFactSaveConflict({"error_code": "product_fact_version_conflict", "current_fact_report_id": current_id,
                     "current_fact_report": self._report_row_to_dict(current) if current else None, "secret_exposed": False})
+            unchanged = False
+            if versioned and previous:
+                # An unchanged action has its own replay receipt but points at
+                # the existing fact version. A later replay never revives it.
+                prior_output = _load_json_field(previous["output_json"])
+                report_id = str(prior_output.get("report_id") or report_id)
+                unchanged = prior_output.get("unchanged") is True
+            elif versioned and current:
+                current_report = self._report_row_to_dict(current)
+                current_task_row = conn.execute("select * from tasks where task_id = ? and company_id = ? and store_id = ?",
+                    (current_report["task_id"], company_id, store_id)).fetchone()
+                current_packet = current_report["report"].get("merchant_product_fact_packet") or {}
+                unchanged = bool(current_task_row and valid_merchant_fact_save_attestation(
+                    current_report, self._task_row_to_dict(current_task_row)) and
+                    normalize_merchant_product_fact_packet(current_packet, source="authenticated_merchant_request") == safe_packet)
+                if unchanged:
+                    # Equality is considered only AFTER the full identity and
+                    # CAS checks. Never deduplicate against an older A version.
+                    report_id = current_id
+                    task_input.pop("merchant_save_attestation", None)
             created_at = self._merchant_product_fact_next_time(conn, company_id, store_id, project)
             inserted = conn.execute(
                 """insert or ignore into tasks (
@@ -6115,12 +6142,15 @@ class SaaSRepository:
             if created:
                 self._insert_audit(conn, company_id=company_id, store_id=store_id, user_id=user_id,
                                    actor_type="user", action_type="task.create", target_type="task", target_id=task_id,
-                                   summary="SaaS product fact checkpoint created.", details={"task_type": "merchant_product_facts", "title": title})
-                self.save_merchant_product_fact_report(task=task, packet=safe_packet,
-                    listing_project_identity=project, _connection=conn, _report_id=report_id, _created_at=created_at)
+                                    summary="SaaS product fact save reused current checkpoint." if unchanged else "SaaS product fact checkpoint created.",
+                                    details={"task_type": "merchant_product_facts", "title": title})
+                if not unchanged:
+                    self.save_merchant_product_fact_report(task=task, packet=safe_packet,
+                        listing_project_identity=project, _connection=conn, _report_id=report_id, _created_at=created_at,
+                        _merchant_save_attestation=task_input.get("merchant_save_attestation"))
                 output = {"report_id": report_id, "unknown_fact_count": len(safe_packet.get("unknown_facts") or []),
                           "ready_for_listing_generation": bool(safe_packet.get("listing_readiness", {}).get("ready_for_listing_generation")),
-                          "real_platform_writes_enabled": False, "secret_exposed": False}
+                          "unchanged": unchanged, "real_platform_writes_enabled": False, "secret_exposed": False}
                 conn.execute("update tasks set status = ?, updated_at = ?, output_json = ? where task_id = ? and company_id = ?",
                              ("completed", created_at, json.dumps(output, ensure_ascii=False), task_id, company_id))
             report_row = conn.execute(
@@ -6138,6 +6168,7 @@ class SaaSRepository:
                     **({"listing_project_identity": report["report"]["listing_project_identity"]}
                        if report["report"].get("listing_project_identity") else {}),
                     "idempotent_replay": not created, "model_called": False,
+                    "unchanged": unchanged,
                     "current_fact_report_id": current_id, "is_current": current_id == report_id,
                     **({"current_fact_report": self._report_row_to_dict(current) if current else None} if current_id != report_id else {}),
                     "real_platform_writes_enabled": False, "secret_exposed": False}
@@ -6291,6 +6322,7 @@ class SaaSRepository:
         _report_id: str | None = None,
         _created_at: str | None = None,
         _semantic_dispatch: dict[str, Any] | None = None,
+        _merchant_save_attestation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist one authenticated merchant product-fact checkpoint."""
 
@@ -6331,6 +6363,8 @@ class SaaSRepository:
             report_payload["listing_project_identity"] = safe_listing_project_identity
         if isinstance(_semantic_dispatch, dict):
             report_payload["semantic_dispatch"] = _redact_secret_like(_semantic_dispatch)
+        if isinstance(_merchant_save_attestation, dict):
+            report_payload["merchant_save_attestation"] = _merchant_save_attestation
         with nullcontext(_connection) if _connection is not None else self._connect() as conn:
             if _connection is None:
                 if self.database_engine != "postgres":
