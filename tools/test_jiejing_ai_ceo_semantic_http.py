@@ -74,6 +74,16 @@ class Model:
                     "read_images": bool(data.get("has_new_images")) and action in {"new", "current"},
                     "save_artifact": (research or action in {"new", "current"}) and "不要保存" not in message, "candidate_count": 1,
                     "excluded_candidates": [], "listing_deferred": False, "steps": ["整理商品资料"]}, ensure_ascii=False)
+                if "检索合同纠错" in message:
+                    self.research_attempts = getattr(self, "research_attempts", 0) + 1
+                    plan = json.loads(text)
+                    queries = [{"subject": name, "query": "site:ebay.com/itm/ " + name}
+                               for name in ("adhesive cable clips", "silicone drain hair catcher")]
+                    plan.update(intent="research", project_action="none", product_name="", read_images=False,
+                        save_artifact=True, research_delivery="candidate_selection", candidate_count=2,
+                        listing_deferred=True, search="web_search", query=queries[0]["query"],
+                        research_queries=queries if self.research_attempts > 1 else [])
+                    text = json.dumps(plan, ensure_ascii=False)
         else:
             # Report prompt leakage as ordinary provider output so HTTP callers
             # can observe context isolation without mocking the chat function.
@@ -85,6 +95,14 @@ class Model:
             text = ("发现旧资料泄漏。" if old else "商品资料已按这次任务整理。") + " 未确认的重量、尺寸、材质、采购价和图片授权仍需核对；完成核对后可进入 Listing，发布前需要确认。"
             if "研究候选" in prompt:
                 text = "### 候选商品 1：咖啡量勺\n推荐度评分：85/100\n理由：厨房计量场景明确，小件容易比较款式。尚未取得供应商来源，材质尺寸重量成本和图片权利均待核验。\n建议先自行找到货源并核对真实商品资料，再生成 Listing；当前不发布。"
+            if "检索合同纠错" in prompt:
+                text = ("### 候选商品 1：adhesive cable clips\n历史页面参考 [S1]，页面标价 $5.99。"
+                    "供应商材质、成本、尺寸、重量和图片授权未知；风险是粘胶掉落，需实物验证。\n"
+                    "| 项目 | 结论 |\n|---|---|\n| 当前在售状态 | 未验证 |\n"
+                    "### 候选商品 2：silicone drain hair catcher\n历史页面参考 [S2]，页面标价 $4.99。"
+                    "供应商材质、成本、尺寸、重量和图片授权未知；风险是排水口不适配，需实物验证。\n"
+                    "| 项目 | 结论 |\n|---|---|\n| 当前在售状态 | 未验证 |\n"
+                    "推荐先找 adhesive cable clips 的供应商并核对资料；只是待核对方向，不是销量或盈利证明。")
         return {"text": text, "model": self.model, "model_mode": "live_unit",
             "finish_reason": "stop", "_usage": {"input_tokens": 30, "output_tokens": 40, "total_tokens": 70}}
 
@@ -102,9 +120,22 @@ class Vision:
             "facts": {"material": {"value": "new image wood", "confidence": .99, "image_indexes": [1]}}},
             "usage": {"input_tokens": 17, "output_tokens": 9, "total_tokens": 26}}
 api.fal_product_vision_client_from_env = lambda: Vision()
+from jiejing_saas import ai_ceo_chat as chat
+class ResearchSearch:
+    def provider_status(self, provider):
+        return {"configured": True, "provider": provider, "secret_exposed": False}
+    def probe(self, config):
+        first = "adhesive cable clips" in config.query
+        name, item, price = (("adhesive cable clips", "123456789001", "5.99") if first else
+                             ("silicone drain hair catcher", "123456789002", "4.99"))
+        return {"status": "ready", "provider": config.provider, "query": config.query,
+                "results": [{"title": name, "url": "https://www.ebay.com/itm/" + item,
+                             "snippet": name + ". US $" + price}]}
+chat.PublicSearchProbeAdapter = ResearchSearch
 def reject_network(*args, **kwargs):
     raise AssertionError("semantic HTTP fixture forbids external requests")
-api.urllib.request.urlopen = reject_network
+import urllib.request
+urllib.request.urlopen = reject_network
 '''
 
 
@@ -453,6 +484,42 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         self.assertNotIn("listing_project_identity", payload["ai_ceo_chat"])
         self.assertEqual(before, self.reports())
 
+    def test_http_quota_ignores_internal_records_but_keeps_real_limit_and_replay(self):
+        repository = SaaSRepository(Path(self.temp.name) / "saas.sqlite", database_engine="sqlite", database_url="")
+        scope = {"company_id": self.old["task"]["company_id"], "store_id": self.store,
+                 "user_id": self.old["task"]["user_id"]}
+        _, initial = self.call("/billing/usage")
+        limit = next(row["limit"] for row in initial["billing_usage"]["quota_status"] if row["unit"] == "ai_ceo_task")
+        for kind in ("ai_ceo_chat_request", "merchant_ceo_chat_attempt", "merchant_product_facts", "ai_ceo_product_vision"):
+            for _ in range(30):
+                repository.create_task(**scope, task_type=kind, title="internal fixture", input_data={})
+        for _ in range(limit - 1):
+            repository.create_task(**scope, task_type="product_workflow", title="business fixture", input_data={})
+        before = self.reports()
+        body = self.envelope("只聊聊天，不改动商品。")
+        path = f"/stores/{self.store}/merchant-ceo/chat"
+        status, first = self.call(path, body)
+        self.assertEqual(201, status, first.get("ai_ceo_chat", {}).get("blocked_by"))
+        self.assertEqual("ready", first["semantic_dispatch"]["status"])
+        self.assertEqual(before, self.reports())
+        _, usage = self.call("/billing/usage")
+        self.assertEqual(limit, usage["billing_usage"]["usage"]["monthly_task_count"])
+        status, replay = self.call(path, body)
+        self.assertEqual(201, status)
+        self.assertTrue(replay["idempotent_replay"])
+        for _ in range(2):
+            status, blocked = self.call(path, self.envelope("聊聊天，再发起一次。"))
+            self.assertEqual(402, status)
+            self.assertFalse(blocked["usage_consumed"])
+            self.assertIn("subscription_quota_blocked", blocked["ai_ceo_chat"]["blocked_by"])
+        _, usage = self.call("/billing/usage")
+        self.assertEqual(limit, usage["billing_usage"]["usage"]["monthly_task_count"])
+        _, tasks = self.call("/tasks")
+        chats = [item for item in tasks["tasks"] if item["task_type"] == "merchant_ceo_chat"]
+        self.assertEqual(1, len(chats))
+        self.assertEqual(2, chats[0]["output"]["model_request_count"])
+        self.assertEqual(before, self.reports())
+
     def test_idempotency_conflict_also_carries_an_unbound_receipt(self):
         body = self.envelope("另外整理咖啡量勺。")
         _, first = self.call(f"/stores/{self.store}/merchant-ceo/chat", body)
@@ -488,6 +555,32 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         self.assertEqual("ready", continued["semantic_dispatch"]["status"])
         self.assertEqual(candidate_identity, continued["semantic_dispatch"]["target_project_identity"])
         self.assertEqual("咖啡量勺", continued["ai_ceo_chat"]["context"]["active_listing_context"]["product_name"])
+
+    def test_open_research_repairs_queries_and_saves_only_its_evidence_report(self):
+        before = self.reports()
+        body = self.envelope("无货源研究候选，检索合同纠错：联网比较两种商品，保存报告，不建项目，不改旧商品。")
+        path = f"/stores/{self.store}/merchant-ceo/chat"
+        status, result = self.call(path, body)
+        self.assertEqual(201, status, result.get("ai_ceo_chat", {}).get("blocked_by"))
+        self.assertEqual("ready", result["semantic_dispatch"]["status"])
+        self.assertEqual("none", result["semantic_dispatch"]["project_action"])
+        self.assertEqual({}, result["semantic_dispatch"]["target_project_identity"])
+        self.assertIsNone(result.get("product_vision_report"))
+        self.assertTrue(result["ai_ceo_chat"]["answer_quality"]["accepted"])
+        report = result["ai_ceo_market_report"]
+        self.assertTrue(report)
+        self.assertEqual(2, len(report["report"]["product_candidates"]))
+        self.assertNotIn("OLD_GOLDEN_EIGHT", result["ai_ceo_chat"]["answer"])
+        after = self.reports()
+        self.assertEqual(before, [item for item in after if item["report_id"] != report["report_id"]])
+        status, replay = self.call(path, body)
+        self.assertEqual(201, status)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(after, self.reports())
+        _, tasks = self.call("/tasks")
+        chats = [item for item in tasks["tasks"] if item["task_type"] == "merchant_ceo_chat"]
+        self.assertEqual(1, len(chats))
+        self.assertEqual(3, chats[0]["output"]["model_request_count"])
 
     def test_platform_trial_counts_one_turn_for_two_calls_and_blocks_after_twenty(self):
         first_body = self.envelope("平台试用，聊聊天。")

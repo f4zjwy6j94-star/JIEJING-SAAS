@@ -4745,6 +4745,47 @@ def _semantic_research_candidate_source_blockers(*, answer: str, records: list[d
     return []
 
 
+def _research_availability_statements(answer: str) -> list[str]:
+    """Pair Markdown availability labels with their values, not peer caveats.
+
+    A header such as '当前在售状态' is a question/field, not an assertion.
+    Only aligned tables are projected; malformed tables remain conservative.
+    Source/price/brand checks continue to inspect their original source cells.
+    """
+    lines = re.sub(r"[*_`]+", "", str(answer or "")).splitlines()
+    label = re.compile(r"(?:(?:当前|目前|现在)?(?:在售)?(?:状态|情况)|"
+                       r"(?:current\s+)?(?:availability|status))", re.I)
+
+    def cells(line: str) -> list[str]:
+        return [x.strip() for x in line.strip().strip("|").split("|")]
+
+    statements: list[str] = []
+    index = 0
+    while index < len(lines):
+        if not (lines[index].strip().startswith("|") and index + 1 < len(lines)
+                and re.fullmatch(r"\|?\s*[-:|\s]+\|?", lines[index + 1].strip())):
+            statements.append(lines[index])
+            index += 1
+            continue
+        headers = cells(lines[index])
+        end = index + 2
+        while end < len(lines) and lines[end].strip().startswith("|"):
+            end += 1
+        rows = [cells(line) for line in lines[index + 2:end]]
+        if len(headers) < 2 or not rows or any(len(row) != len(headers) for row in rows):
+            statements.extend(lines[index:end])
+        else:
+            # Do not hide affirmative assertions disguised as table headings.
+            statements.extend(header for header in headers if not label.fullmatch(header))
+            for row in rows:
+                if label.fullmatch(row[0]):
+                    statements.extend(f"{row[0]}：{value}" for value in row[1:])
+                else:
+                    statements.extend(f"{header}：{value}" for header, value in zip(headers, row))
+        index = end
+    return statements
+
+
 def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]]) -> list[str]:
     """Bound source references and reject known ambiguous product attributions.
 
@@ -4788,21 +4829,6 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
         # Model tables often use links without [S#]. Formatting must not bypass
         # the same evidence checks applied to prose with citation labels.
         claim_line = re.sub(r"[*_`]+", "", line)
-        # Search snippets (even ones saying Buy it now) are historical product
-        # references, not a live listing-status check. Evaluate each assertion:
-        # a later disclaimer must not cancel a contradictory positive claim.
-        for clause in re.split(r"[。；;！!？?\n，,|]|\b(?:but|however)\b|(?:但是|不过|但)", claim_line, flags=re.I):
-            if not re.search(
-                r"(?:当前|目前|现在|仍然|仍|正在).{0,8}(?:在售|售卖)|"
-                r"(?:有|存在|均为|都是)\s*在售\s*(?:listing|商品|产品|刊登)|"
-                r"^\s*在售\s*$|(?:状态|status|availability)\s*[:：]\s*(?:在售|active|available|for sale)|"
-                r"\b(?:currently|still|actively)\s+(?:available|listed|for sale)\b",
-                clause, re.I):
-                continue
-            if not re.search(
-                r"(?:不能|无法|不应|不可|不要|未验证|未核实|未确认|不确定|待核|尚待|是否|历史|当时|曾经)|"
-                r"\b(?:not|cannot|unverified|unknown|unconfirmed|historical)\b", clause, re.I):
-                blocked.add("research_unverified_current_availability")
         for source in line_sources.values():
             prices = set(re.findall(r"(?:US\s*)?\$\s*(\d+(?:\.\d+)?)", str(source.get("snippet") or "")))
             uncertain = re.search(r"(?:主商品)?(?:价格|标价|报价|售价).{0,8}(?:未验证|未核实|不确定|无法确认)|"
@@ -4815,6 +4841,21 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
                 re.search(r"\bunbranded\b|品牌[:：]\s*无品牌", str(s.get("title") or "")+" "+str(s.get("snippet") or ""), re.I)
                 for s in brand_sources)):
                 blocked.add("research_unverified_unbranded_claim")
+    # Snippets remain historical references, never proof of a live listing.
+    # Evaluate each field/assertion separately; a peer/footer caveat cannot
+    # cancel a contradictory positive claim.
+    for statement in _research_availability_statements(answer):
+        for clause in re.split(r"[。；;！!？?\n，,|]|\b(?:but|however)\b|(?:但是|不过|但)", statement, flags=re.I):
+            if not re.search(
+                r"(?:当前|目前|现在|仍然|仍|正在).{0,8}(?:在售|售卖)|"
+                r"(?:有|存在|均为|都是)\s*在售\s*(?:listing|商品|产品|刊登)|"
+                r"^\s*在售\s*$|(?:状态|status|availability)\s*[:：]\s*(?:在售|active|available|for sale)|"
+                r"\b(?:currently|still|actively)\s+(?:available|listed|for sale)\b", clause, re.I):
+                continue
+            if not re.search(
+                r"(?:不能|无法|不应|不可|不要|未验证|未核实|未确认|不确定|待核|尚待|是否|历史|当时|曾经)|"
+                r"\b(?:not|cannot|unverified|unknown|unconfirmed|historical)\b", clause, re.I):
+                blocked.add("research_unverified_current_availability")
     return sorted(blocked)
 
 

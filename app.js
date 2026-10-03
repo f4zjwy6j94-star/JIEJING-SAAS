@@ -27168,7 +27168,7 @@ function saasAiCeoMerchantSafeFailureText(error) {
     title = "当前账号没有创建任务权限";
     reason = "当前店铺角色不能执行这项任务。";
     next = "请切换到有任务权限的账号，或联系团队负责人调整角色或权限。";
-  } else if (raw.includes("402") || raw.includes("quota") || raw.includes("payment") || raw.includes("billing") || raw.includes("balance") || raw.includes("credit")) {
+  } else if (Number(error?.status) === 402 || raw.includes("402") || raw.includes("quota") || raw.includes("payment") || raw.includes("billing") || raw.includes("balance") || raw.includes("credit")) {
     title = "AI 额度或连接状态挡住了本次回复";
     reason = "这通常是当前套餐额度、用量上限或 AI 账号状态需要复核。";
     next = "先到设置里的 AI 与素材查看状态；不要重复填写连接信息，除非页面明确提示连接已失效。";
@@ -47764,7 +47764,9 @@ function shouldKeepSaasAiCeoThreadTurn(turn = {}) {
   if (!latest) return false;
   if (latest.pending) return true;
   const status = String(latest.status || "");
-  if (["historical_no_model_reply", "blocked_before_model_chat"].includes(status)) return false;
+  // A terminal quota/config blocker must replace its pending turn, including
+  // after reload. Only obsolete historical placeholders are discarded.
+  if (status === "historical_no_model_reply") return false;
   const oldTechnicalReplyPattern = new RegExp(
     [
       "后端" + "模型回复尚未返回",

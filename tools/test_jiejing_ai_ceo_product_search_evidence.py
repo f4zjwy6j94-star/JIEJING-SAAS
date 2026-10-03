@@ -680,6 +680,29 @@ class ProductSearchEvidenceTests(unittest.TestCase):
                 route="ebay_workflow", answer=prefix+claim, source_records=sources)
             self.assertNotIn("research_unverified_current_availability", result["blocked_by"], claim)
 
+    def test_availability_table_labels_are_not_positive_claims(self):
+        sources = [{"citation_id": "S1", "title": "Adhesive cable clips",
+                    "url": "https://www.ebay.com/itm/123456789001", "snippet": "US $5.99"}]
+        for claim in (
+            "| 商品 | 当前在售状态 | 来源 |\n|---|---|---|\n| Adhesive cable clips | 未验证 | [S1] |",
+            "| 项目 | 结论 |\n|---|---|\n| 当前在售状态 | 未验证 [S1] |",
+            "| 商品 | **当前在售状态** | 来源 |\n|---|---|---|\n| Adhesive cable clips | **未验证** | [S1] |",
+            "| Product | Current availability | Source |\n|---|---|---|\n| Adhesive cable clips | unknown | [S1] |",
+        ):
+            with self.subTest(claim=claim):
+                self.assertNotIn("research_unverified_current_availability",
+                                 chat._research_source_answer_blockers(claim, sources))
+        for claim in (
+            "| 商品 | 当前在售状态 | 备注 |\n|---|---|---|\n| cable clips | 在售 | 销量未验证 |",
+            "| 项目 | 结论 |\n|---|---|\n| 当前在售状态 | 在售 [S1] |",
+            "| 商品 | 当前在售状态 |\n|---|---|\n| cable clips | 未验证 |\n| another product | 在售 |",
+            "| 当前在售的商品 | 备注 |\n|---|---|\n| cable clips | 未验证 |",
+            "当前在售 [S1]。\n| 项目 | 结论 |\n|---|---|\n| 当前在售状态 | 未验证 |",
+        ):
+            with self.subTest(claim=claim):
+                self.assertIn("research_unverified_current_availability",
+                              chat._research_source_answer_blockers(claim, sources))
+
     def test_real_chat_repairs_availability_or_rejects_without_generic_projection(self):
         bad = "\n\n".join(f"候选商品 {i}：{name}\n当前在售 [S{i}]。价格与供应商事实未验证。"
                           for i, name in enumerate(PRODUCTS, 1))

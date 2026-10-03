@@ -97,6 +97,12 @@ QUOTA_ACTION_UNITS = {
     "provider_job": "provider_job_quota",
     "model_report_assist": "provider_job_quota",
 }
+# Records created inside a merchant operation, not additional operations. Keep
+# unknown/legacy task types metered; this is not a status-based quota exemption.
+INTERNAL_TASK_RECORD_TYPES = frozenset({
+    "ai_ceo_chat_request", "merchant_ceo_chat_attempt",
+    "merchant_product_facts", "ai_ceo_product_vision",
+})
 STRIPE_CURRENT_API_VERSION = "2026-06-24.dahlia"
 STRIPE_GO_LIVE_DOCS = [
     "https://docs.stripe.com/get-started/checklist/go-live",
@@ -1398,7 +1404,10 @@ def _company_usage(repository: SaaSRepository, *, company_id: str) -> dict[str, 
     return {
         "period": month_prefix,
         "connected_store_count": len(stores),
-        "monthly_task_count": len(monthly_tasks),
+        "monthly_task_count": sum(
+            str(item.get("task_type") or "") not in INTERNAL_TASK_RECORD_TYPES
+            for item in monthly_tasks
+        ),
         "monthly_provider_job_count": len(provider_tasks),
         "monthly_model_report_assist_count": len(model_reports),
         "queue_job_count_sampled": len(queue_jobs),

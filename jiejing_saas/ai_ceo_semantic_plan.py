@@ -112,6 +112,7 @@ def plan_ai_ceo_turn(*, model_client: Any, message: str,
                for item in conversation_history[-8:] if isinstance(item, dict)]
     payload = {"merchant_message": message, "conversation_history": history,
                "current_product": active_listing_context, "has_new_images": bool(has_source_assets)}
+    research_repair_scope: dict[str, Any] | None = None
     for attempt in range(2):
         try:
             result = model_client.generate_text(
@@ -135,6 +136,28 @@ def plan_ai_ceo_turn(*, model_client: Any, message: str,
             plan = validate_semantic_plan(raw, has_current_product=bool(active_listing_context),
                                           has_source_assets=has_source_assets, message=message)
         except SemanticPlanError as exc:
+            if not attempt and str(exc) == "semantic_plan_missing_research_queries":
+                # Validate every other field first; query validation precedes
+                # fact/security checks and cannot become a bypass for them.
+                probe = validate_semantic_plan({**raw, "search": "none", "research_queries": []},
+                    has_current_product=bool(active_listing_context),
+                    has_source_assets=has_source_assets, message=message)
+                if (probe["status"] != "ready" or probe["intent"] != "research"
+                        or raw["project_action"] != "none" or probe["read_images"]
+                        or probe["product_fact_proposals"] or probe["simulation_request"] is not None):
+                    raise
+                research_repair_scope = {key: probe[key] for key in FIELDS
+                    if key not in {"query", "research_queries", "steps", "question"}}
+                research_repair_scope["search"] = "web_search"
+                payload["plan_validation_feedback"] = {
+                    "code": "semantic_plan_missing_research_queries",
+                    "instruction": "上一轮开放选品规划未提供一致的检索字段，未执行任何动作。"
+                        "请依据原文重新输出完整合法JSON：research_queries须有1到3组subject/query，"
+                        "顶层query必须逐字等于第一组query。保持原研究范围、候选数量、排除项、"
+                        "保存报告选择和不建项目边界；只补检索字段，不读取图片、不提商品事实、"
+                        "不修改模拟标记、不安排发布或其他动作。不得猜测商家的商品范围。",
+                }
+                continue
             if attempt or str(exc) != "semantic_plan_non_workflow_mutation":
                 raise
             # Fixed contract feedback only: never forward invalid output or
@@ -147,7 +170,10 @@ def plan_ai_ceo_turn(*, model_client: Any, message: str,
                     "普通聊天用chat/none；讨论当前商品用research/current/single_product_analysis且save_artifact=false。",
             }
             continue
-        if attempt and (plan["project_action"] == "new" or plan["save_artifact"] or plan["read_images"]
+        if research_repair_scope is not None:
+            if any(plan[key] != value for key, value in research_repair_scope.items()):
+                raise SemanticPlanError("semantic_plan_repair_scope_changed")
+        elif attempt and (plan["project_action"] == "new" or plan["save_artifact"] or plan["read_images"]
                         or plan["product_fact_proposals"] or plan["simulation_request"] is not None
                         or plan["intent"] in {"live_action", "remember_rule"}
                         or plan["search"] not in {"none", "reuse"}):

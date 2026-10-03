@@ -126,6 +126,47 @@ class SemanticDispatchTests(unittest.TestCase):
             self.plan(model=timeout, current={"product_name": "量勺"})
         self.assertEqual(2, len(timeout.prompts))
 
+    def test_open_research_query_contract_gets_one_bounded_model_repair(self):
+        valid = decision(intent="research", project_action="none", product_name="", read_images=False,
+                         source_mode="merchant_has_no_source", candidate_count=2, listing_deferred=True,
+                         query="eBay cable clips product", simulation_request=None,
+                         search="web_search", research_queries=[{"subject": "cable clips", "query": "eBay cable clips product"}])
+        for invalid in ({**valid, "research_queries": []}, {**valid, "query": "different top-level query"}):
+            model = SequenceModelFixture([invalid, valid])
+            plan = self.plan(model=model, assets=False, message="联网比较两种商品并保存选品报告，不新建项目。")
+            self.assertEqual("none", plan["project_action"])
+            self.assertTrue(plan["save_artifact"])
+            self.assertEqual(valid["research_queries"], plan["research_queries"])
+            self.assertEqual(2, len(model.prompts))
+            feedback = json.loads(model.prompts[1]["user_prompt"])["plan_validation_feedback"]
+            self.assertEqual("semantic_plan_missing_research_queries", feedback["code"])
+            self.assertNotIn("different top-level query", model.prompts[1]["user_prompt"])
+            self.assertEqual([45, 20], [item["timeout_seconds"] for item in model.prompts])
+        for change in ({"project_action": "new", "product_name": "other"},
+                       {"intent": "listing", "research_delivery": "none", "research_queries": []},
+                       {"candidate_count": 5}, {"read_images": True},
+                       {"excluded_candidates": ["changed exclusion"]},
+                       {"source_mode": "merchant_has_source"}, {"save_artifact": False},
+                       {"listing_deferred": False}):
+            model = SequenceModelFixture([{**valid, "research_queries": []}, {**valid, **change}])
+            with self.subTest(change=change), self.assertRaises(SemanticPlanError):
+                self.plan(model=model, current={"product_name": "Old scoop"}, assets=True)
+            self.assertEqual(2, len(model.prompts))
+        for second, expected in (({**valid, "research_queries": []}, "semantic_plan_missing_research_queries"),
+                                 (TimeoutError("untrusted provider message"), "semantic_plan_model_failed")):
+            model = SequenceModelFixture([{**valid, "research_queries": []}, second, valid])
+            with self.subTest(second=second), self.assertRaisesRegex(SemanticPlanError, "^" + expected + "$"):
+                self.plan(model=model, assets=False)
+            self.assertEqual(2, len(model.prompts))
+        for invalid in ({**valid, "research_queries": [], "product_fact_proposals": [{"field": "price", "value": "1", "source_quote": "x"}]},
+                        {**valid, "research_queries": [], "simulation_request": {"enabled": True, "source_quote": "x"}},
+                        {**valid, "research_queries": [], "company_id": "forged"},
+                        {**valid, "research_queries": [], "project_action": "current"}):
+            model = SequenceModelFixture([invalid, valid])
+            with self.subTest(invalid=invalid), self.assertRaises(SemanticPlanError):
+                self.plan(model=model, current={"product_name": "Old scoop"}, message="x")
+            self.assertEqual(1, len(model.prompts))
+
     def test_repair_is_not_offered_for_unknown_authority_or_invalid_fields(self):
         for invalid in (decision(company_id="forged"), decision(save_artifact="false"), None):
             with self.subTest(invalid=invalid):

@@ -66,6 +66,24 @@ def main() -> int:
         if store_quota.get("allowed") is not False or "connected_store_quota" not in store_quota.get("reason", ""):
             return fail("connected_store quota should block the second store")
 
+        # One merchant turn also persists request/retry/fact/vision records.
+        # These implementation records cannot spend extra business-task units.
+        for task_type in ("ai_ceo_chat_request", "merchant_ceo_chat_attempt",
+                          "merchant_product_facts", "ai_ceo_product_vision"):
+            for index in range(30):
+                repo.create_task(company_id=company["company_id"], store_id=store["store_id"],
+                    user_id=user["user_id"], task_type=task_type,
+                    title="Internal bookkeeping fixture", input_data={"index": index})
+        internal_usage = build_billing_usage(settings, repo, company_id=company["company_id"])
+        if internal_usage["usage"]["monthly_task_count"] != 0:
+            return fail("request, attempt, fact and vision records must not consume business-task quota")
+        if internal_usage["usage"]["monthly_provider_job_count"] != 0:
+            return fail("internal records cannot be shifted into provider billing")
+        if not evaluate_quota_action(settings, repo, company_id=company["company_id"], action_unit="ai_ceo_task")["allowed"]:
+            return fail("internal bookkeeping must not exhaust the merchant task allowance")
+        if len(repo.list_tasks(company_id=company["company_id"])) != 120:
+            return fail("quota projection must retain every internal audit record")
+
         for index in range(100):
             repo.create_task(
                 company_id=company["company_id"],
@@ -75,9 +93,15 @@ def main() -> int:
                 title=f"quota task {index}",
                 input_data={"index": index},
             )
+            if index == 98:
+                before_limit = evaluate_quota_action(settings, repo, company_id=company["company_id"], action_unit="ai_ceo_task")
+                if not before_limit["allowed"] or before_limit["usage"]["usage"]["monthly_task_count"] != 99:
+                    return fail("99 real business tasks must permit exactly one more starter task")
         task_quota = evaluate_quota_action(settings, repo, company_id=company["company_id"], action_unit="ai_ceo_task")
         if task_quota.get("allowed") is not False or "monthly_task_quota" not in task_quota.get("reason", ""):
             return fail("ai_ceo_task quota should block after monthly starter quota is exhausted")
+        if task_quota["usage"]["usage"]["monthly_task_count"] != 100:
+            return fail("business tasks must remain metered regardless of internal record count")
 
         serialized = json.dumps({"plan": plan, "usage": usage, "task_quota": task_quota}, ensure_ascii=False)
         for forbidden in ["UNIT-PAYMENT-SECRET", "UNIT-WEBHOOK-SECRET", "access_token", "refresh_token", "client_secret"]:

@@ -138,6 +138,10 @@ vm.runInContext(extractFunction("saasAiCeoMerchantSafeFailureText"), context);
   );
   assert.strictEqual(protectedSessionChecks, 1, "mutation preflight must run exactly once");
   assert.strictEqual(fetchCalls, 1, "AI mutation request must be sent exactly once");
+  const chineseQuota = vm.runInContext(
+    'saasAiCeoMerchantSafeFailureText({status: 402, message: "当前套餐或额度暂时不能继续。本次未调用模型。"})', context,
+  );
+  assert.match(chineseQuota, /额度|套餐/, "numeric HTTP 402 must survive Chinese-only error text");
   const permissionFailureText = await vm.runInContext(
     `saasAiCeoMerchantSafeFailureText(new Error(saasBackendErrorMessage(403, "", { error: "missing permission: create_task" })))`,
     context,

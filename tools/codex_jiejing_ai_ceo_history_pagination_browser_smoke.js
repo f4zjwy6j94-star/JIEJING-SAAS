@@ -227,6 +227,11 @@ async function main() {
           const metadata = { contract_version: "server_finalized_chat_archive_v1", request_task_id: requestId, assistant_id: "ceo-server-" + crypto.createHash("sha256").update(requestId).digest("hex").slice(0, 32), created_at: new Date(Date.UTC(2026, 8, 5, 8, archiveProtocol.requests.length)).toISOString(), archived: true };
           const semanticDispatch = { contract_version: "ai_ceo_semantic_dispatch_v1", status: failure ? "blocked" : "ready", project_action: "none", company_id: "company-archive-user", store_id: "history-store", command_id: body.command.id, idempotency_key: body.idempotency_key, request_task_id: requestId, submitted_project_identity: body.active_listing_context?.listing_project_identity || {}, target_project_identity: {}, consumed_source_asset_ids: [], workflow_target: "" };
           const chat = { status: failure ? "model_call_failed" : "model_answered", answer: failure ? "模型暂时不可用，这次没有生成新内容。" : "毛利扣除商品直接成本，净利还扣除经营费用。", route: "general_chat", semantic_dispatch: semanticDispatch };
+          if (archiveProtocol.responseStatus === 402) Object.assign(chat, {
+            status: "blocked_before_model_chat", route: "ebay_workflow", route_label: "套餐与额度",
+            answer: "当前套餐或额度暂时不能继续。本次未调用模型、未消耗次数、未生成草稿。",
+            blocked_by: ["subscription_quota_blocked"],
+          });
           archiveProtocol.turns.push({ assistant_id: metadata.assistant_id, created_at: metadata.created_at, user_text: body.message, assistant_text: chat.answer, status: chat.status, route: chat.route, store_id: "history-store", semantic_dispatch: semanticDispatch });
           const payload = { ai_ceo_chat: chat, ai_ceo_chat_history_turn: metadata, semantic_dispatch: semanticDispatch, ...(failure ? { error_code: "model_call_failed", error: chat.answer } : {}) };
           finalized = { request: body, status: archiveProtocol.responseStatus, payload };
@@ -575,6 +580,43 @@ async function main() {
   cases.push("lost_final_reconcile_reuses_frozen_semantic_request");
   cases.push("missing_webcrypto_fails_before_request_or_sync");
   await archivePage.close();
+
+  const quotaContext = await browser.newContext();
+  await quotaContext.route("**/*", (route) => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
+  const quotaPage = await quotaContext.newPage();
+  await quotaPage.setExtraHTTPHeaders({ "x-local-archive-fixture": "1" });
+  await quotaPage.goto(`${base}/app.html?start=app&qa=public-saas&saasApiBase=${encodeURIComponent(base)}`);
+  await seedAccount(quotaPage, "archive-user", true);
+  archiveProtocol.responseStatus = 402;
+  const quotaResult = await quotaPage.evaluate(async () => {
+    state.saasToken = "archive-fixture-only";
+    state.saasConnected = true;
+    state.activeStore = "history-store";
+    localStorage.setItem(saasStorageKeys.storeId, "history-store");
+    handleSaasCeoCommandSubmit("再比较两个候选商品，不改动旧资料。");
+    await Promise.resolve(state.saasLastCeoCommandPersistPromise);
+    return state.saasAiCeoThread;
+  });
+  const quotaTurn = archiveProtocol.turns.at(-1);
+  assert.equal(archiveProtocol.turns.length, 4, "quota check must exercise a fresh request, not a previous pending replay");
+  const settledQuota = quotaResult.find((turn) => turn.assistant_id === quotaTurn.assistant_id);
+  assert.equal(settledQuota?.pending, false, "HTTP 402 must replace the spinner with its terminal answer");
+  assert.equal(settledQuota.status, "blocked_before_model_chat");
+  assert.match(await quotaPage.locator(`[id="${quotaTurn.assistant_id}"]`).innerText(), /额度|套餐/);
+  await quotaPage.reload();
+  await seedAccount(quotaPage, "archive-user");
+  const recoveredQuota = await quotaPage.evaluate(async (turn) => {
+    // A tab closed before the response can retain exactly this pending identity.
+    state.saasAiCeoThread = [{ ...turn, assistant_text: "正在思考", status: "model_streaming", pending: true }];
+    await refreshSaasAiCeoThreadFromBackend();
+    return state.saasAiCeoThread.filter((item) => item.assistant_id === turn.assistant_id);
+  }, quotaTurn);
+  assert.equal(recoveredQuota.length, 1, "terminal archive recovery cannot create a duplicate");
+  assert.equal(recoveredQuota[0].pending, false, "refresh must settle the previously pending request");
+  assert.equal(recoveredQuota[0].status, "blocked_before_model_chat");
+  assert.match(await quotaPage.locator(`[id="${quotaTurn.assistant_id}"]`).innerText(), /额度|套餐/);
+  cases.push("quota_terminal_replaces_spinner", "quota_archive_settles_cached_pending");
+  await quotaContext.close();
   assert.deepEqual(errors, []);
   const screenshot = path.join(os.tmpdir(), `jiejing-ai-ceo-history-${Date.now()}.png`);
   await page.locator("#ceoChat").evaluate((chat) => { chat.scrollTop = 0; });
