@@ -146,6 +146,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("merchant_content_workspace", ["node", "--test", "tools/test_jiejing_merchant_content_workspace.js"]),
     ("media_result_hierarchy", ["node", "tools/test_jiejing_media_result_hierarchy.js"]),
     ("media_project_source_entry", ["node", "tools/test_jiejing_media_project_source_entry.js"]),
+    ("media_review_session_preflight", ["node", "tools/test_jiejing_media_review_session_preflight.js"]),
     ("listing_concrete_product_gate", [sys.executable, "tools/test_jiejing_listing_concrete_product_gate.py"]),
     ("ai_ceo_product_label_extraction", [sys.executable, "tools/test_jiejing_ai_ceo_product_label_extraction.py"]),
     ("ai_ceo_candidate_fact_consistency", [sys.executable, "tools/test_jiejing_ai_ceo_frontend_candidate_consistency.py"]),

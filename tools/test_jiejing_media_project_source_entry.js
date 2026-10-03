@@ -36,11 +36,18 @@ function fixture() {
   view.querySelector = selector => elements.get(selector) || null;
   const identity = { key: "fixture-project", source_report_id: "fixture-report", candidate_id: "fixture-candidate" };
   const state = { activeMediaDraft: "fixture-media", mediaTaskEntry: "project",
+    view: "media", saasIdentity: { user_id: "fixture-user", company_id: "fixture-company" },
+    saasUser: { user_id: "fixture-user" }, saasCompany: { company_id: "fixture-company" },
     saasListingComposerDraft: { product: "Fixture measuring cups", listing_project_identity: identity,
       fields: { title: "Saved listing title" } } };
-  const requests = [], toasts = [], ui = {};
-  const context = { state, URL, location: { hostname: "127.0.0.1" },
-    document: { querySelector: selector => elements.get(selector) || null },
+  const requests = [], sessionRequests = [], toasts = [], ui = {};
+  const context = { state, URL, AbortController, setTimeout, clearTimeout, saasAccountSessionEpoch: 0,
+    SAAS_BROWSER_SESSION_REFRESH_TIMEOUT_MS: 10000, location: { hostname: "127.0.0.1" },
+    window: { location: { href: "http://127.0.0.1/app.html?view=media&project=fixture-project" },
+      addEventListener() {}, removeEventListener() {} },
+    MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } },
+    document: { body: {}, querySelector: selector => elements.get(selector) || null },
+    hasSaasProtectedSessionCandidate: () => true,
     saasCurrentListingProjectIdentity: draft => draft?.listing_project_identity || {},
     showActionToast: text => toasts.push(text),
     setMediaNewTaskMode: () => { state.mediaTaskEntry = "single"; },
@@ -49,16 +56,24 @@ function fixture() {
     syncMediaGenerationActionState() {}, publicRuntimeText: value => String(value),
     activeSaasStore: () => ({ store_id: "fixture-store" }),
     saasFetch: async (url, options) => {
+      assert.notEqual(options.saasRequestIsCurrent?.(), false, "the real media guard must accept this fixture scope");
+      if (url === "/me") {
+        sessionRequests.push({ url, options });
+        return { user: state.saasUser, company: state.saasCompany, identity: state.saasIdentity };
+      }
       requests.push({ url, options });
       return { provider_reference_ready: true, media_source_asset: { asset_id: "fixture-asset", sha256: "aa",
         source_url: "https://example.test/private-source", rights_status: "unknown" } };
     },
   };
   vm.createContext(context);
-  for (const name of ["uploadSaasMediaSourceFile", "handleMediaSourceFile", "bindMediaSourceUploadEvents"]) {
+  for (const name of ["saasNormalizeListingProjectIdentity", "createSaasMediaMutationGuard",
+    "saasMediaMutationResultIsUncertain", "saasMediaMutationUncertainMessage", "ensureSaasMediaMutationSession",
+    "ensureSaasProtectedSessionForMutation", "assertSaasLiveIdentityScope",
+    "uploadSaasMediaSourceFile", "handleMediaSourceFile", "bindMediaSourceUploadEvents"]) {
     vm.runInContext(extract(name), context);
   }
-  return { context, state, elements, view, requests, toasts, ui };
+  return { context, state, elements, view, requests, sessionRequests, toasts, ui };
 }
 
 test("current product exposes a source picker without switching to an independent task", () => {
@@ -86,6 +101,7 @@ test("source selection uploads once to the current product and never confirms ri
   input.emit("change");
   await new Promise(setImmediate);
   assert.equal(f.requests.length, 1);
+  assert.equal(f.sessionRequests.length, 1, "the source picker must safely preflight before its sole upload");
   assert.equal(f.requests[0].url, "/stores/fixture-store/media-source-assets");
   assert.equal(f.requests[0].options.body, file);
   assert.equal(input.value, "");

@@ -13527,17 +13527,107 @@ function setMediaNewTaskMode() {
   syncMediaGenerationActionState(readMediaGenerationConfig({ entry: "single" }));
 }
 
-async function uploadSaasMediaSourceFile(file) {
+function createSaasMediaMutationGuard(actionIsCurrent = () => true) {
+  const epoch = saasAccountSessionEpoch;
+  const userId = String(state.saasIdentity?.user_id || state.saasUser?.user_id || "");
+  const companyId = String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "");
+  const storeId = String(activeSaasStore()?.store_id || "");
+  const project = () => JSON.stringify(saasNormalizeListingProjectIdentity(saasCurrentListingProjectIdentity()) || null);
+  const projectSnapshot = project();
+  const view = state.view;
+  const route = window.location.href;
+  let cancelled = false;
+  let submitted = false;
+  const cancel = () => { cancelled = true; };
+  const observer = new MutationObserver(cancel);
+  observer.observe(document.body, { attributes: true, attributeFilter: ["data-view"] });
+  window.addEventListener("popstate", cancel);
+  window.addEventListener("hashchange", cancel);
+  const isCurrent = () => {
+      if (observer.takeRecords().length) cancelled = true;
+      return !cancelled && Boolean(userId && companyId && storeId) && epoch === saasAccountSessionEpoch &&
+        userId === String(state.saasIdentity?.user_id || state.saasUser?.user_id || "") &&
+        companyId === String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "") &&
+        storeId === String(activeSaasStore()?.store_id || "") && project() === projectSnapshot &&
+        state.view === view && window.location.href === route && actionIsCurrent() && !cancelled;
+  };
+  return {
+    cancel,
+    isCurrent,
+    get submitted() { return submitted; },
+    requestIsCurrent: () => {
+      if (!isCurrent()) return false;
+      submitted = true;
+      return true;
+    },
+    dispose: () => {
+      observer.disconnect();
+      window.removeEventListener("popstate", cancel);
+      window.removeEventListener("hashchange", cancel);
+    },
+  };
+}
+
+function saasMediaMutationResultIsUncertain(error, guard) {
+  const status = Number(error?.status || 0);
+  return guard.submitted && !(status >= 400 && status < 500 && status !== 408);
+}
+
+function saasMediaMutationUncertainMessage(action) {
+  return `${action}请求已发送，但未能确认结果。请先刷新当前素材记录核对，不要重复提交。`;
+}
+
+async function ensureSaasMediaMutationSession(guard) {
+  const assertCurrent = () => {
+    if (!guard.isCurrent()) throw new Error("操作期间页面、账号、商品或素材已变化，请重新核对后提交。");
+  };
+  assertCurrent();
+  const controller = new AbortController();
+  let timer = null;
+  try {
+    const session = await Promise.race([
+      ensureSaasProtectedSessionForMutation({ saasRequestIsCurrent: guard.isCurrent, signal: controller.signal }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          guard.cancel();
+          controller.abort();
+          reject(new Error("登录状态核验超时，素材操作尚未提交，请稍后重试。"));
+        }, SAAS_BROWSER_SESSION_REFRESH_TIMEOUT_MS);
+      }),
+    ]);
+    // An old response must not clear a replacement scope, including a late 401.
+    assertCurrent();
+    assertSaasLiveIdentityScope(session);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function uploadSaasMediaSourceFile(file, { uploadIsCurrent = () => true } = {}) {
   const store = activeSaasStore();
   if (!store?.store_id) throw new Error("请先进入一个店铺工作区，再上传商品来源图。");
-  const payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/media-source-assets`, {
-    method: "POST",
-    headers: {
-      "content-type": file.type || "application/octet-stream",
-      "x-jiejing-file-name": encodeURIComponent(file.name || "source-image"),
-    },
-    body: file,
-  });
+  const guard = createSaasMediaMutationGuard(uploadIsCurrent);
+  let payload;
+  try {
+    await ensureSaasMediaMutationSession(guard);
+    payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/media-source-assets`, {
+      method: "POST",
+      saasRequestIsCurrent: guard.requestIsCurrent,
+      headers: {
+        "content-type": file.type || "application/octet-stream",
+        "x-jiejing-file-name": encodeURIComponent(file.name || "source-image"),
+      },
+      body: file,
+    });
+  } catch (error) {
+    const failure = saasMediaMutationResultIsUncertain(error, guard)
+      ? Object.assign(new Error(saasMediaMutationUncertainMessage("图片上传")), { code: "saas_media_result_uncertain" })
+      : error;
+    if (!guard.isCurrent()) failure.saasMediaMutationContextChanged = true;
+    throw failure;
+  } finally {
+    guard.dispose();
+  }
   const asset = payload?.media_source_asset && typeof payload.media_source_asset === "object" ? payload.media_source_asset : null;
   const safeAsset = asset ? { ...asset, provider_reference_ready: payload?.provider_reference_ready === true } : null;
   if (safeAsset) delete safeAsset.source_url;
@@ -13611,7 +13701,7 @@ async function handleMediaSourceFile(file, sourceEvent) {
   setText("#mediaProductionNeed", "主图、场景图、详情图、尺寸图和短视频脚本");
   setText("#mediaProductionGap", "尺寸、重量、材质、套装内容和图片使用权仍需核对");
   try {
-    const asset = await uploadSaasMediaSourceFile(file);
+    const asset = await uploadSaasMediaSourceFile(file, { uploadIsCurrent: uploadProjectIsCurrent });
     if (!uploadProjectIsCurrent()) return;
     state.saasMediaSourceUpload = {
       ...asset,
@@ -13626,6 +13716,14 @@ async function handleMediaSourceFile(file, sourceEvent) {
     setText("#mediaProjectSourceStatus", "来源图已上传。请选择实物保真模式，再点击生成；图片使用权仍需核对。");
     showActionToast("商品来源图已上传。请确认素材要求后点击“生成素材”，不会自动发布。");
   } catch (error) {
+    if (error?.code === "saas_media_result_uncertain") {
+      showActionToast(error.message);
+      if (!error.saasMediaMutationContextChanged && uploadProjectIsCurrent()) {
+        setText("#mediaProductionStatus", "图片上传结果待核对 · 请勿重复提交");
+      }
+      return;
+    }
+    if (error?.saasMediaMutationContextChanged) return;
     if (!uploadProjectIsCurrent()) return;
     state.saasMediaSourceUpload = null;
     setText("#mediaDropHint", "图片上传失败，请重试");
@@ -14076,9 +14174,35 @@ async function approveLatestSaasMediaAssetJobForListingDraft() {
     showActionToast("素材审核未保存：请在当前素材预览中逐项确认，任务切换或少勾一项都会阻止提交。");
     return null;
   }
+  const context = saasListingCloudContext();
+  if (!context || String(job.store_id || "") !== context.storeId || String(job.company_id || "") !== context.companyId) {
+    showActionToast("无法核对当前账号、店铺和商品，素材审核没有提交。请重新打开当前素材预览。");
+    return null;
+  }
+  const previewKey = state.saasActiveMediaPreviewKey;
+  const jobSnapshot = JSON.stringify(job);
+  const evidenceSnapshot = JSON.stringify(evidence);
+  const modal = document.querySelector("#assetModal");
+  const originalChecks = Array.from(modal.querySelectorAll("[data-media-review-check]"));
+  const guard = createSaasMediaMutationGuard(() => {
+    if (observer.takeRecords().length) guard.cancel();
+    const currentChecks = Array.from(modal.querySelectorAll("[data-media-review-check]"));
+    return context.key === saasListingCloudContext()?.key && state.saasActiveMediaPreviewKey === previewKey &&
+      latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true }) === job &&
+      JSON.stringify(job) === jobSnapshot && currentChecks.length === originalChecks.length &&
+      currentChecks.every((input, index) => input === originalChecks[index]) &&
+      JSON.stringify(readSaasMediaReviewEvidenceFromActiveModal(mediaJobId, hasVideoAsset)) === evidenceSnapshot;
+  });
+  // Closing/reopening a preview or changing a checkbox cancels this attempt,
+  // even if the merchant later returns to identical visible values.
+  const observer = new MutationObserver(guard.cancel);
+  observer.observe(modal, { attributes: true, attributeFilter: ["hidden", "data-media-review-job-id"], childList: true, subtree: true });
+  modal.addEventListener("change", guard.cancel);
   try {
+    await ensureSaasMediaMutationSession(guard);
     const payload = await saasFetch(`/media-asset-jobs/${encodeURIComponent(mediaJobId)}/review`, {
       method: "POST",
+      saasRequestIsCurrent: guard.requestIsCurrent,
       body: JSON.stringify({
         decision: "approve_for_listing_draft",
         fact_consistency_confirmed: evidence.fact_consistency_confirmed,
@@ -14101,8 +14225,14 @@ async function approveLatestSaasMediaAssetJobForListingDraft() {
     showActionToast("素材审核已记录：现在可以回写 Listing 草稿，不会写入 eBay。");
     return reviewed;
   } catch (error) {
-    showActionToast(`素材审核没有保存：${publicRuntimeText(error?.message || error).slice(0, 120)}`);
+    showActionToast(saasMediaMutationResultIsUncertain(error, guard)
+      ? saasMediaMutationUncertainMessage("素材审核")
+      : `素材审核没有保存：${publicRuntimeText(error?.message || error).slice(0, 120)}`);
     return null;
+  } finally {
+    observer.disconnect();
+    modal.removeEventListener("change", guard.cancel);
+    guard.dispose();
   }
 }
 
@@ -14110,15 +14240,21 @@ async function retrySaasMediaAssetJob(mediaJobId, button = null) {
   const cleanId = String(mediaJobId || "").trim();
   if (!cleanId) return null;
   const sourceJob = (state.saasMediaAssetJobs || []).find((job) => String(job?.media_job_id || "") === cleanId) || {};
-  if (!(await requestMediaReworkAcceptance(sourceJob))) return null;
+  const sourceSnapshot = JSON.stringify(sourceJob);
+  const guard = createSaasMediaMutationGuard(() =>
+    (state.saasMediaAssetJobs || []).find((job) => String(job?.media_job_id || "") === cleanId) === sourceJob &&
+    JSON.stringify(sourceJob) === sourceSnapshot);
   const originalLabel = button?.textContent || "生成新版本";
-  if (button) {
-    button.disabled = true;
-    button.textContent = "正在创建";
-  }
   try {
+    if (!(await requestMediaReworkAcceptance(sourceJob))) return null;
+    if (button) {
+      button.disabled = true;
+      button.textContent = "正在创建";
+    }
+    await ensureSaasMediaMutationSession(guard);
     const payload = await saasFetch(`/media-asset-jobs/${encodeURIComponent(cleanId)}/retry`, {
       method: "POST",
+      saasRequestIsCurrent: guard.requestIsCurrent,
       body: JSON.stringify({
         reason: "商家在素材工坊要求重做并保留上一版本",
         run_mode: "queued",
@@ -14139,9 +14275,12 @@ async function retrySaasMediaAssetJob(mediaJobId, button = null) {
     });
     return mediaJob;
   } catch (error) {
-    showActionToast(`新版本没有创建：${publicRuntimeText(error?.message || error).slice(0, 120)}`);
+    showActionToast(saasMediaMutationResultIsUncertain(error, guard)
+      ? saasMediaMutationUncertainMessage("素材重做")
+      : `新版本没有创建：${publicRuntimeText(error?.message || error).slice(0, 120)}`);
     return null;
   } finally {
+    guard.dispose();
     if (button) {
       button.disabled = false;
       button.textContent = originalLabel;
@@ -14634,7 +14773,7 @@ function saasMediaQueueFailureView(error = {}) {
   };
 }
 
-async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
+async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}, acceptedGuard = null) {
   if (!isSaasPublicMvpMode()) return null;
   const store = activeSaasStore();
   if (!store?.store_id) {
@@ -14642,9 +14781,16 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
     setText("#mediaPreviewNote", "还没有可用的店铺工作区，素材只保留为本页草稿，不会标记为可发布素材。");
     return null;
   }
+  const factsSnapshot = JSON.stringify(currentMediaStudioProductFacts(config));
+  const configSnapshot = JSON.stringify(config);
+  const guard = acceptedGuard || createSaasMediaMutationGuard(() =>
+    JSON.stringify(currentMediaStudioProductFacts(config)) === factsSnapshot && JSON.stringify(config) === configSnapshot);
   const payload = buildSaasMediaAssetJobPayload(sourceText, config);
+  const requestBody = JSON.stringify(payload);
   const optimisticId = `local-${payload.idempotency_key}`;
-  upsertSaasMediaAssetJobForDisplay({
+  try {
+    await ensureSaasMediaMutationSession(guard);
+    upsertSaasMediaAssetJobForDisplay({
     media_job_id: optimisticId,
     idempotency_key: payload.idempotency_key,
     job: { job_spec: payload },
@@ -14660,11 +14806,11 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
     },
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  });
-  try {
+    });
     const response = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/provider-jobs/queue`, {
       method: "POST",
-      body: JSON.stringify(payload),
+      saasRequestIsCurrent: guard.requestIsCurrent,
+      body: requestBody,
     });
     const mediaJob = response.media_asset_job && typeof response.media_asset_job === "object" ? response.media_asset_job : null;
     if (!mediaJob?.media_job_id) throw new Error("media asset job missing from backend response");
@@ -14702,6 +14848,14 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
     showActionToast(liveAssetsReturned ? conceptOnly ? "概念参考图已返回：不可用于刊登。" : "真实素材已返回：先审核，不会直接发布。" : "素材任务已创建：未返回真实图片前不会标记为已出图。");
     return mediaJob;
   } catch (error) {
+    if (saasMediaMutationResultIsUncertain(error, guard)) {
+      showActionToast(saasMediaMutationUncertainMessage("素材生成"));
+      return null;
+    }
+    if (!guard.isCurrent()) {
+      showActionToast("素材任务尚未创建：操作期间页面、商品、来源图或生成设置已变化，请重新确认。");
+      return null;
+    }
     console.warn(`[JIEJING media job queue skipped] ${error?.message || error}`);
     const failure = saasMediaQueueFailureView(error);
     upsertSaasMediaAssetJobForDisplay(
@@ -14720,6 +14874,8 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
     setText("#mediaPreviewNote", failure.note);
     showActionToast(failure.toast);
     return null;
+  } finally {
+    guard.dispose();
   }
 }
 
@@ -14741,8 +14897,14 @@ async function handleMediaGenerateImagesDraftClick() {
     showActionToast("先上传真实商品图：本次没有调用付费素材服务。只有明确选择“创意场景探索”时，才允许生成不可刊登的概念参考图。");
     return;
   }
+  const factsSnapshot = JSON.stringify(productFacts);
+  const configSnapshot = JSON.stringify(config);
+  const guard = createSaasMediaMutationGuard(() =>
+    JSON.stringify(readMediaGenerationConfig()) === configSnapshot &&
+    JSON.stringify(currentMediaStudioProductFacts(config)) === factsSnapshot);
   const acceptanceConfirmed = await requestMediaGenerationAcceptance(groundingGate);
   if (!acceptanceConfirmed) {
+    guard.dispose();
     state.mediaGenerationStatus = "needs_rights_confirmation";
     if (groundingGate.conceptOnly) state.mediaGenerationStatus = "needs_concept_acceptance";
     setText(
@@ -14758,6 +14920,11 @@ async function handleMediaGenerateImagesDraftClick() {
     showActionToast("已停止：本次没有调用付费素材服务，也没有消耗素材点。");
     return;
   }
+  if (!guard.isCurrent()) {
+    guard.dispose();
+    showActionToast("确认期间页面、商品、来源图或生成设置已变化，素材任务尚未创建，请重新确认。");
+    return;
+  }
   config.commercialRightsConfirmed = groundingGate.hasGroundedSource === true;
   config.conceptOnlyAccepted = groundingGate.conceptOnly === true;
   const text =
@@ -14771,7 +14938,7 @@ async function handleMediaGenerateImagesDraftClick() {
   setText("#mediaProductionStatus", "素材草稿已整理 · 正在创建素材任务");
   setText("#mediaPreviewNote", "素材草稿会进入素材清单审核；正式发布前仍需核对真实尺寸、材质、重量、图片权利和平台规则。");
   showActionToast("素材草稿已整理：正在创建后端素材任务。");
-  queueSaasMediaAssetJobFromStudio(text, config);
+  return queueSaasMediaAssetJobFromStudio(text, config, guard);
 }
 
 async function handleMediaScriptDraftClick() {
@@ -17885,7 +18052,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasAiCeoThreadCloudReady = false;
 }
 
-async function ensureSaasProtectedSessionForMutation() {
+async function ensureSaasProtectedSessionForMutation({ saasRequestIsCurrent = null, signal } = {}) {
   if (!hasSaasProtectedSessionCandidate()) {
     const error = new Error("捷境登录已失效，请重新登录。");
     error.status = 401;
@@ -17893,7 +18060,7 @@ async function ensureSaasProtectedSessionForMutation() {
     handleSaasUnrecoverableSession(error);
     throw error;
   }
-  const session = await saasFetch("/me", { method: "GET", cache: "no-store" });
+  const session = await saasFetch("/me", { method: "GET", cache: "no-store", saasRequestIsCurrent, signal });
   if (!(session?.user?.user_id || session?.identity?.user_id)) {
     const error = new Error("捷境登录已失效，请重新登录。");
     error.status = 401;
@@ -49063,19 +49230,26 @@ async function handleSaasAiCeoAttachmentFiles(files = []) {
   }
   const uploadGeneration = Number(state.saasAiCeoAttachmentUploadGeneration || 0) + 1;
   state.saasAiCeoAttachmentUploadGeneration = uploadGeneration;
+  const uploadAccountEpoch = saasAccountSessionEpoch;
+  const uploadUserId = String(state.saasIdentity?.user_id || state.saasUser?.user_id || "");
+  const uploadCompanyId = String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "");
   const uploadStoreId = String(activeSaasStore()?.store_id || "").trim();
   const uploadProjectId = saasCurrentMerchantProjectId();
   const uploadIsCurrent = () => Boolean(
     uploadGeneration === Number(state.saasAiCeoAttachmentUploadGeneration || 0) &&
+    uploadAccountEpoch === saasAccountSessionEpoch &&
+    uploadUserId === String(state.saasIdentity?.user_id || state.saasUser?.user_id || "") &&
+    uploadCompanyId === String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "") &&
     String(activeSaasStore()?.store_id || "").trim() === uploadStoreId &&
     saasCurrentMerchantProjectId() === uploadProjectId
   );
   state.saasAiCeoAttachmentUploading = true;
   renderSaasAiCeoPendingAttachments();
+  let mutationContextChanged = false;
   try {
     const uploaded = [];
     for (const file of selected) {
-      const asset = await uploadSaasMediaSourceFile(file);
+      const asset = await uploadSaasMediaSourceFile(file, { uploadIsCurrent });
       if (!uploadIsCurrent()) return false;
       uploaded.push(asset);
     }
@@ -49084,6 +49258,12 @@ async function handleSaasAiCeoAttachmentFiles(files = []) {
     showActionToast(`已添加 ${uploaded.length} 张商品图；发送后 AI CEO 会真实识别并带入 Listing。`);
     return true;
   } catch (error) {
+    mutationContextChanged = error?.saasMediaMutationContextChanged === true;
+    if (error?.code === "saas_media_result_uncertain") {
+      showActionToast(error.message);
+      return false;
+    }
+    if (mutationContextChanged) return false;
     if (!uploadIsCurrent()) return false;
     showActionToast(error?.message || "商品图片上传失败，请稍后重试。");
     return false;

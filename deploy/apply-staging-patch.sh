@@ -436,6 +436,7 @@ FILES=(
   "tools/test_jiejing_ai_ceo_semantic_dispatch_frontend.js"
   "tools/test_jiejing_ai_ceo_bound_product_navigation.js"
   "tools/test_jiejing_ai_ceo_command_text_fidelity.js"
+  "tools/test_jiejing_media_review_session_preflight.js"
   "tools/test_jiejing_ai_ceo_simulation_request.py"
   "tools/test_jiejing_ai_ceo_simulation_request_http.py"
   "tools/test_jiejing_current_project_archive_ui.py"
@@ -1007,6 +1008,7 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check tools/test_jiejing_recent_product_tasks.js
 "$NODE_BIN" --check tools/test_jiejing_ai_ceo_bound_product_navigation.js
 "$NODE_BIN" --check tools/test_jiejing_ai_ceo_command_text_fidelity.js
+"$NODE_BIN" --check tools/test_jiejing_media_review_session_preflight.js
 "$NODE_BIN" --check tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_workflow_entry_feedback.js
 "$NODE_BIN" --check tools/test_jiejing_listing_product_fact_confirmation_ui.js
