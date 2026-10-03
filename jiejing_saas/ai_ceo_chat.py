@@ -2949,15 +2949,39 @@ def _run_product_selection_web_search(*, message: str, budget: dict[str, Any],
     }
 
 
+def _product_candidate_aliases(candidate: str) -> list[str]:
+    """Recognize explicit bilingual labels, without translating or guessing."""
+    if not re.search(r"[\u4e00-\u9fff]", candidate):
+        return [candidate.strip().lower()]
+    aliases = []
+    for part in re.split(r"[/、]", candidate.lower()):
+        part = part.strip()
+        if len(part) < 2:
+            continue
+        segments = [value.strip() for value in re.split(
+            r"[（）()]|(?<=[\u4e00-\u9fff])\s+(?=[a-z])|(?<=[a-z])\s+(?=[\u4e00-\u9fff])", part) if value.strip()]
+        chinese = [value for value in segments if re.search(r"[\u4e00-\u9fff]", value) and not re.search(r"[a-z]", value)]
+        english = [value for value in segments if not re.search(r"[\u4e00-\u9fff]", value)
+                   and len(re.findall(r"[a-z]{3,}", value)) >= 2]
+        # A lone acronym, size or model number is not an English product alias.
+        aliases.extend(chinese + english if chinese and english else [part])
+    return list(dict.fromkeys(aliases))
+
+
 def _product_source_matches_candidate(record: dict[str, Any], candidate: str) -> bool:
     """Conservative relevance, not proof of price, availability or a sale."""
     searchable = _normalized_text(f"{record.get('title', '')} {record.get('snippet', '')}")
-    if re.search(r"[\u4e00-\u9fff]", candidate):
-        return any(part.strip() in searchable for part in re.split(r"[/、]", candidate.lower()) if len(part.strip()) >= 2)
-    terms = [word.rstrip("s") for word in re.findall(r"[a-z]{3,}", candidate.lower())
-             if word not in {"and", "for", "with", "set", "pack", "kit", "the"}]
     source_terms = {word.rstrip("s") for word in re.findall(r"[a-z]{3,}", searchable)}
-    return bool(terms) and terms[-1] in source_terms and sum(term in source_terms for term in terms) >= (len(terms) * 3 + 4) // 5
+    for alias in _product_candidate_aliases(candidate):
+        if re.search(r"[\u4e00-\u9fff]", alias):
+            if alias in searchable:
+                return True
+            continue
+        terms = [word.rstrip("s") for word in re.findall(r"[a-z]{3,}", alias)
+                 if word not in {"and", "for", "with", "set", "pack", "kit", "the"}]
+        if terms and terms[-1] in source_terms and sum(term in source_terms for term in terms) >= (len(terms) * 3 + 4) // 5:
+            return True
+    return False
 
 
 def _run_builtin_public_realtime_source(
@@ -4707,7 +4731,8 @@ def _semantic_research_candidate_source_blockers(*, answer: str, records: list[d
         prose = "\n".join(prose_lines)
         subjects = [item["subject"] for item in queries] + [plan.get("product_name") or ""] + names
         mentions = [(match.start(), match.end(), alias.strip())
-            for subject in subjects for alias in re.split(r"[/、]", subject) if len(alias.strip()) >= 2
+            for subject in subjects for part in re.split(r"[/、]", subject)
+            for alias in _product_candidate_aliases(part) if len(alias.strip()) >= 2
             for match in re.finditer(re.escape(alias.strip()), prose, flags=re.IGNORECASE)]
         spans: list[tuple[int, int, str]] = []
         for start, end, name in sorted(mentions, key=lambda item: (item[0], -item[1])):
@@ -4738,7 +4763,9 @@ def _semantic_research_candidate_source_blockers(*, answer: str, records: list[d
         aliases = [name]
         for item in queries:
             subject = item["subject"]
-            if _normalized_candidate_name(name) in {_normalized_candidate_name(part) for part in subject.split("/")}:
+            if _normalized_candidate_name(name) in {
+                _normalized_candidate_name(alias) for part in subject.split("/") for alias in _product_candidate_aliases(part)
+            }:
                 aliases.append(subject)
         if any(not any(alias and _product_source_matches_candidate(record, alias) for alias in aliases) for record in cited):
             return ["research_candidate_source_mismatch"]
@@ -4846,6 +4873,12 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
     # cancel a contradictory positive claim.
     for statement in _research_availability_statements(answer):
         for clause in re.split(r"[。；;！!？?\n，,|]|\b(?:but|however)\b|(?:但是|不过|但)", statement, flags=re.I):
+            # An explicitly unknown status field is not a current-sale claim.
+            # Bind the entire clause: unknown price/stock must not exempt a
+            # positive availability claim elsewhere in the same statement.
+            if re.fullmatch(r"\s*(?:当前|目前|现在)?在售(?:状态|情况)\s*[:：]\s*"
+                            r"(?:未知|不详|待确认)\s*(?:\[S\d+\])?\s*", clause, re.I):
+                continue
             if not re.search(
                 r"(?:当前|目前|现在|仍然|仍|正在).{0,8}(?:在售|售卖)|"
                 r"(?:有|存在|均为|都是)\s*在售\s*(?:listing|商品|产品|刊登)|"

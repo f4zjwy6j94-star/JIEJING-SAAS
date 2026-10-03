@@ -741,6 +741,24 @@ class ProductSearchEvidenceTests(unittest.TestCase):
                 del repo
                 gc.collect()
 
+    def test_unknown_availability_field_is_not_a_claim_or_a_peer_exemption(self):
+        sources = [{"citation_id": "S1", "title": "Adhesive cable clips",
+                    "url": "https://www.ebay.com/itm/123456789001", "snippet": "US $5.99"}]
+        prefix = "候选商品 1：adhesive cable clips\n"
+        for status in ("未知", "不详", "待确认", "未验证"):
+            for field in (f"当前在售状态：{status}。",
+                          f"| 项目 | 结论 |\n|---|---|\n| 当前在售状态 | {status} |"):
+                with self.subTest(status=status, field=field):
+                    result = chat.validate_ai_ceo_answer_quality(message="调研1个候选商品，不创建 Listing。",
+                        route="ebay_workflow", answer=prefix + field, source_records=sources)
+                    self.assertNotIn("research_unverified_current_availability", result["blocked_by"])
+        for statement in ("价格未知，但当前在售。", "当前在售，销量未知。",
+                          "当前在售且价格未知。", "当前在售状态：在售；供应商未知。",
+                          "| 当前在售状态 | 库存 |\n|---|---|\n| 在售 | 未知 |"):
+            result = chat.validate_ai_ceo_answer_quality(message="调研1个候选商品，不创建 Listing。",
+                route="ebay_workflow", answer=prefix + statement, source_records=sources)
+            self.assertIn("research_unverified_current_availability", result["blocked_by"], statement)
+
     def test_research_cannot_swap_citations_or_promote_ambiguous_prices_and_brands(self):
         sources = [
             {"citation_id": "S1", "title": "Chef Select measuring cups", "url": "https://www.ebay.com/itm/123456789001", "snippet": "Seller feedback. $31.24 previous price $36.75. Other items $64.39.", "market_evidence_role": "item_listing_reference"},

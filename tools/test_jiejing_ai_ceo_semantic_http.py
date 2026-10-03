@@ -91,6 +91,22 @@ class Model:
                         listing_deferred=True, search="web_search", query=queries[0]["query"],
                         research_queries=queries if self.research_attempts > 1 else [])
                     text = json.dumps(plan, ensure_ascii=False)
+                if "中英商品名" in message:
+                    plan = json.loads(text)
+                    queries = [
+                        {"subject": "自粘桌面理线夹 adhesive cable clips", "query": "site:ebay.com adhesive cable clips desk"},
+                        {"subject": "排水口硅胶滤网 silicone drain hair catcher", "query": "site:ebay.com silicone drain hair catcher strainer"},
+                    ]
+                    if "括号别名" in message:
+                        queries[0]["subject"] = "自粘桌面理线夹（adhesive cable clips）"
+                        queries[1]["subject"] = "排水口硅胶滤网 (silicone drain hair catcher)"
+                    elif "斜线别名" in message:
+                        queries[0]["subject"] = "自粘桌面理线夹 / adhesive cable clips"
+                        queries[1]["subject"] = "排水口硅胶滤网 / silicone drain hair catcher"
+                    plan.update(intent="research", project_action="none", product_name="", read_images=False,
+                        save_artifact=True, research_delivery="candidate_selection", candidate_count=2,
+                        listing_deferred=True, search="web_search", query=queries[0]["query"], research_queries=queries)
+                    text = json.dumps(plan, ensure_ascii=False)
         else:
             # Report prompt leakage as ordinary provider output so HTTP callers
             # can observe context isolation without mocking the chat function.
@@ -110,6 +126,17 @@ class Model:
                     "供应商材质、成本、尺寸、重量和图片授权未知；风险是排水口不适配，需实物验证。\n"
                     "| 项目 | 结论 |\n|---|---|\n| 当前在售状态 | 未验证 |\n"
                     "推荐先找 adhesive cable clips 的供应商并核对资料；只是待核对方向，不是销量或盈利证明。")
+            if "中英商品名" in prompt:
+                text = ("### 候选商品 1：自粘桌面理线夹 adhesive cable clips\n历史页面参考 [S1]，页面标价 $5.99。"
+                    "当前在售状态、销量、利润未验证。供应商材质、成本、尺寸、重量和图片授权未知；风险是粘胶掉落，需实物验证。\n"
+                    "### 候选商品 2：排水口硅胶滤网 silicone drain hair catcher\n历史页面参考 [S2]，页面标价 $4.99。"
+                    "当前在售状态、销量、利润未验证。供应商材质、成本、尺寸、重量和图片授权未知；风险是排水口不适配，需实物验证。\n"
+                    "推荐先找自粘桌面理线夹 adhesive cable clips 的供应商并核对资料；只是待核对方向，不是销量或盈利证明。")
+                if "中文报告标题" in prompt:
+                    text = text.replace("自粘桌面理线夹 adhesive cable clips", "自粘桌面理线夹").replace(
+                        "排水口硅胶滤网 silicone drain hair catcher", "排水口硅胶滤网")
+                if "交换引用" in prompt:
+                    text = text.replace("[S1]", "[TEMP]").replace("[S2]", "[S1]").replace("[TEMP]", "[S2]")
         return {"text": text, "model": self.model, "model_mode": "live_unit",
             "finish_reason": "stop", "_usage": {"input_tokens": 30, "output_tokens": 40, "total_tokens": 70}}
 
@@ -135,9 +162,15 @@ class ResearchSearch:
         first = "adhesive cable clips" in config.query
         name, item, price = (("adhesive cable clips", "123456789001", "5.99") if first else
                              ("silicone drain hair catcher", "123456789002", "4.99"))
+        # Search providers reorder English product terms; the model's subject
+        # may contain a Chinese alias too. Neither is evidence of a live sale.
+        title = ("12 Pcs Cable Clips Adhesive Clamps on Desk Cord Organizer Holder" if first else
+                 "1Pc Silicone Hair Drain Catcher Sink Strainer Filter Shower Drain Protector")
         return {"status": "ready", "provider": config.provider, "query": config.query,
-                "results": [{"title": name, "url": "https://www.ebay.com/itm/" + item,
-                             "snippet": name + ". US $" + price}]}
+                "results": [{"title": title, "url": "https://www.ebay.com/itm/" + item,
+                             "snippet": "US $" + price},
+                            {"title": "Adhesive cable ties" if first else "Silicone drain cleaning brush",
+                             "url": "https://www.ebay.com/itm/123456789003", "snippet": "US $8.99"}]}
 chat.PublicSearchProbeAdapter = ResearchSearch
 def reject_network(*args, **kwargs):
     raise AssertionError("semantic HTTP fixture forbids external requests")
@@ -605,6 +638,46 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         self.assertEqual(202, replay_status)
         self.assertTrue(replay["idempotent_replay"])
         self.assertEqual(before, self.reports())
+
+    def test_bilingual_research_subjects_keep_matching_english_pages_without_old_product_changes(self):
+        before = self.reports()
+        body = self.envelope("无货源研究候选：中英商品名，比较自粘桌面理线夹和排水口硅胶滤网。保存报告，不建项目。")
+        path = f"/stores/{self.store}/merchant-ceo/chat"
+        status, result = self.call(path, body)
+        self.assertEqual(201, status, result.get("ai_ceo_chat", {}).get("blocked_by"))
+        answer = result["ai_ceo_chat"]
+        self.assertEqual("model_answered", answer["status"], answer.get("answer_quality"))
+        self.assertTrue(answer["answer_quality"]["accepted"])
+        self.assertEqual({"https://www.ebay.com/itm/123456789001", "https://www.ebay.com/itm/123456789002"},
+                         {record["url"] for record in answer["source_records"]})
+        self.assertEqual("none", result["semantic_dispatch"]["project_action"])
+        self.assertEqual({}, result["semantic_dispatch"]["target_project_identity"])
+        self.assertIsNone(result.get("product_vision_report"))
+        report = result["ai_ceo_market_report"]
+        self.assertEqual(2, len(report["report"]["product_candidates"]))
+        after = self.reports()
+        self.assertEqual(before, [item for item in after if item["report_id"] != report["report_id"]])
+        status, replay = self.call(path, body)
+        self.assertEqual(201, status)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(after, self.reports())
+
+    def test_chinese_report_names_bind_to_explicit_planned_aliases_not_peer_sources(self):
+        for spelling in ("空格别名", "括号别名", "斜线别名"):
+            with self.subTest(spelling=spelling):
+                body = self.envelope("无货源研究候选：中英商品名，中文报告标题，" + spelling + "。保存报告，不建项目。")
+                path = f"/stores/{self.store}/merchant-ceo/chat"
+                status, result = self.call(path, body)
+                self.assertEqual(201, status, result.get("ai_ceo_chat", {}).get("answer_quality"))
+                self.assertEqual("model_answered", result["ai_ceo_chat"]["status"])
+                self.assertEqual({"自粘桌面理线夹", "排水口硅胶滤网"},
+                    {item["name"] for item in result["ai_ceo_market_report"]["report"]["product_candidates"]})
+                before = self.reports()
+                status, wrong = self.call(path, self.envelope(body["message"] + "交换引用。"))
+                self.assertEqual(202, status)
+                self.assertIn("research_candidate_source_mismatch", wrong["ai_ceo_chat"]["answer_quality"]["blocked_by"])
+                self.assertIsNone(wrong.get("ai_ceo_market_report"))
+                self.assertEqual(before, self.reports())
 
     def test_platform_trial_counts_one_turn_for_two_calls_and_blocks_after_twenty(self):
         first_body = self.envelope("平台试用，聊聊天。")
