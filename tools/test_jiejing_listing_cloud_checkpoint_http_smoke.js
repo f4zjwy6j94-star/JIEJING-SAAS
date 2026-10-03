@@ -32,7 +32,10 @@ async function main() {
   const checkpointPath = `/stores/${fixture.store_id}/listing-drafts/${fixture.identity.key}/checkpoint`;
   const statusPath = `/stores/${fixture.store_id}/merchant-project-status`;
   const factPath = `/stores/${fixture.store_id}/product-facts`;
-  const wizardScenario = fixture.scenario === "unchanged-facts-wizard";
+  const precheckPath = `/stores/${fixture.store_id}/publish-precheck`;
+  const confirmationPaths = ["publish-confirmation", "ebay-draft-confirmation"].map(name => `/stores/${fixture.store_id}/${name}`);
+  const newMediaScenario = fixture.scenario === "new-media-after-generation";
+  const wizardScenario = fixture.scenario === "unchanged-facts-wizard" || newMediaScenario;
   const requests = [], forbidden = [], errors = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
@@ -45,12 +48,14 @@ async function main() {
       && url.searchParams.size === 1 && url.searchParams.get("project_id") === fixture.identity.key;
     const wizardRequest = wizardScenario && ((url.pathname === factPath && req.method === "POST")
       || (url.pathname === "/reports" && req.method === "GET"));
-    if (!checkpointRequest && !statusRequest && !wizardRequest) {
+    const safetyRequest = newMediaScenario && (([precheckPath, ...confirmationPaths].includes(url.pathname) && req.method === "POST")
+      || (["/tasks", "/confirmations"].includes(url.pathname) && req.method === "GET"));
+    if (!checkpointRequest && !statusRequest && !wizardRequest && !safetyRequest) {
       forbidden.push("unapproved_request"); res.writeHead(404); return res.end();
     }
     // The browser's real HttpOnly session cookie is forwarded unchanged. The
     // Python server, not this proxy, authenticates and applies all persistence.
-    if (checkpointRequest || wizardRequest) requests.push({ method: req.method, path: url.pathname,
+    if (checkpointRequest || wizardRequest || safetyRequest) requests.push({ method: req.method, path: url.pathname,
       query: Object.fromEntries(url.searchParams) });
     const upstream = http.request(new URL(req.url, api), { method: req.method, headers: req.headers }, (response) => {
       res.writeHead(response.statusCode, response.headers); response.pipe(res);
@@ -112,6 +117,9 @@ async function main() {
           document.querySelectorAll(".view").forEach(view => view.classList.toggle("is-active", view.id === "view-product"));
           setSaasListingWizardStep(startStep); renderProductListingCenter();
         }, { fixture: { ...fixture, session_token: undefined }, base, startStep });
+        diagnostic.mount = await page.evaluate(() => ({ draft_exists: Boolean(state.saasListingComposerDraft),
+          context_exists: Boolean(saasListingCloudContext()), step: saasListingWizardRecord()?.step,
+          reports: state.saasReports.length, panels: document.querySelectorAll("[data-listing-wizard-step]").length }));
         assert.equal(await page.locator(`#view-product [data-listing-wizard-step="${startStep}"]`).isVisible(), true);
       }
       async function move(direction, expectedStep) {
@@ -130,24 +138,162 @@ async function main() {
       }
       diagnostic.stage = "initial_restore";
       await mount(2);
-      const sourceProjection = await page.evaluate(() => {
-        const draft = state.saasListingComposerDraft;
-        const report = state.saasReports.find(item => item.report_id === draft.source_product_fact_report_id);
-        return { actual: sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet).source_records,
-          expected: sanitizeSaasMerchantProductFactPacketSnapshot(report.report.merchant_product_fact_packet).source_records };
-      });
-      diagnostic.source_projection_equal = require("node:util").isDeepStrictEqual(sourceProjection.actual, sourceProjection.expected);
-      assert.deepEqual(sourceProjection.actual, sourceProjection.expected,
-        "current authoritative sources must survive history restore without loss or obsolete duplicates");
-      assert.equal(await page.locator('#view-product [data-saas-listing-draft-field="title"]').inputValue(), fixture.expected_copy.title);
+      diagnostic.stage = "initial_copy_restored";
+      if (!newMediaScenario) {
+        const sourceProjection = await page.evaluate(() => {
+          const draft = state.saasListingComposerDraft;
+          const report = state.saasReports.find(item => item.report_id === draft.source_product_fact_report_id);
+          return { actual: sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet).source_records,
+            expected: sanitizeSaasMerchantProductFactPacketSnapshot(report.report.merchant_product_fact_packet).source_records };
+        });
+        diagnostic.source_projection_equal = require("node:util").isDeepStrictEqual(sourceProjection.actual, sourceProjection.expected);
+        assert.deepEqual(sourceProjection.actual, sourceProjection.expected,
+          "current authoritative sources must survive history restore without loss or obsolete duplicates");
+      }
+      diagnostic.initial_title_matches = (await page.locator('#view-product [data-saas-listing-draft-field="title"]').inputValue()) === fixture.expected_copy.title;
+      assert.equal(diagnostic.initial_title_matches, true);
       diagnostic.stage = "copy_to_images";
       await move("next", 3);
+      if (newMediaScenario) {
+        diagnostic.stage = "first_image_rights_save";
+        await page.getByText("查看或补充已有图片地址（可选）", { exact: true }).click();
+        await page.locator('[data-saas-product-fact-field="image_urls"]').fill("https://media.example.test/approved-gold-set.jpg");
+        await page.locator('[data-saas-product-fact-field="image_rights_confirmed"]').check();
+      }
       diagnostic.stage = "images_to_publish";
       await move("next", 4);
       diagnostic.stage = "edit_publish_intake";
       await page.getByRole("button", { name: "编辑发布资料", exact: true }).click();
       const firstForm = page.locator("#saasPublishIntakeForm");
       assert.equal(await firstForm.isVisible(), true);
+      if (newMediaScenario) {
+        const saved = await readCheckpoint();
+        diagnostic = { ...diagnostic, stage: "media_publish_copy_projection",
+          checkpoint_copy_present: saved.checkpoint.fields.title === fixture.expected_copy.title &&
+            saved.checkpoint.fields.description === fixture.expected_copy.description,
+          base_changed: saved.base_changed,
+          publish_title_present: Boolean(await firstForm.locator('[name="title"]').inputValue()),
+          publish_description_present: Boolean(await firstForm.locator('[name="description_html"]').inputValue()) };
+        assert.equal(await firstForm.locator('[name="title"]').inputValue(), fixture.expected_copy.title,
+          "saving the first merchant-attested image must not blank already validated buyer copy");
+        assert.ok((await firstForm.locator('[name="description_html"]').inputValue()).includes(fixture.expected_copy.description));
+        assert.equal(saved.base_changed, false);
+        assert.deepEqual(saved.checkpoint.merchant_edited_fields, []);
+        const modelGenerated = await page.evaluate(() => state.saasListingComposerDraft.model_generated);
+        assert.equal(modelGenerated, false, "a checkpoint must not invent a new generation proof");
+        diagnostic.stage = "media_copy_cold_reload";
+        await mount(4);
+        await page.getByRole("button", { name: "编辑发布资料", exact: true }).click();
+        assert.equal(await page.locator('#saasPublishIntakeForm [name="title"]').inputValue(), fixture.expected_copy.title);
+        assert.ok((await page.locator('#saasPublishIntakeForm [name="description_html"]').inputValue()).includes(fixture.expected_copy.description));
+        const blockers = [];
+        async function businessCounts() {
+          const counts = {};
+          for (const name of ["tasks", "reports", "confirmations"]) {
+            const response = await context.request.get(`${base}/${name}?store_id=${encodeURIComponent(fixture.store_id)}`);
+            assert.equal(response.status(), 200);
+            counts[name] = (await response.json())[name].length;
+          }
+          return counts;
+        }
+        async function preparedPayload() {
+          diagnostic.stage = "prepare_source_guard_form";
+          const form = page.locator("#saasPublishIntakeForm");
+          assert.equal(await form.locator('[name="title"]').inputValue(), fixture.expected_copy.title);
+          assert.ok((await form.locator('[name="description_html"]').inputValue()).includes(fixture.expected_copy.description));
+          await form.locator('[name="category_id"]').fill("20552");
+          await form.locator('[name="price"]').fill("12.99");
+          await page.evaluate(() => flushSaasListingCloudCheckpoint());
+          return page.evaluate(() => readSaasPublishIntakeForm());
+        }
+        async function assertSourceBlocked(payload, blocker, { dom = false } = {}) {
+          diagnostic.stage = `source_guard_${blocker}`;
+          const before = await businessCounts();
+          const check = await context.request.post(`${base}${precheckPath}`, { data: { ...payload, simulation_only: false } });
+          assert.equal(check.status(), 200);
+          const receipt = await check.json();
+          assert.deepEqual(receipt.source_blockers, [blocker]);
+          for (const key of ["confirmation_created", "task_created", "platform_write_attempted", "real_execution_allowed"]) {
+            assert.equal(receipt[key], false);
+          }
+          if (dom) {
+            // Exercise the same real confirmation handler used by the button.
+            // This fixture has no synced eBay packet, so do not forge account
+            // authorization merely to enable the UI's additional account gate.
+            const denied = page.waitForResponse(response => new URL(response.url()).pathname === confirmationPaths[1]
+              && response.request().method() === "POST");
+            const accepted = page.evaluate(() => createSaasPublishConfirmationFromIntakeForm("ebay-draft"));
+            const response = await denied;
+            assert.equal(response.status(), 422);
+            const rejection = await response.json();
+            assert.deepEqual(rejection.blockers, [blocker]);
+            assert.equal(rejection.confirmation_created, false);
+            assert.equal(await accepted, false);
+          }
+          // A client cannot bypass the same source protection by forging its
+          // simulation flag or calling either confirmation endpoint directly.
+          for (const endpoint of confirmationPaths) {
+            const response = await context.request.post(`${base}${endpoint}`, { data: { ...payload, simulation_only: false } });
+            assert.equal(response.status(), 422);
+            const rejection = await response.json();
+            assert.deepEqual(rejection.blockers, [blocker]);
+            assert.equal(rejection.confirmation_created, false);
+          }
+          assert.deepEqual(await businessCounts(), before, "source denials must not create tasks, reports or confirmations");
+          blockers.push(blocker);
+        }
+        if (fixture.simulation_only) {
+          const payload = await preparedPayload();
+          const beforePosts = requests.filter(item => confirmationPaths.includes(item.path)).length;
+          assert.equal(await page.evaluate(() => createSaasPublishConfirmationFromIntakeForm("ebay-draft")), false);
+          assert.equal(requests.filter(item => confirmationPaths.includes(item.path)).length, beforePosts,
+            "the real confirmation handler must reject simulation before HTTP");
+          assert.match(await page.locator("body").textContent(), /不能创建 eBay/);
+          assert.equal(payload.simulation_only, true);
+          await assertSourceBlocked(payload, "simulation_only_product_facts");
+        } else {
+          let payload = await preparedPayload();
+          const cleanCheck = await context.request.post(`${base}${precheckPath}`, { data: payload });
+          assert.equal(cleanCheck.status(), 200);
+          assert.deepEqual((await cleanCheck.json()).source_blockers, [],
+            "non-simulation fixture must first pass authenticated source and rights validation");
+          await page.evaluate(job => { state.saasMediaAssetJobs = [job]; }, fixture.pending_media);
+          assert.equal((await page.evaluate(() => readSaasPublishIntakeForm())).publish_evidence_refs.media_job_id, "",
+            "a pending media job cannot enter the actual publication form as approved evidence");
+          await assertSourceBlocked({ ...payload, publish_evidence_refs: { ...payload.publish_evidence_refs,
+            media_job_id: fixture.pending_media.media_job_id } }, "media_job_not_approved");
+          for (const mode of ["revoke-rights", "clear-images"]) {
+            diagnostic.stage = mode;
+            await mount(3);
+            if (mode === "clear-images") {
+              await page.getByText("查看或补充已有图片地址（可选）", { exact: true }).click();
+              await page.locator('[data-saas-product-fact-field="image_urls"]').fill("");
+              await page.locator('[data-saas-product-fact-field="image_rights_confirmed"]').check();
+            } else await page.locator('[data-saas-product-fact-field="image_rights_confirmed"]').uncheck();
+            await move("next", 3);
+            const afterSave = await readCheckpoint();
+            assert.equal(afterSave.base_changed, false);
+            assert.equal(afterSave.checkpoint.fields.title, fixture.expected_copy.title);
+            await mount(4);
+            await page.getByRole("button", { name: "编辑发布资料", exact: true }).click();
+            payload = await preparedPayload();
+            if (mode === "clear-images") assert.deepEqual(payload.asset_manifest.assets, [],
+              "no former image may be restored into the publish form");
+            else {
+              assert.notEqual(afterSave.current_base_report.report.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed, true);
+              assert.notEqual(await page.evaluate(() => state.saasListingComposerDraft.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed), true);
+            }
+            await assertSourceBlocked(payload, mode === "clear-images" ? "image_assets_missing" : "image_rights_not_attested", { dom: true });
+          }
+        }
+        assert.deepEqual(forbidden, []); assert.deepEqual(errors, []);
+        await context.close();
+        process.stdout.write(JSON.stringify({ scenario: fixture.scenario, copy_preserved: true,
+          cold_reload_preserved: true, model_generated_after_checkpoint: modelGenerated,
+          base_changed: saved.base_changed, external_requests: 0, page_errors: 0,
+          source_blockers: blockers, denials_created_no_business_records: true, confirmation_entry_exercised: true }));
+        return;
+      }
       const costs = { shipping_cost: "4.20", ebay_fee: "2.07", ad_budget: "0", return_risk_reserve: "0.65",
         exchange_rate: "1", net_profit: "3.57", gross_margin_percent: "27.48" };
       for (const [key, value] of Object.entries(costs)) await firstForm.locator(`[name="${key}"]`).fill(value);
@@ -285,4 +431,12 @@ async function main() {
   }
 }
 
-main().catch(() => { process.stderr.write(JSON.stringify({ error: "checkpoint_http_browser_smoke_failed", ...diagnostic }) + "\n"); process.exitCode = 1; });
+main().catch((error) => {
+  const reference = error?.name === "ReferenceError" ? String(error.message || "").match(/^([A-Za-z_$][\w$]*) is not defined$/)?.[1] : undefined;
+  const failedAt = Number(String(error?.stack || "").match(/test_jiejing_listing_cloud_checkpoint_http_smoke\.js:(\d+):/)?.[1]) || undefined;
+  process.stderr.write(JSON.stringify({ error: "checkpoint_http_browser_smoke_failed", ...diagnostic,
+    error_kind: ["AssertionError", "TypeError", "ReferenceError", "TimeoutError"].includes(error?.name) ? error.name : "other",
+    ...(failedAt ? { fixture_line: failedAt } : {}),
+    ...(reference ? { missing_fixture_symbol: reference } : {}) }) + "\n");
+  process.exitCode = 1;
+});

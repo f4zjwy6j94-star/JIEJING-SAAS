@@ -1303,7 +1303,10 @@ test("merchant editing a vision-origin Listing with matching validated backend f
   } finally { await device.context.close(); }
 });
 
-for (const mode of ["matching", "changed-facts", "changed-copy", "other-candidate", "missing-generation"]) {
+for (const mode of ["matching", "media-added", "media-rights-revoked", "media-cleared", "changed-facts", "changed-spec",
+  "changed-source-facts", "changed-unknown", "changed-conflicts", "simulation-downgrade", "changed-copy",
+  "other-company", "other-store", "other-project", "other-source", "other-candidate", "missing-generation",
+  "fake-runtime", "fake-contract", "fake-source", "not-ready"]) {
   test(`unchanged generated vision copy survives a text checkpoint only with authenticated matching evidence: ${mode}`, async () => {
     resetFixture();
     const packet = { product_name: "Foldable Tablet Stand", source: "backend_product_vision_extraction",
@@ -1330,15 +1333,47 @@ for (const mode of ["matching", "changed-facts", "changed-copy", "other-candidat
           buyer_copy_status: "merchant_edited_requires_review", merchant_edited_fields: [],
           buyer_copy_requires_validated_listing_generation: true, merchant_product_fact_packet: packet });
         if (mode === "changed-facts") draft.merchant_product_fact_packet.merchant_confirmed_facts.material = "Steel";
+        if (mode === "changed-spec") draft.merchant_product_fact_packet.merchant_confirmed_facts.package_weight_g = "45";
+        if (mode === "changed-source-facts") draft.merchant_product_fact_packet.source_confirmed_facts.material = "Steel";
+        if (mode === "changed-unknown") draft.merchant_product_fact_packet.unknown_facts.push("net_weight_g");
+        if (mode === "changed-conflicts") draft.merchant_product_fact_packet.fact_conflicts.push({ field: "material", value: "Steel" });
+        if (mode === "simulation-downgrade") draft.merchant_product_fact_packet.simulation_only = false;
+        if (["media-added", "media-rights-revoked", "media-cleared"].includes(mode)) {
+          draft.merchant_product_fact_packet.merchant_confirmed_facts.image_urls = mode === "media-cleared" ? "" : "https://media.example.test/current.jpg";
+          draft.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed = mode !== "media-rights-revoked";
+          if (mode === "media-cleared") {
+            draft.merchant_product_fact_packet.unknown_facts.push("image_urls");
+            // A former publish snapshot is not permission to resurrect a cleared selection.
+            draft.publish_intake = { values: { image_urls: "https://media.example.test/former.jpg" }, basis: {} };
+          }
+        }
         if (mode === "changed-copy") draft.fields.description = "Unverified replacement copy";
+        if (mode === "other-company") state.saasReports[0].company_id = "unrelated-company";
+        if (mode === "other-store") state.saasReports[0].store_id = "unrelated-store";
+        if (mode === "other-project") state.saasReports[0].report.listing_project_identity.key = "unrelated-project";
+        if (mode === "other-source") state.saasReports[0].report.listing_project_identity.source_report_id = "unrelated-source";
         if (mode === "other-candidate") state.saasReports[0].report.listing_project_identity.candidate_id = "unrelated-candidate";
+        if (mode === "fake-runtime") state.saasReports[0].runtime_run_id = "merchant_edit";
+        if (mode === "fake-contract") state.saasReports[0].report.contract_version = "merchant_edit";
+        if (mode === "fake-source") state.saasReports[0].report.listing_handoff.source_mode = "client_generated";
+        if (mode === "not-ready") state.saasReports[0].report.listing_handoff.ready_for_listing_draft = false;
         if (mode === "missing-generation") state.saasReports = [];
       }, { packet, mode });
       const form = await mountPublishIntake(device.page);
-      assert.equal(await form.locator('[name="title"]').inputValue(), mode === "matching" ? originalFields.title : "",
+      const copyAllowed = ["matching", "media-added", "media-rights-revoked", "media-cleared"].includes(mode);
+      assert.equal(await form.locator('[name="title"]').inputValue(), copyAllowed ? originalFields.title : "",
         "a saved unchanged generated text must not disappear, but a checkpoint alone cannot grant validation");
-      if (mode === "matching") assert.match(await form.locator('[name="description_html"]').inputValue(), /Original description/);
+      if (copyAllowed) assert.match(await form.locator('[name="description_html"]').inputValue(), /Original description/);
       else assert.equal(await form.locator('[name="description_html"]').inputValue(), "");
+      if (mode === "media-cleared") assert.equal(await form.locator('[name="image_urls"]').inputValue(), "",
+        "preserving validated text must never restore an old image URL");
+      if (mode === "media-rights-revoked") {
+        assert.equal(await form.locator('[name="image_urls"]').inputValue(), "",
+          "the existing publish projection still excludes an image whose rights were withdrawn");
+        assert.equal(await device.page.evaluate(() => state.saasListingComposerDraft.merchant_product_fact_packet.merchant_confirmed_facts.image_urls), "https://media.example.test/current.jpg",
+          "denying publication must not erase the merchant's current image selection");
+        assert.equal(await device.page.evaluate(() => state.saasListingComposerDraft.merchant_product_fact_packet.merchant_confirmed_facts.image_rights_confirmed), false);
+      }
       assert.equal(await device.page.evaluate(() => state.saasListingComposerDraft.model_generated), false,
         "reading a text checkpoint is not a model call or a new generation proof");
       assert.equal(requests.filter(request => request.method === "POST").length, 0);

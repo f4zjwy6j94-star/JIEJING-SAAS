@@ -34640,7 +34640,7 @@ function saasListingMerchantEditHasValidatedBase(draft) {
       !saasListingCloudSameIdentity(saasNormalizeListingProjectIdentity(draft.listing_project_identity), context.identity)) return false;
   // A cloud checkpoint cannot attest to generation or facts. Only an already
   // authenticated, project-scoped generation report can satisfy this existing
-  // prerequisite, and only while its fact snapshot is still exactly current.
+  // prerequisite, and only while its buyer-copy facts are still exactly current.
   const report = (state.saasReports || []).filter((item) =>
     ["listing.package", "product.listing"].includes(item.report_type) && saasListingCloudReportMatchesContext(item, context) &&
     !saasListingRewriteReportIsSuperseded(item, context) &&
@@ -34661,15 +34661,10 @@ function saasListingMerchantEditHasValidatedBase(draft) {
   const currentPacket = draft.merchant_product_fact_packet;
   const generatedPacket = report?.report?.merchant_product_fact_packet;
   if (!currentPacket || !generatedPacket) return false;
-  const signature = (packet) => JSON.stringify(saasCanonicalJsonValue({
-    product_name: packet.product_name || "",
-    source_confirmed_facts: packet.source_confirmed_facts || {},
-    merchant_confirmed_facts: packet.merchant_confirmed_facts || {},
-    unknown_facts: [...(packet.unknown_facts || [])].sort(),
-    fact_conflicts: packet.fact_conflicts || [],
-    simulation_only: packet.simulation_only === true,
-  }));
-  return signature(currentPacket) === signature(generatedPacket);
+  // Adding/reviewing images cannot invalidate unchanged generated text. Reuse
+  // only the existing copy dependency signature; current image selection,
+  // rights and media approval remain independently required for publication.
+  return saasListingMediaCopyFactSignature(currentPacket) === saasListingMediaCopyFactSignature(generatedPacket);
 }
 
 function saasListingCloudReceipt(raw, context) {

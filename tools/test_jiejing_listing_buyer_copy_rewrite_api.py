@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from concurrent.futures import ThreadPoolExecutor
+import gc
 import json
 from pathlib import Path
 import shutil
@@ -212,6 +213,89 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertFalse(rejected["usage_consumed"])
         self.assertIsNone(rejected["report"])
         self.assertEqual(self.calls(), [])
+
+    def test_real_generated_copy_survives_first_image_rights_save_and_publish_projection(self):
+        self.run_generated_media_copy_browser_loop(simulation_only=True)
+
+    def test_media_copy_reuse_preserves_real_source_and_confirmation_guards(self):
+        self.run_generated_media_copy_browser_loop(simulation_only=False)
+
+    def run_generated_media_copy_browser_loop(self, *, simulation_only):
+        """The full app crosses real fact/checkpoint HTTP after a real generation handler."""
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node is required for the real media-to-publish browser loop")
+        identity = {"key": "listing-project-media-" + uuid.uuid4().hex,
+                    "source_report_id": "", "candidate_id": ""}
+        packet = {"source": "backend_product_vision_extraction", "simulation_only": simulation_only,
+            "vision_contract_version": "jiejing_ai_ceo_product_vision_intake_v1",
+            "buyer_copy_requires_validated_listing_generation": True,
+            "merchant_confirmed_facts": {"product_name": "Foldable Tablet Stand",
+                "material": "Aluminum and silicone", "condition": "NEW", "style": "Foldable",
+                "source_url": "https://supplier.example.test/tablet-stand"}}
+        fact_path = f"/stores/{self.store_id}/product-facts"
+        status, anchor = self.request(fact_path, method="POST", body={
+            "listing_project_identity": identity, "merchant_product_fact_packet": packet})
+        self.assertEqual(status, 201)
+        # The immutable source anchor is distinct from the selected candidate's
+        # project; never create two different full identities under one key.
+        identity.update(key="listing-project-media-selected-" + uuid.uuid4().hex,
+                        source_report_id=anchor["report"]["report_id"], candidate_id="candidate-media")
+        status, facts = self.request(fact_path, method="POST", body={
+            "listing_project_identity": identity, "merchant_product_fact_packet": packet})
+        self.assertEqual(status, 201)
+        output = {"title": "Foldable Aluminum Tablet Stand",
+            "selling_points": ["Aluminum construction", "Foldable design", "Silicone contact pads"],
+            "description": "A foldable aluminum tablet stand with silicone contact pads for desktop use.",
+            "category_suggestion": "Tablet Stands", "keywords": ["tablet stand"],
+            "item_specifics": {"Type": "Tablet Stand"}}
+        (self.root / "provider-control.json").write_text(json.dumps({"output": output}), encoding="utf-8")
+        status, generated = self.request(self.path, method="POST", body={
+            "operation_id": str(uuid.uuid4()), "listing_project_identity": identity,
+            "merchant_product_fact_packet": facts["merchant_product_fact_packet"], "current_draft_fields": {}})
+        self.assertEqual(status, 201, "the real generation endpoint must produce the scoped proof")
+        self.assertEqual(len(self.calls()), 1)
+        report = generated["report"]
+        fields = {key: "" for key in FIELD_KEYS}
+        fields.update(title=output["title"], selling_points="\n".join(output["selling_points"]),
+                      description=output["description"])
+        checkpoint_path = f"/stores/{self.store_id}/listing-drafts/{identity['key']}/checkpoint"
+        status, _saved = self.request(checkpoint_path, method="POST", body={
+            "contract_version": "listing_merchant_edit_v1", "listing_project_identity": identity,
+            "base_report_id": report["report_id"], "expected_revision": 0, "mutation_id": str(uuid.uuid4()),
+            "fields": fields, "merchant_edited_fields": []})
+        self.assertEqual(status, 201)
+        # Seed only a pending local media job, through the real repository. It
+        # has no provider result or merchant approval; no proof is forged.
+        from jiejing_saas.repository import SaaSRepository
+        profile = self.request("/me")[1]
+        repository = SaaSRepository(self.root / "saas.sqlite", database_engine="sqlite", database_url="")
+        pending_media = repository.create_media_asset_job(
+            company_id=profile["identity"]["company_id"], store_id=self.store_id,
+            task_id=report["task_id"], user_id=profile["identity"]["user_id"],
+            provider_job_key="local-pending-media", idempotency_key=str(uuid.uuid4()),
+            job_spec={"inputs": {"product_facts": {"listing_project_key": identity["key"]}}})
+        del repository
+        gc.collect()  # Release SQLite's completed context handles before Windows cleanup.
+        result = subprocess.run([node, str(ROOT / "tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js")],
+            cwd=ROOT, text=True, encoding="utf-8", capture_output=True, timeout=90,
+            input=json.dumps({"scenario": "new-media-after-generation", "api_base": self.base,
+                "session_token": self.token, "profile": profile, "store_id": self.store_id,
+                "identity": identity, "expected_copy": fields, "simulation_only": simulation_only,
+                "pending_media": pending_media}))
+        # Only the child's fixed diagnostic is surfaced, never a local credential or response body.
+        self.assertEqual(result.returncode, 0, "real media-to-publish loop failed: " + result.stderr)
+        evidence = json.loads(result.stdout)
+        self.assertTrue(evidence["copy_preserved"])
+        self.assertTrue(evidence["cold_reload_preserved"])
+        self.assertFalse(evidence["model_generated_after_checkpoint"])
+        self.assertFalse(evidence["base_changed"])
+        self.assertEqual(evidence["external_requests"], 0)
+        self.assertEqual(evidence["page_errors"], 0)
+        self.assertEqual(evidence["source_blockers"], ["simulation_only_product_facts"] if simulation_only else
+                         ["media_job_not_approved", "image_rights_not_attested", "image_assets_missing"])
+        self.assertTrue(evidence["denials_created_no_business_records"])
+        self.assertTrue(evidence["confirmation_entry_exercised"])
+        self.assertEqual(len(self.calls()), 1, "image saving must never regenerate buyer copy")
 
     def test_operation_result_is_readable_and_replay_does_not_call_model_again(self):
         operation_id = str(uuid.uuid4())
