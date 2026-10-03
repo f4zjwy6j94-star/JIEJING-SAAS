@@ -74,6 +74,16 @@ def simulation_generate(self, **kwargs):
             plan["simulation_request"] = {"enabled": True, "source_quote": "仅用于内部模拟", "write_allowed": True}
         if "仅做费用测算" in message:
             plan.update(intent="research", research_delivery="single_product_analysis")
+        if "合同纠错" in message:
+            self.readonly_plan_attempts = getattr(self, "readonly_plan_attempts", 0) + 1
+            plan.update(intent="chat" if self.readonly_plan_attempts == 1 else "research",
+                project_action="current", read_images=False, save_artifact=False,
+                product_fact_proposals=[], simulation_request=None,
+                research_delivery="none" if self.readonly_plan_attempts == 1 else "single_product_analysis")
+            if self.readonly_plan_attempts > 1 and "拒绝副作用" in message:
+                plan.update(save_artifact=True, project_action="new", product_name="未经请求的新商品")
+            if self.readonly_plan_attempts > 1 and "重复无效" in message:
+                plan.update(intent="chat", research_delivery="none")
         result["text"] = json.dumps(plan, ensure_ascii=False)
     return result
 Model.generate_text = simulation_generate
@@ -216,6 +226,91 @@ class SimulationRequestHttpTests(unittest.TestCase):
             self.assertTrue(response["ai_ceo_chat"].get("product_intake") is None)
             self.assertEqual({"enabled": True, "source_quote": "仅用于内部模拟"},
                              response["ai_ceo_chat"]["turn_plan"]["simulation_request"])
+
+    def test_readonly_cost_plan_repair_preserves_all_fields_and_meters_replay_once(self):
+        status, protected = self.call(f"/stores/{self.store}/product-facts", {
+            "listing_project_identity": self.b_identity,
+            "merchant_product_fact_packet": {**self.b["merchant_product_fact_packet"], "simulation_only": True}})
+        self.assertEqual(201, status)
+        fields = {key: "Saved B " + key for key in FIELD_KEYS}
+        intake = {"values": {key: "Saved B " + key for key in PUBLISH_INTAKE_KEYS}, "basis": {}}
+        self.assertEqual(35, len(intake["values"]))
+        path = f"/stores/{self.store}/listing-drafts/{self.b_identity['key']}/checkpoint"
+        query = "?" + urlencode({key: self.b_identity[key] for key in ("source_report_id", "candidate_id")})
+        status, saved = self.call(path, {"contract_version": "listing_merchant_edit_v1",
+            "listing_project_identity": self.b_identity, "base_report_id": protected["report"]["report_id"],
+            "expected_revision": 0, "mutation_id": "checkpoint-" + uuid.uuid4().hex,
+            "fields": fields, "merchant_edited_fields": ["title", "description"], "publish_intake": intake})
+        self.assertEqual(201, status)
+        before_reports = self.reports()
+        status, before_checkpoint = self.call(path + query)
+        self.assertEqual(200, status)
+        body = self.b_envelope("继续那把：合同纠错费用咨询。只回复模拟费用表，不变更任何商品资料，不联网，不要保存成果，不生成图片，不发布，保留原模拟保护。")
+        chat_path = f"/stores/{self.store}/merchant-ceo/chat"
+        status, result = self.call(chat_path, body)
+        self.assertEqual(201, status, result)
+        self.assertEqual("ready", result["semantic_dispatch"]["status"])
+        plan = result["ai_ceo_chat"]["turn_plan"]
+        self.assertEqual("research", plan["intent"])
+        self.assertFalse(plan["save_artifact"])
+        self.assertFalse(plan["read_images"])
+        self.assertEqual([], plan["product_fact_proposals"])
+        self.assertIsNone(plan["simulation_request"])
+        self.assertTrue(result["ai_ceo_chat"]["answer"])
+        self.assertIsNone(result.get("product_vision_report"))
+        self.assertIsNone(result.get("ai_ceo_market_report"))
+        self.assertEqual(before_reports, self.reports())
+        self.assertEqual(before_checkpoint, self.call(path + query)[1])
+        self.assertEqual(fields, saved["checkpoint"]["fields"])
+        self.assertEqual(intake["values"], saved["checkpoint"]["publish_intake"]["values"])
+        _, tasks = self.call("/tasks")
+        chats = [item for item in tasks["tasks"] if item["task_type"] == "merchant_ceo_chat"]
+        self.assertEqual(1, len(chats))
+        self.assertEqual(3, chats[0]["output"]["model_request_count"])
+        status, replay = self.call(chat_path, body)
+        self.assertEqual(201, status)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(before_reports, self.reports())
+        self.assertEqual(before_checkpoint, self.call(path + query)[1])
+        _, after_tasks = self.call("/tasks")
+        after_chats = [item for item in after_tasks["tasks"] if item["task_type"] == "merchant_ceo_chat"]
+        self.assertEqual(chats, after_chats)
+        streamed = {**body, "command": {**body["command"], "id": "cmd-" + uuid.uuid4().hex}}
+        request = urllib.request.Request(f"{self.base}{chat_path}?stream=1",
+            data=json.dumps(streamed).encode(), method="POST",
+            headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=25) as response:
+            events = [json.loads(line) for line in response.read().decode().splitlines() if line]
+        final = next(item["payload"] for item in events if item.get("type") == "final")
+        self.assertEqual("ready", final["semantic_dispatch"]["status"])
+        self.assertIsNone(final.get("product_vision_fact_packet"))
+        self.assertEqual(before_reports, self.reports())
+        self.assertEqual(before_checkpoint, self.call(path + query)[1])
+        _, archive = self.call("/ai-ceo/chat-history")
+        self.assertEqual(final["semantic_dispatch"], archive["ai_ceo_chat_history"]["turns"][-1]["semantic_dispatch"])
+        status, stream_replay = self.call(chat_path, streamed)
+        self.assertEqual(201, status)
+        self.assertTrue(stream_replay["idempotent_replay"])
+        _, tasks = self.call("/tasks")
+        chats = [item for item in tasks["tasks"] if item["task_type"] == "merchant_ceo_chat"]
+        self.assertEqual([3, 3], [item["output"]["model_request_count"] for item in chats])
+
+    def test_readonly_plan_repair_rejects_escalation_and_repeated_invalid_output(self):
+        before_reports = self.reports()
+        for scenario, expected in (("拒绝副作用", "semantic_plan_repair_effect_escalation"),
+                                   ("重复无效", "semantic_plan_non_workflow_mutation")):
+            with self.subTest(scenario=scenario):
+                body = self.b_envelope("继续那把：合同纠错" + scenario + "；只讨论费用，不要保存商品。")
+                status, result = self.call(f"/stores/{self.store}/merchant-ceo/chat", body)
+                self.assertEqual(202, status)
+                self.assertEqual([expected], result["ai_ceo_chat"]["blocked_by"])
+                self.assertIsNone(result.get("product_vision_report"))
+                self.assertIsNone(result.get("ai_ceo_market_report"))
+                self.assertEqual(before_reports, self.reports())
+                _, tasks = self.call("/tasks")
+                chats = [item for item in tasks["tasks"] if item["task_type"] == "merchant_ceo_chat"]
+                self.assertTrue(chats)
+                self.assertTrue(all(item["output"]["model_request_count"] == 2 for item in chats))
 
     def test_simulation_listing_evidence_without_fact_report_keeps_first_save_payload(self):
         # A historical Listing can be the only durable project evidence. Seed

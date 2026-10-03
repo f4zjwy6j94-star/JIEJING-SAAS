@@ -28,6 +28,15 @@ class RawModelFixture(ModelFixture):
         return {"text": self.decision, "finish_reason": "stop"}
 
 
+class SequenceModelFixture(ModelFixture):
+    def generate_text(self, **kwargs):
+        self.prompts.append(kwargs)
+        item = self.decision[min(len(self.prompts) - 1, len(self.decision) - 1)]
+        if isinstance(item, Exception):
+            raise item
+        return {"text": json.dumps(item, ensure_ascii=False), "finish_reason": "stop"}
+
+
 def decision(**changes):
     research = changes.get("intent") == "research"
     return {
@@ -69,6 +78,61 @@ class SemanticDispatchTests(unittest.TestCase):
                 raise TimeoutError("provider diagnostic must not be returned")
         with self.assertRaisesRegex(SemanticPlanError, "^semantic_plan_model_failed$"):
             self.plan(model=FailedModel(), message="新建一个独立商品项目：银色小勺")
+
+    def test_model_repairs_readonly_context_conflict_with_fixed_feedback_only(self):
+        invalid = decision(intent="chat", project_action="current", product_name="untrusted-model-output-marker",
+                           read_images=False, save_artifact=False)
+        repaired = decision(intent="research", project_action="current", read_images=False,
+                            save_artifact=False, research_delivery="single_product_analysis")
+        model = SequenceModelFixture([invalid, repaired])
+        message = "只讨论当前商品的模拟费用，保留资料，不联网。"
+        plan = self.plan(model=model, current={"product_name": "量勺"}, assets=False, message=message)
+        self.assertEqual("research", plan["intent"])
+        self.assertEqual("current", plan["project_action"])
+        self.assertFalse(plan["save_artifact"])
+        self.assertEqual(2, len(model.prompts))
+        first, second = [json.loads(item["user_prompt"]) for item in model.prompts]
+        self.assertEqual(message, second["merchant_message"])
+        self.assertEqual(first, {k: v for k, v in second.items() if k != "plan_validation_feedback"})
+        self.assertEqual("semantic_plan_non_workflow_mutation", second["plan_validation_feedback"]["code"])
+        self.assertNotIn("untrusted-model-output-marker", model.prompts[1]["user_prompt"])
+        self.assertEqual([45, 20], [item["timeout_seconds"] for item in model.prompts])
+
+    def test_repair_cannot_escalate_effects_or_retry_more_than_once(self):
+        invalid = decision(intent="chat", project_action="current", read_images=False, save_artifact=False)
+        readonly = decision(intent="research", project_action="current", read_images=False,
+                            save_artifact=False, research_delivery="single_product_analysis")
+        escalations = [
+            decision(read_images=False),
+            {**readonly, "save_artifact": True},
+            {**readonly, "read_images": True},
+            decision(intent="live_action", project_action="current", read_images=False, save_artifact=False),
+            decision(intent="remember_rule", project_action="none", read_images=False, save_artifact=False),
+            {**readonly, "search": "web_search", "query": "scoop",
+             "research_queries": [{"subject": "scoop", "query": "scoop"}]},
+        ]
+        for repaired in escalations:
+            with self.subTest(repaired=repaired):
+                model = SequenceModelFixture([invalid, repaired])
+                with self.assertRaisesRegex(SemanticPlanError, "^semantic_plan_repair_effect_escalation$"):
+                    self.plan(model=model, current={"product_name": "量勺"})
+                self.assertEqual(2, len(model.prompts))
+        repeated = SequenceModelFixture([invalid, invalid, readonly])
+        with self.assertRaisesRegex(SemanticPlanError, "^semantic_plan_non_workflow_mutation$"):
+            self.plan(model=repeated, current={"product_name": "量勺"})
+        self.assertEqual(2, len(repeated.prompts))
+        timeout = SequenceModelFixture([invalid, TimeoutError("do-not-leak-provider-detail")])
+        with self.assertRaisesRegex(SemanticPlanError, "^semantic_plan_model_failed$"):
+            self.plan(model=timeout, current={"product_name": "量勺"})
+        self.assertEqual(2, len(timeout.prompts))
+
+    def test_repair_is_not_offered_for_unknown_authority_or_invalid_fields(self):
+        for invalid in (decision(company_id="forged"), decision(save_artifact="false"), None):
+            with self.subTest(invalid=invalid):
+                model = SequenceModelFixture([invalid, decision(read_images=False)])
+                with self.assertRaises(SemanticPlanError):
+                    self.plan(model=model)
+                self.assertEqual(1, len(model.prompts))
 
     def test_strict_schema_rejects_unknown_authority_identity_types_and_bounds(self):
         invalid = [

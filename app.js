@@ -32748,6 +32748,8 @@ function renderSaasReadonlyPublishCheckResult() {
     "listing.sku": "SKU", "listing.title": "标题", "listing.description_html": "商品描述",
     "listing.category_id": "类目", "listing.condition": "商品状态", "listing.price": "售价",
     "listing.quantity": "库存", "listing.item_specifics": "商品属性", "listing.merchant_location_key": "库存位置",
+    "listing.item_specifics.Brand": "品牌（Brand）", "listing.item_specifics.Type": "类型（Type）",
+    "listing.item_specifics.Material": "材质（Material）",
     "business_policies.fulfillment_policy_id": "配送政策", "business_policies.payment_policy_id": "付款政策",
     "business_policies.return_policy_id": "退货政策", "supplier_facts.package_weight_g": "包装重量",
     "supplier_facts.package_dimensions_cm": "包装尺寸", "supplier_facts.package_dimensions_cm.length": "包装长度",

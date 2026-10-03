@@ -216,6 +216,18 @@ test("read-only checks distinguish not-applicable rows from passes and missing d
   assert.doesNotMatch(html, /待补：/);
 });
 
+test("missing item specifics name the fields instead of an unhelpful generic blocker", async () => {
+  const ctx = readonlyFixture();
+  ctx.response.publish_readiness.checks = [{ key: "item_specifics_quality", label: "Item specifics",
+    status: "blocked", blocking: true, summary: "商品属性未齐全",
+    details: { missing_fields: ["listing.item_specifics.Brand", "listing.item_specifics.Type"] } }];
+  await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx);
+  const html = vm.runInContext("renderSaasReadonlyPublishCheckResult()", ctx);
+  assert.match(html, /待补：品牌（Brand）、类型（Type）/);
+  assert.doesNotMatch(html, /相关必填资料/);
+  assert.match(html, /1 项阻断/);
+});
+
 test("precheck failures and mismatched responses never display a previous success", async () => {
   for (const response of [null, { ...readonlyFixture().response, store_id: "other-store" },
     { ...readonlyFixture().response, real_execution_allowed: true }]) {

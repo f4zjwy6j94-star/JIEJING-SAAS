@@ -69,6 +69,9 @@ def plan_ai_ceo_turn(*, model_client: Any, message: str,
         "intent: chat/research/listing/media/support/bulk/review/live_action/remember_rule/realtime。"
         "project_action: new/current/none/clarify。只有用户明确要处理另一个具体商品才 new；"
         "继续当前商品用 current；闲聊、开放选品与实时问题用 none，不因为当前打开商品就绑定它。"
+        "chat/realtime/remember_rule只能用project_action=none（不明确时clarify），read_images和save_artifact必须false。"
+        "只讨论当前商品且不保存成果，可以用research/current/single_product_analysis并save_artifact=false；"
+        "不能组合chat/current。只回答测算表不等于保存商品资料，沿用原模拟保护时simulation_request=null。"
         "目标有歧义则 status=clarification_required, project_action=clarify 并提出一个简短 question。"
         "新商品 product_name 只能来自用户提供的名称或明确描述，不得沿用旧商品的SKU、事实或图片。"
         "没有当前商品却要求继续当前商品时必须澄清。仅上传图片而用途不明时先问用途。"
@@ -107,29 +110,50 @@ def plan_ai_ceo_turn(*, model_client: Any, message: str,
     history = [{key: str(item.get(key) or "")[:1500]
                 for key in ("user_text", "assistant_text", "route")}
                for item in conversation_history[-8:] if isinstance(item, dict)]
-    try:
-        result = model_client.generate_text(
-            system_prompt=system,
-            user_prompt=json.dumps({"merchant_message": message, "conversation_history": history,
-                                   "current_product": active_listing_context,
-                                   "has_new_images": bool(has_source_assets)}, ensure_ascii=False),
-            # Existing text providers cap at 4096; bounded quoted fact proposals
-            # need more room than the earlier intent-only 1500-token response.
-            temperature=0, max_output_tokens=4096, timeout_seconds=45,
-        )
-    except Exception as exc:
-        raise SemanticPlanError("semantic_plan_model_failed") from exc
-    if isinstance(result, dict) and result.get("finish_reason") == "length":
-        raise SemanticPlanError("semantic_plan_truncated_output")
-    try:
-        text = result.get("text") if isinstance(result, dict) else None
-        if not isinstance(text, str) or len(text) > 16000:
-            raise ValueError("invalid_semantic_model_output")
-        raw = json.loads(text, object_pairs_hook=_unique_json_object)
-    except (TypeError, ValueError) as exc:
-        raise SemanticPlanError("semantic_plan_invalid_json") from exc
-    return validate_semantic_plan(raw, has_current_product=bool(active_listing_context),
-                                  has_source_assets=has_source_assets, message=message)
+    payload = {"merchant_message": message, "conversation_history": history,
+               "current_product": active_listing_context, "has_new_images": bool(has_source_assets)}
+    for attempt in range(2):
+        try:
+            result = model_client.generate_text(
+                system_prompt=system, user_prompt=json.dumps(payload, ensure_ascii=False),
+                # Both calls use the same metered provider boundary. A single
+                # repair requests a 20-second timeout, never an unbounded loop.
+                temperature=0, max_output_tokens=4096, timeout_seconds=20 if attempt else 45,
+            )
+        except Exception as exc:
+            raise SemanticPlanError("semantic_plan_model_failed") from exc
+        if isinstance(result, dict) and result.get("finish_reason") == "length":
+            raise SemanticPlanError("semantic_plan_truncated_output")
+        try:
+            text = result.get("text") if isinstance(result, dict) else None
+            if not isinstance(text, str) or len(text) > 16000:
+                raise ValueError("invalid_semantic_model_output")
+            raw = json.loads(text, object_pairs_hook=_unique_json_object)
+        except (TypeError, ValueError) as exc:
+            raise SemanticPlanError("semantic_plan_invalid_json") from exc
+        try:
+            plan = validate_semantic_plan(raw, has_current_product=bool(active_listing_context),
+                                          has_source_assets=has_source_assets, message=message)
+        except SemanticPlanError as exc:
+            if attempt or str(exc) != "semantic_plan_non_workflow_mutation":
+                raise
+            # Fixed contract feedback only: never forward invalid output or
+            # exception details. The model, not local keywords, reconsiders it.
+            payload["plan_validation_feedback"] = {
+                "code": "semantic_plan_non_workflow_mutation",
+                "instruction": "上一次规划将非工作流意图与商品操作混用，已拒绝且未执行。请依据原文重新输出完整合法JSON。"
+                    "本次纠错只允许无副作用的回答或澄清：不新建商品、不保存成果、不读图、不检索，"
+                    "不提商品事实或模拟标记、不安排执行或记忆规则；不要为了通过校验改变用户意图。"
+                    "普通聊天用chat/none；讨论当前商品用research/current/single_product_analysis且save_artifact=false。",
+            }
+            continue
+        if attempt and (plan["project_action"] == "new" or plan["save_artifact"] or plan["read_images"]
+                        or plan["product_fact_proposals"] or plan["simulation_request"] is not None
+                        or plan["intent"] in {"live_action", "remember_rule"}
+                        or plan["search"] not in {"none", "reuse"}):
+            raise SemanticPlanError("semantic_plan_repair_effect_escalation")
+        return plan
+    raise SemanticPlanError("semantic_plan_non_workflow_mutation")  # defensive; loop always returns/raises
 
 
 def validate_semantic_plan(raw: Any, *, has_current_product: bool,
