@@ -37,7 +37,14 @@ class Model:
     endpoint = ""
     def generate_text(self, **kwargs):
         prompt = str(kwargs.get("user_prompt") or "")
-        if "语义任务规划器" in str(kwargs.get("system_prompt") or ""):
+        if "商品检索词补全器" in str(kwargs.get("system_prompt") or ""):
+            data = json.loads(prompt)
+            patch = {"research_queries": [{"subject": name, "query": "site:ebay.com/itm/ " + name}
+                for name in ("adhesive cable clips", "silicone drain hair catcher")]}
+            if "检索补词越界" in data["merchant_message"]:
+                patch["project_action"] = "new"
+            text = json.dumps(patch, ensure_ascii=False)
+        elif "语义任务规划器" in str(kwargs.get("system_prompt") or ""):
             data = json.loads(prompt)
             message = data["merchant_message"]
             if "坏计划" in message:
@@ -581,6 +588,23 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         chats = [item for item in tasks["tasks"] if item["task_type"] == "merchant_ceo_chat"]
         self.assertEqual(1, len(chats))
         self.assertEqual(3, chats[0]["output"]["model_request_count"])
+
+    def test_query_completion_cannot_create_a_project_or_change_reports(self):
+        before = self.reports()
+        body = self.envelope("无货源研究候选，检索合同纠错，检索补词越界。只保存选品报告，不建项目。")
+        path = f"/stores/{self.store}/merchant-ceo/chat"
+        status, result = self.call(path, body)
+        self.assertEqual(202, status)
+        self.assertEqual("blocked", result["semantic_dispatch"]["status"])
+        self.assertEqual({}, result["semantic_dispatch"]["target_project_identity"])
+        self.assertIsNone(result.get("ai_ceo_market_report"))
+        self.assertIsNone(result.get("product_vision_report"))
+        self.assertIsNone(result.get("merchant_ceo_command"))
+        self.assertEqual(before, self.reports())
+        replay_status, replay = self.call(path, body)
+        self.assertEqual(202, replay_status)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(before, self.reports())
 
     def test_platform_trial_counts_one_turn_for_two_calls_and_blocks_after_twenty(self):
         first_body = self.envelope("平台试用，聊聊天。")

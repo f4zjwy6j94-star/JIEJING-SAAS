@@ -132,7 +132,7 @@ class SemanticDispatchTests(unittest.TestCase):
                          query="eBay cable clips product", simulation_request=None,
                          search="web_search", research_queries=[{"subject": "cable clips", "query": "eBay cable clips product"}])
         for invalid in ({**valid, "research_queries": []}, {**valid, "query": "different top-level query"}):
-            model = SequenceModelFixture([invalid, valid])
+            model = SequenceModelFixture([invalid, {"research_queries": valid["research_queries"]}])
             plan = self.plan(model=model, assets=False, message="联网比较两种商品并保存选品报告，不新建项目。")
             self.assertEqual("none", plan["project_action"])
             self.assertTrue(plan["save_artifact"])
@@ -152,7 +152,7 @@ class SemanticDispatchTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(SemanticPlanError):
                 self.plan(model=model, current={"product_name": "Old scoop"}, assets=True)
             self.assertEqual(2, len(model.prompts))
-        for second, expected in (({**valid, "research_queries": []}, "semantic_plan_missing_research_queries"),
+        for second, expected in (({"research_queries": []}, "semantic_plan_missing_research_queries"),
                                  (TimeoutError("untrusted provider message"), "semantic_plan_model_failed")):
             model = SequenceModelFixture([{**valid, "research_queries": []}, second, valid])
             with self.subTest(second=second), self.assertRaisesRegex(SemanticPlanError, "^" + expected + "$"):
@@ -166,6 +166,53 @@ class SemanticDispatchTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(SemanticPlanError):
                 self.plan(model=model, current={"product_name": "Old scoop"}, message="x")
             self.assertEqual(1, len(model.prompts))
+
+    def test_query_completion_cannot_reconsider_already_validated_scope(self):
+        original = decision(intent="research", project_action="none", product_name="理线夹与排水口滤网",
+            read_images=False, source_mode="merchant_has_no_source", candidate_count=2,
+            listing_deferred=True, excluded_candidates=["量勺", "量杯"], save_artifact=True,
+            research_delivery="evidence_comparison", search="web_search",
+            query="invalid-top-query-marker", research_queries=[], simulation_request=None)
+        queries = [{"subject": "自粘理线夹 / adhesive cable clips", "query": "site:ebay.com/itm/ adhesive cable clips"},
+                   {"subject": "排水口滤网 / silicone drain hair catcher", "query": "site:ebay.com/itm/ silicone drain hair catcher"}]
+        model = SequenceModelFixture([original, {"research_queries": queries}])
+        message = "比较理线夹和排水口滤网，保存比较报告，不新建项目，不改变旧商品。"
+        plan = self.plan(model=model, current={"product_name": "Old scoop"}, assets=False, message=message)
+        for key, value in original.items():
+            if key not in {"query", "research_queries"}:
+                self.assertEqual(value, plan[key], key)
+        self.assertEqual(queries, plan["research_queries"])
+        self.assertEqual(queries[0]["query"], plan["query"])
+        self.assertEqual(2, len(model.prompts))
+        repair = json.loads(model.prompts[1]["user_prompt"])
+        self.assertEqual(message, repair["merchant_message"])
+        self.assertEqual("none", repair["validated_research_scope"]["project_action"])
+        self.assertEqual(2, repair["validated_research_scope"]["candidate_count"])
+        self.assertNotIn("invalid-top-query-marker", model.prompts[1]["user_prompt"])
+        self.assertNotIn("Old scoop", model.prompts[1]["user_prompt"])
+        self.assertEqual([45, 20], [item["timeout_seconds"] for item in model.prompts])
+
+    def test_query_completion_rejects_extra_scope_and_malformed_queries(self):
+        original = decision(intent="research", project_action="none", product_name="",
+            read_images=False, save_artifact=True, source_mode="merchant_has_no_source",
+            search="web_search", query="cable clips", research_queries=[], simulation_request=None)
+        patch = {"research_queries": [{"subject": "cable clips", "query": "site:ebay.com/itm/ cable clips"}]}
+        for change in ({"project_action": "new"}, {"save_artifact": False}, {"candidate_count": 5},
+                       {"excluded_candidates": []}, {"product_name": "different scope"},
+                       {"simulation_request": {"enabled": False}}, {"company_id": "forged"},
+                       {"query": "extra redundant query"}, {"read_images": True}):
+            model = SequenceModelFixture([original, {**patch, **change}, patch])
+            with self.subTest(change=change), self.assertRaisesRegex(SemanticPlanError, "^semantic_plan_repair_scope_changed$"):
+                self.plan(model=model, assets=False)
+            self.assertEqual(2, len(model.prompts))
+        for queries in ([], None, "query", [None], [{"query": "cable clips"}],
+                        [{"subject": "clips", "query": ""}],
+                        [{"subject": "clips", "query": "cable", "company_id": "forged"}],
+                        patch["research_queries"] * 4):
+            model = SequenceModelFixture([original, {"research_queries": queries}, patch])
+            with self.subTest(queries=queries), self.assertRaises(SemanticPlanError):
+                self.plan(model=model, assets=False)
+            self.assertEqual(2, len(model.prompts))
 
     def test_repair_is_not_offered_for_unknown_authority_or_invalid_fields(self):
         for invalid in (decision(company_id="forged"), decision(save_artifact="false"), None):
