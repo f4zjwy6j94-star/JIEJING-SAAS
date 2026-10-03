@@ -512,14 +512,69 @@ def main() -> int:
             ).fetchone()[0]
         if completed_task_status != "completed_no_platform_write":
             return fail(f"simulated draft task must close instead of remaining queued: {completed_task_status}")
-        # Server evidence remains authoritative even if a browser omits its
-        # simulation marker. This fixture mutation is isolated to this SQLite.
+        # Report-only corruption cannot impersonate a new merchant save: its
+        # packet no longer matches the server task and authentication proof.
+        # Keep this negative fixture isolated to the temporary local SQLite.
         simulated_report = json.loads(original_report_json)
         simulated_report["merchant_product_fact_packet"]["simulation_only"] = True
         with sqlite3.connect(SAAS_DB) as conn:
             conn.execute("update reports set report_json = ? where report_id = ?",
                          (json.dumps(simulated_report), product_fact_report_id))
+            before_tampered_check = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                                     for table in ("tasks", "confirmations", "execution_results", "reports")]
         preview_body["simulation_only"] = False
+        status, tampered_precheck = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-precheck", preview_body, token=token,
+        )
+        if status != 200 or tampered_precheck.get("read_only") is not True:
+            return fail("tampered source evidence must receive a safe readonly precheck")
+        if tampered_precheck.get("source_blockers") != ["product_facts_not_authenticated"]:
+            return fail("report-only packet corruption must fail server authentication")
+        for key in ("confirmation_created", "task_created", "platform_write_attempted", "real_execution_allowed"):
+            if tampered_precheck.get(key) is not False:
+                return fail("tampered source precheck must not create records or permit platform execution")
+        if tampered_precheck.get("publish_readiness", {}).get("ready_for_platform_adapter") is not False:
+            return fail("tampered source precheck must never authorize a platform adapter")
+        status, tampered_confirmation = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-confirmation", preview_body, token=token,
+        )
+        if (status != 422 or tampered_confirmation.get("confirmation_created") is not False
+                or tampered_confirmation.get("blockers") != ["product_facts_not_authenticated"]):
+            return fail("report-only packet corruption must block real confirmation intake")
+        with sqlite3.connect(SAAS_DB) as conn:
+            after_tampered_check = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                                    for table in ("tasks", "confirmations", "execution_results", "reports")]
+        if before_tampered_check != after_tampered_check:
+            return fail("tampered source checks must not create business records")
+
+        # Legitimate simulation is a new authenticated merchant action through
+        # the same endpoint as the UI, with the exact current report as its CAS
+        # base. Do not repair the old report's proof, hash, or task by hand.
+        status, simulation_save = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/product-facts",
+            {
+                "listing_project_identity": listing_project_identity,
+                "merchant_product_fact_packet": deepcopy(simulated_report["merchant_product_fact_packet"]),
+                "save_context": {
+                    "contract_version": "merchant_product_fact_save_v1",
+                    "mutation_id": "publish-intake-legitimate-simulation-save",
+                    "expected_fact_report_id": product_fact_report_id,
+                },
+            },
+            token=token,
+        )
+        simulated_fact_report_id = simulation_save.get("report", {}).get("report_id")
+        if (status != 201 or not simulated_fact_report_id or simulated_fact_report_id == product_fact_report_id
+                or simulation_save.get("is_current") is not True
+                or simulation_save.get("listing_project_identity") != listing_project_identity
+                or simulation_save.get("merchant_product_fact_packet", {}).get("simulation_only") is not True):
+            return fail("legitimate simulation facts must be saved through authenticated current-version CAS")
+        preview_body["publish_evidence_refs"] = {"product_fact_report_id": simulated_fact_report_id}
+        with sqlite3.connect(SAAS_DB) as conn:
+            before_simulation_check = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                                       for table in ("tasks", "confirmations", "execution_results", "reports")]
+        # The browser still omits the flag; only the newly saved server packet
+        # supplies the authoritative simulation boundary.
         status, server_simulation = post_json_status(
             f"{base_url}/stores/{store['store_id']}/publish-precheck", preview_body, token=token,
         )
@@ -533,6 +588,10 @@ def main() -> int:
         if status != 422 or blocked_simulation.get("confirmation_created") is not False:
             return fail("readonly precheck must not unlock real confirmation intake for simulated facts")
         with sqlite3.connect(SAAS_DB) as conn:
+            after_simulation_check = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                                      for table in ("tasks", "confirmations", "execution_results", "reports")]
+            if before_simulation_check != after_simulation_check:
+                return fail("legitimate simulation checks must not create business records")
             conn.execute(
                 "update tasks set status = 'queued' where task_id = ?",
                 (replacement_draft.get("task_id"),),
