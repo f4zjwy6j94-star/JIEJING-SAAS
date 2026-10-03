@@ -161,6 +161,9 @@ function readonlyFixture() {
     saasPublishIntakeSourceBasis: () => ctx.basis,
     snapshotSaasPublishIntakeFormValues: () => {},
     requireSaasProtectedSessionForAction: () => true,
+    ensureSaasProtectedSessionForMutation: async () => ({}),
+    assertSaasLiveIdentityScope: () => {},
+    AbortController, setTimeout, clearTimeout, SAAS_BROWSER_SESSION_REFRESH_TIMEOUT_MS: 10000,
     readSaasPublishIntakeForm: () => ({ simulation_only: true, listing_project_identity: { key: "project-A" } }),
     escapeHtml: value => String(value ?? "").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
     showActionToast: message => ctx.messages.push(message),
@@ -196,9 +199,11 @@ test("late prechecks cannot reappear after edit, project switch, or source updat
     ctx => { ctx.contextKey = "company:user:store-B:project-B"; },
     ctx => { ctx.basis = { title: "Changed source" }; }]) {
     const ctx = readonlyFixture();
-    let finish;
-    ctx.saasFetch = () => new Promise(resolve => { finish = resolve; });
+    let finish, started;
+    const requestStarted = new Promise(resolve => { started = resolve; });
+    ctx.saasFetch = () => new Promise(resolve => { finish = resolve; started(); });
     const pending = vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx);
+    await requestStarted;
     assert.equal(await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx), false, "duplicate click is ignored");
     change(ctx); finish(ctx.response);
     assert.equal(await pending, false);

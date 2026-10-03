@@ -32800,9 +32800,29 @@ async function runSaasReadonlyPublishPrecheck() {
   const pending = { basis: saasReadonlyPublishCheckBasis(), status: "checking" };
   state.saasReadonlyPublishCheck = pending;
   refreshSaasReadonlyPublishCheckView();
+  let sessionTimedOut = false;
+  let sessionTimer = null;
+  const sessionController = new AbortController();
+  const requestIsCurrent = () => !sessionTimedOut && state.saasReadonlyPublishCheck === pending &&
+    pending.basis === saasReadonlyPublishCheckBasis();
   try {
+    // This endpoint is read-only but uses POST. Renew through the existing
+    // protected GET path before sending; never replay a POST after a 401.
+    const session = await Promise.race([
+      ensureSaasProtectedSessionForMutation({ saasRequestIsCurrent: requestIsCurrent, signal: sessionController.signal }),
+      new Promise((_, reject) => {
+        sessionTimer = setTimeout(() => {
+          sessionTimedOut = true;
+          sessionController.abort();
+          reject(new Error("登录核验超时，发布检查尚未提交。"));
+        }, SAAS_BROWSER_SESSION_REFRESH_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(sessionTimer);
+    if (!requestIsCurrent()) return false;
+    assertSaasLiveIdentityScope(session);
     const result = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/publish-precheck`, {
-      method: "POST", body: JSON.stringify(payload),
+      method: "POST", body: JSON.stringify(payload), saasRequestIsCurrent: requestIsCurrent,
     });
     if (state.saasReadonlyPublishCheck !== pending || pending.basis !== saasReadonlyPublishCheckBasis()) return false;
     if (result.read_only !== true || result.store_id !== store.store_id ||
@@ -32821,6 +32841,7 @@ async function runSaasReadonlyPublishPrecheck() {
     }
     return false;
   } finally {
+    clearTimeout(sessionTimer);
     if (state.saasReadonlyPublishCheck === pending) state.saasReadonlyPublishCheck = null;
     refreshSaasReadonlyPublishCheckView();
   }

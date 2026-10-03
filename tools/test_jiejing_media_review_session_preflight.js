@@ -76,6 +76,17 @@ before(async () => {
       return json(res, 200, { ok: true, session_refreshed: true, secret_exposed: false },
         { "set-cookie": "review_access=fresh; Path=/; HttpOnly; SameSite=Strict" });
     }
+    if (url.pathname === `/stores/${scope.store_id}/publish-precheck` && req.method === "POST") {
+      const chunks = []; for await (const chunk of req) chunks.push(chunk);
+      event.body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (current.precheckDenied || !String(req.headers.cookie || "").includes("review_access=fresh")) {
+        return json(res, 401, { error: "session_expired" });
+      }
+      return json(res, 200, { read_only: true, store_id: scope.store_id, listing_project_key: identity.key,
+        simulation_only: true, confirmation_created: false, task_created: false,
+        platform_write_attempted: false, real_execution_allowed: false,
+        publish_readiness: { checks: [{ key: "simulation_only", label: "模拟保护", status: "blocked", blocking: true }] } });
+    }
     if (url.pathname === `/stores/${scope.store_id}/merchant-ceo/chat` && req.method === "POST") {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
       event.body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -169,6 +180,112 @@ async function assertNoReview(fixture) {
   assert.equal(fixture.requests.filter(row => row.path.endsWith("/review")).length, 0,
     "invalidated preflight must not send the original or a replacement review");
 }
+
+async function openPublishPrecheck(page) {
+  await page.locator('#assetModal .modal-close[data-close-modal]').click();
+  await page.evaluate(() => {
+    state.saasListingComposerDraft.merchant_product_fact_packet.simulation_only = true;
+    setView("product"); setSaasListingWizardStep(4); renderProductListingCenter();
+  });
+  assert.equal(await page.locator('[data-saas-action="run-publish-precheck"]').first().isEnabled(), true);
+}
+
+for (const mode of ["expired", "fresh"]) test(`publish precheck ${mode} session is verified before one read-only request`, async () => {
+  await harness(async ({ page, fixture, context }) => {
+    if (mode === "fresh") await context.addCookies([{ name: "review_access", value: "fresh", url: base, httpOnly: true }]);
+    await openPublishPrecheck(page);
+    const result = page.waitForResponse(response => new URL(response.url()).pathname.endsWith("/publish-precheck"));
+    await page.locator('[data-saas-action="run-publish-precheck"]').first().click();
+    assert.equal((await result).status(), 200, "checking an idle page must renew before the POST, not log the merchant out");
+    await page.waitForFunction(() => state.saasReadonlyPublishCheck?.status === "checked");
+    const posts = fixture.requests.filter(row => row.path.endsWith("/publish-precheck"));
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].body.listing_project_identity.key, identity.key);
+    assert.equal(posts[0].body.simulation_only, true);
+    assert.equal(fixture.requests[0].path, "/me");
+    assert.equal(fixture.requests.filter(row => row.path === "/auth/refresh").length, mode === "expired" ? 1 : 0);
+    assert.match(await page.locator('[data-listing-visible-publish-bridge]').textContent(), /1 项阻断/);
+  });
+});
+
+test("publish precheck revoked renewal sends no product request", async () => {
+  await harness(async ({ page, fixture }) => {
+    fixture.refreshRevoked = true;
+    await openPublishPrecheck(page);
+    await page.locator('[data-saas-action="run-publish-precheck"]').first().click();
+    await page.waitForURL("**/index.html?reason=session_expired*");
+    assert.equal(fixture.requests.filter(row => row.path.endsWith("/publish-precheck")).length, 0);
+  });
+});
+
+test("publish precheck POST401 is neither refreshed nor replayed", async () => {
+  await harness(async ({ page, fixture, context }) => {
+    await context.addCookies([{ name: "review_access", value: "fresh", url: base, httpOnly: true }]);
+    fixture.precheckDenied = true;
+    await openPublishPrecheck(page);
+    const result = page.waitForResponse(response => new URL(response.url()).pathname.endsWith("/publish-precheck"));
+    await page.locator('[data-saas-action="run-publish-precheck"]').first().click();
+    assert.equal((await result).status(), 401);
+    await page.waitForURL("**/index.html?reason=session_expired*");
+    assert.equal(fixture.requests.filter(row => row.path.endsWith("/publish-precheck")).length, 1);
+    assert.equal(fixture.requests.filter(row => row.path === "/auth/refresh").length, 0);
+  });
+});
+
+for (const changed of ["company", "project", "source", "input"]) test(`publish precheck ${changed} changes cancel held renewal`, async () => {
+  await harness(async ({ page, fixture }) => {
+    await openPublishPrecheck(page);
+    const hold = { entered: deferred(), release: deferred() }; fixture.meHold = hold;
+    try {
+      await page.locator('[data-saas-action="run-publish-precheck"]').first().click();
+      await bounded(hold.entered.promise, "publish /me arrival");
+      await page.evaluate(changed => {
+        if (changed === "company") { state.saasIdentity.company_id = "replacement-company"; state.saasCompany.company_id = "replacement-company"; }
+        if (changed === "project") state.saasListingComposerDraft.listing_project_identity.key = "replacement-project";
+        if (changed === "source") state.saasListingComposerDraft.fields.title = "Changed title";
+        if (changed === "input") {
+          const input = document.querySelector('#saasPublishIntakeForm [name="price"]');
+          input.value = "14.95"; input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }, changed);
+      const returned = page.waitForResponse(response => new URL(response.url()).pathname === "/me");
+      hold.release.resolve(); await returned;
+      await page.waitForFunction(() => state.saasReadonlyPublishCheck?.status !== "checking");
+      assert.equal(fixture.requests.filter(row => row.path.endsWith("/publish-precheck")).length, 0);
+      assert.equal(fixture.requests.filter(row => row.path === "/auth/refresh").length, 0);
+      assert.equal(await page.locator('[data-listing-visible-publish-bridge]').getByText("只读检查已完成", { exact: true }).count(), 0);
+    } finally { hold.release.resolve(); }
+  });
+});
+
+test("publish precheck rejects a different cookie account before sending product facts", async () => {
+  await harness(async ({ page, fixture }) => {
+    fixture.profile = { user: { user_id: "other-user" }, company: profile.company,
+      identity: { ...profile.identity, user_id: "other-user" } };
+    await openPublishPrecheck(page);
+    await page.locator('[data-saas-action="run-publish-precheck"]').first().click();
+    await page.waitForFunction(() => state.saasReadonlyPublishCheck?.status !== "checking");
+    assert.equal(fixture.requests.filter(row => row.path.endsWith("/publish-precheck")).length, 0);
+  });
+});
+
+test("publish precheck bounds a stalled session probe and ignores its late response", async () => {
+  await harness(async ({ page, fixture }) => {
+    await openPublishPrecheck(page);
+    const hold = { entered: deferred(), release: deferred() }; fixture.meHold = hold;
+    try {
+      await page.locator('[data-saas-action="run-publish-precheck"]').first().click();
+      await bounded(hold.entered.promise, "stalled publish /me arrival");
+      await page.waitForFunction(() => state.saasReadonlyPublishCheck?.status === "error", null, { timeout: 13000 });
+      assert.equal(await page.locator('[data-saas-action="run-publish-precheck"]').first().isEnabled(), true);
+      assert.equal(fixture.requests.filter(row => row.path.endsWith("/publish-precheck")).length, 0);
+      hold.release.resolve(); await new Promise(setImmediate);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(fixture.requests.filter(row => row.path === "/auth/refresh").length, 0);
+      assert.equal(fixture.requests.filter(row => row.path.endsWith("/publish-precheck")).length, 0);
+    } finally { hold.release.resolve(); }
+  });
+});
 
 test("actual media review renews an expired access session before its one mutation", async () => {
   await harness(async ({ page, fixture }) => {
