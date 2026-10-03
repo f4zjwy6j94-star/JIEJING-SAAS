@@ -13104,6 +13104,17 @@ function handleGlobalFlowNavigation(button) {
     pulseFlowTarget("#view-product .saas-recent-product-tasks");
     return;
   }
+  if (view === "product" && key === "current-product") {
+    let requestedIdentity = null;
+    try {
+      requestedIdentity = saasNormalizeListingProjectIdentity(JSON.parse(button.dataset.aiCeoTaskProjectIdentity || "null"));
+    } catch (_error) { /* A stale or incomplete task button cannot select a product. */ }
+    const currentIdentity = saasAiCeoBoundProductNavigationIdentity();
+    const mode = saasListingCloudSameIdentity(requestedIdentity, currentIdentity) ? "single" : "recent";
+    activateSaasListingMode(mode);
+    pulseFlowTarget(mode === "single" ? "#view-product .saas-listing-wizard" : "#view-product .saas-recent-product-tasks");
+    return;
+  }
   if (key === "goal") {
     const currentProjectId = saasCurrentMerchantProjectId();
     const explicitProjectEntry = ["product", "media", "confirm"].includes(sourceView) && Boolean(currentProjectId);
@@ -16588,7 +16599,7 @@ function sanitizeSaasMerchantProductFactValues(values = {}) {
         key,
         ["image_rights_confirmed", "merchant_owned_product_confirmed"].includes(key)
           ? values[key] === true
-          : sanitizeSaasWorkflowFeedbackText(values[key], key === "image_urls" ? 2400 : key === "source_url" ? 700 : 240),
+          : sanitizeSaasCeoCommandSourceText(values[key]).slice(0, key === "image_urls" ? 2400 : key === "source_url" ? 700 : 240),
       ]),
   );
 }
@@ -24227,7 +24238,7 @@ function shouldReadSaasAccountScopedLocalCache() {
 
 function normalizeSaasCeoCommand(command = null) {
   if (!command || typeof command !== "object") return null;
-  const text = publicRuntimeText(command.text || "");
+  const text = sanitizeSaasCeoCommandSourceText(command.text || "");
   if (!text) return null;
   const routes = Array.isArray(command.routes) ? command.routes : [];
   return {
@@ -25108,7 +25119,7 @@ function sanitizeSaasFrozenNewProjectRequestPayload(payload = null, options = {}
     command,
     conversation_history: semanticRequest ? (Array.isArray(payload.conversation_history) ? payload.conversation_history : []).slice(-8).map((turn) => ({
       user_text: sanitizeSaasCeoCommandSourceText(turn.user_text).slice(0, 900),
-      assistant_text: publicRuntimeText(turn.assistant_text || "").slice(0, 3200),
+      assistant_text: sanitizeSaasCeoCommandSourceText(turn.assistant_text || "").slice(0, 3200),
       market_report_id: /^report_[A-Za-z0-9_-]+$/.test(String(turn.market_report_id || "")) ? String(turn.market_report_id).slice(0, 120) : "",
       route: ["general_chat", "ebay_workflow", "external_realtime", "confirmation_required", "merchant_rule_memory"].includes(turn.route) ? turn.route : "general_chat",
     })) : [],
@@ -25581,6 +25592,21 @@ function resumeSaasUncertainNewListingProjectRequestAfterRefresh() {
   return scheduleSaasPendingNewListingProjectReconciliation({ delayMs: 0 });
 }
 
+function saasAiCeoBoundProductNavigationIdentity() {
+  const raw = state.saasListingComposerDraft?.listing_project_identity;
+  const identity = saasNormalizeListingProjectIdentity(raw);
+  if (!identity || !["key", "source_report_id", "candidate_id"].every((key) =>
+    typeof raw?.[key] === "string" && raw[key] && raw[key] === identity[key])) return null;
+  if (identity.key !== String(state.aiCeoTaskContextProjectId || "") ||
+    identity.key !== saasCurrentMerchantProjectId()) return null;
+  const context = saasListingCloudContext();
+  // Navigation follows an already bound, scoped saved product. It neither
+  // derives identity from the product name nor grants permission to save it.
+  if (!context || !saasListingCloudSameIdentity(identity, context.identity) ||
+    !(state.saasReports || []).some((report) => saasListingCloudReportMatchesContext(report, context))) return null;
+  return identity;
+}
+
 function saasAiCeoTaskContextProjection(command = state.saasLastCeoCommand) {
   const explicit = state.aiCeoExplicitTaskContext && typeof state.aiCeoExplicitTaskContext === "object"
     ? state.aiCeoExplicitTaskContext
@@ -25679,6 +25705,7 @@ function saasAiCeoTaskContextProjection(command = state.saasLastCeoCommand) {
     nextAction.label ||
       (missingFacts.length ? "补齐商品资料" : route?.view === "cockpit" ? "继续当前调研" : "打开选品与上架"),
   ).slice(0, 56);
+  const nextProjectIdentity = nextView === "product" ? saasAiCeoBoundProductNavigationIdentity() : null;
   return {
     productLabel,
     stageLabel: publicRuntimeText(currentStage?.label || route?.label || "资料整理").slice(0, 48),
@@ -25689,7 +25716,8 @@ function saasAiCeoTaskContextProjection(command = state.saasLastCeoCommand) {
     blockerTitle: publicRuntimeText(blocker.title || "").slice(0, 96),
     nextView,
     nextLabel,
-    nextKey: nextView === "product" ? "recent" : nextView,
+    nextKey: nextView === "product" ? nextProjectIdentity ? "current-product" : "recent" : nextView,
+    nextProjectIdentity,
   };
 }
 
@@ -25730,7 +25758,7 @@ function renderSaasAiCeoTaskContextMarkup(options = {}) {
           ${context.blockerTitle ? `<strong>${escapeHtml(context.blockerTitle)}</strong>` : ""}
           <ul>${missingMarkup}</ul>
         </section>
-        <button class="primary-action compact-action" type="button" ${context.attemptFailed ? 'data-ai-ceo-task-context-close' : `data-ai-ceo-task-next-action data-global-flow-view="${escapeHtml(context.nextView)}" data-global-flow-key="${escapeHtml(context.nextKey)}"`}>${escapeHtml(context.nextLabel)}</button>
+        <button class="primary-action compact-action" type="button" ${context.attemptFailed ? 'data-ai-ceo-task-context-close' : `data-ai-ceo-task-next-action data-global-flow-view="${escapeHtml(context.nextView)}" data-global-flow-key="${escapeHtml(context.nextKey)}"${context.nextProjectIdentity ? ` data-ai-ceo-task-project-identity="${escapeHtml(JSON.stringify(context.nextProjectIdentity))}"` : ""}`}>${escapeHtml(context.nextLabel)}</button>
         <p class="saas-ai-ceo-task-context-boundary">完整字段在“选品与上架”修改；收起这里只改变界面，不会删除商品资料、报告或草稿。</p>
       </div>
     </aside>
@@ -26416,7 +26444,8 @@ function scheduleSaasAiCeoPendingWatchdog(messageId, command = state.saasLastCeo
 }
 
 function sanitizeSaasCeoCommandSourceText(text = "") {
-  return publicRuntimeText(text || "")
+  // User source data is not operational display copy: preserve intent and SKUs.
+  return String(text || "")
     .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "[model_key_redacted]")
     .replace(/\b(AIAK|AKID|ASIA)[A-Za-z0-9]{12,}\b/g, "[cloud_key_redacted]")
     .replace(/\b(access[_-]?token|refresh[_-]?token|api[_-]?key|password|secret)\s*[:=]\s*[^,\s;，；]+/gi, "$1=[redacted]");
@@ -26437,7 +26466,7 @@ function saasAiCeoConversationHistoryForRequest() {
     .slice(-8)
     .map((turn) => ({
       user_text: sanitizeSaasCeoCommandSourceText(turn.user_text).slice(0, 900),
-      assistant_text: publicRuntimeText(turn.assistant_text).slice(0, 3200),
+      assistant_text: sanitizeSaasCeoCommandSourceText(turn.assistant_text).slice(0, 3200),
       // Reference only: the server reloads evidence and checks owner/store/project.
       market_report_id: /^report_[A-Za-z0-9_-]+$/.test(String(turn.market_report_id || ""))
         ? String(turn.market_report_id).slice(0, 120) : "",
@@ -35018,7 +35047,7 @@ function collectSaasMerchantProductFacts() {
     delete merchantConfirmed[key];
     const value = field.type === "checkbox"
       ? field.checked === true
-      : sanitizeSaasWorkflowFeedbackText(field.value || "", key === "image_urls" ? 2400 : key === "source_url" ? 700 : 240);
+      : sanitizeSaasCeoCommandSourceText(field.value || "").slice(0, key === "image_urls" ? 2400 : key === "source_url" ? 700 : 240);
     if (field.dataset.productFactUnknown === "true" || !saasMerchantProductFactValuePresent(key, value)) {
       unknownFacts.push(key);
       if (field.dataset.productFactUnknown === "true" || field.dataset.productFactConfirmed === "true") explicitUnknownFacts.push(key);

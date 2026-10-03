@@ -493,6 +493,7 @@ const baseFunctionNames = [
   "applySaasMerchantProductFactPacketToDraft",
   "saasCanonicalJsonValue",
   "invalidateSaasListingValidationForFactChange",
+  "sanitizeSaasCeoCommandSourceText",
   "collectSaasMerchantProductFacts",
   "saveSaasMerchantProductFacts",
   "persistSaasMerchantProductFacts",

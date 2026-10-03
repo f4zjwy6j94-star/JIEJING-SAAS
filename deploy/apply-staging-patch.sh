@@ -434,6 +434,10 @@ FILES=(
   "tools/test_jiejing_ai_ceo_semantic_chat.py"
   "tools/test_jiejing_ai_ceo_semantic_http.py"
   "tools/test_jiejing_ai_ceo_semantic_dispatch_frontend.js"
+  "tools/test_jiejing_ai_ceo_bound_product_navigation.js"
+  "tools/test_jiejing_ai_ceo_command_text_fidelity.js"
+  "tools/test_jiejing_ai_ceo_simulation_request.py"
+  "tools/test_jiejing_ai_ceo_simulation_request_http.py"
   "tools/test_jiejing_current_project_archive_ui.py"
   "tools/test_jiejing_ai_ceo_phase0_red_contracts.py"
   "tools/test_jiejing_ai_ceo_private_empty_answer.py"
@@ -913,6 +917,8 @@ python3 -m py_compile \
   tools/test_jiejing_ai_ceo_semantic_dispatch.py \
   tools/test_jiejing_ai_ceo_semantic_chat.py \
   tools/test_jiejing_ai_ceo_semantic_http.py \
+  tools/test_jiejing_ai_ceo_simulation_request.py \
+  tools/test_jiejing_ai_ceo_simulation_request_http.py \
   tools/test_jiejing_saas_ai_ceo_platform_model_fallback.py \
   tools/test_jiejing_operational_health_readiness.py \
   tools/test_jiejing_stripe_checkout_portal.py \
@@ -999,6 +1005,8 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check tools/test_jiejing_workbench_boot_recovery.js
 "$NODE_BIN" --check tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_recent_product_tasks.js
+"$NODE_BIN" --check tools/test_jiejing_ai_ceo_bound_product_navigation.js
+"$NODE_BIN" --check tools/test_jiejing_ai_ceo_command_text_fidelity.js
 "$NODE_BIN" --check tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js
 "$NODE_BIN" --check tools/test_jiejing_workflow_entry_feedback.js
 "$NODE_BIN" --check tools/test_jiejing_listing_product_fact_confirmation_ui.js

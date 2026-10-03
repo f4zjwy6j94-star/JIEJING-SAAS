@@ -388,7 +388,7 @@ def _public_ai_ceo_turn_plan(plan: dict[str, Any]) -> dict[str, Any]:
         for key in ("planner_policy", "status", "intent", "project_action", "product_name", "question",
                     "search", "query", "read_images", "save_artifact", "candidate_count",
                     "excluded_candidates", "listing_deferred", "steps", "research_delivery", "research_queries",
-                    "product_fact_proposals"):
+                    "product_fact_proposals", "simulation_request"):
             if key in plan:
                 public[key] = copy.deepcopy(plan[key])
     return public

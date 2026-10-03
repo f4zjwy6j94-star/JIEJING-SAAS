@@ -9015,10 +9015,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                 audit_summary="Semantic product image extraction completed; product persistence awaits the answer.",
                             )
                             consumed_source_asset_ids = list(source_asset_ids)
-                        if turn_plan.get("product_fact_proposals"):
+                        if turn_plan.get("product_fact_proposals") or turn_plan.get("simulation_request"):
+                            proposal_base = product_vision_fact_packet or new_project_fact_packet(active_listing_product_name)
+                            if (turn_plan.get("simulation_request") and not product_vision_fact_packet
+                                    and turn_plan.get("project_action") == "current"):
+                                # This turn is text intake, not another vision
+                                # call. The locked merge preserves prior image
+                                # evidence/records without claiming consumption.
+                                proposal_base = {**(active_listing_context.get("merchant_product_fact_packet") or proposal_base),
+                                    "source": "backend_semantic_product_proposals", "vision_contract_version": "", "vision_usage": {},
+                                    "derived_listing_suggestions": {}, "source_records": [],
+                                    "field_evidence": {}, "fact_conflicts": []}
                             product_vision_fact_packet = merge_product_fact_proposals(
-                                product_vision_fact_packet or new_project_fact_packet(active_listing_product_name),
-                                turn_plan["product_fact_proposals"],
+                                proposal_base, turn_plan["product_fact_proposals"],
+                                simulation_request=turn_plan.get("simulation_request"),
                             )
                         chat = attach_supplier_fact_attestation(run_ai_ceo_chat(
                             repository=self.repository, company_id=identity["company_id"], store_id=store_id,
@@ -9200,6 +9210,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             listing_project_identity=listing_project_identity,
                             expected_fact_report_id=str(active_listing_context.get("fact_report_id") or ""),
                             new_project=turn_plan.get("project_action") == "new",
+                            simulation_request=turn_plan.get("simulation_request"),
                             semantic_dispatch={**dispatch_receipt(), "status": "ready",
                                 "target_project_identity": listing_project_identity,
                                 "consumed_source_asset_ids": list(consumed_source_asset_ids),

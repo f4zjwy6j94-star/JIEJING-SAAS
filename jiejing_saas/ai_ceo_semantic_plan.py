@@ -27,7 +27,7 @@ INTENTS = {
 SEARCHES = {"none", "reuse", "web_search", "news_search", "weather", "stock_quote", "company_research", "exchange_rate"}
 RESEARCH_DELIVERIES = {"none", "candidate_selection", "evidence_comparison", "single_product_analysis"}
 PRODUCT_FACT_PROPOSAL_FIELDS = frozenset(MERCHANT_PRODUCT_FACT_KEYS) - {"image_rights_confirmed", "merchant_owned_product_confirmed"}
-FIELDS = {"status", "intent", "project_action", "product_name", "question", "search", "query", "source_mode", "read_images", "save_artifact", "candidate_count", "excluded_candidates", "listing_deferred", "steps", "research_delivery", "research_queries", "product_fact_proposals"}
+FIELDS = {"status", "intent", "project_action", "product_name", "question", "search", "query", "source_mode", "read_images", "save_artifact", "candidate_count", "excluded_candidates", "listing_deferred", "steps", "research_delivery", "research_queries", "product_fact_proposals", "simulation_request"}
 
 
 class SemanticPlanError(ValueError):
@@ -91,11 +91,17 @@ def plan_ai_ceo_turn(*, model_client: Any, message: str,
         "value为非空字符串最多240字；数字字段使用纯数值字符串（克/厘米单位按字段），不能填未知或猜测。"
         "source_quote为本条原文中连续的非空片段，最多160字；不能引用历史、图片或网页代替本条原文。"
         "禁止提出图片授权、商品所有权确认、身份、权限或秘密；无法从本条找到出处就不提出。"
+        "simulation_request通常为null；仅本条用户明确要求当前或新商品仅用于内部模拟时，"
+        "可为{enabled:true,source_quote:本条原文连续非空片段}，引用最多160字。"
+        "否定、转述、咨询或仅历史里提到模拟都不是本条请求；只允许ready、new/current、save_artifact=true。"
+        "它只增加不可写入eBay的保护，不能设false或解除已有模拟保护，也不授予事实确认或图片权利。"
+        "模拟数值仍只能通过本条逐项给出的product_fact_proposals作为待确认建议保存；"
+        "仅说采用上一组但没有本条数值时不从历史或回答补数，不把示例当供应商或商家真实事实。"
         "真实发布、改价、改库存、退款、采购付款、广告、政策及敏感客服承诺用 live_action，"
         "只能安排确认，不授权执行。只有明确要求记住长期规则才 remember_rule。"
         "任何未知商品参数仍是未知，不能把模拟数值当事实。steps只列1到6条简短任务步骤。"
         "必须恰好返回这些字段：status,intent,project_action,product_name,question,search,query,"
-        "source_mode,read_images,save_artifact,candidate_count,excluded_candidates,listing_deferred,steps,research_delivery,research_queries,product_fact_proposals。"
+        "source_mode,read_images,save_artifact,candidate_count,excluded_candidates,listing_deferred,steps,research_delivery,research_queries,product_fact_proposals,simulation_request。"
         "status只能是ready或clarification_required；布尔字段为JSON布尔。不要返回任何权限、ID、密钥或可执行代码。"
     )
     history = [{key: str(item.get(key) or "")[:1500]
@@ -128,7 +134,8 @@ def plan_ai_ceo_turn(*, model_client: Any, message: str,
 
 def validate_semantic_plan(raw: Any, *, has_current_product: bool,
                            has_source_assets: bool, message: str) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) != FIELDS:
+    # Older plans may omit this opt-in protection; omission never clears it.
+    if not isinstance(raw, dict) or (set(raw) | {"simulation_request"}) != FIELDS:
         raise SemanticPlanError("semantic_plan_invalid_fields")
     for key, allowed in (("status", {"ready", "clarification_required"}),
                          ("intent", INTENTS), ("project_action", {"new", "current", "none", "clarify"}),
@@ -195,7 +202,20 @@ def validate_semantic_plan(raw: Any, *, has_current_product: bool,
             {"derived_listing_suggestions": proposed_values}, source="backend_semantic_proposals")
         if normalized["derived_listing_suggestions"] != proposed_values:
             raise SemanticPlanError("semantic_plan_invalid_product_fact_values")
-    plan = dict(raw)
+    simulation_request = raw.get("simulation_request")
+    if simulation_request is not None:
+        if (not isinstance(simulation_request, dict) or set(simulation_request) != {"enabled", "source_quote"}
+                or simulation_request["enabled"] is not True
+                or not isinstance(simulation_request["source_quote"], str)
+                or not simulation_request["source_quote"].strip()
+                or len(simulation_request["source_quote"]) > 160
+                or simulation_request["source_quote"] not in message):
+            raise SemanticPlanError("semantic_plan_invalid_simulation_request")
+        if contains_secret_like_data(simulation_request):
+            raise SemanticPlanError("semantic_plan_sensitive_simulation_request")
+        if raw["status"] != "ready" or raw["project_action"] not in {"new", "current"} or not raw["save_artifact"]:
+            raise SemanticPlanError("semantic_plan_unrequested_simulation_request")
+    plan = {**raw, "simulation_request": dict(simulation_request) if simulation_request is not None else None}
     needs_target = (plan["project_action"] == "current" and not has_current_product) or (
         plan["intent"] in {"listing", "media", "review"} and plan["project_action"] == "none"
         and (plan["save_artifact"] or plan["read_images"])
@@ -203,7 +223,7 @@ def validate_semantic_plan(raw: Any, *, has_current_product: bool,
     needs_name = plan["project_action"] == "new" and not plan["product_name"].strip()
     if needs_target or needs_name or plan["status"] == "clarification_required" or plan["project_action"] == "clarify":
         plan.update(status="clarification_required", project_action="clarify", read_images=False,
-                    save_artifact=False, search="none", research_queries=[], product_fact_proposals=[])
+                    save_artifact=False, search="none", research_queries=[], product_fact_proposals=[], simulation_request=None)
         plan["question"] = plan["question"].strip() or "你希望继续哪个商品，还是新建一个商品项目？"
     route, target = INTENTS[plan["intent"]]
     if plan["intent"] in {"chat", "realtime", "remember_rule"}:

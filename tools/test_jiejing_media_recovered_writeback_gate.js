@@ -292,7 +292,7 @@ function writebackWizardHarness(job = approvedJob(), previousImages = "") {
     "saasMerchantProductFactValuePresent", "saasMerchantProductFactPacket", "saasMerchantProductFactOrigin",
     "saasMerchantProductFactProjectedValue", "saasListingWizardImageUrls", "renderSaasMerchantProductFactField",
     "saasListingMediaWritebackForDraft", "saasListingMediaWritebackImageUrls", "saasListingMediaWritebackRightsReady",
-    "renderSaasListingMediaWritebackPanel", "renderSaasListingWizardImages", "collectSaasMerchantProductFacts",
+    "renderSaasListingMediaWritebackPanel", "renderSaasListingWizardImages", "sanitizeSaasCeoCommandSourceText", "collectSaasMerchantProductFacts",
     "sanitizeSaasMerchantProductFactValues", "sanitizeSaasMerchantProductFactPacketSnapshot",
     "pickSaasSnapshotFields", "sanitizeSaasListingPublishPrefillSnapshot", "sanitizeSaasListingMediaWritebackSnapshot",
     "saasListingMerchantEditableFieldKeys", "saasListingMerchantEditedFields", "sanitizeSaasListingComposerDraftSnapshot",

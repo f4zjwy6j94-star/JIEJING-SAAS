@@ -93,7 +93,7 @@ test("facts continue uses confirmed core facts, independent of publish gaps", ()
   assert.deepEqual(Array.from(context.saasListingWizardCoreMissing(draft)), ["material"]);
 });
 test("saving a partial step preserves other facts and revokes visible unknown values", () => {
-  const context = load(["collectSaasMerchantProductFacts"], {
+  const context = load(["sanitizeSaasCeoCommandSourceText", "collectSaasMerchantProductFacts"], {
     saasMerchantProductFactPacket: () => ({ merchant_confirmed_facts: {
       product_name: "Tablet stand", material: "Aluminum", image_urls: "https://example.test/photo.png", image_rights_confirmed: true,
     }, unknown_facts: ["quantity"] }),

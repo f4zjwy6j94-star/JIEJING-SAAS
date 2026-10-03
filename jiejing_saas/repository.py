@@ -6258,11 +6258,25 @@ class SaaSRepository:
     def save_ai_ceo_semantic_product_facts(
         self, *, task: dict[str, Any], packet: dict[str, Any], listing_project_identity: dict[str, str],
         expected_fact_report_id: str, new_project: bool = False, semantic_dispatch: dict[str, Any] | None = None,
+        simulation_request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Append model suggestions with the same store lock/version check as merchant saves."""
         project = normalize_listing_project_identity(listing_project_identity)
         if not project or not all(project.values()):
             raise ProductFactSaveValidationError("product_fact_invalid_project")
+        if simulation_request is not None:
+            task_input = task.get("input") or {}
+            plan = task_input.get("turn_plan") or {}
+            if (not isinstance(simulation_request, dict) or set(simulation_request) != {"enabled", "source_quote"}
+                    or simulation_request.get("enabled") is not True
+                    or not isinstance(simulation_request.get("source_quote"), str)
+                    or not simulation_request["source_quote"].strip() or len(simulation_request["source_quote"]) > 160
+                    or simulation_request["source_quote"] not in str(task_input.get("message") or "")
+                    or contains_secret_like_data(simulation_request)
+                    or plan.get("planner_policy") != "backend_model_semantic_planner_v1"
+                    or plan.get("status") != "ready" or plan.get("project_action") not in {"new", "current"}
+                    or plan.get("save_artifact") is not True or plan.get("simulation_request") != simulation_request):
+                raise ProductFactSaveValidationError("product_fact_invalid_simulation_request")
         self.initialize()
         with self._connect() as conn:
             if self.database_engine != "postgres":
@@ -6284,7 +6298,6 @@ class SaaSRepository:
                       "source_records": [*(previous.get("source_records") or []), *(packet.get("source_records") or [])]}
             if previous:
                 merged["product_name"] = previous.get("product_name") or packet.get("product_name")
-                merged["simulation_only"] = previous.get("simulation_only") is True
                 known = set(merged["merchant_confirmed_facts"]) | set(merged["source_confirmed_facts"])
                 merged["unknown_facts"] = [key for key in dict.fromkeys([*(previous.get("unknown_facts") or []), *(packet.get("unknown_facts") or [])]) if key not in known]
                 merged["listing_copy"] = previous.get("listing_copy") or {}
@@ -6307,6 +6320,15 @@ class SaaSRepository:
                 merged["listing_readiness"] = {**(previous.get("listing_readiness") or {}),
                     "ready_for_real_publish": False,
                     **({"ready_for_listing_generation": False} if conflicts else {})}
+            # Simulation is a one-way restriction, never a fact confirmation.
+            merged["simulation_only"] = previous.get("simulation_only") is True or simulation_request is not None
+            merged["fact_scope"] = "simulation_rehearsal" if merged["simulation_only"] else "merchant_product"
+            if merged["simulation_only"]:
+                merged["blocked_by"] = list(dict.fromkeys([*(merged.get("blocked_by") or []), "simulation_only_product_facts"]))
+                merged["listing_readiness"] = {**(merged.get("listing_readiness") or {}),
+                    "ready_for_real_publish": False, "reason": "模拟演练资料仅供内部 Listing 与素材流程，不可写入 eBay"}
+                if simulation_request is not None or previous.get("simulation_request"):
+                    merged["simulation_request"] = dict(simulation_request or previous["simulation_request"])
             return self.save_merchant_product_fact_report(task=task, packet=merged,
                 listing_project_identity=project, _connection=conn,
                 _report_id=project["source_report_id"] if new_project else None,

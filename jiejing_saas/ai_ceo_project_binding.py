@@ -27,7 +27,8 @@ def new_project_fact_packet(product_name: str) -> dict[str, Any]:
     }, source="backend_semantic_project_anchor")
 
 
-def merge_product_fact_proposals(packet: dict[str, Any], proposals: list[dict[str, str]]) -> dict[str, Any]:
+def merge_product_fact_proposals(packet: dict[str, Any], proposals: list[dict[str, str]], *,
+                                 simulation_request: dict[str, Any] | None = None) -> dict[str, Any]:
     """Merge planner-validated, message-grounded values as unconfirmed suggestions."""
     normalized = normalize_merchant_product_fact_packet({
         "derived_listing_suggestions": {item["field"]: item["value"] for item in proposals},
@@ -46,13 +47,22 @@ def merge_product_fact_proposals(packet: dict[str, Any], proposals: list[dict[st
                 "reason": "本轮文字资料与图片建议不同，均未确认，请核对真实商品资料。"})
         evidence[field] = {"source_type": "merchant_message_model_proposal", "source_quote": item["source_quote"],
                            "image_indexes": [], "confidence": 0.0, "merchant_confirmation_received": False}
-    return {**packet,
+    merged = {**packet,
         "derived_listing_suggestions": {**(packet.get("derived_listing_suggestions") or {}), **suggestions},
         "field_evidence": evidence, "fact_conflicts": conflicts,
         "product_fact_proposals": [dict(item) for item in proposals],
         "buyer_copy_requires_validated_listing_generation": True,
         "real_platform_writes_enabled": False,
     }
+    if simulation_request is not None:
+        # The caller supplies only the server-validated semantic request, never
+        # a browser flag. This marks proposals, not real confirmed evidence.
+        merged.update(simulation_only=True, fact_scope="simulation_rehearsal",
+                      simulation_request=dict(simulation_request))
+        merged["blocked_by"] = list(dict.fromkeys([*(packet.get("blocked_by") or []), "simulation_only_product_facts"]))
+        merged["listing_readiness"] = {**(packet.get("listing_readiness") or {}),
+            "ready_for_real_publish": False, "reason": "模拟演练资料仅供内部 Listing 与素材流程，不可写入 eBay"}
+    return merged
 
 
 def semantic_dispatch_receipt(*, plan: dict[str, Any], status: str, command_id: str,
