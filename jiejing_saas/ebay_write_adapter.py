@@ -596,11 +596,21 @@ def build_publish_readiness(
         profit_blocking = True
     profit_issues = [issue for issue in value_issues if issue["key"].startswith("finance_review.")]
     profit_blocking = profit_blocking or bool(profit_issues)
-    if profit_issues:
-        # A blocked input must not still advertise a cross-currency or otherwise
-        # invalid profit as the calculated result. Preserve source inputs below.
+    calculation_input_prefixes = tuple(f"finance_review.{key}" for key in (
+        "procurement_cost", "shipping_cost", "ebay_fee", "ad_budget",
+        "return_risk_reserve", "exchange_rate",
+    ))
+    invalid_calculation_input = any(issue["key"].startswith(calculation_input_prefixes) for issue in profit_issues)
+    invalid_calculation_input = invalid_calculation_input or any(issue["key"] == "listing.price.value" for issue in value_issues)
+    if invalid_calculation_input:
+        # Invalid amounts/currencies cannot support a displayed profit. A real
+        # loss from valid costs is still useful evidence and must stay visible.
         calculated_profit = None
         effective_profit = None
+    elif profit_issues:
+        # A wrong declared total cannot replace a valid calculation, including
+        # a loss. Without complete costs it cannot be used as a fallback either.
+        effective_profit = calculated_profit
     missing_profit_inputs = [
         key
         for key, value in {

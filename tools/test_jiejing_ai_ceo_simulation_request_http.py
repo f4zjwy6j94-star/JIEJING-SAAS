@@ -143,7 +143,7 @@ class SimulationRequestHttpTests(unittest.TestCase):
         self.assertEqual(201, status)
         fields = {key: "Saved B " + key for key in FIELD_KEYS}
         intake = {"values": {key: "Saved B " + key for key in PUBLISH_INTAKE_KEYS}, "basis": {}}
-        self.assertEqual(35, len(intake["values"]))
+        self.assertEqual(37, len(intake["values"]))
         checkpoint_path = f"/stores/{self.store}/listing-drafts/{self.b_identity['key']}/checkpoint"
         query = "?" + urlencode({key: self.b_identity[key] for key in ("source_report_id", "candidate_id")})
         status, saved = self.call(checkpoint_path, {"contract_version": "listing_merchant_edit_v1",
@@ -234,7 +234,7 @@ class SimulationRequestHttpTests(unittest.TestCase):
         self.assertEqual(201, status)
         fields = {key: "Saved B " + key for key in FIELD_KEYS}
         intake = {"values": {key: "Saved B " + key for key in PUBLISH_INTAKE_KEYS}, "basis": {}}
-        self.assertEqual(35, len(intake["values"]))
+        self.assertEqual(37, len(intake["values"]))
         path = f"/stores/{self.store}/listing-drafts/{self.b_identity['key']}/checkpoint"
         query = "?" + urlencode({key: self.b_identity[key] for key in ("source_report_id", "candidate_id")})
         status, saved = self.call(path, {"contract_version": "listing_merchant_edit_v1",

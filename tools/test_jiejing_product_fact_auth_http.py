@@ -240,6 +240,20 @@ class ProductFactAuthHttpTests(unittest.TestCase):
         self.assertIsNone(wrong_fee["details"]["calculated_contribution_profit"])
         self.assertIsNone(wrong_fee["details"]["effective_profit"])
         body["finance_review"]["shipping_cost_money"]["currency"] = "USD"
+        # A legitimate calculated loss remains visible and blocking even when
+        # the merchant's declared profit is incorrectly positive.
+        body["finance_review"]["shipping_cost_money"]["value"] = "20"
+        loss = profit()
+        self.assertEqual("blocked", loss["status"])
+        self.assertEqual(-13, loss["details"]["calculated_contribution_profit"])
+        self.assertEqual(-13, loss["details"]["effective_profit"])
+        self.assertIn("净利润为负", loss["summary"])
+        body["finance_review"]["shipping_cost_money"]["value"] = "-1"
+        invalid_cost = profit()
+        self.assertEqual("blocked", invalid_cost["status"])
+        self.assertIsNone(invalid_cost["details"]["calculated_contribution_profit"])
+        self.assertIsNone(invalid_cost["details"]["effective_profit"])
+        body["finance_review"]["shipping_cost_money"]["value"] = "1"
         for change in ({"exchange_rate_basis": ""}, {"exchange_rate": ""}, {"exchange_rate": "NaN"}):
             previous = dict(body["finance_review"])
             body["finance_review"].update(change)
