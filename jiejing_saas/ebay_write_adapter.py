@@ -575,7 +575,7 @@ def build_publish_readiness(
     net_profit = _money_float(finance.get("net_profit_money"))
     if net_profit is None:
         net_profit = _float(finance.get("net_profit"))
-    sale_currency = str((listing.get("price") or {}).get("currency") or "USD").strip().upper()
+    sale_currency = str(price.get("currency") or "USD").strip().upper()
     procurement_cost = publish_procurement_cost_in_sale_currency(finance, sale_currency)
     shipping_cost = _money_float(finance.get("shipping_cost_money"))
     if shipping_cost is None:

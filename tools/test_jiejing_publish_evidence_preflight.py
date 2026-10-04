@@ -238,6 +238,14 @@ def main() -> int:
     )
     if legacy_preflight.get("status") != "ready_for_platform_adapter":
         return fail("valid legacy scalar draft prices must remain supported")
+    # The UI projection must support the same legacy values as execution,
+    # rather than raising while reading a currency from a scalar.
+    for legacy_price in (14.99, "14.99"):
+        legacy_price_payload["listing"]["price"] = legacy_price
+        legacy_readiness = build_publish_readiness(legacy_price_payload, preflight=legacy_preflight)
+        legacy_finance = next(row for row in legacy_readiness["checks"] if row["key"] == "profit_and_fee_sanity")
+        if legacy_finance["details"]["calculation_currency"] != "USD" or legacy_finance["details"]["unit_price"] != 14.99:
+            return fail("legacy price readiness must use the normalized amount and currency")
 
     # A complete object is not necessarily a valid sale. Validate the same
     # values at the execution boundary, even when source/rights are verified.
