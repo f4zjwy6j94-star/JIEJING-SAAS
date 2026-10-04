@@ -1363,6 +1363,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         save_dependencies = [function_body(APP_JS, name) for name in (
             "saasCanonicalJsonValue", "prepareSaasProductFactSaveAttempt",
             "assertSaasProductFactSaveIsCurrent", "saasProductFactSaveFailureMessage",
+            "saasMerchantProductFactRequiredKeys",
         )]
         context_function = function_body(APP_JS, "saasListingAiGenerationContextKey")
         invalidate_function = function_body(APP_JS, "invalidateSaasListingValidationForFactChange")
