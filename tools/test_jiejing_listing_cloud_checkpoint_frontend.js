@@ -719,7 +719,8 @@ for (const [lateRead, changed, intakeFirst] of [[false, false], [true, false], [
 async function mediaStepFixture(mode = "saved", step = 3) {
   resetFixture();
   const normalizedSources = mode.startsWith("normalized-source-records");
-  const visionGeneratedCopy = mode === "vision-generated-copy";
+  const noopAfterGeneration = mode.startsWith("noop-");
+  const visionGeneratedCopy = mode === "vision-generated-copy" || noopAfterGeneration;
   const image = "https://cdn.example.test/approved-gold-set.jpg";
   const packet = { product_name: "Gold wood-handled measuring set", simulation_only: true,
     source: "authenticated_merchant_request",
@@ -786,6 +787,12 @@ async function mediaStepFixture(mode = "saved", step = 3) {
   };
   factHandler = (request, res) => {
     if (mode === "fact-failure") return sendJson(res, 503, { error_code: "product_fact_storage_unavailable" });
+    if (noopAfterGeneration) {
+      if (mode === "noop-concurrent") checkpoint = { ...checkpoint, revision: checkpoint.revision + 1,
+        fields: { ...checkpoint.fields, title: "Other device reviewed copy" } };
+      return sendJson(res, 201, { report: facts, merchant_product_fact_packet: packet,
+        listing_project_identity: identity, is_current: true, current_fact_report_id: facts.report_id, unchanged: true });
+    }
     factSaveCount += 1;
     currentBase = { ...facts, report_id: factSaveCount === 1 ? "media-facts-after" : `media-facts-after-${factSaveCount}`,
       created_at: `2026-09-06T02:00:${String(factSaveCount).padStart(2, "0")}Z`,
@@ -828,6 +835,26 @@ async function mediaStepFixture(mode = "saved", step = 3) {
   }, { facts, packet, step, normalizedSources, visionGeneratedCopy, validatedBase });
   await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
   return { device, originalCopy, validatedBase, latest: () => currentBase };
+}
+
+for (const mode of ["noop-current", "noop-concurrent"]) {
+  test(`reused fact head keeps a fresh reviewed Listing without overwriting another device: ${mode}`, async () => {
+    const { device, originalCopy } = await mediaStepFixture(mode);
+    try {
+      await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+      await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+      const concurrent = mode === "noop-concurrent";
+      assert.equal(await device.page.evaluate(() => saasListingWizardRecord().step), concurrent ? 3 : 4,
+        "a new concurrent checkpoint must be reviewed before continuing");
+      assert.equal(checkpoint.fields.title, concurrent ? "Other device reviewed copy" : originalCopy.title);
+      assert.equal(requests.filter(x => x.method === "POST" && x.path === checkpointPath).length, 0,
+        "reusing a fact head must not create an unnecessary copy revision");
+      assert.equal(requests.some(request => /generate|confirmation/.test(request.path)), false);
+      assert.equal(await device.page.evaluate(() => state.saasListingComposerDraft.simulation_only), true);
+      assert.deepEqual(unexpected, []);
+      assert.deepEqual(device.errors, []);
+    } finally { await device.context.close(); }
+  });
 }
 
 test("saving images and reopening a vision-generated draft preserves buyer copy without another model call", async () => {

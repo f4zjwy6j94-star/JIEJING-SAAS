@@ -235,7 +235,7 @@ class CheckpointHTTPTests(unittest.TestCase):
         self.assertEqual(self.request("/tasks")[1], before_tasks)
         self.assertEqual(self.request("/reports")[1], before_reports)
 
-    def _browser_unchanged_fact_roundtrip(self, *, source_is_image=False):
+    def _browser_unchanged_fact_roundtrip(self, *, source_is_image=False, saved_fact_noop=False):
         """Actual DOM -> fact POST -> checkpoint CAS, including a cold reload."""
         node = shutil.which("node")
         self.assertIsNotNone(node, "Node is required for the real wizard-to-HTTP integration")
@@ -263,6 +263,14 @@ class CheckpointHTTPTests(unittest.TestCase):
         }
         if source_is_image:
             packet["merchant_confirmed_facts"]["source_url"] = packet["merchant_confirmed_facts"]["image_urls"]
+        if saved_fact_noop:
+            # A previously saved editor already carries its safe suggestions.
+            # The next image-step save therefore reuses the older fact head,
+            # while the newer validated Listing remains the checkpoint base.
+            packet["derived_listing_suggestions"] = {
+                key: value for key, value in packet["merchant_confirmed_facts"].items()
+                if key != "image_rights_confirmed"
+            }
         action = self.fact_action("Gold-tone metal and wood", self.base_report_id)
         action["merchant_product_fact_packet"] = packet
         status, saved = self.request(f"/stores/{self.store_id}/product-facts", method="POST", body=action)
@@ -304,7 +312,8 @@ class CheckpointHTTPTests(unittest.TestCase):
             cwd=ROOT, text=True, encoding="utf-8", capture_output=True, timeout=90,
             input=json.dumps({"scenario": "unchanged-facts-wizard", "api_base": self.base,
                               "session_token": self.token, "profile": self.request("/me")[1],
-                              "store_id": self.store_id, "identity": self.identity, "expected_copy": fields}),
+                              "store_id": self.store_id, "identity": self.identity, "expected_copy": fields,
+                              "saved_fact_noop": saved_fact_noop}),
         )
         # The child emits an allowlisted diagnostic, never a raw exception,
         # request header, cookie, session value or browser trace.
@@ -316,12 +325,18 @@ class CheckpointHTTPTests(unittest.TestCase):
         self.assertEqual(evidence["restored_publish_fields"], 35)
         self.assertEqual(evidence["external_requests"], 0)
         self.assertEqual(evidence["page_errors"], 0)
+        if saved_fact_noop:
+            self.assertTrue(evidence["initial_fact_save_unchanged"])
+            self.assertEqual(evidence["initial_checkpoint_base_type"], "listing.package")
 
     def test_browser_unchanged_facts_keep_cloud_copy_after_wizard_roundtrip(self):
         self._browser_unchanged_fact_roundtrip()
 
     def test_browser_source_link_and_image_at_same_url_keep_both_authoritative_records(self):
         self._browser_unchanged_fact_roundtrip(source_is_image=True)
+
+    def test_browser_reused_fact_head_keeps_newer_listing_base_and_completes_wizard(self):
+        self._browser_unchanged_fact_roundtrip(saved_fact_noop=True)
 
     def fact_action(self, material, expected, *, mutation=None, identity=None):
         body = copy.deepcopy(self.fact_body)

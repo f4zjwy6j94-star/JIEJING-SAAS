@@ -189,7 +189,19 @@ async function main() {
         await page.locator('[data-saas-product-fact-field="image_rights_confirmed"]').check();
       }
       diagnostic.stage = "images_to_publish";
+      const initialFactSave = fixture.saved_fact_noop ? page.waitForResponse(response =>
+        new URL(response.url()).pathname === `/stores/${fixture.store_id}/product-facts` &&
+        response.request().method() === "POST").then(response => response.json()) : null;
       await move("next", 4);
+      if (initialFactSave) {
+        const savedFact = await initialFactSave;
+        const currentCheckpoint = await readCheckpoint();
+        diagnostic.initial_fact_save_unchanged = savedFact.unchanged === true;
+        diagnostic.initial_checkpoint_base_type = currentCheckpoint.current_base_report.report_type;
+        assert.equal(savedFact.unchanged, true, "the real fact API must reuse the existing immutable head");
+        assert.equal(currentCheckpoint.base_changed, false);
+        assert.equal(currentCheckpoint.current_base_report.report_type, "listing.package");
+      }
       diagnostic.stage = "edit_publish_intake";
       await page.getByRole("button", { name: "编辑发布资料", exact: true }).click();
       const firstForm = page.locator("#saasPublishIntakeForm");

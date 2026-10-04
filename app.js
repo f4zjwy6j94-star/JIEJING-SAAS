@@ -11139,6 +11139,7 @@ async function captureSaasListingMediaCopyTransition(isCurrent, { includeMedia =
   if (!isCurrent() || !record || record.conflict || record.dirty || record.pending || record.write ||
       !["saved", "current", "idle"].includes(record.status)) return null;
   return { key: record.context.key, revision: record.revision, baseReportId: record.baseReportId,
+    factReportId: String(state.saasListingComposerDraft?.source_product_fact_report_id || ""),
     seq: record.seq, refreshGeneration: saasStateRefreshGeneration,
     fields: saasListingCloudFields(state.saasListingComposerDraft?.fields),
     edited: [...saasListingMerchantEditedFields()],
@@ -11154,9 +11155,24 @@ async function finishSaasListingMediaCopyTransition(before, isCurrent) {
       record.revision !== before.revision || record.dirty || record.pending || record.write) return false;
   const draft = state.saasListingComposerDraft;
   const report = saasListingCloudBaseReport(record.context);
-  if (!saasListingCloudReportMatchesContext(report, record.context) || report.report_type !== "merchant.product_facts" ||
-      report.report_id !== draft?.source_product_fact_report_id ||
+  if (!saasListingCloudReportMatchesContext(report, record.context) ||
       saasListingMediaCopyFactSignature(saasMerchantProductFactPacket(), { includeMedia: before.includeMedia === true }) !== before.factSignature) return false;
+  // A successful unchanged save reuses the immutable fact head. A newer
+  // validated Listing can therefore remain the checkpoint's current base.
+  // Restore only its exact fresh receipt; do not manufacture a fact successor,
+  // adopt a concurrent edit, or grant new generation/publication authority.
+  if (before.factReportId && draft?.source_product_fact_report_id === before.factReportId &&
+      report.report_id === before.baseReportId && !record.conflict &&
+      JSON.stringify(record.fields) === JSON.stringify(before.fields)) {
+    if (!(await hydrateSaasListingCloudCheckpoint({ force: true }))) return false;
+    return isCurrent() && saasListingCloudRecord() === record &&
+      before.refreshGeneration === saasStateRefreshGeneration && record.seq === before.seq &&
+      record.revision === before.revision && saasListingCloudBaseReport(record.context)?.report_id === before.baseReportId &&
+      state.saasListingComposerDraft?.source_product_fact_report_id === before.factReportId &&
+      saasListingMediaCopyFactSignature(saasMerchantProductFactPacket(), { includeMedia: before.includeMedia === true }) === before.factSignature &&
+      JSON.stringify(record.fields) === JSON.stringify(before.fields) && restoreSaasFreshListingCloudProjection();
+  }
+  if (report.report_type !== "merchant.product_facts" || report.report_id !== draft?.source_product_fact_report_id) return false;
   const conflict = record.conflict;
   // Only this just-saved unchanged-facts (or image-step media-only) successor
   // may carry the reviewed copy.
