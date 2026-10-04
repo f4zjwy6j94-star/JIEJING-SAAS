@@ -493,7 +493,12 @@ class SimulationRequestHttpTests(unittest.TestCase):
         self.assertEqual(200, status)
         chats = [item for item in tasks["tasks"] if item["task_type"] == "merchant_ceo_chat"]
         self.assertEqual(1, len(chats))
-        self.assertEqual(2, chats[0]["output"]["model_request_count"])
+        # Planner, proposal-role review and answer are each metered once;
+        # replay must not make another model request or remove protection.
+        self.assertEqual(3, chats[0]["output"]["model_request_count"])
+        review = {"policy": "backend_model_fact_role_review_v1", "status": "completed", "rejected_fields": []}
+        self.assertNotIn("product_fact_review", first["ai_ceo_chat"]["turn_plan"])
+        self.assertEqual(review, chats[0]["input"]["turn_plan"]["product_fact_review"])
         self.assertEqual(first["ai_ceo_chat"]["turn_plan"]["simulation_request"], chats[0]["input"]["turn_plan"]["simulation_request"])
         # A subsequent ordinary, message-grounded proposal cannot downgrade a
         # previously protected product, even if the browser supplies false.
