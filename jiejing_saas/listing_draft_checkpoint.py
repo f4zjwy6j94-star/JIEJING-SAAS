@@ -19,8 +19,8 @@ PUBLISH_INTAKE_KEYS = (
     "product", "sku", "title", "condition", "category_id", "category_leaf", "price", "currency", "quantity",
     "merchant_location_key", "inventory_location_key", "inventory_location_name", "inventory_location_city",
     "inventory_location_state", "inventory_location_country", "item_location", "package_weight_g", "package_length_cm",
-    "package_width_cm", "package_height_cm", "material", "procurement_cost", "shipping_cost", "ebay_fee", "ad_budget",
-    "return_risk_reserve", "exchange_rate", "net_profit", "gross_margin_percent", "item_specifics", "image_urls",
+    "package_width_cm", "package_height_cm", "material", "procurement_cost", "procurement_cost_currency", "shipping_cost", "ebay_fee", "ad_budget",
+    "return_risk_reserve", "exchange_rate", "exchange_rate_basis", "net_profit", "gross_margin_percent", "item_specifics", "image_urls",
     "description_html", "fulfillment_policy_id", "payment_policy_id", "return_policy_id",
 )
 SAFETY = {"model_called": False, "usage_consumed": False,

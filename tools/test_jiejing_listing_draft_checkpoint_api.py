@@ -132,7 +132,8 @@ class CheckpointHTTPTests(unittest.TestCase):
         before_reports = self.request("/reports")[1]
         self.body["publish_intake"] = {
             "values": {"sku": "TEST-8PC", "title": "", "shipping_cost": "4.20", "ad_budget": "0",
-                       "exchange_rate": "1", "item_location": "Test location", "image_urls": "https://example.invalid/product.jpg"},
+                       "exchange_rate": "0.14", "exchange_rate_basis": "sale_currency_per_cost_currency", "procurement_cost_currency": "CNY",
+                       "item_location": "Test location", "image_urls": "https://example.invalid/product.jpg"},
             "basis": {"title": "Source title", "shipping_cost": "", "price": "12.99"},
         }
         status, saved = self.request(self.path, method="POST", body=self.body)
@@ -322,7 +323,7 @@ class CheckpointHTTPTests(unittest.TestCase):
         self.assertEqual(evidence["scenario"], "unchanged-facts-wizard")
         self.assertTrue(evidence["no_conflict"])
         self.assertTrue(evidence["server_packets_equal"])
-        self.assertEqual(evidence["restored_publish_fields"], 35)
+        self.assertEqual(evidence["restored_publish_fields"], 37, "includes cost currency and directed-FX basis")
         self.assertEqual(evidence["external_requests"], 0)
         self.assertEqual(evidence["page_errors"], 0)
         if saved_fact_noop:

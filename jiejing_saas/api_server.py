@@ -372,6 +372,8 @@ def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[s
     return {
         "contract_version": "2026-07-04-ai-ceo-market-report-delivery-v1",
         "mode": "quick_then_structured_report",
+        "artifact_kind": str(body.get("artifact_kind") or ""),
+        "product_fact_report_id": str(body.get("product_fact_report_id") or ""),
         "report_id": str(report.get("report_id") or ""),
         "report_type": str(report.get("report_type") or ""),
         "status": str(report.get("status") or "saved"),
@@ -398,7 +400,7 @@ _LISTING_QUALITY_REJECTION_CODES = frozenset({
     *{f"{prefix}_{reason}" for prefix in ("listing_model_output", "listing_final_copy") for reason in (
         "missing_buyer_copy", "selling_points_count", "marketplace_language", "unverified_compatibility",
         "ungrounded_material", "ungrounded_performance_claim", "ungrounded_warranty",
-        "ungrounded_certification", "ungrounded_numeric_spec",
+        "ungrounded_certification", "ungrounded_numeric_spec", "semantic_unsupported", "semantic_review_invalid",
     )},
 })
 
@@ -9308,6 +9310,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     conversation_history=conversation_history,
                     listing_project_identity=listing_project_identity,
                     active_listing_product_name=active_listing_product_name,
+                    product_fact_report=product_vision_report,
                 ) if artifact_requested else None
             except Exception as exc:
                 semantic_status = "blocked"
@@ -15186,6 +15189,7 @@ def _publish_confirmation_payload_from_body(
         "ad_budget_money": _safe_publish_money(finance_in.get("ad_budget_money")),
         "return_risk_reserve_money": _safe_publish_money(finance_in.get("return_risk_reserve_money")),
         "exchange_rate": _safe_publish_decimal(finance_in.get("exchange_rate"), places=8),
+        "exchange_rate_basis": "sale_currency_per_cost_currency" if finance_in.get("exchange_rate_basis") == "sale_currency_per_cost_currency" else "",
         "net_profit_money": _safe_publish_money(finance_in.get("net_profit_money")),
         "gross_margin_percent": _safe_publish_decimal(finance_in.get("gross_margin_percent")),
     }
@@ -15249,7 +15253,7 @@ def _safe_publish_money(value: Any) -> dict[str, str] | None:
     amount = _safe_publish_decimal(value.get("value"))
     if not amount:
         return None
-    return {"value": amount, "currency": _safe_publish_text(value.get("currency") or "USD", limit=8) or "USD"}
+    return {"value": amount, "currency": _safe_publish_text(value.get("currency"), limit=8).upper()}
 
 
 def _clean_publish_text_map(value: Any, *, key_limit: int = 80, value_limit: int = 240) -> dict[str, str]:

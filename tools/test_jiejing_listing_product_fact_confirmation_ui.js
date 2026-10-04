@@ -1883,7 +1883,7 @@ test("advanced risk hints retain suggestion confirmation and unknown transitions
           vision_contract_version: origin === "vision" ? "jiejing_ai_ceo_product_vision_intake_v1" : "",
           source_confirmed_facts: {},
           merchant_confirmed_facts: { product_name: "Foldable Tablet Stand", merchant_owned_product_confirmed: true,
-            condition: "NEW", unit_cost: "3.5", currency: "USD", quantity: "2", image_urls: "https://example.invalid/tablet-fixture.jpg" },
+            condition: "NEW", unit_cost: "3.5", unit_cost_currency: "USD", currency: "USD", quantity: "2", image_urls: "https://example.invalid/tablet-fixture.jpg" },
           derived_listing_suggestions: { material: "Aluminum Alloy", selling_price: "16.99" },
           unknown_facts: ["material", "selling_price", "sku", "package_weight_g", "package_length_cm", "package_width_cm",
             "package_height_cm", "item_location", "image_rights_confirmed"],

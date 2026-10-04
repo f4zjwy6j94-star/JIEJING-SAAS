@@ -24,6 +24,7 @@ from jiejing_saas.listing_draft_generation import (
 )
 from jiejing_saas.ebay_write_adapter import build_publish_readiness
 from jiejing_saas.repository import SaaSRepository
+from tools.listing_claim_review_fixture import review_response
 from jiejing_saas.sensitive_text import contains_secret_like_text
 
 
@@ -36,8 +37,11 @@ class FakeListingModel:
         self.payload = payload
         self.call_count = 0
 
-    def generate_text(self, **_: Any) -> dict[str, Any]:
+    def generate_text(self, **kwargs: Any) -> dict[str, Any]:
         self.call_count += 1
+        review = review_response(kwargs, usage={"input_tokens": 100, "output_tokens": 100, "total_tokens": 200})
+        if review is not None:
+            return review
         return {
             "text": json.dumps(self.payload, ensure_ascii=False),
             "model_mode": "fake_live_model_text",
@@ -704,7 +708,7 @@ def main() -> None:
         except ListingDraftGenerationError as exc:
             if exc.failure_code != "listing_model_usage_ledger_failed":
                 raise
-            if exc.model_usage.get("request_count") != 1 or exc.usage_consumed is not True:
+            if exc.model_usage.get("request_count") != 2 or exc.usage_consumed is not True:
                 raise AssertionError(f"ledger failure hid actual provider usage: {exc.model_usage}")
         else:
             raise AssertionError("Listing persisted despite a model usage ledger failure")
@@ -723,7 +727,7 @@ def main() -> None:
         for failed_task in failed_tasks:
             output = failed_task.get("output") if isinstance(failed_task.get("output"), dict) else {}
             failure_code = str(output.get("failure_code") or "")
-            expected_requests = 1 if failure_code.startswith("listing_final_copy_") or failure_code == "listing_model_usage_ledger_failed" else 2
+            expected_requests = 1 if failure_code.startswith("listing_final_copy_") else 2
             if output.get("usage_consumed") is not True or output.get("model_request_count") != expected_requests:
                 raise AssertionError(f"failed Listing task hid consumed model usage: {failed_task}")
             if not failure_code.startswith(("listing_model_output_", "listing_final_copy_")) and failure_code != "listing_model_usage_ledger_failed":
@@ -740,7 +744,7 @@ def main() -> None:
                 "select request_count, usage_json from model_usage_ledger order by created_at asc"
             ).fetchall()
             execution_count = connection.execute("select count(*) from execution_results").fetchone()[0]
-        if len(usage_rows) != 7 or sum(int(row[0] or 0) for row in usage_rows) != 11:
+        if len(usage_rows) != 7 or sum(int(row[0] or 0) for row in usage_rows) != 14:
             raise AssertionError(f"success/failure model usage ledger is incomplete: {usage_rows}")
         if execution_count != 0:
             raise AssertionError("Listing copy generation or quality repair triggered a platform execution")

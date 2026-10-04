@@ -155,6 +155,7 @@ MERCHANT_PRODUCT_FACT_KEYS = (
     "package_height_cm",
     "unit_cost",
     "selling_price",
+    "unit_cost_currency",
     "currency",
     "quantity",
     "item_location",
@@ -179,6 +180,7 @@ MERCHANT_PRODUCT_FACT_REQUIRED_KEYS = tuple(
         "style",
         "packaging_type",
         "included_items",
+        "unit_cost_currency",
         "handling_time_days",
         "merchant_owned_product_confirmed",
     }
@@ -5646,6 +5648,7 @@ class SaaSRepository:
         conversation_history: list[dict[str, Any]] | None = None,
         listing_project_identity: dict[str, Any] | None = None,
         active_listing_product_name: str = "",
+        product_fact_report: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Persist a merchant-facing AI CEO market research chat turn as a report."""
 
@@ -5860,7 +5863,15 @@ class SaaSRepository:
             and bool(report_id)
             and not blocked_by
         )
-        title = f"AI CEO 市场调研：{product}"[:180] if product else "AI CEO 市场调研"
+        fact_receipt = product_fact_report if isinstance(product_fact_report, dict) else {}
+        facts_saved = bool(semantic and fact_receipt.get("report_id")
+            and fact_receipt.get("report_type") == "merchant.product_facts"
+            and fact_receipt.get("task_id") == task["task_id"]
+            and normalize_listing_project_identity((fact_receipt.get("report") or {}).get("listing_project_identity")) == safe_listing_project_identity
+            and safe_listing_project_identity)
+        artifact_kind = "product_facts" if facts_saved else "market_research" if not semantic or semantic_plan.get("intent") == "research" else "advice"
+        artifact_label = {"product_facts": "商品资料", "market_research": "市场调研", "advice": "咨询记录"}[artifact_kind]
+        title = f"AI CEO {artifact_label}：{product}"[:180] if product else f"AI CEO {artifact_label}"
         if source_intake_failed:
             summary = "未能读取商品来源页面；本次未提取到可导入的商品参数，原商品资料保持不变。"
         elif listing_import_ready:
@@ -5869,9 +5880,15 @@ class SaaSRepository:
             summary = f"AI CEO 已把“{product}”整理成市场调研工作记录；完成来源与供应商事实核验后再进入 Listing 草稿。"
         else:
             summary = "AI CEO 已保存本次选品/市场调研工作记录；形成唯一候选并完成事实核验后再进入 Listing 草稿。"
+        if artifact_kind == "product_facts":
+            summary = "商品资料更新已保存；建议和冲突仍待核对，已确认资料与手改文案保持独立，未发布。"
+        elif artifact_kind == "advice":
+            summary = "本次咨询记录已保存；不代表商品资料已更新或平台动作已执行。"
         report_payload = {
             "contract_version": AI_CEO_MARKET_REPORT_CONTRACT_VERSION,
             "artifact_type": "ai_ceo.market_research",
+            "artifact_kind": artifact_kind,
+            "product_fact_report_id": str(fact_receipt["report_id"]) if facts_saved else "",
             "artifact_version": AI_CEO_MARKET_REPORT_CONTRACT_VERSION,
             "merchant_intent": merchant_intent,
             "source_mode": source_mode,
@@ -19390,6 +19407,10 @@ def normalize_merchant_product_fact_packet(
                 continue
             if key == "source_url" and not re.match(r"^https?://", text, flags=re.IGNORECASE):
                 continue
+            if key in {"currency", "unit_cost_currency"}:
+                text = text.upper()
+                if not re.fullmatch(r"[A-Z]{3}", text):
+                    continue
             if key in {
                 "package_weight_g",
                 "net_weight_g",
@@ -19408,6 +19429,11 @@ def normalize_merchant_product_fact_packet(
                 if not math.isfinite(numeric) or numeric <= 0 or numeric > 1_000_000_000:
                     continue
             cleaned[key] = text
+        # Legacy supplier intake labelled the only currency as `currency`.
+        # With a procurement amount but no sale price it cannot attest to the
+        # listing currency. Preserve the quote in its cost role instead.
+        if cleaned.get("unit_cost") and cleaned.get("currency") and not cleaned.get("selling_price") and not cleaned.get("unit_cost_currency"):
+            cleaned["unit_cost_currency"] = cleaned.pop("currency")
         return cleaned
 
     merchant_confirmed = clean_values(submitted, allow_confirmation=trusted_merchant_request) if trusted_merchant_request else {}
@@ -19459,26 +19485,44 @@ def normalize_merchant_product_fact_packet(
     # promote an extracted value, image right, or product ownership to a fact.
     vision_version = _safe_ai_ceo_supplier_text(raw.get("vision_contract_version"), limit=80)
     vision_origin = bool(vision_version) or raw.get("source") == "backend_product_vision_extraction"
-    evidence = {}
-    for key, item in (raw.get("field_evidence") if isinstance(raw.get("field_evidence"), dict) else {}).items():
-        if key not in MERCHANT_PRODUCT_FACT_KEYS or not isinstance(item, dict):
-            continue
-        confidence = item.get("confidence")
-        confidence = float(confidence) if isinstance(confidence, (int, float)) and math.isfinite(confidence) else 0.0
-        indexes = item.get("image_indexes") if isinstance(item.get("image_indexes"), list) else []
-        evidence[key] = {
-            "source_type": _safe_ai_ceo_supplier_text(item.get("source_type"), limit=80),
-            "image_indexes": [index for index in indexes if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < 20][:10],
-            "confidence": max(0.0, min(1.0, confidence)),
-            "merchant_confirmation_received": key in merchant_confirmed,
-        }
+    def evidence_indexes(value: Any) -> list[int]:
+        return [index for index in (value if isinstance(value, list) else [])
+                if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < 20][:10]
+
+    def clean_evidence(value: Any, *, pending: bool = False) -> dict[str, Any]:
+        result = {}
+        for key, item in (value if isinstance(value, dict) else {}).items():
+            if key not in MERCHANT_PRODUCT_FACT_KEYS or not isinstance(item, dict):
+                continue
+            confidence = item.get("confidence")
+            confidence = float(confidence) if isinstance(confidence, (int, float)) and math.isfinite(confidence) else 0.0
+            result[key] = {
+                "source_type": _safe_ai_ceo_supplier_text(item.get("source_type"), limit=80),
+                "image_indexes": evidence_indexes(item.get("image_indexes")),
+                "confidence": max(0.0, min(1.0, confidence)),
+                "merchant_confirmation_received": not pending and key in merchant_confirmed,
+            }
+            for name, limit in (("source_quote", 700), ("evidence_role", 80), ("source_id", 160), ("sku", 160)):
+                text = _safe_ai_ceo_supplier_text(item.get(name), limit=limit)
+                if text and not contains_secret_like_text(text):
+                    result[key][name] = text
+        return result
+
+    evidence = clean_evidence(raw.get("field_evidence"))
+    pending_evidence = clean_evidence(raw.get("pending_field_evidence"), pending=True)
     conflicts = []
     for item in (raw.get("fact_conflicts") if isinstance(raw.get("fact_conflicts"), list) else [])[:20]:
         if not isinstance(item, dict) or item.get("field") not in MERCHANT_PRODUCT_FACT_KEYS:
             continue
         values = item.get("values") if isinstance(item.get("values"), list) else []
-        conflicts.append({"field": item["field"], "values": [_safe_ai_ceo_supplier_text(item, limit=240) for item in values[:5]],
-                          "reason": _safe_ai_ceo_supplier_text(item.get("reason"), limit=320)})
+        conflict = {"field": item["field"], "values": [_safe_ai_ceo_supplier_text(item, limit=240) for item in values[:5]],
+                    "reason": _safe_ai_ceo_supplier_text(item.get("reason"), limit=320)}
+        if "image_indexes" in item:
+            conflict["image_indexes"] = evidence_indexes(item["image_indexes"])
+        if isinstance(item.get("source_ids"), list):
+            conflict["source_ids"] = [text for value in item["source_ids"][:10]
+                                      if (text := _safe_ai_ceo_supplier_text(value, limit=160)) and not contains_secret_like_text(text)]
+        conflicts.append(conflict)
     for item in (raw.get("source_records") if isinstance(raw.get("source_records"), list) else [])[:12]:
         if not isinstance(item, dict) or item.get("type") not in {"merchant_product_link", "merchant_product_image"}:
             continue
@@ -19504,6 +19548,7 @@ def normalize_merchant_product_fact_packet(
         "vision_contract_version": vision_version,
         "buyer_copy_requires_validated_listing_generation": vision_origin or raw.get("buyer_copy_requires_validated_listing_generation") is True,
         "field_evidence": evidence,
+        "pending_field_evidence": pending_evidence,
         "fact_conflicts": conflicts,
         "source_mode": (
             "merchant_source_supplied"
@@ -19653,6 +19698,8 @@ def _normalize_ai_ceo_chat_history_turn(
         "decision_center_required": bool(value.get("decision_center_required")),
         "market_report_id": re.sub(r"[^A-Za-z0-9_-]", "", str(value.get("market_report_id") or ""))[:120],
         "market_report_delivery": {
+            "artifact_kind": str(delivery.get("artifact_kind") or "")[:40],
+            "product_fact_report_id": re.sub(r"[^A-Za-z0-9_-]", "", str(delivery.get("product_fact_report_id") or ""))[:120],
             "report_id": re.sub(r"[^A-Za-z0-9_-]", "", str(delivery.get("report_id") or ""))[:120],
             "report_type": str(delivery.get("report_type") or "")[:80],
             "status": str(delivery.get("status") or "")[:80],

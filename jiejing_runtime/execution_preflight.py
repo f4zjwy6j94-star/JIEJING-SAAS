@@ -344,6 +344,25 @@ def finite_publish_number(value: Any) -> float | None:
     return amount if math.isfinite(amount) else None
 
 
+def publish_procurement_cost_in_sale_currency(finance: dict[str, Any], sale_currency: str) -> float | None:
+    """Convert only an explicitly labelled procurement currency, never other fees."""
+    raw = finance.get("procurement_cost_money", finance.get("procurement_cost"))
+    amount = finite_publish_number(raw.get("value") if isinstance(raw, dict) else raw)
+    if amount is None or amount < 0:
+        return None
+    cost_currency = str(raw.get("currency") or "").strip().upper() if isinstance(raw, dict) else sale_currency
+    if not cost_currency:
+        return None
+    if cost_currency == sale_currency:
+        return amount
+    rate = finite_publish_number(finance.get("exchange_rate"))
+    if (not cost_currency or rate is None or rate <= 0
+            or finance.get("exchange_rate_basis") != "sale_currency_per_cost_currency"):
+        return None
+    converted = finite_publish_number(amount * rate)
+    return round(converted, 2) if converted is not None else None
+
+
 def validate_publish_input_values(payload: dict[str, Any]) -> list[dict[str, str]]:
     """Check sale values independently of presence and merchant approval."""
     listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
@@ -368,7 +387,8 @@ def validate_publish_input_values(payload: dict[str, Any]) -> list[dict[str, str
         for axis in ("length", "width", "height"):
             size = finite_publish_number(dimensions.get(axis))
             if size is None or size <= 0:
-                issues.append(PreflightIssue(f"supplier_facts.package_dimensions_cm.{axis}", "包装长、宽、高必须分别填写大于 0 的有效数字。").to_dict())
+                axis_label = {"length": "长", "width": "宽", "height": "高"}[axis]
+                issues.append(PreflightIssue(f"supplier_facts.package_dimensions_cm.{axis}", f"包装{axis_label}（cm）必须填写大于 0 的有效数字。").to_dict())
     finance = payload.get("finance_review") if isinstance(payload.get("finance_review"), dict) else {}
     cost_values = []
     sale_currency = str(price.get("currency") or "USD").strip().upper()
@@ -379,8 +399,11 @@ def validate_publish_input_values(payload: dict[str, Any]) -> list[dict[str, str
         if field in finance:
             if number is None or number < 0:
                 issues.append(PreflightIssue(f"finance_review.{field}", "费用和净利润必须是非负的有效数字；亏损商品不能直接发布。").to_dict())
-            if isinstance(value, dict) and str(value.get("currency") or sale_currency).strip().upper() != sale_currency:
-                issues.append(PreflightIssue(f"finance_review.{field}.currency", "费用和净利润需按售价币种核对，不能将不同币种直接相减。").to_dict())
+            if isinstance(value, dict) and str(value.get("currency") or "").strip().upper() != sale_currency:
+                converted = publish_procurement_cost_in_sale_currency(finance, sale_currency) if key == "procurement_cost" else None
+                if converted is None:
+                    issues.append(PreflightIssue(f"finance_review.{field}.currency", "费用不能跨币种直接相减；采购成本换算需明确 1 单位成本币种兑换多少售价币种及有效汇率，其余费用请填写售价币种金额。").to_dict())
+                number = converted
         if key != "net_profit":
             cost_values.append(number)
     for key in ("exchange_rate", "gross_margin_percent"):

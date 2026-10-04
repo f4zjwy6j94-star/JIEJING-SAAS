@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from jiejing_runtime.execution_preflight import finite_publish_number, validate_publish_evidence, validate_publish_input_values
+from jiejing_runtime.execution_preflight import finite_publish_number, publish_procurement_cost_in_sale_currency, validate_publish_evidence, validate_publish_input_values
 
 from .config import SaaSSettings
 from .ebay_http_client import EbayReadOnlyHttpClient, HttpTransport, _urlopen_transport
@@ -301,17 +301,19 @@ def build_publish_readiness(
     _add_check(
         checks,
         key="category_match",
-        label="eBay 类目校验",
-        status="blocked" if category_blockers else ("passed" if listing.get("category_id") else "needs_attention"),
+        label="eBay 类目资料",
+        status="blocked" if category_blockers or not listing.get("category_id") else ("needs_attention" if read_only else "passed"),
         summary=(
             str(category_blockers[0].get("message") or "类目和商品不匹配。")
             if category_blockers
-            else f"类目 {listing.get('category_id')} / {listing.get('category_leaf') or 'leaf pending'} 已进入预检。"
+            else f"已填写类目 {listing.get('category_id')}；本次未向 eBay 核实类目有效性、商品匹配和类目属性要求。"
             if listing.get("category_id")
             else "还没有可发布的 eBay 类目。"
         ),
         blocking=bool(category_blockers or not listing.get("category_id")),
-        details={"category_id": listing.get("category_id"), "category_leaf": listing.get("category_leaf") or listing.get("leaf_category")},
+        details={"category_id": listing.get("category_id"), "category_leaf": listing.get("category_leaf") or listing.get("leaf_category"),
+                 "verification_level": "local_input_only", "platform_verified": False,
+                 "next_action": "正式发布前核对当前站点的叶子类目及该类目必填属性；更换类目后重新核对。"},
     )
 
     policy_missing = [
@@ -323,10 +325,12 @@ def build_publish_readiness(
         checks,
         key="business_policies",
         label="店铺政策",
-        status="blocked" if policy_missing else "passed",
-        summary="缺少发货/付款/退货政策，eBay 发布会失败。" if policy_missing else "已带入发货、付款、退货政策。",
+        status="blocked" if policy_missing else ("needs_attention" if read_only else "passed"),
+        summary="缺少发货/付款/退货政策，eBay 发布会失败。" if policy_missing else "已填写三项政策编号；本次未向 eBay 核实政策是否仍有效且属于当前店铺。",
         blocking=bool(policy_missing),
-        details={"missing_fields": [f"business_policies.{field}" for field in policy_missing]},
+        details={"missing_fields": [f"business_policies.{field}" for field in policy_missing],
+                 "verification_level": "local_input_only", "platform_verified": False,
+                 "next_action": "在店铺设置核对发货、付款和退货政策；编号已填写不代表平台已接受。"},
     )
 
     location_key = str(listing.get("merchant_location_key") or "").strip()
@@ -334,10 +338,11 @@ def build_publish_readiness(
         checks,
         key="inventory_location",
         label="库存位置",
-        status="passed" if location_key else "blocked",
-        summary=f"库存位置 {location_key} 已准备。" if location_key else "缺少 merchant_location_key，需要先建 eBay inventory location。",
+        status=("needs_attention" if read_only else "passed") if location_key else "blocked",
+        summary=f"已填写库存位置 {location_key}；本次未向 eBay 核实位置是否有效或启用。" if location_key else "缺少库存位置编号，需要先在当前 eBay 店铺配置库存位置。",
         blocking=not bool(location_key),
-        details={"merchant_location_key": location_key},
+        details={"merchant_location_key": location_key, "verification_level": "local_input_only", "platform_verified": False,
+                 "next_action": "核对当前店铺的库存位置与实际履约地点，不以供应商发货地替代。"},
     )
 
     dimensions = supplier.get("package_dimensions_cm") if isinstance(supplier.get("package_dimensions_cm"), dict) else {}
@@ -373,14 +378,16 @@ def build_publish_readiness(
         checks,
         key="asset_reachability",
         label="图片资产",
-        status="blocked" if not urls else ("needs_attention" if invalid_count else "passed"),
+        status="blocked" if not urls else ("needs_attention" if invalid_count or read_only else "passed"),
         summary=(
             "缺少可上传给 eBay 的图片 URL。"
             if not urls
-            else f"{len(urls)} 张图片可用，{invalid_count} 个资产不是 http/https URL。"
+            else f"{len(urls) - invalid_count} 个图片地址符合 http/https 格式，{invalid_count} 个格式无效；本次未验证图片可下载或被 eBay 接受。"
         ),
         blocking=not bool(urls),
-        details={"image_url_count": len(urls), "invalid_asset_count": invalid_count},
+        details={"image_url_count": len(urls), "invalid_asset_count": invalid_count,
+                 "verification_level": "local_input_only", "platform_verified": False,
+                 "next_action": "在素材预览确认图片可加载；正式发布还需平台校验地址与图片规范。"},
     )
 
     evidence = payload.get("publish_evidence") if isinstance(payload.get("publish_evidence"), dict) else {}
@@ -568,9 +575,8 @@ def build_publish_readiness(
     net_profit = _money_float(finance.get("net_profit_money"))
     if net_profit is None:
         net_profit = _float(finance.get("net_profit"))
-    procurement_cost = _money_float(finance.get("procurement_cost_money"))
-    if procurement_cost is None:
-        procurement_cost = _float(finance.get("procurement_cost"))
+    sale_currency = str((listing.get("price") or {}).get("currency") or "USD").strip().upper()
+    procurement_cost = publish_procurement_cost_in_sale_currency(finance, sale_currency)
     shipping_cost = _money_float(finance.get("shipping_cost_money"))
     if shipping_cost is None:
         shipping_cost = _float(finance.get("shipping_cost"))
@@ -590,6 +596,11 @@ def build_publish_readiness(
         profit_blocking = True
     profit_issues = [issue for issue in value_issues if issue["key"].startswith("finance_review.")]
     profit_blocking = profit_blocking or bool(profit_issues)
+    if profit_issues:
+        # A blocked input must not still advertise a cross-currency or otherwise
+        # invalid profit as the calculated result. Preserve source inputs below.
+        calculated_profit = None
+        effective_profit = None
     missing_profit_inputs = [
         key
         for key, value in {
@@ -622,9 +633,13 @@ def build_publish_readiness(
         blocking=profit_blocking,
         details={
             "net_profit": net_profit,
+            "unit_price": unit_price,
             "calculated_contribution_profit": calculated_profit,
             "effective_profit": effective_profit,
             "procurement_cost": procurement_cost,
+            "calculation_currency": sale_currency,
+            "procurement_source_money": finance.get("procurement_cost_money"),
+            "exchange_rate_basis": finance.get("exchange_rate_basis"),
             "ebay_fee": ebay_fee,
             "ad_budget": ad_budget,
             "shipping_cost": shipping_cost,

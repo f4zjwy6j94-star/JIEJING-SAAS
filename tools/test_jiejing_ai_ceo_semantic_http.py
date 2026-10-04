@@ -471,6 +471,52 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         self.assertEqual(packet, payload["ai_ceo_market_report"]["report"]["merchant_product_fact_packet"])
         self.assertIsNone(payload["product_vision_task"])
 
+    def test_fact_delivery_kind_survives_replay_history_and_rendered_restore(self):
+        body = self.envelope("继续那把量勺，补充待核对资料：材质304不锈钢和实木，货号SPOON15，尺寸18×4×2厘米，净重42克。")
+        path = f"/stores/{self.store}/merchant-ceo/chat"
+        status, first = self.call(path, body)
+        self.assertEqual(201, status)
+        delivery = first["ai_ceo_market_report_delivery"]
+        self.assertEqual("product_facts", delivery.get("artifact_kind"))
+        self.assertTrue(delivery["product_fact_report_id"])
+        reports = self.reports()
+        record = next(row for row in reports if row["report_id"] == delivery["report_id"])
+        self.assertEqual("product_facts", record["report"]["artifact_kind"])
+        self.assertEqual("merchant.product_facts", next(row for row in reports if row["report_id"] == delivery["product_fact_report_id"])["report_type"])
+        _, replay = self.call(path, body)
+        self.assertEqual(delivery, replay["ai_ceo_market_report_delivery"])
+        self.assertEqual(reports, self.reports())
+        _, history = self.call("/ai-ceo/chat-history")
+        turns = history.get("turns") or history.get("ai_ceo_chat_history", {}).get("turns") or []
+        archived = turns[-1]["market_report_delivery"]
+        self.assertEqual("product_facts", archived["artifact_kind"])
+        self.assertEqual(delivery["product_fact_report_id"], archived["product_fact_report_id"])
+        script = r'''
+const fs = require('fs'); const source = fs.readFileSync('app.js','utf8');
+const input = JSON.parse(fs.readFileSync(0,'utf8'));
+const publicRuntimeText = value => String(value || '');
+const normalizeSaasAiCeoLatestTurn = value => value;
+const saasAiCeoMarketProductLabel = () => 'Measuring scoop';
+const saasIsConcreteProductLabel = () => true;
+const escapeHtml = value => String(value).replaceAll('<','&lt;');
+const saasSavedAiCeoMarketReportForTurn = () => input.record;
+const saasAuthoritativeAiCeoMarketReportForTurn = () => input.record;
+for (const name of ['normalizeSaasAiCeoMarketReportDelivery','saasAiCeoMarketReportDeliveryFromRecord','renderSaasAiCeoMarketReportDeliveryMarkup']) {
+  const start = source.indexOf('function '+name+'('), end = source.indexOf('\nfunction ',start+10);
+  eval(source.slice(start,end));
+}
+const results = [normalizeSaasAiCeoMarketReportDelivery(input.delivery), normalizeSaasAiCeoMarketReportDelivery(input.archived), saasAiCeoMarketReportDeliveryFromRecord(input.record)];
+process.stdout.write(JSON.stringify(results.map(delivery => ({kind:delivery.artifact_kind,html:renderSaasAiCeoMarketReportDeliveryMarkup({market_report_delivery:delivery})}))));
+'''
+        output = subprocess.run(["node", "-e", script], cwd=ROOT, input=json.dumps({"delivery": delivery, "archived": archived, "record": record}),
+            text=True, encoding="utf-8", capture_output=True, check=True)
+        for result in json.loads(output.stdout):
+            self.assertEqual("product_facts", result["kind"])
+            self.assertIn("商品资料已保存", result["html"])
+            self.assertNotIn("市场调研已保存", result["html"])
+            self.assertNotIn("候选商品", result["html"])
+            self.assertNotIn("ai-ceo-import-market-to-listing", result["html"])
+
     def test_invalid_text_proposals_fail_closed_before_image_or_product_writes(self):
         before = self.reports()
         for case in ("伪造引用", "未知字段", "越权确认"):

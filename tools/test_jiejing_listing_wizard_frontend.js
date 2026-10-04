@@ -161,7 +161,7 @@ test("step 2 generation captures one normalized packet for both wire signature c
   const draft = { merchant_product_fact_packet: { merchant_confirmed_facts: { material: "Resin" },
     unknown_facts: ["image_urls"], listing_readiness: { ready: false } },
     fields: { title: "Merchant title" }, model_generated: true };
-  const context = load(["captureSaasListingFactsForAiGeneration"], {
+  const context = load(["sanitizeSaasListingPublishPrefillSnapshot", "captureSaasListingFactsForAiGeneration"], {
     state: { saasListingComposerDraft: draft }, document: { querySelector: () => null },
     saasMerchantProductFactPacket: value => value.merchant_product_fact_packet,
     sanitizeSaasMerchantProductFactPacketSnapshot: packet => ({

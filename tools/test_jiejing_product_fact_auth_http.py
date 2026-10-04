@@ -138,6 +138,120 @@ class ProductFactAuthHttpTests(unittest.TestCase):
         self.assertEqual(["simulation_only_product_facts"], result["source_blockers"])
         self.assertTrue(result["simulation_only"])
 
+    def test_readonly_filled_inputs_are_not_platform_verification(self):
+        _, saved = self.save()
+        body = self.precheck_body(saved["report"]["report_id"])
+        body["listing"]["merchant_location_key"] = "unverified-location"
+        body["business_policies"] = {
+            "fulfillment_policy_id": "unverified-shipping",
+            "payment_policy_id": "unverified-payment",
+            "return_policy_id": "unverified-return",
+        }
+        # A client assertion must not manufacture remote verification.
+        body["platform_verified"] = True
+        body["verification_level"] = "platform_verified"
+        before = {route: self.call("/" + route)[1][route] for route in ("tasks", "reports", "confirmations")}
+        result = self.precheck(saved["report"]["report_id"], body=body)
+        checks = {row["key"]: row for row in result["publish_readiness"]["checks"]}
+        for key in ("category_match", "business_policies", "inventory_location", "asset_reachability"):
+            with self.subTest(key=key):
+                self.assertEqual("needs_attention", checks[key]["status"])
+                self.assertEqual("local_input_only", checks[key]["details"]["verification_level"])
+                self.assertIs(False, checks[key]["details"]["platform_verified"])
+                self.assertIn("未", checks[key]["summary"])
+                self.assertTrue(checks[key]["details"]["next_action"])
+        after = {route: self.call("/" + route)[1][route] for route in before}
+        self.assertEqual(before, after)
+
+    def test_precheck_dimensions_identify_each_invalid_axis_and_unit(self):
+        _, saved = self.save()
+        body = self.precheck_body(saved["report"]["report_id"])
+        body["supplier_facts"]["package_dimensions_cm"] = {"length": "", "width": "", "height": ""}
+        checks = self.precheck(saved["report"]["report_id"], body=body)["publish_readiness"]["checks"]
+        check = next(row for row in checks if row["key"] == "package_facts")
+        issues = {row["key"]: row["message"] for row in check["details"]["validation_issues"]}
+        for axis, label in (("length", "长"), ("width", "宽"), ("height", "高")):
+            self.assertIn(f"包装{label}（cm）", issues[f"supplier_facts.package_dimensions_cm.{axis}"])
+        self.assertEqual(3, len(set(issues.values())))
+
+    def test_fact_evidence_roundtrip_retains_provenance_without_promoting_authority(self):
+        packet = self.packet()
+        packet["field_evidence"]["material"].update(source_quote="材质 PVC", evidence_role="product_material",
+            source_id="supplier-photo-24", sku="DRAIN-GRAY", platform_verified=True)
+        packet["pending_field_evidence"] = {"material": {"source_type": "merchant_message", "source_quote": "标题硅胶",
+            "evidence_role": "supplier_title", "source_id": "supplier-title", "sku": "DRAIN-GRAY"}}
+        packet["fact_conflicts"] = [{"field": "material", "values": ["PVC", "Silicone"],
+            "reason": "参数与标题不一致", "image_indexes": [0, 1], "source_ids": ["supplier-photo-24", "supplier-title"]}]
+        _, saved = self.save(packet)
+        fact_packet = saved["merchant_product_fact_packet"]
+        for key in ("source_quote", "evidence_role", "source_id", "sku"):
+            self.assertEqual(packet["field_evidence"]["material"][key], fact_packet["field_evidence"]["material"][key])
+            self.assertEqual(packet["pending_field_evidence"]["material"][key], fact_packet["pending_field_evidence"]["material"][key])
+        self.assertNotIn("platform_verified", fact_packet["field_evidence"]["material"])
+        self.assertEqual([0, 1], fact_packet["fact_conflicts"][0]["image_indexes"])
+        self.assertEqual(packet["fact_conflicts"][0]["source_ids"], fact_packet["fact_conflicts"][0]["source_ids"])
+        _, again = self.save(fact_packet, expected=saved["report"]["report_id"])
+        self.assertTrue(again["unchanged"])
+        record = next(row for row in self.call("/reports")[1]["reports"] if row["report_id"] == saved["report"]["report_id"])
+        self.assertEqual(fact_packet, record["report"]["merchant_product_fact_packet"])
+
+    def test_cost_currency_is_preserved_separately_from_sale_currency(self):
+        packet = self.packet()
+        packet["merchant_confirmed_facts"].update(unit_cost="1.20", unit_cost_currency="CNY", selling_price="9.99", currency="USD")
+        _, saved = self.save(packet)
+        facts = saved["merchant_product_fact_packet"]["merchant_confirmed_facts"]
+        self.assertEqual("CNY", facts.get("unit_cost_currency"))
+        self.assertEqual("USD", facts["currency"])
+        _, restored = self.save(saved["merchant_product_fact_packet"], expected=saved["report"]["report_id"])
+        self.assertTrue(restored["unchanged"])
+
+    def test_legacy_cost_only_currency_cannot_become_confirmed_sale_currency(self):
+        packet = self.packet()
+        packet["merchant_confirmed_facts"].pop("selling_price")
+        packet["merchant_confirmed_facts"].update(unit_cost="1.20", currency="CNY")
+        _, saved = self.save(packet)
+        facts = saved["merchant_product_fact_packet"]["merchant_confirmed_facts"]
+        self.assertEqual("CNY", facts.get("unit_cost_currency"))
+        self.assertNotIn("currency", facts)
+        self.assertIn("currency", saved["merchant_product_fact_packet"]["unknown_facts"])
+
+    def test_profit_converts_only_explicit_cost_currency_with_explicit_rate_direction(self):
+        _, saved = self.save()
+        body = self.precheck_body(saved["report"]["report_id"])
+        body["listing"]["price"] = {"value": "10", "currency": "USD"}
+        body["finance_review"] = {
+            "procurement_cost_money": {"value": "14", "currency": "CNY"},
+            "shipping_cost_money": {"value": "1", "currency": "USD"},
+            "ebay_fee_money": {"value": "1", "currency": "USD"},
+            "ad_budget_money": {"value": "0", "currency": "USD"},
+            "return_risk_reserve_money": {"value": "0", "currency": "USD"},
+            "net_profit_money": {"value": "6", "currency": "USD"},
+            "exchange_rate": "0.14285714285714285", "exchange_rate_basis": "sale_currency_per_cost_currency",
+        }
+        def profit():
+            return next(row for row in self.precheck(saved["report"]["report_id"], body=body)["publish_readiness"]["checks"] if row["key"] == "profit_and_fee_sanity")
+        valid = profit()
+        self.assertEqual("passed", valid["status"])
+        self.assertEqual(6, valid["details"]["calculated_contribution_profit"])
+        self.assertEqual(2, valid["details"]["procurement_cost"])
+        body["finance_review"]["shipping_cost_money"]["currency"] = "CNY"
+        wrong_fee = profit()
+        self.assertEqual("blocked", wrong_fee["status"])
+        self.assertIsNone(wrong_fee["details"]["calculated_contribution_profit"])
+        self.assertIsNone(wrong_fee["details"]["effective_profit"])
+        body["finance_review"]["shipping_cost_money"]["currency"] = "USD"
+        for change in ({"exchange_rate_basis": ""}, {"exchange_rate": ""}, {"exchange_rate": "NaN"}):
+            previous = dict(body["finance_review"])
+            body["finance_review"].update(change)
+            check = profit()
+            self.assertEqual("blocked", check["status"])
+            self.assertIsNone(check["details"]["calculated_contribution_profit"])
+            body["finance_review"] = previous
+        for money in ({"value": "14"}, {"value": "14", "currency": ""}):
+            body["finance_review"]["procurement_cost_money"] = money
+            self.assertEqual("blocked", profit()["status"])
+            self.assertIsNone(profit()["details"]["calculated_contribution_profit"])
+
     def test_optional_unknowns_survive_http_roundtrip_until_explicitly_confirmed(self):
         packet = self.packet()
         packet["unknown_facts"] = ["net_weight_g", "product_origin", "not_a_fact"]

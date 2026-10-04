@@ -6800,12 +6800,13 @@ function readSaasPublishIntakeForm() {
       media_job_id: String(approvedMediaJob?.media_job_id || "").trim(),
     },
     finance_review: {
-      procurement_cost_money: value("procurement_cost") ? { value: value("procurement_cost"), currency: value("currency") || "USD" } : null,
+      procurement_cost_money: value("procurement_cost") ? { value: value("procurement_cost"), currency: value("procurement_cost_currency") } : null,
       shipping_cost_money: value("shipping_cost") ? { value: value("shipping_cost"), currency: value("currency") || "USD" } : null,
       ebay_fee_money: value("ebay_fee") ? { value: value("ebay_fee"), currency: value("currency") || "USD" } : null,
       ad_budget_money: value("ad_budget") ? { value: value("ad_budget"), currency: value("currency") || "USD" } : null,
       return_risk_reserve_money: value("return_risk_reserve") ? { value: value("return_risk_reserve"), currency: value("currency") || "USD" } : null,
       exchange_rate: value("exchange_rate"),
+      exchange_rate_basis: value("exchange_rate_basis"),
       net_profit_money: value("net_profit") ? { value: value("net_profit"), currency: value("currency") || "USD" } : null,
       gross_margin_percent: value("gross_margin_percent"),
     },
@@ -8202,11 +8203,13 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     package_height_cm: (logisticsEdited ? dimensionMatch?.[3] : publishPrefill.package_height_cm || dimensionMatch?.[3]) || "",
     material: String((editedFields.has("item_specifics") ? material : publishPrefill.material || material) || "").trim(),
     procurement_cost: publishPrefill.procurement_cost || "",
+    procurement_cost_currency: publishPrefill.procurement_cost_currency || "",
     shipping_cost: "",
     ebay_fee: "",
     ad_budget: "",
     return_risk_reserve: "",
     exchange_rate: currency === "CNY" ? "" : "",
+    exchange_rate_basis: "",
     net_profit: "",
     gross_margin_percent: "",
     item_specifics: itemSpecifics,
@@ -8231,6 +8234,7 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
   }
   // An old form snapshot must not resurrect a subsequently revoked image.
   merged.image_urls = saasMerchantProductFactProjectedValue(draft?.merchant_product_fact_packet || {}, {}, "image_urls", merged.image_urls);
+  if (merged.exchange_rate_basis !== "sale_currency_per_cost_currency") merged.exchange_rate = "";
   return merged;
 }
 
@@ -8357,15 +8361,17 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
             </label>
           `,
         ], { tone: "core", step: "01" })}
-        ${renderSaasPublishFormGroup("价格利润", "价格、成本、平台费和预留，决定是否值得发布。", [
+        ${renderSaasPublishFormGroup("价格利润", "采购成本保留原币种；物流、平台费、广告、退货预留及净利润均按售价币种填写。不同币种须填写有明确方向的汇率。", [
           renderSaasPublishInputField("价格", "price", { value: formValues.price, type: "number", placeholder: "12.99", extra: 'step="0.01" min="0"' }),
-          renderSaasPublishInputField("币种", "currency", { value: formValues.currency || "USD" }),
+          renderSaasPublishInputField("售价币种", "currency", { value: formValues.currency || "USD" }),
           renderSaasPublishInputField("采购成本", "procurement_cost", { value: formValues.procurement_cost, type: "number", extra: 'step="0.01" min="0"' }),
+          renderSaasPublishInputField("采购成本币种", "procurement_cost_currency", { value: formValues.procurement_cost_currency, placeholder: "如 CNY" }),
           renderSaasPublishInputField("物流成本", "shipping_cost", { value: formValues.shipping_cost, type: "number", extra: 'step="0.01" min="0"' }),
           renderSaasPublishInputField("eBay fee", "ebay_fee", { value: formValues.ebay_fee, type: "number", extra: 'step="0.01" min="0"' }),
           renderSaasPublishInputField("广告预算", "ad_budget", { value: formValues.ad_budget, type: "number", extra: 'step="0.01" min="0"' }),
           renderSaasPublishInputField("退货预留", "return_risk_reserve", { value: formValues.return_risk_reserve, type: "number", extra: 'step="0.01" min="0"' }),
-          renderSaasPublishInputField("汇率", "exchange_rate", { value: formValues.exchange_rate, type: "number", placeholder: "如 7.20", extra: 'step="0.0001" min="0"' }),
+          renderSaasPublishInputField("汇率：1 成本币 = 多少售价币", "exchange_rate", { value: formValues.exchange_rate, type: "number", placeholder: "同币种填 1；不同币种核实后填写", extra: 'step="0.00000001" min="0"' }),
+          `<input type="hidden" name="exchange_rate_basis" value="${escapeHtml(formValues.exchange_rate_basis || "")}" />`,
           renderSaasPublishInputField("净利润", "net_profit", { value: formValues.net_profit, type: "number", extra: 'step="0.01"' }),
           renderSaasPublishInputField("毛利率 %", "gross_margin_percent", { value: formValues.gross_margin_percent, type: "number", extra: 'step="0.1"' }),
         ], { step: "02" })}
@@ -9476,8 +9482,9 @@ function saasMerchantProductFactDefinitions() {
       help: "成本和供货能力由商家确认，AI 只做利润建议。",
       fields: [
         ["unit_cost", "单件成本", "例如：7.80", "number"],
+        ["unit_cost_currency", "采购成本币种", "例如：CNY", "text"],
         ["selling_price", "计划售价", "例如：14.99", "number"],
-        ["currency", "币种", "USD / CNY", "text"],
+        ["currency", "计划售价币种", "例如：USD", "text"],
         ["quantity", "真实可售数量", "例如：5", "number"],
       ],
     },
@@ -9552,6 +9559,7 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
     package_width_cm: publishPrefill.package_width_cm || "",
     package_height_cm: publishPrefill.package_height_cm || "",
     unit_cost: publishPrefill.procurement_cost || fields.cost_price || "",
+    unit_cost_currency: publishPrefill.procurement_cost_currency || "",
     selling_price: publishPrefill.price || fields.price || "",
     currency: publishPrefill.currency || "USD",
     quantity: publishPrefill.quantity || "",
@@ -9566,6 +9574,12 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
   for (const key of Array.isArray(existing.unknown_facts) ? existing.unknown_facts : []) {
     if (!Object.prototype.hasOwnProperty.call(existing.derived_listing_suggestions || {}, key)) {
       delete derivedSuggestions[key];
+    }
+  }
+  for (const values of [sourceConfirmed, merchantConfirmed, derivedSuggestions]) {
+    if (values.unit_cost && values.currency && !values.selling_price && !values.unit_cost_currency) {
+      values.unit_cost_currency = values.currency;
+      delete values.currency;
     }
   }
   const values = { ...derivedSuggestions, ...sourceConfirmed, ...merchantConfirmed };
@@ -9626,6 +9640,7 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
       existing.source === "backend_product_vision_extraction" ||
       Boolean(existing.vision_contract_version),
     field_evidence: existing.field_evidence && typeof existing.field_evidence === "object" ? { ...existing.field_evidence } : {},
+    pending_field_evidence: existing.pending_field_evidence && typeof existing.pending_field_evidence === "object" ? { ...existing.pending_field_evidence } : {},
     fact_conflicts: Array.isArray(existing.fact_conflicts) ? [...existing.fact_conflicts] : [],
     unknown_facts: unknownFacts,
     source_records: sourceRecords,
@@ -16664,6 +16679,11 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
     ...(packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object" ? packet.merchant_confirmed_facts : {}),
   };
   const dimensions = [facts.package_length_cm, facts.package_width_cm, facts.package_height_cm].filter(Boolean);
+  if (facts.unit_cost && facts.currency && !facts.selling_price && !facts.unit_cost_currency) {
+    facts.unit_cost_currency = facts.currency;
+    delete facts.currency;
+    packet = { ...packet, unknown_facts: [...new Set([...(packet.unknown_facts || []), "currency"])] };
+  }
   const productVisionRequiresValidatedListing =
     packet.source === "backend_product_vision_extraction" || Boolean(packet.vision_contract_version);
   const listingCopy =
@@ -16694,7 +16714,8 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
     package_height_cm: saasMerchantProductFactProjectedValue(packet, facts, "package_height_cm", projected.publish_prefill?.package_height_cm),
     procurement_cost: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost", projected.publish_prefill?.procurement_cost),
     price: saasMerchantProductFactProjectedValue(packet, facts, "selling_price", projected.publish_prefill?.price),
-    currency: facts.currency || projected.publish_prefill?.currency || "USD",
+    currency: saasMerchantProductFactProjectedValue(packet, facts, "currency", projected.publish_prefill?.currency),
+    procurement_cost_currency: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost_currency", projected.publish_prefill?.procurement_cost_currency),
     image_urls: saasMerchantProductFactProjectedValue(packet, facts, "image_urls", projected.publish_prefill?.image_urls),
     image_rights_confirmed: facts.image_rights_confirmed === true,
   };
@@ -16706,8 +16727,8 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
       : projected.fields?.selling_points || "",
     description: listingCopy.description || projected.fields?.description || "",
     item_specifics: saasListingItemSpecificsWithMerchantFacts(projected.fields?.item_specifics || "", facts),
-    price: facts.selling_price || projected.fields?.price || "",
-    cost_price: facts.unit_cost || projected.fields?.cost_price || "",
+    price: saasMerchantProductFactProjectedValue(packet, facts, "selling_price", projected.fields?.price),
+    cost_price: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost", projected.fields?.cost_price),
     images: facts.image_urls
       ? `${facts.image_urls}\n图片商业使用权：${facts.image_rights_confirmed === true ? "商家已确认" : "待确认"}`
       : projected.fields?.images || "",
@@ -16821,6 +16842,8 @@ function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
   const visionContractVersion = publicRuntimeText(packet.vision_contract_version || "").slice(0, 80);
   const productVisionRequiresValidatedListing =
     source === "backend_product_vision_extraction" || Boolean(visionContractVersion);
+  const evidenceText = (value) => Object.fromEntries(["source_quote", "evidence_role", "source_id", "sku"]
+    .filter(key => value?.[key]).map(key => [key, publicRuntimeText(value[key]).slice(0, key === "source_quote" ? 700 : 160)]));
   return {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
     source,
@@ -16857,6 +16880,7 @@ function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
                 key,
                 {
                   source_type: publicRuntimeText(value.source_type || "").slice(0, 80),
+                  ...evidenceText(value),
                   image_indexes: Array.isArray(value.image_indexes)
                     ? value.image_indexes
                         .map((index) => Number(index))
@@ -16871,11 +16895,21 @@ function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
               ]),
           )
         : {},
+    pending_field_evidence: packet.pending_field_evidence && typeof packet.pending_field_evidence === "object"
+      ? Object.fromEntries(Object.entries(packet.pending_field_evidence).filter(([key, value]) =>
+          saasMerchantProductFactDefinitions().some(group => group.fields.some(field => field[0] === key)) && value && typeof value === "object")
+        .slice(0, 30).map(([key, value]) => [key, { ...evidenceText(value),
+          source_type: publicRuntimeText(value.source_type || "").slice(0, 80),
+          image_indexes: Array.isArray(value.image_indexes) ? value.image_indexes.filter(index => Number.isInteger(index) && index >= 0 && index < 20).slice(0, 10) : [],
+          confidence: Number.isFinite(Number(value.confidence)) ? Math.max(0, Math.min(1, Number(value.confidence))) : 0,
+          merchant_confirmation_received: false }])) : {},
     fact_conflicts: Array.isArray(packet.fact_conflicts)
       ? packet.fact_conflicts.slice(0, 12).map((item) => ({
           field: publicRuntimeText(item?.field || "").slice(0, 80),
           values: Array.isArray(item?.values) ? item.values.map((value) => publicRuntimeText(value).slice(0, 160)).slice(0, 6) : [],
           reason: publicRuntimeText(item?.reason || "").slice(0, 300),
+          ...(Array.isArray(item?.image_indexes) ? { image_indexes: item.image_indexes.filter(index => Number.isInteger(index) && index >= 0 && index < 20).slice(0, 10) } : {}),
+          ...(Array.isArray(item?.source_ids) ? { source_ids: item.source_ids.map(value => publicRuntimeText(value).slice(0, 160)).slice(0, 10) } : {}),
           requires_merchant_confirmation: true,
         }))
       : [],
@@ -16909,7 +16943,7 @@ function sanitizeSaasListingPublishPrefillSnapshot(values = {}) {
   const allowedKeys = [
     "sku", "condition", "quantity", "category_id", "category_leaf", "merchant_location_key",
     "item_location", "handling_time_days", "material", "product_dimensions_cm", "package_weight_g",
-    "package_length_cm", "package_width_cm", "package_height_cm", "procurement_cost", "price", "currency",
+    "package_length_cm", "package_width_cm", "package_height_cm", "procurement_cost", "procurement_cost_currency", "price", "currency",
     "image_urls", "image_rights_confirmed", "description_html", "fulfillment_policy_id", "payment_policy_id",
     "return_policy_id",
   ];
@@ -22814,15 +22848,19 @@ function renderSaasProfitBrainPanel(readiness = null) {
   const check = saasPublishReadinessCheck(readiness, "profit_and_fee_sanity");
   if (!check) return "";
   const details = check.details || {};
+  const money = value => value === null || value === undefined || value === "" ? null : `${details.calculation_currency || "币种待核对"} ${value}`;
+  const sourceCost = details.procurement_source_money;
   const rows = [
-    ["售价", details.unit_price],
-    ["采购", details.procurement_cost],
-    ["eBay fee", details.ebay_fee],
-    ["广告", details.ad_budget],
-    ["物流", details.shipping_cost],
-    ["退货", details.return_risk_reserve],
-    ["汇率", details.exchange_rate],
-    ["贡献毛利", details.effective_profit],
+    ["售价", money(details.unit_price)],
+    ["采购原价", sourceCost?.value != null ? `${sourceCost.currency || "币种待核对"} ${sourceCost.value}` : null],
+    ["采购折算", money(details.procurement_cost)],
+    ["eBay fee", money(details.ebay_fee)],
+    ["广告", money(details.ad_budget)],
+    ["物流", money(details.shipping_cost)],
+    ["退货", money(details.return_risk_reserve)],
+    ["汇率", details.exchange_rate_basis === "sale_currency_per_cost_currency" && details.exchange_rate != null
+      ? `1 ${sourceCost?.currency || "成本币"} = ${details.exchange_rate} ${details.calculation_currency || "售价币"}` : null],
+    ["贡献毛利", money(details.effective_profit)],
   ];
   return `
     <div class="saas-profit-brain-strip" aria-label="利润大脑">
@@ -26420,6 +26458,8 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
   const sourceCopy = delivery.source_record_count ? `已带 ${delivery.source_record_count} 条公开来源；` : "";
   const savedReport = saasSavedAiCeoMarketReportForTurn(latest);
   const authoritativeReport = saasAuthoritativeAiCeoMarketReportForTurn(latest);
+  const artifactKind = delivery.artifact_kind || savedReport?.report?.artifact_kind ||
+    (savedReport?.report?.turn_plan?.intent && savedReport.report.turn_plan.intent !== "research" ? "advice" : "market_research");
   if (latest.status === "model_answer_rejected" || latest.answer_quality?.accepted === false || savedReport?.report?.answer_quality?.accepted === false) {
     return `
       <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
@@ -26441,6 +26481,12 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
         </div>
       </div>
     `;
+  }
+  if (artifactKind !== "market_research") {
+    const factsSaved = artifactKind === "product_facts" && Boolean(delivery.product_fact_report_id || savedReport?.report?.product_fact_report_id);
+    return `<div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
+      <div><span>${factsSaved ? "商品资料已保存" : "咨询记录已保存"}</span><strong>${escapeHtml(title)}</strong>
+      <small>${factsSaved ? "请在当前商品资料中核对新增建议与冲突；已确认事实和手改文案保持独立。" : "本次回复已保留，不代表商品资料已更新。"}未创建发布确认单，未执行平台动作。</small></div></div>`;
   }
   const blockedDraftAvailable =
     delivery.listing_import_ready !== true &&
@@ -32311,8 +32357,8 @@ function sanitizeSaasPublishIntakeDraftValues(input = {}) {
   const names = ["product", "sku", "title", "condition", "category_id", "category_leaf", "price", "currency", "quantity",
     "merchant_location_key", "inventory_location_key", "inventory_location_name", "inventory_location_city",
     "inventory_location_state", "inventory_location_country", "item_location", "package_weight_g", "package_length_cm",
-    "package_width_cm", "package_height_cm", "material", "procurement_cost", "shipping_cost", "ebay_fee", "ad_budget",
-    "return_risk_reserve", "exchange_rate", "net_profit", "gross_margin_percent", "item_specifics", "image_urls",
+    "package_width_cm", "package_height_cm", "material", "procurement_cost", "procurement_cost_currency", "shipping_cost", "ebay_fee", "ad_budget",
+    "return_risk_reserve", "exchange_rate", "exchange_rate_basis", "net_profit", "gross_margin_percent", "item_specifics", "image_urls",
     "description_html", "fulfillment_policy_id", "payment_policy_id", "return_policy_id"];
   if (!input || typeof input !== "object" || Array.isArray(input)) return {};
   return Object.fromEntries(names.filter((name) => Object.hasOwn(input, name) && typeof input[name] === "string")
@@ -32408,10 +32454,11 @@ function persistSaasPublishIntakeDraft(status = "saved") {
 function saasPublishIntakeDependentFields(changed = []) {
   const result = new Set(changed);
   const add = (...names) => names.forEach((name) => result.add(name));
-  if (changed.some((name) => ["price", "currency", "procurement_cost", "quantity"].includes(name))) {
+  if (changed.some((name) => ["price", "currency", "procurement_cost", "procurement_cost_currency", "quantity"].includes(name))) {
     add("ebay_fee", "return_risk_reserve", "net_profit", "gross_margin_percent");
   }
   if (changed.includes("currency")) add("exchange_rate", "shipping_cost", "ad_budget");
+  if (changed.includes("procurement_cost_currency")) add("exchange_rate");
   if (changed.some((name) => ["item_location", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm", "fulfillment_policy_id"].includes(name))) {
     add("shipping_cost", "net_profit", "gross_margin_percent");
   }
@@ -32430,6 +32477,11 @@ function snapshotSaasPublishIntakeFormValues(changedName = "") {
     refreshSaasReadonlyPublishCheckView();
   }
   const values = sanitizeSaasPublishIntakeDraftValues(Object.fromEntries(new FormData(form).entries()));
+  if (changedName === "exchange_rate") {
+    values.exchange_rate_basis = "sale_currency_per_cost_currency";
+    const input = form.elements.namedItem("exchange_rate_basis");
+    if (input) input.value = values.exchange_rate_basis;
+  }
   const basis = saasPublishIntakeSourceBasis();
   let renderedBasis = {};
   try { renderedBasis = JSON.parse(form.dataset.intakeBasis || "{}"); } catch { /* Missing source cannot attest to freshness. */ }
@@ -32877,7 +32929,9 @@ function renderSaasReadonlyPublishCheckResult() {
         <strong>${escapeHtml(check.label || "资料检查")} · ${check.blocking ? "阻断" : check.status === "not_applicable" ? "不适用" : check.status === "passed" ? "通过" : "待核对"}</strong>
         <p>${escapeHtml(check.key === "publish_source_rights_evidence" && sourceSummary ? sourceSummary : check.summary || "请核对当前资料。")}</p>
         ${check.status !== "not_applicable" && check.details?.missing_fields?.length ? `<p>待补：${escapeHtml(check.details.missing_fields.map(key => fieldLabels[key] || "相关必填资料").join("、"))}</p>` : ""}
-        ${(check.details?.validation_issues || []).map(issue => `<p>${escapeHtml(issue.message || "资料无效")}</p>`).join("")}
+        ${check.details?.verification_level === "local_input_only" ? "<p>仅本地资料校验，未取得本次平台核实结果。</p>" : ""}
+        ${check.details?.next_action ? `<p>下一步：${escapeHtml(check.details.next_action)}</p>` : ""}
+        ${[...new Set((check.details?.validation_issues || []).map(issue => issue.message || "资料无效"))].map(message => `<p>${escapeHtml(message)}</p>`).join("")}
       </article>`).join("")}</div></details>
   </section>`;
 }
@@ -35495,6 +35549,7 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
     buyer_copy_requires_validated_listing_generation:
       current.buyer_copy_requires_validated_listing_generation === true,
     field_evidence: current.field_evidence && typeof current.field_evidence === "object" ? { ...current.field_evidence } : {},
+    pending_field_evidence: current.pending_field_evidence && typeof current.pending_field_evidence === "object" ? { ...current.pending_field_evidence } : {},
     fact_conflicts: Array.isArray(current.fact_conflicts) ? [...current.fact_conflicts] : [],
     // Retain explicit clears of optional facts across save/reload, without
     // turning every untouched empty optional input into a new tombstone.
@@ -35525,15 +35580,16 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
     package_height_cm: saasMerchantProductFactProjectedValue(packet, facts, "package_height_cm", draft.publish_prefill?.package_height_cm),
     procurement_cost: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost", draft.publish_prefill?.procurement_cost),
     price: saasMerchantProductFactProjectedValue(packet, facts, "selling_price", draft.publish_prefill?.price),
-    currency: facts.currency || draft.publish_prefill?.currency || "USD",
+    currency: saasMerchantProductFactProjectedValue(packet, facts, "currency", draft.publish_prefill?.currency),
+    procurement_cost_currency: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost_currency", draft.publish_prefill?.procurement_cost_currency),
     image_urls: saasMerchantProductFactProjectedValue(packet, facts, "image_urls", draft.publish_prefill?.image_urls),
     image_rights_confirmed: facts.image_rights_confirmed === true,
   };
   draft.fields = {
     ...(draft.fields || {}),
     item_specifics: saasListingItemSpecificsWithMerchantFacts(draft.fields?.item_specifics || "", facts),
-    price: facts.selling_price || draft.fields?.price || "",
-    cost_price: facts.unit_cost || draft.fields?.cost_price || "",
+    price: saasMerchantProductFactProjectedValue(packet, facts, "selling_price", draft.fields?.price),
+    cost_price: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost", draft.fields?.cost_price),
     images: facts.image_urls
       ? `${facts.image_urls}\n图片商业使用权：${facts.image_rights_confirmed === true ? "商家已确认" : "待确认"}`
       : draft.fields?.images || "待补图片来源和商业使用权。",
@@ -35564,7 +35620,7 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
     };
   }
   if (facts.item_location) supplierFacts.item_location = facts.item_location;
-  if (Number(facts.unit_cost) > 0) supplierFacts.unit_cost = `${facts.currency || "USD"} ${facts.unit_cost}`;
+  if (Number(facts.unit_cost) > 0) supplierFacts.unit_cost = `${facts.unit_cost_currency || facts.currency || "待核对币种"} ${facts.unit_cost}`;
   const supplierRequired = ["material", "package_weight_g", "package_dimensions_cm", "item_location", "unit_cost"];
   const supplierMissing = supplierRequired.filter((key) => supplierFacts[key] === undefined);
   state.saasAiCeoSupplierFactAttestation = {
@@ -35760,6 +35816,7 @@ function captureSaasListingFactsForAiGeneration(draft = state.saasListingCompose
     // signature check bind the same normalized facts, not server/UI metadata.
     const packet = sanitizeSaasMerchantProductFactPacketSnapshot(current);
     draft.merchant_product_fact_packet = packet;
+    draft.publish_prefill = sanitizeSaasListingPublishPrefillSnapshot(draft.publish_prefill);
     return packet;
   }
   const collected = collectSaasMerchantProductFacts();
@@ -35802,6 +35859,7 @@ function captureSaasListingFactsForAiGeneration(draft = state.saasListingCompose
     field_evidence: current.field_evidence && typeof current.field_evidence === "object"
       ? current.field_evidence
       : {},
+    pending_field_evidence: current.pending_field_evidence || {},
     fact_conflicts: Array.isArray(current.fact_conflicts) ? current.fact_conflicts : [],
     unknown_facts: collected.unknownFacts,
     source_records: sourceRecords,
@@ -35809,13 +35867,18 @@ function captureSaasListingFactsForAiGeneration(draft = state.saasListingCompose
     secret_exposed: false,
   });
   const projected = applySaasMerchantProductFactPacketToDraft(draft, packet);
-  // Capturing facts is not a new generation result. Preserve the visible buyer
-  // copy without upgrading its provenance; still apply fact revocations/gaps.
-  for (const key of ["title", "selling_points", "description"]) {
+  // Capturing facts is not a merchant edit or a new generation result. Keep
+  // every explicitly edited Listing field; fact revocations remain in the
+  // fact packet and publish prefill and cannot grant publication authority.
+  for (const key of new Set(["title", "selling_points", "description",
+    ...(draft.merchant_edited_fields || []).filter(key => saasListingMerchantEditableFieldKeys().includes(key))])) {
     if (Object.prototype.hasOwnProperty.call(draft.fields || {}, key)) {
       projected.fields[key] = draft.fields[key];
     }
   }
+  // Freeze the same bounded key order used by cold storage before computing
+  // the operation proof. No proof is rewritten during recovery.
+  projected.publish_prefill = sanitizeSaasListingPublishPrefillSnapshot(projected.publish_prefill);
   invalidateSaasListingValidationForFactChange(projected, current, packet);
   state.saasListingComposerDraft = projected;
   return packet;
@@ -36493,7 +36556,7 @@ function saasListingRewriteKnownTerminalFailure(error) {
   // Failure-code text cannot prove persistence state: even JSON/timeout errors
   // can arise during storage. Only the backend's explicit pre-save phase plus
   // its complete typed failure envelope permits another user-initiated call.
-  const qualityCode = /^(?:listing_model_output_(?:invalid_json|not_object|rewrite_copy_invalid|rewrite_copy_too_long|rewrite_copy_sensitive_text)|(?:listing_model_output|listing_final_copy)_(?:missing_buyer_copy|selling_points_count|marketplace_language|unverified_compatibility|ungrounded_material|ungrounded_performance_claim|ungrounded_warranty|ungrounded_certification|ungrounded_numeric_spec))$/.test(payload?.failure_code || "");
+  const qualityCode = /^(?:listing_model_output_(?:invalid_json|not_object|rewrite_copy_invalid|rewrite_copy_too_long|rewrite_copy_sensitive_text)|(?:listing_model_output|listing_final_copy)_(?:missing_buyer_copy|selling_points_count|marketplace_language|unverified_compatibility|ungrounded_material|ungrounded_performance_claim|ungrounded_warranty|ungrounded_certification|ungrounded_numeric_spec|semantic_unsupported|semantic_review_invalid))$/.test(payload?.failure_code || "");
   return (error?.status === 502 || (error?.status === 422 && qualityCode)) && payload && typeof payload === "object" && !Array.isArray(payload) && payload.status === "failed" &&
     payload.report_save_attempted === false && payload.report === null &&
     typeof payload.task_id === "string" && /^[A-Za-z0-9._:-]{1,160}$/.test(payload.task_id) &&
@@ -36949,6 +37012,8 @@ function saasAiCeoMarketReportDeliveryFromRecord(record = null) {
   return normalizeSaasAiCeoMarketReportDelivery({
     contract_version: "2026-07-04-ai-ceo-market-report-delivery-v1",
     mode: "quick_then_structured_report",
+    artifact_kind: body.artifact_kind || (body.turn_plan?.intent && body.turn_plan.intent !== "research" ? "advice" : "market_research"),
+    product_fact_report_id: body.product_fact_report_id || "",
     report_id: record.report_id,
     report_type: record.report_type,
     status: record.status || "saved",
@@ -45622,13 +45687,13 @@ function saasListingDraftFromManualSourceFacts(facts = {}) {
     ...(dimensions.width ? { package_width_cm: String(dimensions.width) } : {}),
     ...(dimensions.height ? { package_height_cm: String(dimensions.height) } : {}),
     ...(intake.supplier_facts.item_location ? { item_location: String(intake.supplier_facts.item_location) } : {}),
-    ...(unitCost ? { unit_cost: unitCost, currency: ["CNY", "USD"].includes(currency) ? currency : "CNY" } : {}),
+    ...(unitCost ? { unit_cost: unitCost, unit_cost_currency: ["CNY", "USD"].includes(currency) ? currency : "CNY" } : {}),
   };
   const sourceLines = [
     productName,
     merchantConfirmed.source_url || "",
     merchantConfirmed.material ? `材质: ${merchantConfirmed.material}` : "",
-    merchantConfirmed.unit_cost ? `成本: ${merchantConfirmed.currency} ${merchantConfirmed.unit_cost}` : "",
+    merchantConfirmed.unit_cost ? `成本: ${merchantConfirmed.unit_cost_currency} ${merchantConfirmed.unit_cost}` : "",
     merchantConfirmed.item_location ? `发货地: ${merchantConfirmed.item_location}` : "",
     merchantConfirmed.package_weight_g ? `包装重量: ${merchantConfirmed.package_weight_g} g` : "",
     dimensions.length && dimensions.width && dimensions.height
@@ -47707,6 +47772,8 @@ function normalizeSaasAiCeoMarketReportDelivery(delivery = null) {
   return {
     contract_version: publicRuntimeText(delivery.contract_version || "").slice(0, 100),
     mode: publicRuntimeText(delivery.mode || "").slice(0, 80),
+    artifact_kind: ["market_research", "product_facts", "advice"].includes(delivery.artifact_kind) ? delivery.artifact_kind : "",
+    product_fact_report_id: String(delivery.product_fact_report_id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 120),
     report_id: String(delivery.report_id || "").replace(/[^A-Za-z0-9_-]/g, ""),
     report_type: publicRuntimeText(delivery.report_type || "").slice(0, 80),
     status: publicRuntimeText(delivery.status || "saved").slice(0, 80),

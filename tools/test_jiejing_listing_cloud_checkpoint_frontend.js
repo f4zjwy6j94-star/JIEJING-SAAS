@@ -406,16 +406,25 @@ test("publish intake autosaves through the checkpoint and restores on a clean se
   try {
     await first.page.evaluate(() => hydrateSaasListingCloudCheckpoint());
     const form = await mountPublishIntake(first.page);
-    for (const [name, value] of Object.entries({ shipping_cost: "4.20", ebay_fee: "2.07", ad_budget: "0",
+    for (const [name, value] of Object.entries({ procurement_cost_currency: "CNY", currency: "USD", exchange_rate: "0.14", shipping_cost: "4.20", ebay_fee: "2.07", ad_budget: "0",
       return_risk_reserve: "0.65", net_profit: "3.57", gross_margin_percent: "27.48", title: "" })) {
       await form.locator(`[name="${name}"]`).fill(value);
     }
     await waitUntil(() => checkpoint?.publish_intake?.values.shipping_cost === "4.20", "publish form must be persisted to the server, not only localStorage");
-    second = await openDevice();
+    second = await openDevice({ visual: true });
     await second.page.evaluate(() => hydrateSaasListingCloudCheckpoint());
     const restored = await mountPublishIntake(second.page);
-    for (const name of ["shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "net_profit", "gross_margin_percent", "title"]) {
+    for (const name of ["procurement_cost_currency", "currency", "exchange_rate", "exchange_rate_basis", "shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "net_profit", "gross_margin_percent", "title"]) {
       assert.equal(await restored.locator(`[name="${name}"]`).inputValue(), checkpoint.publish_intake.values[name], name);
+    }
+    assert.equal(checkpoint.publish_intake.values.exchange_rate_basis, "sale_currency_per_cost_currency");
+    assert.match(await restored.innerText(), /汇率：1 成本币 = 多少售价币/);
+    const screenshots = path.join(root, "output", "product-quality-20261005");
+    fs.mkdirSync(screenshots, { recursive: true });
+    for (const width of [1280, 919]) {
+      await second.page.setViewportSize({ width, height: 960 });
+      const panel = restored.getByRole("region", { name: "价格利润", exact: true });
+      await panel.screenshot({ path: path.join(screenshots, `currencies-${width}.png`) });
     }
     assert.match(await second.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /已云端保存/);
     assert.equal(requests.filter((entry) => entry.method === "POST").length, 1, "opening the clean device does not create another checkpoint");

@@ -119,6 +119,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("listing_generation_legacy_recovery", [sys.executable, "tools/test_jiejing_listing_generation_legacy_recovery.py"]),
     ("listing_draft_buyer_copy_quality", [sys.executable, "tools/test_jiejing_listing_draft_buyer_copy_quality.py"]),
     ("listing_grounding_security", [sys.executable, "tools/test_jiejing_listing_grounding_security.py"]),
+    ("listing_claim_review", [sys.executable, "tools/test_jiejing_listing_claim_review.py"]),
     ("listing_draft_generation_api", [sys.executable, "tools/test_jiejing_listing_draft_generation_api.py"]),
     ("listing_draft_checkpoint_api", [sys.executable, "tools/test_jiejing_listing_draft_checkpoint_api.py"]),
     ("product_fact_auth_http", [sys.executable, "tools/test_jiejing_product_fact_auth_http.py"]),

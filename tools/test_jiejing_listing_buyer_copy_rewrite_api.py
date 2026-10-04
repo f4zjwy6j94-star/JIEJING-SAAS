@@ -43,11 +43,13 @@ def serve_fixture(directory, port):
         return real_connect(sock, address)
 
     socket.socket.connect = loopback_only
+    provider_log_lock = threading.Lock()
 
     def local_model(self, **kwargs):
         control = json.loads((root / "provider-control.json").read_text(encoding="utf-8"))
-        with (root / "provider-calls.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"prompt": kwargs.get("user_prompt", "")}) + "\n")
+        with provider_log_lock:
+            with (root / "provider-calls.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"prompt": kwargs.get("user_prompt", "")}) + "\n")
         if control.get("hold"):
             (root / "provider-entered").touch()
             deadline = time.monotonic() + 20
@@ -57,6 +59,10 @@ def serve_fixture(directory, port):
                 time.sleep(0.01)
         if control.get("error"):
             raise TimeoutError("local provider fixture timeout")
+        from tools.listing_claim_review_fixture import review_response
+        review = review_response(kwargs, usage={"input_tokens": 80, "output_tokens": 50, "total_tokens": 130})
+        if review is not None:
+            return review
         return {"text": json.dumps(control.get("output", LocalModelBoundary().output)),
                 "_usage": {"input_tokens": 80, "output_tokens": 50, "total_tokens": 130}}
 
@@ -344,7 +350,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             "operation_id": str(uuid.uuid4()), "listing_project_identity": identity,
             "merchant_product_fact_packet": facts["merchant_product_fact_packet"], "current_draft_fields": {}})
         self.assertEqual(status, 201, "the real generation endpoint must produce the scoped proof")
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
         report = generated["report"]
         fields = {key: "" for key in FIELD_KEYS}
         fields.update(title=output["title"], selling_points="\n".join(output["selling_points"]),
@@ -424,7 +430,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
                          ["media_job_not_approved", "image_rights_not_attested", "image_assets_missing"])
         self.assertTrue(evidence["denials_created_no_business_records"])
         self.assertTrue(evidence["confirmation_entry_exercised"])
-        self.assertEqual(len(self.calls()), 1, "image saving must never regenerate buyer copy")
+        self.assertEqual(len(self.calls()), 2, "image saving must never regenerate buyer copy")
 
     def test_operation_result_is_readable_and_replay_does_not_call_model_again(self):
         operation_id = str(uuid.uuid4())
@@ -548,7 +554,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(observed["status"], "report_saved")
         self.assertEqual(observed["task_id"], missing["task_id"])
         self.assertEqual(observed["report"]["report_id"], generated["report"]["report_id"])
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
         self.assertEqual(self.quota(), quota_completed)
 
     def test_operation_is_claimed_before_source_precheck_can_race_a_replay(self):
@@ -569,7 +575,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             finally:
                 (self.root / "source-release").touch()
             self.assertEqual(first.result(timeout=20)[0], 201)
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_claimed_operation_source_failure_settles_without_model_and_never_reexecutes(self):
         request = {**self.body, "operation_id": str(uuid.uuid4())}
@@ -596,7 +602,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         status, retry = self.request(self.path, method="POST", body={**request, "operation_id": str(uuid.uuid4())})
         self.assertEqual(status, 201)
         self.assertEqual(retry["status"], "completed")
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_legacy_failed_result_requires_exact_task_checkpoint_and_presave_ledger(self):
         invalid_output = LocalModelBoundary().output
@@ -642,7 +648,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(self.request("/tasks")[1], before_tasks)
         self.assertEqual(self.request("/reports")[1], before_reports)
         self.assertEqual(self.quota(), quota)
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_http_requires_the_saved_source_revision_before_model(self):
         status, rejected = self.request(self.path, method="POST", body={**self.body,
@@ -684,7 +690,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         status, completed = self.request(self.path, method="POST", body=self.body)
         self.assertEqual(status, 201)
         self.assertEqual(completed["status"], "completed")
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
         self.assertEqual(self.quota()["used"], original_quota["used"] + 1)
         self.assertEqual(len(self.request("/reports")[1]["reports"]), len(original_reports["reports"]) + 1)
         self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"], self.original_checkpoint)
@@ -715,7 +721,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             "base_report_id": report["report_id"], "expected_revision": 2, "mutation_id": str(uuid.uuid4()),
             "fields": {**contract["fields"], "description": "Merchant changed the new draft."},
             "merchant_edited_fields": [*contract["merchant_edited_fields"], "description"]})[0], 201)
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
         self.assertEqual(self.quota()["used"], 1)
 
     def test_a_second_rewrite_uses_the_first_report_and_replays_without_moving_head(self):
@@ -745,7 +751,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(replay["checkpoint"], saved_first["checkpoint"])
         self.assertTrue(replay["idempotent_replay"])
         self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"], saved_second["checkpoint"])
-        self.assertEqual(len(self.calls()), 2)
+        self.assertEqual(len(self.calls()), 4)
 
     def test_http_rejects_source_and_snapshot_mismatches_without_quota_usage(self):
         self.assertEqual(self.quota()["used"], 0)
@@ -802,7 +808,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertIsNone(failed["report"])
         self.assertEqual(self.request("/reports")[1], original_reports)
         self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"], self.original_checkpoint)
-        self.assertEqual(len(self.calls()), 1, "a storage fault must not trigger another model request")
+        self.assertEqual(len(self.calls()), 2, "a storage fault must not trigger another model request")
 
     def test_other_tenant_cannot_rewrite_or_read_the_original_project(self):
         status, other = self.request("/auth/register", method="POST", token="", body={
@@ -901,7 +907,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(self.request(self.checkpoint_path, method="POST", body=stale_adoption)[0], 409)
         self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"], saved_again["checkpoint"])
         self.assertIn(report["report_id"], [item["report_id"] for item in self.request("/reports")[1]["reports"]])
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_http_rewrite_snapshots_keep_provider_words_and_urls_exact(self):
         self.fields.update(risk_notes="FAL concept original text", images="https://fal.media/files/original-product.png")
@@ -955,7 +961,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             "merchant_edited_fields": [*chosen["merchant_edited_fields"], "description"]})
         self.assertEqual(status, 201)
         self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"], edited["checkpoint"])
-        self.assertEqual(len(self.calls()), 2)
+        self.assertEqual(len(self.calls()), 4)
 
     def test_merchant_edit_during_model_can_continue_after_conflict_without_regeneration(self):
         (self.root / "provider-control.json").write_text(json.dumps({"hold": True}), encoding="utf-8")
@@ -986,7 +992,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             "fields": {**update["fields"], "description": "Reviewed without another AI request."}})
         self.assertEqual(status, 201)
         self.assertEqual(self.request(self.checkpoint_path + self.checkpoint_query)[1]["checkpoint"], continued["checkpoint"])
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
 
     def run_real_browser(self, wire_case=None, lose_generation_response=False, reload_before_check=False,
                          unregistered_first_response=False, legacy_request_signature=False):
@@ -1020,7 +1026,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(current["current_revision"], 3)
         self.assertNotEqual(current["checkpoint"]["fields"]["title"], self.fields["title"])
         self.assertEqual(current["checkpoint"]["fields"]["price"], self.fields["price"])
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
 
     def assert_real_browser_default_generation(self, resume=False):
         copy_fields = {key: value for key, value in LocalModelBoundary().output.items()
@@ -1037,7 +1043,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(evidence["generation_posts"], 2 if resume else 1)
         self.assertTrue(evidence["ui_metadata_retained_at_send"])
         self.assertEqual(evidence["external_requests"], 0)
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
         return evidence
 
     def test_real_browser_default_generation_uses_the_same_wire_fact_contract(self):
@@ -1074,7 +1080,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(evidence["checkpoint_posts"], 2)
         self.assertTrue(evidence["refreshed"])
         self.assertEqual(evidence["external_requests"], 0)
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_real_browser_lost_rewrite_response_reloads_original_signature_before_result_check(self):
         evidence = self.run_real_browser(lose_generation_response=True, reload_before_check=True)
@@ -1084,7 +1090,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(evidence["checkpoint_posts"], 2)
         self.assertTrue(evidence["refreshed"])
         self.assertEqual(evidence["external_requests"], 0)
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_real_browser_continues_unregistered_generation_with_original_operation_once(self):
         evidence = self.run_real_browser(unregistered_first_response=True)
@@ -1093,7 +1099,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(evidence["checkpoint_posts"], 2, "continue must not flush or rebase the original source")
         self.assertTrue(evidence["refreshed"])
         self.assertEqual(evidence["external_requests"], 0)
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
         self.assertEqual(self.quota()["used"], 1)
 
     def test_real_browser_legacy_unregistered_rewrite_uses_original_input_and_exact_checkpoint_proof(self):
@@ -1101,7 +1107,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         self.assertEqual(evidence["generation_posts"], 2)
         self.assertEqual(evidence["checkpoint_posts"], 2)
         self.assertTrue(evidence["legacy_request_signature_remains_absent"])
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.calls()), 2)
         self.assertEqual(self.quota()["used"], 1)
 
 

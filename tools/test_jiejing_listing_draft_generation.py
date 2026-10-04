@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.listing_draft_generation import ListingDraftGenerationError, generate_listing_draft
 from jiejing_saas.repository import SaaSRepository
+from tools.listing_claim_review_fixture import review_response
 
 
 class FakeLiveModelClient:
@@ -29,6 +30,9 @@ class FakeLiveModelClient:
 
     def generate_text(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
+        review = review_response(kwargs, usage={"input_tokens": 240, "output_tokens": 160, "total_tokens": 400})
+        if review is not None:
+            return review
         return {
             "text": json.dumps(
                 {
@@ -201,8 +205,8 @@ def main() -> None:
         )
         if generated.get("status") != "completed":
             raise AssertionError(f"complete facts did not generate Listing: {generated}")
-        if len(fake.calls) != 1:
-            raise AssertionError(f"expected one model call, got {len(fake.calls)}")
+        if len(fake.calls) != 2:
+            raise AssertionError(f"expected generation and semantic review, got {len(fake.calls)}")
         prompt = json.dumps(fake.calls[0], ensure_ascii=False)
         if secret_sample in prompt or "vault://must-not-enter-report" in prompt:
             raise AssertionError("Listing model prompt included frontend or Vault secret material")
@@ -234,7 +238,7 @@ def main() -> None:
             "returnPolicyId": "return-official-1",
         }:
             raise AssertionError(f"official business policies did not override model: {policies}")
-        if generated.get("real_platform_writes_enabled") is not False or generated.get("model_usage", {}).get("total_tokens") != 400:
+        if generated.get("real_platform_writes_enabled") is not False or generated.get("model_usage", {}).get("total_tokens") != 800:
             raise AssertionError(f"Listing result lost safety or usage evidence: {generated}")
 
         stored = repository.list_reports(company_id=company["company_id"], limit=20)
@@ -248,7 +252,7 @@ def main() -> None:
             execution_count = conn.execute("select count(*) from execution_results").fetchone()[0]
         finally:
             conn.close()
-        if usage_count != 1 or total_tokens != 400:
+        if usage_count != 1 or total_tokens != 800:
             raise AssertionError(f"provider-reported usage was not persisted: {(usage_count, total_tokens)}")
         if execution_count != 0:
             raise AssertionError("Listing generation triggered a platform execution")
@@ -272,13 +276,13 @@ def main() -> None:
                     packet_record=packet_record,
                 )
             except ListingDraftGenerationError as exc:
-                if not exc.model_called or not exc.usage_consumed or exc.model_usage.get("request_count") != 1:
+                if not exc.model_called or not exc.usage_consumed or exc.model_usage.get("request_count") != 2:
                     raise AssertionError(f"audit failure lost the real provider request: {exc.model_usage}")
-                if exc.model_usage.get("total_tokens") != 400 or not exc.task_id:
+                if exc.model_usage.get("total_tokens") != 800 or not exc.task_id:
                     raise AssertionError("audit failure lost provider usage or the original task identity")
             else:
                 raise AssertionError("an audit persistence failure must return a structured generation error")
-        if len(audit_failure_model.calls) != 1:
+        if len(audit_failure_model.calls) != 2:
             raise AssertionError("audit persistence failure caused duplicate provider requests")
 
     print("PASS jiejing_listing_draft_generation")

@@ -14,7 +14,7 @@ CONTRACT_VERSION = "listing_generation_legacy_recovery_v1"
 _SAFETY = {"model_called": False, "usage_consumed": False,
            "real_platform_writes_enabled": False, "secret_exposed": False}
 _FACT_KEYS = ("product_name", "merchant_confirmed_facts", "derived_listing_suggestions", "simulation_only",
-              "source_records", "field_evidence", "fact_conflicts", "buyer_copy_requires_validated_listing_generation",
+              "source_records", "field_evidence", "pending_field_evidence", "fact_conflicts", "buyer_copy_requires_validated_listing_generation",
               "vision_contract_version", "source_mode", "sensitive_text_detected")
 
 

@@ -93,6 +93,10 @@ class BlockingListingModelHandler(BaseHTTPRequestHandler):
                 "Material": "Aluminum alloy with silicone pads",
             },
         }
+        from tools.listing_claim_review_fixture import review_response
+        review = review_response({"user_prompt": body["messages"][-1]["content"]}, usage={})
+        if review is not None:
+            listing = json.loads(review["text"])
         payload = {
             "choices": [
                 {
@@ -380,9 +384,9 @@ def main() -> int:
             or second_response.get("report") is not None
         ):
             return fail(f"the rejected request must prove that no model usage or report occurred: {second_response}")
-        if BlockingListingModelHandler.call_count() != 1:
+        if BlockingListingModelHandler.call_count() != 2:
             return fail(
-                "exactly one concurrent request may enter the fake provider, got "
+                "one reserved generation plus its semantic review may enter the fake provider, got "
                 f"{BlockingListingModelHandler.call_count()}"
             )
 
@@ -445,7 +449,7 @@ def main() -> int:
             or "本次未调用模型" not in str(subscription_response.get("merchant_message") or "")
         ):
             return fail(f"subscription 402 must expose the safe Listing failure contract: {subscription_response}")
-        if BlockingListingModelHandler.call_count() != 1:
+        if BlockingListingModelHandler.call_count() != 2:
             return fail("subscription quota rejection must not enter the fake provider")
 
         public_evidence = json.dumps(

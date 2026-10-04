@@ -60,7 +60,7 @@ class ListingGenerationOperationTests(unittest.TestCase):
         self.assertEqual(repeated["status"], "report_saved")
         replay = self.generate(generation_mode="rewrite_buyer_copy", operation_task=claim["task"])
         self.assertEqual(replay["status"], "report_saved")
-        self.assertEqual(len(self.model.calls), 1)
+        self.assertEqual(len(self.model.calls), 2)
 
     def test_operation_rejects_unrelated_payload_fields_before_creating_a_task(self):
         cases = [dict(merchant_product_fact_packet={**self.packet, "unrelated_private_note": "not product data"}),
@@ -114,7 +114,7 @@ class ListingGenerationOperationTests(unittest.TestCase):
             finally:
                 release.set()
             self.assertEqual(work.result(timeout=5)["status"], "completed")
-        self.assertEqual(len(self.model.calls), 1)
+        self.assertEqual(len(self.model.calls), 2)
 
     def test_quality_failure_is_readable_as_known_pre_save_failure_and_old_fields_survive(self):
         operation = self.operation()
@@ -146,7 +146,7 @@ class ListingGenerationOperationTests(unittest.TestCase):
         self.assertFalse(error.exception.report_save_attempted)
         self.assertEqual(self.read(operation)["status"], "failed_before_report")
         self.assertEqual(self.repository.list_reports(company_id=self.company_id), self.original_reports)
-        self.assertEqual(len(self.model.calls), 1)
+        self.assertEqual(len(self.model.calls), 2)
 
     def test_report_storage_failure_stays_unknown_and_does_not_license_retry(self):
         operation = self.operation()
@@ -162,7 +162,7 @@ class ListingGenerationOperationTests(unittest.TestCase):
         self.assertEqual(view["status"], "save_unknown")
         self.assertFalse(view["can_retry"])
         self.assertTrue(view["report_save_attempted"])
-        self.assertEqual(len(self.model.calls), 1)
+        self.assertEqual(len(self.model.calls), 2)
 
     def test_saved_report_overrides_failed_post_save_metadata_without_a_second_generation(self):
         operation = self.operation()
@@ -176,7 +176,7 @@ class ListingGenerationOperationTests(unittest.TestCase):
         self.assertEqual(view["status"], "report_saved")
         self.assertEqual(view["report"]["report_id"], result["report"]["report_id"])
         self.assertFalse(view["can_retry"])
-        self.assertEqual(len(self.model.calls), 1)
+        self.assertEqual(len(self.model.calls), 2)
 
     def test_recovery_rejects_a_report_whose_original_snapshot_is_not_the_claimed_input(self):
         operation = self.operation()
@@ -266,7 +266,7 @@ class ListingGenerationOperationTests(unittest.TestCase):
         self.assertEqual(view["generation_mode"], "preserve_merchant_edits")
         self.assertIsNone(view["expected_base_report_id"])
         self.assertIsNone(view["expected_checkpoint_revision"])
-        self.assertEqual(len(self.model.calls), 1)
+        self.assertEqual(len(self.model.calls), 2)
 
 
 if __name__ == "__main__":

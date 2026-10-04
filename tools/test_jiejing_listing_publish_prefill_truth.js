@@ -66,11 +66,12 @@ const listingDraftSnapshotSource = extractFunction(
   "\nfunction sanitizeSaasDetachedListingProjectDraftsSnapshot",
 );
 
-function publishPrefill({ input = "", logistics = "", draft = null }) {
+function publishPrefill({ input = "", logistics = "", draft = null, snapshot = {} }) {
   const sandbox = {
     __input: input,
     __logistics: logistics,
     __draft: draft,
+    __snapshot: snapshot,
   };
   vm.runInNewContext(
     `
@@ -93,6 +94,7 @@ const state = {
   },
 };
 const saasPendingPublishIntakeFormValues = null;
+const currentSaasPendingPublishIntakeValues = () => globalThis.__snapshot;
 const sanitizeSaasWorkflowFeedbackText = (value) => String(value || "");
 const saasListingComposerDraftFromText = () => null;
 const saasAccountScopedEbayPublishPrefillFromPacket = () => ({
@@ -148,6 +150,7 @@ const SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT = "merchant_product_fact_packet
 const publicRuntimeText = (value) => String(value || "");
 const sanitizeSaasWorkflowFeedbackText = (value, limit = 240) => String(value || "").slice(0, limit);
 const sanitizeSaasMerchantProductFactValues = (value) => value && typeof value === "object" ? { ...value } : {};
+${namedFunctionSource("saasMerchantProductFactDefinitions")}
 ${factPacketSnapshotSource}
 globalThis.__result = sanitizeSaasMerchantProductFactPacketSnapshot(globalThis.__packet);
 `,
@@ -263,6 +266,47 @@ globalThis.__promise = createSaasPublishConfirmationFromIntakeForm("ebay-draft")
   const result = await sandbox.__promise;
   return { result, fetchCount: sandbox.__fetchCount, toasts: sandbox.__toasts };
 }
+
+test("procurement and sale currencies stay separate and cleared prices cannot revive", () => {
+  const draft = { product: "Drain cover", publish_prefill: { price: "99", procurement_cost: "5", currency: "USD" }, fields: { price: "99", cost_price: "5" } };
+  const packet = { merchant_confirmed_facts: { unit_cost: "1.2", unit_cost_currency: "CNY", currency: "USD" }, unknown_facts: ["selling_price"] };
+  const result = applyFactPacket(draft, packet);
+  assert.equal(result.publish_prefill.procurement_cost_currency, "CNY");
+  assert.equal(result.publish_prefill.currency, "USD");
+  assert.equal(result.fields.price, "");
+  assert.equal(result.publish_prefill.price, "");
+  const unknown = applyFactPacket(draft, { merchant_confirmed_facts: {}, unknown_facts: ["unit_cost", "currency", "unit_cost_currency"] });
+  assert.equal(unknown.fields.cost_price, "");
+  assert.equal(unknown.publish_prefill.currency, "");
+  assert.equal(unknown.publish_prefill.procurement_cost_currency, "");
+  const legacy = applyFactPacket(draft, { merchant_confirmed_facts: { unit_cost: "1.2", currency: "CNY" }, unknown_facts: ["selling_price"] });
+  assert.equal(legacy.publish_prefill.procurement_cost_currency, "CNY");
+  assert.notEqual(legacy.publish_prefill.currency, "CNY");
+});
+
+test("source quotes roles SKU and conflict references survive local snapshot without authority", () => {
+  const evidence = { source_type: "merchant_message", source_quote: "参数PVC", evidence_role: "product_material", source_id: "photo-24", sku: "DRAIN-GRY", image_indexes: [1], platform_verified: true };
+  const packet = { field_evidence: { material: evidence }, pending_field_evidence: { material: evidence },
+    fact_conflicts: [{ field: "material", values: ["PVC", "silicone"], image_indexes: [1, 2], source_ids: ["photo-24", "title"] }] };
+  const restored = sanitizeFactPacketSnapshot(packet);
+  for (const group of ["field_evidence", "pending_field_evidence"]) {
+    for (const key of ["source_quote", "evidence_role", "source_id", "sku"]) assert.equal(restored[group].material[key], evidence[key]);
+    assert.equal(restored[group].material.platform_verified, undefined);
+  }
+  assert.deepEqual(Array.from(restored.fact_conflicts[0].image_indexes), [1, 2]);
+  assert.deepEqual(Array.from(restored.fact_conflicts[0].source_ids), ["photo-24", "title"]);
+});
+
+test("legacy undirected FX is not reused and explicit directed FX survives snapshot restore", () => {
+  const legacy = publishPrefill({ snapshot: { exchange_rate: "7.2", procurement_cost_currency: "CNY", currency: "USD" } });
+  assert.equal(legacy.exchange_rate, "");
+  const directed = publishPrefill({ snapshot: { exchange_rate: "0.14", exchange_rate_basis: "sale_currency_per_cost_currency",
+    procurement_cost_currency: "CNY", currency: "USD" } });
+  assert.equal(directed.exchange_rate, "0.14");
+  assert.equal(directed.exchange_rate_basis, "sale_currency_per_cost_currency");
+  assert.equal(directed.procurement_cost_currency, "CNY");
+  assert.equal(directed.currency, "USD");
+});
 
 test("net weight, product dimensions, and origin notes never prefill package logistics", () => {
   const result = publishPrefill({

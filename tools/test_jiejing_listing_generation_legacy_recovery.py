@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.listing_draft_generation import ListingDraftGenerationError, generate_listing_draft
 from jiejing_saas.repository import SaaSRepository
+from tools.listing_claim_review_fixture import review_response
 
 
 class LocalModel:
@@ -32,6 +33,9 @@ class LocalModel:
 
     def generate_text(self, **_kwargs):
         self.calls += 1
+        review = review_response(_kwargs, usage={"input_tokens": 80, "output_tokens": 50, "total_tokens": 130})
+        if review is not None:
+            return review
         return {"text": json.dumps(self.output), "model": self.model,
                 "_usage": {"input_tokens": 80, "output_tokens": 50, "total_tokens": 130}}
 
@@ -131,7 +135,7 @@ class LegacyRecoveryTests(unittest.TestCase):
         self.assertEqual(recovered["status"], "legacy_evidence_incomplete")
         self.assertIs(recovered["can_retry"], False)
         self.assertIs(caught.exception.report_save_attempted, True)
-        self.assertEqual(self.model.calls, 1)
+        self.assertEqual(self.model.calls, 2)
 
     def test_completed_usage_commit_ack_loss_cannot_be_relabelled_failed(self):
         original = self.repository.record_model_usage
@@ -151,7 +155,7 @@ class LegacyRecoveryTests(unittest.TestCase):
         recovered = self.read(caught.exception.task_id)
         self.assertEqual(recovered["status"], "legacy_evidence_incomplete")
         self.assertIs(recovered["can_retry"], False)
-        self.assertEqual(self.model.calls, 1)
+        self.assertEqual(self.model.calls, 2)
 
     def test_saved_report_with_lost_ack_is_returned_without_another_generation(self):
         original = self.repository.save_listing_draft_report
@@ -178,7 +182,7 @@ class LegacyRecoveryTests(unittest.TestCase):
         self.assertEqual(self.repository.list_reports(company_id=self.company_id, task_id=caught.exception.task_id), reports)
         self.assertEqual(self.repository.get_listing_draft_checkpoint(company_id=self.company_id,
             store_id=self.store_id, identity=self.identity), checkpoint_before)
-        self.assertEqual(self.model.calls, 1)
+        self.assertEqual(self.model.calls, 2)
 
     def test_another_same_project_failed_save_remains_uncertain(self):
         self.model.output["title"] = "中文结果无法通过"
@@ -195,7 +199,7 @@ class LegacyRecoveryTests(unittest.TestCase):
         recovered = self.read(first_task)
         self.assertIs(recovered["can_retry"], False)
         self.assertEqual(recovered["status"], "legacy_evidence_incomplete")
-        self.assertEqual(self.model.calls, 3)
+        self.assertEqual(self.model.calls, 4)
 
     def test_invalid_context_is_not_reflected_as_an_arbitrary_response_payload(self):
         invalid = {**self.identity, "api_key": "do-not-reflect-this-input"}

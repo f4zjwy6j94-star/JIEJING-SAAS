@@ -21,6 +21,7 @@ from jiejing_saas.listing_draft_generation import (
     ListingDraftGenerationError, generate_listing_draft, is_listing_buyer_copy_rewrite_contract,
 )
 from jiejing_saas.repository import SaaSRepository
+from tools.listing_claim_review_fixture import review_response
 
 
 FIELD_KEYS = ("title", "selling_points", "description", "category", "item_specifics",
@@ -47,6 +48,9 @@ class LocalModelBoundary:
 
     def generate_text(self, **kwargs):
         self.calls.append(kwargs)
+        review = review_response(kwargs, usage={"input_tokens": 80, "output_tokens": 50, "total_tokens": 130})
+        if review is not None:
+            return review
         return {"text": json.dumps(self.output), "model": self.model,
                 "_usage": {"input_tokens": 80, "output_tokens": 50, "total_tokens": 130}}
 
@@ -135,7 +139,7 @@ class BuyerCopyRewriteTests(unittest.TestCase):
         }
         result = self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
         self.assertEqual(result["status"], "completed")
-        self.assertEqual(len(self.model.calls), 1)
+        self.assertEqual(len(self.model.calls), 2, "one generation and one final-copy semantic review")
         saved = self.repository.get_report_for_company(company_id=self.company_id,
             report_id=result["report"]["report_id"])
         handoff = saved["report"]["listing_handoff"]["listing_fields"]
@@ -154,7 +158,7 @@ class BuyerCopyRewriteTests(unittest.TestCase):
 
         result = self.generate(generation_mode="rewrite_buyer_copy")
         self.assertEqual(result["status"], "completed")
-        self.assertEqual(len(self.model.calls), 1)
+        self.assertEqual(len(self.model.calls), 2, "one generation and one final-copy semantic review")
         saved = self.repository.get_report_for_company(company_id=self.company_id,
             report_id=result["report"]["report_id"])
         handoff = saved["report"]["listing_handoff"]["listing_fields"]
@@ -193,7 +197,7 @@ class BuyerCopyRewriteTests(unittest.TestCase):
         before = copy.deepcopy(self.fields)
         result = self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
         self.assertEqual(result["status"], "completed")
-        self.assertEqual(len(self.model.calls), 1, "a grounded translation needs no model repair")
+        self.assertEqual(len(self.model.calls), 2, "one generation and one review, no repair")
         saved = self.repository.get_report_for_company(company_id=self.company_id,
             report_id=result["report"]["report_id"])
         handoff = saved["report"]["listing_handoff"]["listing_fields"]
@@ -225,7 +229,7 @@ class BuyerCopyRewriteTests(unittest.TestCase):
                 before_calls = len(self.model.calls)
                 result = self.generate(generation_mode="rewrite_buyer_copy", expected_checkpoint_revision=revision)
                 self.assertEqual(result["status"], "completed")
-                self.assertEqual(len(self.model.calls) - before_calls, 1)
+                self.assertEqual(len(self.model.calls) - before_calls, 2)
                 saved = self.repository.get_report_for_company(company_id=self.company_id,
                     report_id=result["report"]["report_id"])
                 handoff = saved["report"]["listing_handoff"]["listing_fields"]

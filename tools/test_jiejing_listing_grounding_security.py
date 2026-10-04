@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.listing_draft_generation import ListingDraftGenerationError, generate_listing_draft
 from jiejing_saas.repository import SaaSRepository
+from tools.listing_claim_review_fixture import review_response
 from jiejing_saas.sensitive_text import contains_secret_like_data
 
 
@@ -32,6 +33,9 @@ class FixedListingModel:
     def generate_text(self, **kwargs: Any) -> dict[str, Any]:
         self.call_count += 1
         self.prompts.append(str(kwargs.get("user_prompt") or ""))
+        review = review_response(kwargs, usage={"input_tokens": 100, "output_tokens": 80, "total_tokens": 180})
+        if review is not None:
+            return review
         return {
             "text": json.dumps(self.payload, ensure_ascii=False),
             "model_mode": "fixed_listing_grounding",
@@ -350,7 +354,7 @@ def main() -> None:
             model_client=grounded_model,
             model_resolution={"provider_key": "fake", "model": grounded_model.model},
         )
-        if grounded.get("status") != "completed" or grounded_model.call_count != 1:
+        if grounded.get("status") != "completed" or grounded_model.call_count != 2:
             raise AssertionError(f"grounded dimensions and weight were not accepted: {grounded}")
         if len(repository.list_reports(company_id=account["company"]["company_id"])) != 2:
             raise AssertionError("grounded buyer copy did not create exactly two Listing reports")

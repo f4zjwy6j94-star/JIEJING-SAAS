@@ -47,6 +47,22 @@ test("current product excludes other projects, stores, actions and unbound confi
     card("foreign-store", { store_id: "store-B" }), card("unknown-store", { store_id: "" }),
     card("refund", { action_type: "refund_order" }), card("unbound", { item: {} })]), ["current", "save"]);
 });
+test("profit strip labels original and converted currencies and leaves invalid profit unknown", () => {
+  const ctx = vm.createContext({ escapeHtml: value => String(value ?? ""),
+    saasPublishReadinessCheck: value => value, check: { details: {
+      unit_price: 10, calculation_currency: "USD", procurement_source_money: { value: "14", currency: "CNY" },
+      procurement_cost: 2, exchange_rate: 0.14285714, exchange_rate_basis: "sale_currency_per_cost_currency", effective_profit: 6,
+    } } });
+  vm.runInContext(extract("renderSaasProfitBrainPanel"), ctx);
+  let html = vm.runInContext("renderSaasProfitBrainPanel(check)", ctx);
+  assert.match(html, /采购原价<\/b><em>CNY 14/);
+  assert.match(html, /采购折算<\/b><em>USD 2/);
+  assert.match(html, /1 CNY = 0.14285714 USD/);
+  assert.match(html, /贡献毛利<\/b><em>USD 6/);
+  ctx.check.details.effective_profit = null;
+  html = vm.runInContext("renderSaasProfitBrainPanel(check)", ctx);
+  assert.match(html, /贡献毛利<\/b><em>待补/);
+});
 test("legacy same-product SKU works but empty product context never selects all account history", () => {
   const ctx = fixture();
   assert.deepEqual(ids(ctx, [card("legacy", { item: { sku: "SKU-A" } })]), ["legacy"]);
@@ -231,6 +247,19 @@ test("missing item specifics name the fields instead of an unhelpful generic blo
   assert.match(html, /待补：品牌（Brand）、类型（Type）/);
   assert.doesNotMatch(html, /相关必填资料/);
   assert.match(html, /1 项阻断/);
+});
+
+test("precheck explains evidence level and next action, with duplicate legacy issues shown once", async () => {
+  const ctx = readonlyFixture();
+  ctx.response.publish_readiness.checks = [{ key: "category_match", label: "eBay 类目资料", status: "needs_attention",
+    summary: "已填写，本次未向平台核实", details: { verification_level: "local_input_only", platform_verified: false,
+      next_action: "核对当前站点叶子类目", validation_issues: [{ message: "包装尺寸无效" }, { message: "包装尺寸无效" }] } }];
+  await vm.runInContext("runSaasReadonlyPublishPrecheck()", ctx);
+  const html = vm.runInContext("renderSaasReadonlyPublishCheckResult()", ctx);
+  assert.match(html, /仅本地资料校验/);
+  assert.match(html, /下一步：核对当前站点叶子类目/);
+  assert.equal((html.match(/包装尺寸无效/g) || []).length, 1);
+  assert.match(html, /0 项通过/);
 });
 
 test("precheck failures and mismatched responses never display a previous success", async () => {

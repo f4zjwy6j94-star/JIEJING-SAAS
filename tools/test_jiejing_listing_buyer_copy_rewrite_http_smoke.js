@@ -168,6 +168,7 @@ async function main() {
         assert.equal(response.status(), 400);
         await first.page.waitForFunction(() => state.saasListingComposerDraft.ai_generation_feedback?.status === "generation_uncertain");
         const proof = await first.page.evaluate(() => state.saasListingComposerDraft.ai_generation_feedback);
+        const beforeReload = await first.page.evaluate(() => saasListingAiGenerationEditSnapshot().draft);
         assert.match(proof.request_signature, /^[a-f0-9]{64}$/);
         assert.equal(proof.operation.expected_base_report_id, null); assert.equal(proof.operation.expected_checkpoint_revision, null);
         await first.page.reload();
@@ -188,7 +189,27 @@ async function main() {
         const continued = first.page.waitForResponse((r) => new URL(r.url()).pathname === generationPath && r.request().method() === "POST", { timeout: 10000 })
           .then((value) => value, () => null);
         await first.page.getByRole("button", { name: "继续本次生成", exact: true }).click();
-        response = await continued; assert.ok(response, "signed default continuation reaches the real claim once");
+        response = await continued;
+        if (!response) {
+          const diagnostics = await first.page.evaluate(async (beforeReload) => {
+            const feedback = state.saasListingComposerDraft.ai_generation_feedback;
+            const snapshot = saasListingAiGenerationEditSnapshot();
+            const wire = saasListingGenerationWireRequest(saasListingGenerationOperation(feedback.operation));
+            const record = saasListingCloudRecord();
+            const before = JSON.parse(beforeReload), after = JSON.parse(snapshot.draft);
+            return { fieldsEqual: JSON.stringify(before[0]) === JSON.stringify(after[0]),
+              packetEqual: JSON.stringify(before[1]) === JSON.stringify(after[1]),
+              packetMeaningEqual: JSON.stringify(saasCanonicalJsonValue(before[1])) === JSON.stringify(saasCanonicalJsonValue(after[1])),
+              prefillEqual: JSON.stringify(before[2]) === JSON.stringify(after[2]),
+              prefillMeaningEqual: JSON.stringify(saasCanonicalJsonValue(before[2])) === JSON.stringify(saasCanonicalJsonValue(after[2])),
+              inputMatches: await saasSha256Hex(snapshot.draft) === feedback.input_signature,
+              requestMatches: await saasSha256Hex(wire.signatureInput) === feedback.request_signature,
+              loaded: record.loaded, dirty: record.dirty, pending: Boolean(record.pending), conflict: Boolean(record.conflict),
+              checking: feedback.checking };
+          }, beforeReload);
+          diagnosticTag = Object.entries(diagnostics).map(([key, value]) => `${key}${value ? 1 : 0}`).join("_");
+        }
+        assert.ok(response, "signed default continuation reaches the real claim once");
         assert.deepEqual(response.request().postDataJSON(), body);
         await first.page.waitForFunction(() => !saasListingAiGenerationInFlight.size);
       }
