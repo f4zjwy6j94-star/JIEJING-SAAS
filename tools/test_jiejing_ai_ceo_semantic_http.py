@@ -148,6 +148,10 @@ class Model:
                         "排水口硅胶滤网 silicone drain hair catcher", "排水口硅胶滤网")
                 if "交换引用" in prompt:
                     text = text.replace("[S1]", "[TEMP]").replace("[S2]", "[S1]").replace("[TEMP]", "[S2]")
+                if "共同待核" in prompt:
+                    text = text.replace("当前在售状态、销量、利润未验证。", "当前在售、销量、需求及利润均未验证。")
+                if "独立肯定在售" in prompt:
+                    text += "\n当前在售，销量和利润未验证。"
             if "源格式验收" in prompt:
                 text = ("### 候选商品 1：自粘理线夹 / adhesive cable clips\n历史商品参考 [S1]，单件主价 $5.99。\n"
                     "待补资料：供应商成本、包装规格、图片授权、当前在售状态、真实销量与利润。\n"
@@ -182,6 +186,9 @@ class ResearchSearch:
     def provider_status(self, provider):
         return {"configured": True, "provider": provider, "secret_exposed": False}
     def probe(self, config):
+        if "site:ebay.com/itm/" not in config.query:
+            return {"status": "ready", "provider": config.provider, "query": config.query,
+                    "results": [{"title": "eBay category", "url": "https://www.ebay.com/b/", "snippet": "Browse products"}]}
         first = "adhesive cable clips" in config.query
         name, item, price = (("adhesive cable clips", "123456789001", "5.99") if first else
                              ("silicone drain hair catcher", "123456789002", "4.99"))
@@ -704,6 +711,25 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         status, replay = self.call(path, body)
         self.assertEqual(201, status)
         self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(after, self.reports())
+
+    def test_shared_unknown_status_survives_http_report_save_but_positive_peer_claim_does_not(self):
+        before = self.reports()
+        body = self.envelope("无货源研究候选：中英商品名，共同待核。保存独立比较报告，不建项目。")
+        path = f"/stores/{self.store}/merchant-ceo/chat"
+        status, result = self.call(path, body)
+        self.assertEqual(201, status, result.get("ai_ceo_chat", {}).get("blocked_by"))
+        self.assertEqual("none", result["semantic_dispatch"]["project_action"])
+        self.assertEqual({}, result["semantic_dispatch"]["target_project_identity"])
+        self.assertIsNone(result.get("product_vision_report"))
+        report = result["ai_ceo_market_report"]
+        self.assertEqual(2, len(report["report"]["product_candidates"]))
+        after = self.reports()
+        self.assertEqual(before, [item for item in after if item["report_id"] != report["report_id"]])
+        status, blocked = self.call(path, self.envelope(body["message"] + "独立肯定在售。"))
+        self.assertEqual(202, status)
+        self.assertIn("research_unverified_current_availability", blocked["ai_ceo_chat"]["blocked_by"])
+        self.assertIsNone(blocked.get("ai_ceo_market_report"))
         self.assertEqual(after, self.reports())
 
     def test_chinese_report_names_bind_to_explicit_planned_aliases_not_peer_sources(self):

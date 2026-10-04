@@ -86,6 +86,16 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def validate_retired_diagnostic_exclusions(apply: str) -> list[str]:
+    """A fresh candidate must not inherit removed one-shot capture code."""
+    start = apply.index('rsync -a --delete')
+    end = apply.index('"$active_app/" "$candidate_app/"', start)
+    previous_release_copy = apply[start:end]
+    paths = ('jiejing_saas/private_answer_capture.py', 'tools/test_jiejing_ai_ceo_private_answer_capture.py')
+    return [f'retired diagnostic inherited from active release:{path}' for path in paths
+            if f"--exclude '{path}'" not in previous_release_copy]
+
+
 def load_deploy_module():
     spec = importlib.util.spec_from_file_location("jiejing_production_deploy", CLIENT)
     if spec is None or spec.loader is None:
@@ -2222,6 +2232,9 @@ def main(
     try:
         client = read(CLIENT)
         apply = read(APPLY)
+        retired_failures = validate_retired_diagnostic_exclusions(apply)
+        if retired_failures:
+            return fail("; ".join(retired_failures))
         compose = read(COMPOSE)
         patch_apply = read(PATCH_APPLY)
         ci = read(CI)

@@ -565,6 +565,8 @@ candidate_app="$release_dir/app"
 install -d -m 0755 -o root -g root "$candidate_app"
 
 rsync -a --delete \
+  --exclude 'jiejing_saas/private_answer_capture.py' \
+  --exclude 'tools/test_jiejing_ai_ceo_private_answer_capture.py' \
   --exclude '.git/' \
   --exclude 'node_modules/' \
   --exclude '__pycache__/' \

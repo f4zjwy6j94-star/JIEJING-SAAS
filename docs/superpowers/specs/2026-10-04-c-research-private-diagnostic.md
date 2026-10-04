@@ -65,3 +65,38 @@ are removed by this fix candidate. No customer report or product was deleted.
 
 This fix still requires its own complete release gate, same-bundle deployment
 and actual C browser acceptance. A/B are not to be regenerated.
+
+## Post-release findings: item search scope and diagnostic retirement
+
+2637426 passed its 273-check release gate and was deployed. The original C
+request then selected the correct report-only semantic plan but produced zero
+eligible sources: two broad eBay queries returned eight filtered results.
+One explicit item-page follow-up obtained five sources, but the answer still
+failed the current-availability guard. This failure is not a successful C
+acceptance and no new answer-body diagnostic was enabled.
+
+The local follow-up fixes are narrow:
+
+- Constrain the evidence adapter's queries to eBay-US item pages, matching its
+  existing returned-URL boundary. Preserve model-selected subjects, keywords,
+  exclusions, query count and the original semantic plan; no keyword router.
+  Preserve already-scoped `/itm` and `/itm/` queries exactly. The full chat
+  regression initially found nine failures from unnecessary slash rewriting;
+  this compatibility correction restores all 21 chat tests without weakening
+  source attribution or changing the tests' assertions.
+- A closed list such as `当前在售、销量、利润均未验证` shares one negative
+  predicate. Do not split its first noun into a positive current-sale claim.
+  Independent affirmative clauses must still fail. RED tests cover the list
+  alone and within surrounding prose. This is an independently reproduced
+  false positive, not proof that the uncaptured follow-up used that wording.
+- The production base-release copy inherited the deleted one-shot diagnostic
+  module. Its callsites and control were absent and the sample was already
+  cleaned, but physical removal was not complete. Exclude exactly the module
+  and its test when assembling the next candidate; preserve the previous
+  release, runtime data, private configuration and rollback images. The
+  staging patch retires the same two code files explicitly.
+
+Unit tests plus the authenticated local HTTP path check two candidate reports,
+unchanged existing facts, report-only scope and rejection of an independent
+positive current-sale statement. Deployment contracts check the exclusions.
+Only the new release's actual browser result can establish whether C passes.

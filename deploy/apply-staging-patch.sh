@@ -578,6 +578,8 @@ FILES=(
 )
 
 PUBLIC_ASSET_RETIREMENTS=(
+  "jiejing_saas/private_answer_capture.py"
+  "tools/test_jiejing_ai_ceo_private_answer_capture.py"
   "assets/demo-cable-organizer.svg"
   "assets/demo-candle-set.svg"
   "assets/demo-jewelry-case.svg"

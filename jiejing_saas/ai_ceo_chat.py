@@ -2880,6 +2880,11 @@ def _run_product_selection_web_search(*, message: str, budget: dict[str, Any],
     # same product-source filter, balanced window and coverage report still run.
     queries = [item["query"] for item in research_queries] if research_queries is not None else _ebay_product_selection_search_queries(message)[:3]
     candidates = [item["subject"] for item in research_queries] if research_queries is not None else _ebay_product_search_terms(message)
+    # The model chooses products and wording. The evidence adapter owns the
+    # fixed eBay-US item-page boundary it already enforces on returned URLs.
+    # Apply that same scope before searching; broad /b or /sch results are not
+    # useful evidence. Preserve phrases, exclusions, and the original plan.
+    queries = [_ebay_item_evidence_query(query) for query in queries]
 
     def search(query: str) -> dict[str, Any]:
         try:
@@ -2951,6 +2956,16 @@ def _run_product_selection_web_search(*, message: str, budget: dict[str, Any],
         "summary": "候选商品页面检索；商品标价不等于成交证据。" if records else "未获得候选商品页面，工具教程不作为商品市场证据。",
         "secret_exposed": False,
     }
+
+
+def _ebay_item_evidence_query(query: str) -> str:
+    if re.search(r"(?<!\S)site:(?:https?://)?(?:www\.)?ebay\.com/itm/?(?=\s|$)", query, re.I):
+        return query
+    scoped, count = re.subn(
+        r"(?<!\S)site:(?:https?://)?(?:www\.)?ebay\.com(?:/(?:itm/?)?)?(?=\s|$)",
+        "site:ebay.com/itm/", query, flags=re.I,
+    )
+    return scoped if count else "site:ebay.com/itm/ " + query
 
 
 def _product_candidate_aliases(candidate: str) -> list[str]:
@@ -4936,6 +4951,18 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
     # Evaluate each field/assertion separately; a peer/footer caveat cannot
     # cancel a contradictory positive claim.
     for statement in _research_availability_statements(answer):
+        # A closed noun enumeration can share one negative predicate. Splitting
+        # its ideographic commas first turns "当前在售、销量均未验证" into a
+        # false affirmative. Do not extend this to comma-separated clauses or
+        # predicates such as "卖家同时在售"; peer caveats still cannot excuse them.
+        unknown_field = (r"(?:(?:当前|目前|现在)?在售(?:状态|情况)?|(?:实际|真实)?销量|"
+                         r"(?:市场)?需求|(?:实际|真实)?利润|成交(?:记录|情况)?|库存|价格|退货率)")
+        unknown_enumeration = (r"\s*(?:[-+]\s*)?" + unknown_field
+                               + r"(?:\s*(?:、|和|及|与)\s*" + unknown_field + r")+"
+                               + r"\s*[:：]?\s*(?:均|皆|全部|都)?\s*(?:尚未|未)(?:验证|核实|确认)"
+                               + r"\s*[.]?\s*")
+        statement = "\n".join(sentence for sentence in re.split(r"[。；;！!？?\n]", statement)
+                              if not re.fullmatch(unknown_enumeration, sentence, re.I))
         for clause in re.split(r"[。；;！!？?\n，,、|]|\b(?:but|however)\b|(?:但是|不过|但)", statement, flags=re.I):
             # An explicitly unknown status field is not a current-sale claim.
             # Bind the entire clause: unknown price/stock must not exempt a

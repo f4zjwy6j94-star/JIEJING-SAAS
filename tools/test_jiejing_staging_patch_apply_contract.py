@@ -31,6 +31,10 @@ def fail(message: str) -> int:
 
 def main() -> int:
     text = SCRIPT.read_text(encoding="utf-8") if SCRIPT.exists() else ""
+    retirements = text.split("PUBLIC_ASSET_RETIREMENTS=(", 1)[-1].split(")", 1)[0]
+    for retired in ("jiejing_saas/private_answer_capture.py", "tools/test_jiejing_ai_ceo_private_answer_capture.py"):
+        if f'"{retired}"' not in retirements:
+            return fail("retired one-shot diagnostic must not survive a patch: " + retired)
     dockerfile = DOCKERFILE.read_text(encoding="utf-8") if DOCKERFILE.exists() else ""
     bundle = BUNDLE.read_text(encoding="utf-8") if BUNDLE.exists() else ""
     vault_init = VAULT_INIT.read_text(encoding="utf-8") if VAULT_INIT.exists() else ""

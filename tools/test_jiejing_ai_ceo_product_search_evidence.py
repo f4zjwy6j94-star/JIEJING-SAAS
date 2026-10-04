@@ -118,6 +118,19 @@ class ProductSearchEvidenceTests(unittest.TestCase):
                       "待补资料：供应商成本。多个卖家同时在售。", "价格未验证，但多个卖家在售。"):
             self.assertIn("research_unverified_current_availability", chat._research_source_answer_blockers(claim, self.c_sources()), claim)
 
+    def test_shared_unknown_predicate_is_not_split_into_a_positive_sale_claim(self):
+        for claim in ("当前在售、销量、需求及利润均未验证。",
+                      "目前在售状态、实际销量和利润尚未核实。",
+                      "- **当前在售、销量与利润**：未验证。",
+                      "历史页面参考 [S1]。当前在售、销量、利润均未验证。供应商成本未知。"):
+            self.assertNotIn("research_unverified_current_availability",
+                chat._research_source_answer_blockers(claim, self.c_sources()), claim)
+        for claim in ("当前在售，销量和利润未验证。",
+                      "目前在售且需求旺盛，销量与利润未验证。",
+                      "当前在售、多个卖家同时在售，销量与利润均未验证。"):
+            self.assertIn("research_unverified_current_availability",
+                chat._research_source_answer_blockers(claim, self.c_sources()), claim)
+
     def test_candidate_cards_do_not_turn_competitor_rows_into_more_candidates(self):
         for product_header in ("商品", "商品标题"):
             answer = ("### 候选商品 1：自粘桌面理线夹 / adhesive cable clips\n历史页面参考 [S1]。\n"
@@ -173,6 +186,33 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             self.assertNotIn("product research", query)
             self.assertNotIn("marketplace trends", query)
         self.assertEqual("ready", result["status"])
+
+    def test_semantic_product_search_scopes_evidence_to_item_pages_without_replanning(self):
+        from jiejing_saas.ai_ceo_semantic_plan import SEMANTIC_POLICY
+        supplied = [
+            {"subject": PRODUCTS[0], "query": f"site:ebay.com {PRODUCTS[0]} -used"},
+            {"subject": PRODUCTS[1], "query": f'"{PRODUCTS[1]}" price USD'},
+        ]
+        plan = {"planner_policy": SEMANTIC_POLICY, "status": "ready", "intent": "research", "search": "web_search",
+                "required_tools": ["web_search"], "research_queries": supplied,
+                "query": supplied[0]["query"], "research_delivery": "candidate_selection"}
+
+        class ItemPageSearch(FakeSearch):
+            def probe(self, config):
+                response = super().probe(config)
+                if "site:ebay.com/itm/" not in config.query:
+                    response["results"] = [{"title": "eBay category", "url": "https://www.ebay.com/b/", "snippet": "Browse products"}]
+                return response
+
+        unchanged = json.dumps(plan, sort_keys=True)
+        with patch.object(chat, "PublicSearchProbeAdapter", ItemPageSearch):
+            result = chat._run_default_web_context_search(route="ebay_workflow", message="compare the two products", turn_plan=plan)
+        self.assertEqual("ready", result["status"])
+        self.assertEqual(2, result["product_research_evidence"]["item_source_count"])
+        self.assertEqual(2, len(FakeSearch.calls))
+        self.assertEqual({f"site:ebay.com/itm/ {PRODUCTS[0]} -used", f'site:ebay.com/itm/ "{PRODUCTS[1]}" price USD'},
+                         {call.query for call in FakeSearch.calls})
+        self.assertEqual(unchanged, json.dumps(plan, sort_keys=True))
 
     def test_no_listing_boundary_is_not_a_listing_creation_request(self):
         self.assertFalse(chat._looks_like_explicit_listing_intake(FOLLOWUP))
