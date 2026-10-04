@@ -220,7 +220,10 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
     def test_media_copy_reuse_preserves_real_source_and_confirmation_guards(self):
         self.run_generated_media_copy_browser_loop(simulation_only=False)
 
-    def run_generated_media_copy_browser_loop(self, *, simulation_only):
+    def test_copy_survives_conflict_metadata_normalization_after_images_and_cold_reload(self):
+        self.run_generated_media_copy_browser_loop(simulation_only=False, with_conflicts=True)
+
+    def run_generated_media_copy_browser_loop(self, *, simulation_only, with_conflicts=False):
         """The full app crosses real fact/checkpoint HTTP after a real generation handler."""
         node = shutil.which("node")
         self.assertIsNotNone(node, "Node is required for the real media-to-publish browser loop")
@@ -232,6 +235,9 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             "merchant_confirmed_facts": {"product_name": "Foldable Tablet Stand",
                 "material": "Aluminum and silicone", "condition": "NEW", "style": "Foldable",
                 "source_url": "https://supplier.example.test/tablet-stand"}}
+        if with_conflicts:
+            packet["fact_conflicts"] = [{"field": "product_dimensions_cm", "values": ["11.5 x 11.5", "20 x 20 x 0.5"],
+                "reason": "Supplier dimension tables refer to an unverified size or package.", "requires_merchant_confirmation": True}]
         fact_path = f"/stores/{self.store_id}/product-facts"
         status, anchor = self.request(fact_path, method="POST", body={
             "listing_project_identity": identity, "merchant_product_fact_packet": packet})
@@ -269,6 +275,14 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         from jiejing_saas.repository import SaaSRepository
         profile = self.request("/me")[1]
         repository = SaaSRepository(self.root / "saas.sqlite", database_engine="sqlite", database_url="")
+        if with_conflicts:
+            # The original vision report retains provenance metadata, while a
+            # later merchant fact save uses the public normalized schema.
+            # Both records legitimately exist in the same project history.
+            original_packet = copy.deepcopy(facts["merchant_product_fact_packet"])
+            original_packet["fact_conflicts"][0].update(image_indexes=[1, 2], requires_merchant_confirmation=True)
+            repository.save_merchant_product_fact_report(task=facts["task"], packet=original_packet,
+                listing_project_identity=identity, _created_at="2020-01-01T00:00:00+00:00")
         pending_media = repository.create_media_asset_job(
             company_id=profile["identity"]["company_id"], store_id=self.store_id,
             task_id=report["task_id"], user_id=profile["identity"]["user_id"],

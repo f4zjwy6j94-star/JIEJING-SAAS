@@ -9654,7 +9654,9 @@ function saasMerchantProductFactOrigin(packet = {}, key = "") {
     return { state: "source_confirmed", label: "来源资料", tone: "green" };
   }
   if (saasMerchantProductFactValuePresent(key, (packet.derived_listing_suggestions || {})[key])) {
-    if (packet.source === "backend_product_vision_extraction" || Boolean(packet.vision_contract_version)) {
+    const evidenceSource = packet.field_evidence?.[key]?.source_type || "";
+    if (evidenceSource === "ai_extracted_from_merchant_image" ||
+        (!evidenceSource && (packet.source === "backend_product_vision_extraction" || Boolean(packet.vision_contract_version)))) {
       return { state: "vision_suggested", label: "图片识别 · 待确认", tone: "amber" };
     }
     return { state: "ai_suggested", label: "AI 建议 · 待确认", tone: "amber" };
@@ -11094,6 +11096,16 @@ async function navigateSaasListingWizard(direction) {
 function saasListingMediaCopyFactSignature(packet = {}, { includeMedia = false } = {}) {
   const omitMedia = (facts = {}) => Object.fromEntries(Object.entries(facts)
     .filter(([key]) => includeMedia || !["image_urls", "image_rights_confirmed"].includes(key)));
+  // Vision history carries image indexes and review markers that the fact
+  // save API normalizes away. They are provenance, not changed buyer-copy
+  // facts. Compare the complete conflict meaning as a set, without modifying
+  // the stored evidence or dropping an actual field/value/reason change.
+  const conflictMeanings = (packet.fact_conflicts || []).map((item) => ({
+    field: item?.field || "", values: item?.values || [], reason: item?.reason || "",
+    requires_merchant_confirmation: item?.requires_merchant_confirmation !== false,
+  }));
+  const conflicts = [...new Map(conflictMeanings.map(item => [JSON.stringify(saasCanonicalJsonValue(item)), item])).entries()]
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([, item]) => item);
   // Restored snapshots include empty source-record defaults; the fact API
   // omits those and adds response-only safety metadata. Compare both through
   // the same source schema, retaining URL, rights, asset identity and hash.
@@ -11105,7 +11117,7 @@ function saasListingMediaCopyFactSignature(packet = {}, { includeMedia = false }
     source_confirmed_facts: omitMedia(packet.source_confirmed_facts),
     merchant_confirmed_facts: omitMedia(packet.merchant_confirmed_facts),
     unknown_facts: [...(packet.unknown_facts || [])].filter(key => includeMedia || !["image_urls", "image_rights_confirmed"].includes(key)).sort(),
-    fact_conflicts: packet.fact_conflicts || [],
+    fact_conflicts: conflicts,
     ...(includeMedia ? {
       source_mode: packet.source_mode || "", source_records: sourceRecords,
       field_evidence: packet.field_evidence || {}, vision_contract_version: packet.vision_contract_version || "",

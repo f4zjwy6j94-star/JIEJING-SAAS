@@ -19,6 +19,9 @@ class ModelFixture:
 
     def generate_text(self, **kwargs):
         self.prompts.append(kwargs)
+        if "商品字段语义复核器" in kwargs.get("system_prompt", ""):
+            proposals = json.loads(kwargs["user_prompt"])["candidate_proposals"]
+            return {"text": json.dumps({"accepted_fields": [item["field"] for item in proposals]}), "finish_reason": "stop"}
         return {"text": json.dumps(self.decision, ensure_ascii=False), "finish_reason": "stop"}
 
 
@@ -54,6 +57,48 @@ def decision(**changes):
 
 
 class SemanticDispatchTests(unittest.TestCase):
+    def test_supplier_quote_roles_are_reviewed_before_becoming_product_suggestions(self):
+        message = "供应商截图：PVC，采购价1.2元，1件起批；表格120g未说明净重或包重。库存和包装未知。"
+        proposals = [
+            {"field": "material", "value": "PVC", "source_quote": "PVC"},
+            {"field": "unit_cost", "value": "1.2", "source_quote": "采购价1.2元"},
+            {"field": "selling_price", "value": "1.2", "source_quote": "采购价1.2元"},
+            {"field": "quantity", "value": "1", "source_quote": "1件起批"},
+            {"field": "package_weight_g", "value": "120", "source_quote": "表格120g"},
+        ]
+        model = SequenceModelFixture([
+            decision(read_images=False, product_fact_proposals=proposals),
+            {"accepted_fields": ["material", "unit_cost"]},
+        ])
+        plan = self.plan(model=model, message=message, assets=False)
+        self.assertEqual(proposals[:2], plan["product_fact_proposals"])
+        self.assertEqual("new", plan["project_action"])
+        self.assertFalse(plan["real_platform_writes_enabled"])
+        self.assertIn(message, model.prompts[-1]["user_prompt"])
+
+    def test_fact_review_is_subset_only_and_fails_closed_without_retry(self):
+        proposal = {"field": "material", "value": "PVC", "source_quote": "材质PVC"}
+        for review in ({"accepted_fields": ["material", "quantity"]}, {"accepted_fields": ["material", "material"]},
+                       {"accepted_fields": True}, {"accepted_fields": [None]},
+                       {"accepted_fields": [], "project_action": "new"}, {"accepted_fields": [] , "value": "new"}):
+            model = SequenceModelFixture([decision(read_images=False, product_fact_proposals=[proposal]), review])
+            with self.subTest(review=review), self.assertRaisesRegex(SemanticPlanError, "^semantic_fact_review_invalid_output$"):
+                self.plan(model=model, message="材质PVC", assets=False)
+            self.assertEqual(2, len(model.prompts))
+        model = SequenceModelFixture([decision(read_images=False, product_fact_proposals=[proposal]), TimeoutError("untrusted provider detail")])
+        with self.assertRaisesRegex(SemanticPlanError, "^semantic_fact_review_model_failed$"):
+            self.plan(model=model, message="材质PVC", assets=False)
+        self.assertEqual(2, len(model.prompts))
+
+    def test_fact_review_can_reject_all_without_replacing_user_scope(self):
+        proposals = [{"field": "quantity", "value": "3", "source_quote": "每包3个"}]
+        model = SequenceModelFixture([decision(read_images=False, product_fact_proposals=proposals), {"accepted_fields": []}])
+        plan = self.plan(model=model, message="每包3个，库存未知。", assets=False)
+        self.assertEqual([], plan["product_fact_proposals"])
+        self.assertEqual(["quantity"], plan["product_fact_review"]["rejected_fields"])
+        self.assertEqual("new", plan["project_action"])
+        self.assertFalse(plan["real_platform_writes_enabled"])
+
     def test_candidate_report_scope_cannot_create_product_and_gets_one_narrow_repair(self):
         invalid = decision(intent="research", project_action="new", product_name="理线夹与排水口滤网比较",
             read_images=False, save_artifact=True, candidate_count=2, listing_deferred=True,

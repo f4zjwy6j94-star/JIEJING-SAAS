@@ -721,6 +721,29 @@ test("vision-extracted fields are labelled as image recognition and confirmed on
   });
 });
 
+test("mixed provenance labels each unconfirmed suggestion by its own evidence", async () => {
+  await withProductFactPage(async (page) => {
+    await page.evaluate(() => {
+      const packet = state.saasListingComposerDraft.merchant_product_fact_packet;
+      packet.source = "backend_product_vision_extraction";
+      packet.vision_contract_version = "jiejing_ai_ceo_product_vision_intake_v1";
+      packet.field_evidence = {
+        material: { source_type: "merchant_message_model_proposal" },
+        package_weight_g: { source_type: "ai_extracted_from_merchant_image" },
+      };
+      document.querySelector("#product-fact-test-root").innerHTML =
+        renderSaasMerchantProductFactsModule(state.saasListingComposerDraft);
+    });
+    assert.equal(await page.locator('[data-product-fact-key="material"] [data-product-fact-origin]').textContent(), "AI 建议 · 待确认");
+    assert.equal(await page.locator('[data-product-fact-key="package_weight_g"] [data-product-fact-origin]').textContent(), "图片识别 · 待确认");
+    const collected = await page.evaluate(() => collectSaasMerchantProductFacts());
+    assert.equal(collected.merchantConfirmed.material, undefined);
+    assert.equal(collected.merchantConfirmed.package_weight_g, undefined);
+    assert.ok(collected.unknownFacts.includes("material"));
+    assert.ok(collected.unknownFacts.includes("package_weight_g"));
+  });
+});
+
 test("image-only vision intake stays neutral until the merchant confirms product ownership", async () => {
   await withProductFactPage(async (page) => {
     await page.evaluate(() => {

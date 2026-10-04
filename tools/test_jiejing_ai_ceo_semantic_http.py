@@ -38,7 +38,14 @@ class Model:
     endpoint = ""
     def generate_text(self, **kwargs):
         prompt = str(kwargs.get("user_prompt") or "")
-        if "候选报告范围纠错器" in str(kwargs.get("system_prompt") or ""):
+        if "商品字段语义复核器" in str(kwargs.get("system_prompt") or ""):
+            data = json.loads(prompt)
+            if "复核断线" in data["merchant_message"]:
+                raise TimeoutError("unit fact review timeout")
+            accepted = (["material", "unit_cost"] if "供应商字段分离" in data["merchant_message"]
+                else [item["field"] for item in data["candidate_proposals"]])
+            text = json.dumps({"accepted_fields": accepted})
+        elif "候选报告范围纠错器" in str(kwargs.get("system_prompt") or ""):
             text = json.dumps({"project_action": "none", "question": ""})
         elif "商品检索词补全器" in str(kwargs.get("system_prompt") or ""):
             data = json.loads(prompt)
@@ -66,6 +73,14 @@ class Model:
                         {"field": "supplier_item_number", "value": "SPOON15", "source_quote": "SPOON15"},
                         {"field": "product_dimensions_cm", "value": "18×4×2", "source_quote": "18×4×2厘米"},
                         {"field": "net_weight_g", "value": "42", "source_quote": "净重42克"},
+                    ]
+                if "供应商字段分离" in message:
+                    proposals = [
+                        {"field": "material", "value": "PVC", "source_quote": "PVC"},
+                        {"field": "unit_cost", "value": "1.2", "source_quote": "采购价1.2元"},
+                        {"field": "selling_price", "value": "1.2", "source_quote": "采购价1.2元"},
+                        {"field": "quantity", "value": "1", "source_quote": "1件起批"},
+                        {"field": "package_weight_g", "value": "120", "source_quote": "重量120g"},
                     ]
                 if "伪造引用" in message:
                     proposals = [{"field": "material", "value": "铝", "source_quote": "本条消息没有这段来源"}]
@@ -365,6 +380,33 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         self.assertEqual([], dispatch["consumed_source_asset_ids"])
         self.assertEqual(packet, payload["ai_ceo_market_report"]["report"]["merchant_product_fact_packet"])
         self.assertEqual(before, [item for item in after if item["report_id"] in {old["report_id"] for old in before}])
+
+    def test_supplier_role_review_filters_before_real_http_fact_persistence(self):
+        message = "供应商字段分离：新建PVC过滤盖，采购价1.2元，1件起批，重量120g口径不明；售价、库存和包重未知。"
+        before = self.reports()
+        status, payload = self.call(f"/stores/{self.store}/merchant-ceo/chat", self.envelope(message))
+        self.assertEqual(201, status, payload)
+        packet = payload["product_vision_fact_packet"]
+        self.assertEqual("1.2", packet["derived_listing_suggestions"]["unit_cost"])
+        self.assertEqual("PVC", packet["derived_listing_suggestions"]["material"])
+        for key in ("selling_price", "quantity", "package_weight_g"):
+            self.assertNotIn(key, packet["derived_listing_suggestions"])
+            self.assertIn(key, packet["unknown_facts"])
+        self.assertFalse(packet["merchant_confirmed_facts"])
+        self.assertFalse(packet["source_confirmed_facts"])
+        persisted = next(row for row in self.reports() if row["report_id"] == payload["product_vision_report"]["report_id"])
+        self.assertEqual(packet, persisted["report"]["merchant_product_fact_packet"])
+        self.assertEqual(before, [row for row in self.reports() if row["report_id"] in {old["report_id"] for old in before}])
+
+    def test_supplier_role_review_failure_preserves_existing_product_without_artifacts(self):
+        before = self.reports()
+        body = self.envelope("供应商字段分离、复核断线：继续那把量勺。PVC，采购价1.2元，1件起批，重量120g。")
+        status, payload = self.call(f"/stores/{self.store}/merchant-ceo/chat", body)
+        self.assertEqual(202, status)
+        self.assertEqual("semantic_plan_blocked", payload["ai_ceo_chat"]["status"])
+        self.assertIn("semantic_fact_review_model_failed", payload["ai_ceo_chat"]["blocked_by"])
+        self.assertFalse(payload.get("product_vision_report"))
+        self.assertEqual(before, self.reports())
 
     def test_new_image_and_text_facts_preserve_both_sources_without_confirmation(self):
         body = self.envelope("这次单独整理银色木柄15mL咖啡量勺：材质304不锈钢和实木，货号SPOON15，尺寸18×4×2厘米，净重42克。结合本轮图片核对。")

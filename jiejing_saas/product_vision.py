@@ -16,6 +16,7 @@ FAL_VISION_ENDPOINT = "https://fal.run/openrouter/router/vision"
 DEFAULT_FAL_VISION_MODEL = "google/gemini-2.5-flash"
 MAX_AI_CEO_SOURCE_IMAGES = 8
 PRODUCT_VISION_CONTRACT_VERSION = "jiejing_ai_ceo_product_vision_intake_v1"
+_ROLE_QUALIFIED_FACTS = {"net_weight_g": "net_weight", "product_origin": "manufacturing_origin"}
 _SOURCE_FACT_KEYS = {
     "product_name",
     "source_url",
@@ -178,9 +179,14 @@ def build_product_vision_fact_packet(
     candidates = {**facts_body, "product_name": product_name_record}
     extracted_suggestions: dict[str, Any] = {}
     evidence: dict[str, Any] = {}
+    unresolved_roles: list[str] = []
     for key, record in candidates.items():
         safe_key = str(key or "").strip()
         if safe_key not in _SOURCE_FACT_KEYS or safe_key in conflict_keys:
+            continue
+        if safe_key in _ROLE_QUALIFIED_FACTS and (
+                not isinstance(record, dict) or record.get("evidence_role") != _ROLE_QUALIFIED_FACTS[safe_key]):
+            unresolved_roles.append(safe_key)
             continue
         value, confidence, image_indexes = _fact_record(record)
         if not value or confidence < 0.82:
@@ -191,6 +197,7 @@ def build_product_vision_fact_packet(
             "image_indexes": image_indexes,
             "confidence": confidence,
             "merchant_confirmation_received": False,
+            **({"evidence_role": record["evidence_role"]} if safe_key in _ROLE_QUALIFIED_FACTS else {}),
         }
     source_url = _first_http_url(merchant_message)
     if source_url:
@@ -205,11 +212,9 @@ def build_product_vision_fact_packet(
     # provider returns legacy ``listing_copy`` output, keep it outside the
     # persisted product-fact packet so it cannot flow into a publish form.
     listing_copy: dict[str, Any] = {}
-    derived = {
-        **extracted_suggestions,
-        "condition": "NEW",
-        "currency": "USD",
-    }
+    # Defaults are not evidence and must not manufacture conflicts with an
+    # explicit supplier currency or assert the product's condition.
+    derived = dict(extracted_suggestions)
     source_records: list[dict[str, Any]] = []
     for index, asset in enumerate(source_assets[:MAX_AI_CEO_SOURCE_IMAGES], start=1):
         source_records.append(
@@ -244,7 +249,7 @@ def build_product_vision_fact_packet(
         if value not in (None, "", [], {})
     ]
     source_confirmation_unknown = ["source_url" if source_url else "merchant_owned_product_confirmed"]
-    unknown = list(dict.fromkeys([*_CRITICAL_REQUIRED_KEYS, *vision_suggestion_keys, *source_confirmation_unknown]))
+    unknown = list(dict.fromkeys([*_CRITICAL_REQUIRED_KEYS, *vision_suggestion_keys, *unresolved_roles, *source_confirmation_unknown]))
     blocked_by = [f"merchant_product_fact_missing:{key}" for key in _CRITICAL_REQUIRED_KEYS]
     blocked_by.append("merchant_product_source_unconfirmed")
     blocked_by.extend(f"merchant_product_fact_conflict:{key}" for key in sorted(conflict_keys) if key)
@@ -319,8 +324,8 @@ def _vision_prompt(*, merchant_message: str, image_count: int) -> str:
                 "facts": {
                     "material": {"value": "", "confidence": 0.0, "image_indexes": []},
                     "product_dimensions_cm": {"value": "L x W x H", "confidence": 0.0, "image_indexes": []},
-                    "net_weight_g": {"value": "", "confidence": 0.0, "image_indexes": []},
-                    "product_origin": {"value": "", "confidence": 0.0, "image_indexes": []},
+                    "net_weight_g": {"value": "", "confidence": 0.0, "image_indexes": [], "evidence_role": ""},
+                    "product_origin": {"value": "", "confidence": 0.0, "image_indexes": [], "evidence_role": ""},
                     "supplier_item_number": {"value": "", "confidence": 0.0, "image_indexes": []},
                     "supplier_brand": {"value": "", "confidence": 0.0, "image_indexes": []},
                     "craft": {"value": "", "confidence": 0.0, "image_indexes": []},
@@ -336,7 +341,10 @@ def _vision_prompt(*, merchant_message: str, image_count: int) -> str:
                 "Use only visible image evidence and merchant_message; do not use web knowledge.",
                 "If sources say resin and purple sand for material, put both in conflicts and omit the material fact.",
                 "A value labelled N.W. or net weight is net_weight_g only, never package_weight_g.",
+                "For net_weight_g classify evidence_role as net_weight, gross_weight, or unspecified_weight. A generic weight/重量 column is unspecified_weight even at high confidence; never infer net weight from it.",
                 "An origin such as Dehua, Fujian is product_origin only, never item_location or ship-from.",
+                "For product_origin classify evidence_role as manufacturing_origin, supplier_dispatch, supplier_address, or unknown. Only an explicit product manufacturing origin qualifies; 发货地 is supplier_dispatch, not origin.",
+                "Do not resolve ambiguous dimension/weight tables into a confirmed product or package size. Respect the full merchant message's conflicts, negation, and unknown fields, not just isolated numbers.",
                 "A supplier brand is supplier_brand only; it does not prove merchant brand authorization.",
                 "Do not claim image commercial rights, stock, price, cost, condition, ship-from, handling time, or package dimensions unless explicit.",
                 "Do not produce buyer-facing Listing title, selling points, description, compatibility, or device-fit claims; a separate validated Listing generator owns that step.",

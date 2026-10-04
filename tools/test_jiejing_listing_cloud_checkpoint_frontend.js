@@ -1304,7 +1304,8 @@ test("merchant editing a vision-origin Listing with matching validated backend f
 });
 
 for (const mode of ["matching", "media-added", "media-rights-revoked", "media-cleared", "changed-facts", "changed-spec",
-  "changed-source-facts", "changed-unknown", "changed-conflicts", "simulation-downgrade", "changed-copy",
+  "changed-source-facts", "changed-unknown", "changed-conflicts", "normalized-conflicts", "changed-conflict-values",
+  "changed-conflict-reason", "changed-conflict-review", "simulation-downgrade", "changed-copy",
   "other-company", "other-store", "other-project", "other-source", "other-candidate", "missing-generation",
   "fake-runtime", "fake-contract", "fake-source", "not-ready"]) {
   test(`unchanged generated vision copy survives a text checkpoint only with authenticated matching evidence: ${mode}`, async () => {
@@ -1314,6 +1315,10 @@ for (const mode of ["matching", "media-added", "media-rights-revoked", "media-cl
       source_confirmed_facts: {}, merchant_confirmed_facts: { product_name: "Foldable Tablet Stand", material: "Aluminum", condition: "NEW" },
       unknown_facts: ["sku"], fact_conflicts: [], simulation_only: true,
       buyer_copy_requires_validated_listing_generation: true };
+    if (mode === "normalized-conflicts" || mode.startsWith("changed-conflict-")) {
+      packet.fact_conflicts = [{ field: "product_dimensions_cm", values: ["11.5 x 11.5", "20 x 20"],
+        reason: "Supplier sources disagree", image_indexes: [1, 2], requires_merchant_confirmation: true }];
+    }
     const verifiedReport = structuredClone(baseReport);
     verifiedReport.report.merchant_product_fact_packet = structuredClone(packet);
     checkpoint = savedCheckpoint(originalFields);
@@ -1337,6 +1342,15 @@ for (const mode of ["matching", "media-added", "media-rights-revoked", "media-cl
         if (mode === "changed-source-facts") draft.merchant_product_fact_packet.source_confirmed_facts.material = "Steel";
         if (mode === "changed-unknown") draft.merchant_product_fact_packet.unknown_facts.push("net_weight_g");
         if (mode === "changed-conflicts") draft.merchant_product_fact_packet.fact_conflicts.push({ field: "material", value: "Steel" });
+        if (mode === "normalized-conflicts" || mode.startsWith("changed-conflict-")) {
+          const conflict = draft.merchant_product_fact_packet.fact_conflicts[0];
+          delete conflict.image_indexes;
+          delete conflict.requires_merchant_confirmation;
+          if (mode === "normalized-conflicts") draft.merchant_product_fact_packet.fact_conflicts.push(structuredClone(conflict));
+          if (mode === "changed-conflict-values") conflict.values = ["11.5 x 11.5", "25 x 25"];
+          if (mode === "changed-conflict-reason") conflict.reason = "Merchant reviewed a different specification";
+          if (mode === "changed-conflict-review") conflict.requires_merchant_confirmation = false;
+        }
         if (mode === "simulation-downgrade") draft.merchant_product_fact_packet.simulation_only = false;
         if (["media-added", "media-rights-revoked", "media-cleared"].includes(mode)) {
           draft.merchant_product_fact_packet.merchant_confirmed_facts.image_urls = mode === "media-cleared" ? "" : "https://media.example.test/current.jpg";
@@ -1360,7 +1374,7 @@ for (const mode of ["matching", "media-added", "media-rights-revoked", "media-cl
         if (mode === "missing-generation") state.saasReports = [];
       }, { packet, mode });
       const form = await mountPublishIntake(device.page);
-      const copyAllowed = ["matching", "media-added", "media-rights-revoked", "media-cleared"].includes(mode);
+      const copyAllowed = ["matching", "media-added", "media-rights-revoked", "media-cleared", "normalized-conflicts"].includes(mode);
       assert.equal(await form.locator('[name="title"]').inputValue(), copyAllowed ? originalFields.title : "",
         "a saved unchanged generated text must not disappear, but a checkpoint alone cannot grant validation");
       if (copyAllowed) assert.match(await form.locator('[name="description_html"]').inputValue(), /Original description/);

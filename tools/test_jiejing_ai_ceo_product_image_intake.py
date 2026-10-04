@@ -21,6 +21,27 @@ from jiejing_saas.product_vision import (  # noqa: E402
 def main() -> None:
     captured: dict[str, object] = {}
 
+    ambiguous_client = FalProductVisionClient(credential="test-only", transport=lambda **kwargs: {"output": json.dumps({
+        "product_name": {"value": "PVC drain cover", "confidence": 0.99, "image_indexes": [1]},
+        "facts": {
+            "net_weight_g": {"value": "120", "confidence": 0.99, "image_indexes": [1], "evidence_role": "unspecified_weight"},
+            "product_origin": {"value": "Jieyang", "confidence": 0.99, "image_indexes": [1], "evidence_role": "supplier_dispatch"},
+        }, "conflicts": []})})
+    ambiguous_packet = build_product_vision_fact_packet(
+        analysis=ambiguous_client.analyze(image_urls=["https://supplier.example.test/table.jpg"], merchant_message="重量120g，供应商广东揭阳发货，净重未知。"),
+        merchant_message="重量和发货地仅为供应商原表，口径未知。", source_assets=[{"asset_id": "supplier-table"}])
+    assert "net_weight_g" not in ambiguous_packet["derived_listing_suggestions"], "unqualified weight is not verified net weight"
+    assert "product_origin" not in ambiguous_packet["derived_listing_suggestions"], "supplier dispatch is not manufacturing origin"
+    assert {"net_weight_g", "product_origin"}.issubset(ambiguous_packet["unknown_facts"])
+    assert "condition" not in ambiguous_packet["derived_listing_suggestions"]
+    assert "currency" not in ambiguous_packet["derived_listing_suggestions"]
+    unqualified_packet = build_product_vision_fact_packet(analysis={"product_name": {"value": "Drain cover", "confidence": 0.99},
+        "facts": {"net_weight_g": {"value": "120", "confidence": 0.99},
+                  "product_origin": {"value": "Jieyang", "confidence": 0.99}}},
+        merchant_message="See supplier table", source_assets=[])
+    assert "net_weight_g" not in unqualified_packet["derived_listing_suggestions"]
+    assert "product_origin" not in unqualified_packet["derived_listing_suggestions"]
+
     def fake_transport(*, endpoint: str, authorization: str, payload: dict, timeout_seconds: int, proxy_url: str) -> dict:
         captured.update(
             endpoint=endpoint,
@@ -35,8 +56,8 @@ def main() -> None:
                     "product_name": {"value": "禅意佛手莲花倒流香炉", "confidence": 0.98, "image_indexes": [1, 2, 4]},
                     "facts": {
                         "product_dimensions_cm": {"value": "16.2 x 7.7 x 17.9", "confidence": 0.99, "image_indexes": [6]},
-                        "net_weight_g": {"value": "451", "confidence": 0.99, "image_indexes": [5]},
-                        "product_origin": {"value": "中国福建德化", "confidence": 0.96, "image_indexes": [6]},
+                        "net_weight_g": {"value": "451", "confidence": 0.99, "image_indexes": [5], "evidence_role": "net_weight"},
+                        "product_origin": {"value": "中国福建德化", "confidence": 0.96, "image_indexes": [6], "evidence_role": "manufacturing_origin"},
                         "supplier_item_number": {"value": "JC2023041300002", "confidence": 0.98, "image_indexes": [7]},
                     },
                     "conflicts": [
