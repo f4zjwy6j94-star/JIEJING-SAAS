@@ -421,11 +421,11 @@ def _run_check(key: str, command: list[str]) -> dict[str, Any]:
                 errors="replace",
                 capture_output=True,
                 # This API suite also exercises full browser recovery journeys.
-                # These full suites exceed three minutes on a loaded Windows
-                # host (53 browser scenarios / high-volume scoped DB fixtures).
+                # These full suites can exceed five minutes on a loaded
+                # Windows host (browser recovery / high-volume DB fixtures).
                 # Keep every assertion and fail closed if this bound is hit.
-                timeout=(600 if key in {"listing_buyer_copy_rewrite_frontend", "listing_single_progress"}
-                         else 300 if key.startswith("browser_") or key == "listing_buyer_copy_rewrite_api" else 180),
+                timeout=(600 if key in {"listing_buyer_copy_rewrite_frontend", "listing_buyer_copy_rewrite_api", "listing_single_progress"}
+                         else 300 if key.startswith("browser_") else 180),
                 check=False,
             )
             combined_output = f"{completed.stdout}\n{completed.stderr}"

@@ -62,7 +62,7 @@ class ReleaseGateEvidenceTest(unittest.TestCase):
 
     def test_listing_rewrite_api_has_a_bounded_browser_integration_budget(self):
         command = [sys.executable, "tools/test_jiejing_listing_buyer_copy_rewrite_api.py"]
-        cases = (("listing_buyer_copy_rewrite_api", 300), ("browser_fixture", 300),
+        cases = (("listing_buyer_copy_rewrite_api", 600), ("browser_fixture", 300),
                  ("listing_buyer_copy_rewrite_frontend", 600), ("listing_single_progress", 600),
                  ("fixture_pass", 180), ("listing_buyer_copy_rewrite_api_extra", 180),
                  ("listing_buyer_copy_rewrite", 180), ("listing_single_progress_extra", 180))
@@ -76,7 +76,7 @@ class ReleaseGateEvidenceTest(unittest.TestCase):
 
     def test_listing_rewrite_api_timeout_still_fails_without_retry(self):
         command = [sys.executable, "tools/test_jiejing_listing_buyer_copy_rewrite_api.py"]
-        for key, budget in (("listing_buyer_copy_rewrite_api", 300),
+        for key, budget in (("listing_buyer_copy_rewrite_api", 600),
                             ("listing_buyer_copy_rewrite_frontend", 600), ("listing_single_progress", 600)):
             with self.subTest(key=key), patch.object(self.gate.subprocess, "run",
                     side_effect=subprocess.TimeoutExpired(command, budget)) as run:

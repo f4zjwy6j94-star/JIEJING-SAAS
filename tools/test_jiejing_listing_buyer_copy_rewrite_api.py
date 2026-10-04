@@ -13,8 +13,10 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -95,6 +97,67 @@ def serve_fixture(directory, port):
         output_root=root, host="127.0.0.1", port=int(port)).serve_forever()
 
 
+def cleanup_fixture_directory(directory, *, timeout=2.0):
+    """Release only this test-owned temporary directory after its server exits."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            directory.cleanup()
+            return
+        except PermissionError as exc:
+            # On Windows the exited server can release SQLite's file handle a
+            # few milliseconds after wait(). Never hide persistent locks or
+            # any other filesystem failure, and never retry a business call.
+            remaining = deadline - time.monotonic()
+            if getattr(exc, "winerror", None) != 32 or remaining <= 0:
+                raise
+            time.sleep(min(0.02, remaining))
+
+
+class FixtureDirectoryCleanupTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows denies unlink while SQLite owns the file")
+    def test_cleanup_waits_for_a_real_sqlite_handle_to_close(self):
+        directory = tempfile.TemporaryDirectory(prefix="jiejing-rewrite-cleanup-")
+        root = Path(directory.name)
+        connection = sqlite3.connect(root / "saas.sqlite", check_same_thread=False)
+        release = threading.Timer(0.15, connection.close)
+        release.start()
+        try:
+            cleanup_fixture_directory(directory)
+            self.assertFalse(root.exists(), "cleanup must actually remove the allocated fixture")
+        finally:
+            release.join(timeout=2)
+            connection.close()
+            directory.cleanup()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows denies unlink while SQLite owns the file")
+    def test_persistent_sqlite_lock_still_fails_within_the_bound(self):
+        directory = tempfile.TemporaryDirectory(prefix="jiejing-rewrite-cleanup-")
+        root = Path(directory.name)
+        connection = sqlite3.connect(root / "saas.sqlite")
+        started = time.monotonic()
+        try:
+            with self.assertRaises(PermissionError) as failure:
+                cleanup_fixture_directory(directory, timeout=0.03)
+            self.assertEqual(failure.exception.winerror, 32)
+            self.assertLess(time.monotonic() - started, 1)
+            self.assertTrue(root.exists(), "a locked fixture must not be reported as cleaned")
+        finally:
+            connection.close()
+            directory.cleanup()
+
+    def test_other_permission_errors_are_not_retried_or_hidden(self):
+        with tempfile.TemporaryDirectory(prefix="jiejing-rewrite-cleanup-") as root:
+            directory = mock.Mock()
+            directory.name = root
+            failure = PermissionError(13, "local fixture access denied")
+            directory.cleanup.side_effect = failure
+            with self.assertRaises(PermissionError) as raised:
+                cleanup_fixture_directory(directory)
+            self.assertIs(raised.exception, failure)
+            directory.cleanup.assert_called_once_with()
+
+
 class BuyerCopyRewriteHTTPTests(unittest.TestCase):
     @classmethod
     def start_fixture(cls):
@@ -127,7 +190,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
     def stop_fixture(cls):
         cls.process.terminate()
         cls.process.wait(timeout=10)
-        cls.directory.cleanup()
+        cleanup_fixture_directory(cls.directory)
 
     @classmethod
     def request(cls, path, *, method="GET", body=None, token=None):
