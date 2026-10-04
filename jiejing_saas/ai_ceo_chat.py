@@ -511,6 +511,7 @@ def run_ai_ceo_chat(
     active_listing_context: dict[str, Any] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
+    on_answer_diagnostic: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Call the merchant model for an AI CEO chat turn."""
     turn_started_at = time.monotonic()
@@ -1073,6 +1074,15 @@ def run_ai_ceo_chat(
         source_records=source_records,
         context=prompt_context,
     )
+    def emit_private_diagnostic(stage: str, text: str, quality: dict[str, Any]) -> None:
+        if on_answer_diagnostic is not None:
+            try:
+                on_answer_diagnostic({"stage": stage, "answer": text,
+                    "accepted": quality.get("accepted"), "blocked_by": quality.get("blocked_by") or [],
+                    "semantic_plan": prompt_context.get("semantic_plan") or {}, "source_records": source_records})
+            except Exception:
+                pass  # Temporary diagnosis must never alter the merchant result.
+    emit_private_diagnostic("initial", answer, answer_quality)
     repair_retry_count = 0
     repair_candidate_answer = ""
     if (
@@ -1135,6 +1145,7 @@ def run_ai_ceo_chat(
                 source_records=source_records,
                 context=prompt_context,
             )
+            emit_private_diagnostic("repair", repair_answer, repair_quality)
             if repair_answer and repair_quality.get("accepted"):
                 result = repair_result
                 answer = repair_answer

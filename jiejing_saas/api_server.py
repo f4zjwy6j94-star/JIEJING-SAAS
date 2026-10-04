@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from jiejing_runtime.execution import ExecutionRequest, ExecutionService
 from jiejing_runtime.execution_preflight import finite_publish_number
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
+from .private_answer_capture import create_private_answer_capture
 
 
 from .account_health import (
@@ -9052,6 +9053,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                               if key not in {"model_client", "secret_value"}},
                             on_stage=emit_chat_stage if stream_requested else None,
                             on_text_delta=emit_text_delta if stream_requested else None,
+                            on_answer_diagnostic=create_private_answer_capture(
+                                root=self.settings.db_path.parent / ".private-ai-ceo-answer-capture",
+                                company_id=identity["company_id"], user_id=identity["user_id"], store_id=store_id,
+                                project_key=str((submitted_identity or {}).get("key") or ""),
+                                message=message, attempt_id=attempt["task_id"],
+                            ),
                         ))
                 if product_vision_fact_packet:
                     chat = {

@@ -191,6 +191,7 @@ FILES=(
   "jiejing_saas/ai_ceo_chat.py"
   "jiejing_saas/ai_ceo_project_binding.py"
   "jiejing_saas/ai_ceo_semantic_plan.py"
+  "jiejing_saas/private_answer_capture.py"
   "jiejing_saas/market_quote_evidence.py"
   "jiejing_saas/timely_evidence.py"
   "jiejing_saas/listing_draft_generation.py"
@@ -442,6 +443,7 @@ FILES=(
   "tools/test_jiejing_current_project_archive_ui.py"
   "tools/test_jiejing_ai_ceo_phase0_red_contracts.py"
   "tools/test_jiejing_ai_ceo_private_empty_answer.py"
+  "tools/test_jiejing_ai_ceo_private_answer_capture.py"
   "tools/test_jiejing_ai_ceo_product_search_evidence.py"
   "tools/test_jiejing_product_feedback_closure.py"
   "tools/test_jiejing_platform_operations_overview.py"
@@ -721,6 +723,7 @@ python3 -m py_compile \
   jiejing_saas/ai_ceo_chat.py \
   jiejing_saas/ai_ceo_project_binding.py \
   jiejing_saas/ai_ceo_semantic_plan.py \
+  jiejing_saas/private_answer_capture.py \
   jiejing_saas/market_quote_evidence.py \
   jiejing_saas/timely_evidence.py \
   jiejing_saas/commercial_launch_gate.py \
@@ -864,6 +867,7 @@ python3 -m py_compile \
   tools/test_jiejing_ai_ceo_routing_supplier_http_red.py \
   tools/test_jiejing_ai_ceo_phase0_red_contracts.py \
   tools/test_jiejing_ai_ceo_private_empty_answer.py \
+  tools/test_jiejing_ai_ceo_private_answer_capture.py \
   tools/test_jiejing_ai_ceo_product_search_evidence.py \
   tools/test_jiejing_product_feedback_closure.py \
   tools/test_jiejing_platform_operations_overview.py \

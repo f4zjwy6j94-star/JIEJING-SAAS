@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import base64
+import hashlib
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 import uuid
+from datetime import datetime, timedelta, timezone
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -137,6 +139,9 @@ class Model:
                         "排水口硅胶滤网 silicone drain hair catcher", "排水口硅胶滤网")
                 if "交换引用" in prompt:
                     text = text.replace("[S1]", "[TEMP]").replace("[S2]", "[S1]").replace("[TEMP]", "[S2]")
+            if "诊断采样" in prompt:
+                marker = "DIAGNOSTIC_REPAIR" if "上一版回复没有通过" in str(kwargs.get("system_prompt")) else "DIAGNOSTIC_INITIAL"
+                text += "\n当前在售。 " + marker + "。"
         return {"text": text, "model": self.model, "model_mode": "live_unit",
             "finish_reason": "stop", "_usage": {"input_tokens": 30, "output_tokens": 40, "total_tokens": 70}}
 
@@ -621,6 +626,53 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         chats = [item for item in tasks["tasks"] if item["task_type"] == "merchant_ceo_chat"]
         self.assertEqual(1, len(chats))
         self.assertEqual(3, chats[0]["output"]["model_request_count"])
+
+    def test_scoped_private_diagnostic_captures_both_attempts_without_public_leak_or_report_write(self):
+        before = self.reports()
+        message = "无货源研究候选，检索合同纠错，诊断采样：仅研究两种商品，不创建项目。"
+        body = self.envelope(message)
+        path = f"/stores/{self.store}/merchant-ceo/chat"
+        root = Path(self.temp.name) / ".private-ai-ceo-answer-capture"
+        root.mkdir(mode=0o700, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        control = {
+            "capture_id": "capture_http_" + uuid.uuid4().hex,
+            "enabled": True, "company_id": self.old["task"]["company_id"],
+            "user_id": self.old["task"]["user_id"], "store_id": self.store,
+            "project_key": self.old_identity["key"],
+            "message_sha256": hashlib.sha256(message.encode()).hexdigest(),
+            "approved_at": now.isoformat(), "expires_at": (now + timedelta(minutes=5)).isoformat(),
+        }
+        control_path = root / "control.json"
+        control_path.write_text(json.dumps(control), encoding="utf-8")
+        control_path.chmod(0o600)
+        try:
+            status, result = self.call(path, body)
+            self.assertEqual(202, status)
+            self.assertEqual("model_answer_rejected", result["ai_ceo_chat"]["status"])
+            self.assertEqual(before, self.reports())
+            sample_path = root / (control["capture_id"] + ".answer.json")
+            self.assertTrue(sample_path.is_file(), "consented diagnostic missing from the actual HTTP chat path")
+            sample = json.loads(sample_path.read_text(encoding="utf-8"))
+            self.assertEqual(["initial", "repair"], [x["stage"] for x in sample["attempts"]])
+            self.assertIn("DIAGNOSTIC_INITIAL", sample["attempts"][0]["answer"])
+            self.assertIn("DIAGNOSTIC_REPAIR", sample["attempts"][1]["answer"])
+            self.assertTrue(all("research_unverified_current_availability" in x["blocked_by"] for x in sample["attempts"]))
+            self.assertEqual(2, len(sample["source_records"]))
+            self.assertEqual("none", sample["semantic_plan"]["project_action"])
+            self.assertFalse(control_path.exists())
+            for route in ("/tasks", "/reports", "/ai-ceo/chat-history"):
+                _, public = self.call(route)
+                self.assertNotIn("DIAGNOSTIC_INITIAL", json.dumps(public))
+                self.assertNotIn("DIAGNOSTIC_REPAIR", json.dumps(public))
+            previous_bytes = sample_path.read_bytes()
+            self.call(path, body)  # Idempotent replay cannot capture again.
+            self.call(path, self.envelope(message))  # New request also lacks consent.
+            self.assertEqual(previous_bytes, sample_path.read_bytes())
+            self.assertEqual(before, self.reports())
+        finally:
+            if control_path.exists():
+                control_path.unlink()
 
     def test_query_completion_cannot_create_a_project_or_change_reports(self):
         before = self.reports()
