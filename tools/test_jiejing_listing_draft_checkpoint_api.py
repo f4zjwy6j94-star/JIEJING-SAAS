@@ -822,6 +822,43 @@ class CheckpointHTTPTests(unittest.TestCase):
         stale = {**self.body, "expected_revision": 1, "mutation_id": str(uuid.uuid4())}
         self.assertEqual(self.request(self.path, method="POST", body=stale)[1]["error_code"], "listing_draft_base_conflict")
 
+    def test_historical_generation_is_exact_scope_and_excludes_unadopted_or_invalid_reports(self):
+        def generation(suffix, *, identity=None, valid=True, pending_rewrite=False):
+            rid = self.report_fixture(suffix, "listing.package", "2020-01-01T00:00:00+00:00", identity=identity)
+            with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
+                body = json.loads(conn.execute("select report_json from reports where report_id=?", (rid,)).fetchone()[0])
+                body.update(contract_version="listing_ai_draft_generation_v1", listing_handoff={
+                    "source_mode": "project_scoped_live_model", "ready_for_listing_draft": True,
+                    "listing_fields": {}})
+                if not valid:
+                    body["listing_handoff"] = []
+                if pending_rewrite:
+                    body["listing_handoff"]["listing_fields"]["buyer_copy_rewrite"] = {
+                        "contract_version": "listing_buyer_copy_rewrite_v1", "expected_base_report_id": self.base_report_id,
+                        "expected_checkpoint_revision": 0}
+                conn.execute("update reports set runtime_run_id=?,report_json=? where report_id=?",
+                    ("listing_draft_generation", json.dumps(body), rid))
+            return rid
+
+        for key in ("key", "source_report_id", "candidate_id"):
+            generation("foreign_" + key, identity={**self.identity, key: "foreign"})
+        generation("invalid", valid=False)
+        generation("unadopted_rewrite", pending_rewrite=True)
+        status, empty = self.request(self.path + self.query)
+        self.assertEqual(status, 200)
+        self.assertIsNone(empty.get("validated_generation_report"))
+        rid = generation("valid")
+        before = self.request("/reports")[1]
+        status, read = self.request(self.path + self.query)
+        self.assertEqual(status, 200)
+        self.assertEqual(read["current_base_report_id"], self.base_report_id)
+        self.assertEqual(read["validated_generation_report"]["report_id"], rid)
+        self.assertEqual(read["validated_generation_report"]["company_id"], self.company_id)
+        self.assertEqual(read["validated_generation_report"]["store_id"], self.store_id)
+        self.assertEqual(read["validated_generation_report"]["report"]["listing_project_identity"], self.identity)
+        self.assertEqual(self.request("/reports")[1], before)
+        self.assertFalse(read["model_called"] or read["usage_consumed"] or read["real_platform_writes_enabled"])
+
     def test_market_fallback_requires_each_explicit_anchor(self):
         with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
             conn.execute("update reports set status = 'failed' where report_id = ?", (self.base_report_id,))

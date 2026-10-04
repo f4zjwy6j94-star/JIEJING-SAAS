@@ -223,7 +223,10 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
     def test_copy_survives_conflict_metadata_normalization_after_images_and_cold_reload(self):
         self.run_generated_media_copy_browser_loop(simulation_only=False, with_conflicts=True)
 
-    def run_generated_media_copy_browser_loop(self, *, simulation_only, with_conflicts=False):
+    def test_old_product_copy_survives_generation_falling_out_of_recent_reports(self):
+        self.run_generated_media_copy_browser_loop(simulation_only=True, old_generation=True)
+
+    def run_generated_media_copy_browser_loop(self, *, simulation_only, with_conflicts=False, old_generation=False):
         """The full app crosses real fact/checkpoint HTTP after a real generation handler."""
         node = shutil.which("node")
         self.assertIsNotNone(node, "Node is required for the real media-to-publish browser loop")
@@ -275,6 +278,26 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         from jiejing_saas.repository import SaaSRepository
         profile = self.request("/me")[1]
         repository = SaaSRepository(self.root / "saas.sqlite", database_engine="sqlite", database_url="")
+        if old_generation:
+            # Real saved generation, then enough unrelated product history to
+            # evict it from the UI's recent-24 feed, followed by an unchanged
+            # fact successor and an explicitly adopted text checkpoint.
+            for index in range(27):
+                repository.save_merchant_product_fact_report(task=facts["task"], packet=facts["merchant_product_fact_packet"],
+                    listing_project_identity={**identity, "key": f"unrelated-history-{index}"},
+                    _created_at=f"2027-01-01T00:00:{index:02d}+00:00")
+            successor = repository.save_merchant_product_fact_report(task=facts["task"],
+                packet=facts["merchant_product_fact_packet"], listing_project_identity=identity,
+                _created_at="2027-01-02T00:00:00+00:00")
+            status, _ = self.request(checkpoint_path, method="POST", body={
+                "contract_version": "listing_merchant_edit_v1", "listing_project_identity": identity,
+                "base_report_id": successor["report_id"], "expected_revision": 1, "mutation_id": str(uuid.uuid4()),
+                "fields": fields, "merchant_edited_fields": []})
+            self.assertEqual(status, 201)
+            recent = self.request("/reports?limit=24")[1]["reports"]
+            gc.collect()
+            self.assertNotIn(report["report_id"], [item["report_id"] for item in recent])
+            self.assertIn(successor["report_id"], [item["report_id"] for item in recent])
         if with_conflicts:
             # The original vision report retains provenance metadata, while a
             # later merchant fact save uses the public normalized schema.

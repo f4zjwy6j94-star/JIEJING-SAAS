@@ -34911,13 +34911,24 @@ async function hydrateSaasListingCloudCheckpoint(options = {}) {
       if (!Array.isArray(superseded) || superseded.length > 2000 ||
           superseded.some((id) => typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(id)) ||
           superseded.includes(base.report_id) || superseded.includes(checkpoint?.base_report_id)) throw new Error("invalid_superseded_rewrite_ids");
+      const generation = payload.validated_generation_report;
+      if (generation != null && (!saasListingCloudReportMatchesContext(generation, context) ||
+          !["listing.package", "product.listing"].includes(generation.report_type) ||
+          generation.runtime_run_id !== "listing_draft_generation" ||
+          generation.report?.contract_version !== "listing_ai_draft_generation_v1" ||
+          generation.report?.listing_handoff?.source_mode !== "project_scoped_live_model" ||
+          generation.report?.listing_handoff?.ready_for_listing_draft !== true ||
+          !/^[A-Za-z0-9._:-]{1,160}$/.test(generation.report_id || "") ||
+          superseded.includes(generation.report_id))) throw new Error("invalid_checkpoint_generation");
       // An earlier multi-query read can straddle another device's adoption.
       // This fully validated current head/receipt is positive scoped proof;
       // it overrides only those two old exclusions, not unrelated history.
       record.supersededRewriteReportIds.delete(base.report_id);
       if (checkpoint) record.supersededRewriteReportIds.delete(checkpoint.base_report_id);
       for (const id of superseded) record.supersededRewriteReportIds.add(id);
-      state.saasReports = [base, ...(state.saasReports || []).filter((item) => item.report_id !== base.report_id)];
+      const scopedReports = generation && generation.report_id !== base.report_id ? [base, generation] : [base];
+      state.saasReports = [...scopedReports, ...(state.saasReports || [])
+        .filter((item) => !scopedReports.some(report => report.report_id === item.report_id))];
       const latestBase = payload.current_base_report_id;
       acceptedReadBaseId = saasListingCloudBaseReport(context)?.report_id || "";
       if ((saasListingCloudBaseReport(context)?.report_id || "") !== latestBase) throw new Error("superseded_checkpoint_base");

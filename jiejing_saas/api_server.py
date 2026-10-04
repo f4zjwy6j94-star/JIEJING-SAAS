@@ -13987,8 +13987,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         # Checkpoints are a validated, secret-rejected merchant-text DTO, not provider metadata.
         # Preserve their exact immutable receipt; retain normal provider projection on source reports.
         safe = dict(data)
-        base = data.get("current_base_report")
-        if isinstance(base, dict):
+        for report_key in ("current_base_report", "validated_generation_report"):
+            base = data.get(report_key)
+            if not isinstance(base, dict):
+                continue
             projected = _merchant_safe_replaceable_media_provider(base)
             for key in ("report_id", "task_id", "company_id", "store_id"):
                 if key in base:
@@ -13998,7 +14000,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if isinstance(project_identity, dict):
                 projected["report"]["listing_project_identity"] = {
                     key: project_identity[key] for key in ("key", "source_report_id", "candidate_id")}
-            safe["current_base_report"] = projected
+            safe[report_key] = projected
         self._write_json(safe, status=status)
 
     def _write_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK, headers: list[tuple[str, str]] | None = None) -> None:

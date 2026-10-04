@@ -105,7 +105,7 @@ async function main() {
           state.saasTasks = []; state.saasListingMode = "single"; state.saasLoading = false;
           state.saasAccountHealth = { store_id: fixture.store_id, company_id: fixture.profile.identity.company_id,
             status: "restricted", incident_mode: true, can_execute_real_writes: false };
-          const reports = await saasFetch(`/reports?store_id=${encodeURIComponent(fixture.store_id)}`);
+          const reports = await saasFetch(`/reports?store_id=${encodeURIComponent(fixture.store_id)}&limit=24`);
           state.saasReports = reports.reports;
           state.saasListingComposerDraft = null; state.saasDetachedListingProjectDrafts = {};
           state.view = "product"; syncSaasPublicMvpMode(); bindEvents();

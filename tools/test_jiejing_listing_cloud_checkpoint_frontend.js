@@ -207,6 +207,39 @@ async function mountPublishIntake(page) {
   return page.locator("#saasPublishIntakeForm");
 }
 
+for (const invalid of ["company", "store", "project", "source", "candidate", "status", "runtime", "contract", "handoff", "readiness"]) {
+  test(`historical generation hydration rejects an invalid ${invalid} boundary without accepting evidence`, async () => {
+    resetFixture();
+    const generation = structuredClone(baseReport);
+    generation.report_id = "historical-generation-evidence";
+    if (invalid === "company") generation.company_id = "foreign-company";
+    if (invalid === "store") generation.store_id = "foreign-store";
+    if (invalid === "project") generation.report.listing_project_identity.key = "foreign-project";
+    if (invalid === "source") generation.report.listing_project_identity.source_report_id = "foreign-source";
+    if (invalid === "candidate") generation.report.listing_project_identity.candidate_id = "foreign-candidate";
+    if (invalid === "status") generation.status = "failed";
+    if (invalid === "runtime") generation.runtime_run_id = "merchant_edit";
+    if (invalid === "contract") generation.report.contract_version = "merchant_edit";
+    if (invalid === "handoff") generation.report.listing_handoff.source_mode = "frontend_cache";
+    if (invalid === "readiness") generation.report.listing_handoff.ready_for_listing_draft = false;
+    checkpointHandler = (request, res) => {
+      if (request.method !== "GET") return false;
+      sendJson(res, 200, { status: "empty", checkpoint: null, current_revision: 0,
+        current_base_report_id: baseReport.report_id, current_base_report: baseReport,
+        validated_generation_report: generation, base_changed: false });
+      return true;
+    };
+    const device = await openDevice();
+    try {
+      assert.equal(await device.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true })), false);
+      assert.equal(await device.page.evaluate(() => state.saasReports.some(item => item.report_id === "historical-generation-evidence")), false);
+      assert.equal(requests.filter(item => item.method === "POST").length, 0);
+      assert.deepEqual(unexpected, []);
+      assert.deepEqual(device.errors, []);
+    } finally { await device.context.close(); }
+  });
+}
+
 test("publish step has one primary check and reflects the same read-only result and invalidation", async () => {
   resetFixture();
   const device = await openDevice();

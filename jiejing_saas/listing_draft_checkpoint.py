@@ -131,7 +131,8 @@ def _scope(conn, company_id, store_id, *, lock=False):
         raise KeyError("listing_draft_not_found")
 
 
-def _base_candidate(repository, conn, company_id, store_id, identity, excluded_ids):
+def _base_candidate(repository, conn, company_id, store_id, identity, excluded_ids, *,
+                    report_types=("listing.package", "product.listing", "merchant.product_facts", "ai_ceo.market_research")):
     def field(key):
         if repository.database_engine == "postgres":
             return f"r.report_json -> 'listing_project_identity' ->> '{key}'"
@@ -141,13 +142,13 @@ def _base_candidate(repository, conn, company_id, store_id, identity, excluded_i
     # primary reports by at least a millisecond. Postgres already uses timestamptz.
     order_time = "r.created_at" if repository.database_engine == "postgres" else "julianday(r.created_at)"
     exclusion = " and r.report_id not in (" + ",".join("?" for _ in excluded_ids) + ")" if excluded_ids else ""
-    parameters = (company_id, store_id, *(identity[key] for key in IDENTITY_KEYS))
+    parameters = (company_id, store_id, *report_types, *(identity[key] for key in IDENTITY_KEYS))
     parameters += tuple(excluded_ids)
     row = conn.execute(
         f"""select r.*, t.company_id, t.store_id, t.user_id from reports r
         join tasks t on t.task_id = r.task_id
         where t.company_id = ? and t.store_id = ? and r.status = 'saved'
-          and r.report_type in ('listing.package','product.listing','merchant.product_facts','ai_ceo.market_research')
+          and r.report_type in ({','.join('?' for _ in report_types)})
           and {predicates}{exclusion}
         order by case when r.report_type = 'ai_ceo.market_research' then 1 else 0 end,
           {order_time} desc, r.report_id desc limit 1""",
@@ -214,6 +215,37 @@ def _base(repository, conn, company_id, store_id, identity, *, superseded=None):
     return base
 
 
+def _generation_evidence(repository, conn, company_id, store_id, identity, superseded):
+    # The recent-report feed is not a dependency store. Retrieve immutable
+    # generation evidence by the full tenant/store/project identity, regardless
+    # of unrelated newer work. This is not validation of the current facts.
+    excluded = list(superseded)
+    while True:
+        try:
+            candidate = _base_candidate(repository, conn, company_id, store_id, identity, excluded,
+                                        report_types=("listing.package", "product.listing"))
+        except KeyError:
+            return None
+        body = candidate.get("report") if isinstance(candidate.get("report"), dict) else {}
+        handoff = body.get("listing_handoff") if isinstance(body.get("listing_handoff"), dict) else {}
+        valid = (candidate.get("runtime_run_id") == "listing_draft_generation"
+                 and body.get("contract_version") == "listing_ai_draft_generation_v1"
+                 and handoff.get("source_mode") == "project_scoped_live_model"
+                 and handoff.get("ready_for_listing_draft") is True)
+        rewrite = _rewrite_contract(candidate)
+        if valid and rewrite is not None:
+            # Unadopted rewrites must not resurrect rejected text or borrow a
+            # newer generation proof when reopening an older text checkpoint.
+            valid = bool(_valid_rewrite_anchors(candidate, rewrite) and conn.execute(
+                """select checkpoint_id from listing_draft_edit_revisions
+                where company_id = ? and store_id = ? and project_key = ? and source_report_id = ?
+                  and candidate_id = ? and base_report_id = ? limit 1""",
+                (company_id, store_id, *(identity[key] for key in IDENTITY_KEYS), candidate["report_id"])).fetchone())
+        if valid:
+            return candidate
+        excluded.append(candidate["report_id"])
+
+
 def _view(repository, conn, company_id, store_id, identity):
     row = conn.execute(
         """select r.receipt_json from listing_draft_edit_heads h
@@ -229,6 +261,7 @@ def _view(repository, conn, company_id, store_id, identity):
     return {"contract_version": CONTRACT_VERSION, "status": "saved" if checkpoint else "empty",
             "checkpoint": checkpoint, "current_revision": checkpoint["revision"] if checkpoint else 0,
             "current_base_report_id": base["report_id"], "current_base_report": base,
+            "validated_generation_report": _generation_evidence(repository, conn, company_id, store_id, identity, superseded),
             "base_changed": bool(checkpoint and checkpoint["base_report_id"] != base["report_id"]),
             **({"superseded_rewrite_report_ids": superseded} if superseded else {}), **SAFETY}
 
