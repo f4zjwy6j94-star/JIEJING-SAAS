@@ -14,7 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from jiejing_saas import ai_ceo_chat as chat
-from jiejing_saas.repository import SaaSRepository
+from jiejing_saas.repository import SaaSRepository, _ai_ceo_market_product_candidates
 
 
 FOLLOWUP = (
@@ -88,6 +88,60 @@ class FakeSearch:
 
 
 class ProductSearchEvidenceTests(unittest.TestCase):
+    # Minimized public-source formats from the one-shot C diagnostic. No
+    # merchant identity, stored conversation, or private diagnostic is kept.
+    def c_sources(self):
+        return [
+            {"citation_id": "S1", "title": "10X self-adhesive cable clips", "url": "https://www.ebay.com/itm/123456789001",
+             "snippet": "Was US $8.99 (10% off) -US $0.90 Item price US $8.09 Shipping FREE Estimated total US $8.09 You save US $0.90"},
+            {"citation_id": "S2", "title": "Silicone drain hair catcher", "url": "https://www.ebay.com/itm/123456789002", "snippet": "US $5.97/ea 4 available 76 sold"},
+            {"citation_id": "S3", "title": "12 Pcs adhesive cable clips", "url": "https://www.ebay.com/itm/123456789003",
+             "snippet": "Sell one like this # 12 Pcs Cable Clips Seller's other itemsSeller's other items US $17.89/ea Condition: NewNew 10 available Bulk savings: Qty 1; 4 or more for $15.74/ea"},
+        ]
+
+    def test_labelled_item_prices_are_not_confused_with_savings_or_bulk_tiers(self):
+        for claim in ("历史页面主价 $8.09 [S1]。", "历史页面单件标价 US $17.89 [S3]。",
+                      "历史页面标价范围 $8.09–17.89 [S1] [S3]。",
+                      "历史主价 $8.09（原价 $8.99）[S1]。", "主价 $17.89；4 件以上 $15.74/ea [S3]。"):
+            self.assertEqual([], chat._research_source_answer_blockers(claim, self.c_sources()), claim)
+        for claim in ("主商品价格 $0.90 [S1]。", "主商品价格 $8.99 [S1]。",
+                      "单件主价 $15.74 [S3]。", "标价范围 $8.09–99.99 [S1] [S3]。",
+                      "主价 $8.99（原价 $8.99）[S1]。", "2 件以上 $15.74 [S3]。",
+                      "主价 $8.09（原价 $99.99）[S1]。"):
+            self.assertIn("research_ambiguous_main_item_price", chat._research_source_answer_blockers(claim, self.c_sources()), claim)
+
+    def test_pending_availability_fields_are_not_positive_claims(self):
+        for claim in ("待补资料：供应商成本、包装规格、图片授权、当前在售状态、真实销量与利润。",
+                      "在售状态：未验证。商品页和搜索摘要不证明今天仍在售。"):
+            self.assertNotIn("research_unverified_current_availability", chat._research_source_answer_blockers(claim, self.c_sources()), claim)
+        for claim in ("多个卖家同时在售。", "竞争：高，多个卖家在售。\n当前在售状态未验证。",
+                      "待补资料：供应商成本。多个卖家同时在售。", "价格未验证，但多个卖家在售。"):
+            self.assertIn("research_unverified_current_availability", chat._research_source_answer_blockers(claim, self.c_sources()), claim)
+
+    def test_candidate_cards_do_not_turn_competitor_rows_into_more_candidates(self):
+        for product_header in ("商品", "商品标题"):
+            answer = ("### 候选商品 1：自粘桌面理线夹 / adhesive cable clips\n历史页面参考 [S1]。\n"
+                      "### 候选商品 2：排水口硅胶滤网 / silicone drain hair catcher\n历史页面参考 [S2]。\n"
+                      "## 市场调研正文\n### 一、自粘桌面理线夹\n"
+                      f"| 来源 | {product_header} | 可辨认价格 |\n|---|---|---|\n"
+                      "| S1 | 10X Self-Adhesive Cable Clips | $8.09 |\n"
+                      "| S3 | 12 Pcs Adhesive Cable Clips | $17.89 |\n"
+                      "### 二、排水口硅胶滤网\n历史页面参考 [S2]。\n"
+                      "| 维度 | 自粘桌面理线夹 | 排水口硅胶滤网 |\n|---|---|---|\n"
+                      "| 来源 | S1、S3 | S2 |\n| 当前在售状态 | 未验证 | 未验证 |")
+            candidates = _ai_ceo_market_product_candidates(message="", answer=answer)
+            self.assertEqual(2, len(candidates), candidates)
+            plan = {"research_delivery": "candidate_selection", "research_queries": []}
+            self.assertEqual([], chat._semantic_research_candidate_source_blockers(answer=answer, records=self.c_sources(), plan=plan))
+            wrong = answer.replace("### 二、排水口硅胶滤网\n历史页面参考 [S2]", "### 二、排水口硅胶滤网\n历史页面参考 [S3]")
+            self.assertIn("research_candidate_source_mismatch", chat._semantic_research_candidate_source_blockers(answer=wrong, records=self.c_sources(), plan=plan))
+
+    def test_usage_hypotheses_do_not_prove_recurring_demand(self):
+        for claim in ("桌面理线存在持续需求。", "复购与多件购买意愿较强。"):
+            self.assertTrue(chat._answer_uses_unsupported_demand_shortcuts(claim), claim)
+        for claim in ("桌面整理是待验证的使用场景，成交证据不足。", "持续需求未验证。", "无法据此证明持续需求。"):
+            self.assertFalse(chat._answer_uses_unsupported_demand_shortcuts(claim), claim)
+
     def setUp(self):
         FakeSearch.calls = []
         FakeSearch.guide_only = False
@@ -803,6 +857,14 @@ class ProductSearchEvidenceTests(unittest.TestCase):
             )
             self.assertFalse(result["accepted"], (boundary, result))
             self.assertIn("listing_scope_exceeded", result["blocked_by"])
+
+    def test_deferred_listing_boundary_is_not_mistaken_for_generated_fields(self):
+        prefix = "候选商品 1：stainless steel measuring cups set\n商品规格、成本和运输方案未知。\n"
+        boundary = "在你明确说进入 Listing 之前，我不会创建商品项目或生成 Listing 字段。"
+        for suffix, expected in ((boundary, True), (boundary + "\nListing 标题：Measuring Cups", False),
+                                 ("不会生成 Listing 字段，但 Listing 标题：Measuring Cups", False)):
+            result = chat.validate_ai_ceo_answer_quality(message="调研1个候选商品，不创建 Listing。", route="ebay_workflow", answer=prefix + suffix)
+            self.assertEqual(expected, result["accepted"], result)
 
     def test_evidence_table_uses_named_product_column_not_row_number(self):
         result = chat.validate_ai_ceo_answer_quality(

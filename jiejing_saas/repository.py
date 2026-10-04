@@ -19965,7 +19965,7 @@ def _ai_ceo_market_candidate_score(raw_block: str, index: int) -> int:
 def _ai_ceo_market_table_product_column(cells: list[str]) -> int | None:
     """Identify product columns, not arbitrary report headings or prose."""
     labels = [re.sub(r"\s*[（(][^()（）]{1,40}[）)]\s*$", "", cell).strip() for cell in cells]
-    strong = r"候选(?:商品|品|方向)?|商品(?:名称)?|产品(?:名称)?|品类|candidate(?: product)?|product(?: name)?|item name"
+    strong = r"候选(?:商品|品|方向)?|商品(?:名称|标题)?|产品(?:名称)?|品类|candidate(?: product)?|product(?: name| title)?|item name"
     for index, label in enumerate(labels):
         if re.fullmatch(strong, label, flags=re.IGNORECASE):
             return index
@@ -20166,6 +20166,11 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
         key = cleaned.lower()
         if key in seen or len(candidates) >= 5:
             return
+        def alias_keys(value: str) -> set[str]:
+            parts = re.split(r"[/、（）()]|(?<=[\u4e00-\u9fff])\s+(?=[A-Za-z])|(?<=[A-Za-z])\s+(?=[\u4e00-\u9fff])", value)
+            return {re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", part.lower()) for part in parts if len(part.strip()) >= 2}
+        if any(alias_keys(cleaned) & alias_keys(item["name"]) for item in candidates):
+            return
         seen.add(key)
         score_block = block or "\n".join(lines[start_index : start_index + 8])
         candidates.append(
@@ -20193,13 +20198,16 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
         r"^(?:[-*•]\s*)?(?:#+\s*)?(?:推荐产品|建议产品|目标商品|推荐品类|建议品类|商品方向|具体商品|商品名称|产品名称|名称)\s*[:：-]\s*(.+)$",
         r"^(?:[-*•]\s*)?(?:#+\s*)?(?:recommended product|suggested product|target product|product name|item name)\s*[:：-]\s*(.+)$",
     )
+    explicit_card_names: set[str] = set()
     for index, line in enumerate(lines):
         name = ""
-        for pattern in heading_patterns:
+        for pattern_index, pattern in enumerate(heading_patterns):
             match = re.search(pattern, line, flags=re.IGNORECASE)
             if not match:
                 continue
             name = plausible_name(match.group(match.lastindex or 1))
+            if name and pattern_index < 2:
+                explicit_card_names.add(name.lower())
             break
         if not name:
             continue
@@ -20275,6 +20283,14 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
             # an explicit product column can identify a candidate; section
             # headings such as "证据边界说明" are not product fallbacks.
             if product_column is not None:
+                # With cards already present, a generic product/title column
+                # lists competitor references, not additional choices. An
+                # explicitly labelled candidate table may still complete a
+                # report that has only its winner as a card.
+                if explicit_card_names and not re.fullmatch(r"候选(?:商品|品|方向)?|candidate(?: product)?",
+                                                            cells[product_column], re.I):
+                    table_header_index = -1
+                    continue
                 table_header_index = index
                 table_product_column = product_column
                 continue

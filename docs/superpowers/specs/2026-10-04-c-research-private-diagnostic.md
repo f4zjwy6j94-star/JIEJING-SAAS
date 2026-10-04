@@ -35,3 +35,33 @@ run/apply and independent verification. Enable scoped control after deployment,
 send the original C request once through the Jiejing browser, then disable and
 read its sanitized sample. Replay actual failures locally before any fix.
 Do not infer C completion from this diagnostic's green tests.
+
+## Closure and minimal regression
+
+On fdab5fc the one approved request completed and the capture was disabled.
+The initial answer and its existing repair were replayed through the real
+validator. The extracted unit fixtures contain public-source formats only:
+explicit Item price versus Was/savings/bulk amounts, pending availability
+labels, negative availability prose, candidate cards followed by product-title
+tables and translated headers, and report-only semantic scope. No merchant
+identity or stored conversation is committed.
+
+Initial RED: all five focused cases failed before implementation.
+Further RED covers seller-navigation prefixes before unit price, and the
+negative promise not to generate Listing fields. Focused regression and real
+authenticated local HTTP exercise corrected scope, report-only persistence,
+two candidates, unchanged existing reports, idempotent replay and bounded
+answer repair. These are offline fixtures, not production completion.
+
+The final captured-answer replay removes price/ownership/negative-phrase
+false positives but still rejects actual unsupported demand and current-sale
+claims. It does not blanket-accept the captured reports.
+
+Remote cleanup verified 2026-10-04T02:49:38Z: disabled=true, enabled=false,
+sample_present=false (safe cleanup receipt kept locally). The local full sample
+was deleted after minimized tests. Only those tests and non-content status
+receipts remain. The temporary capture module, hooks, test and packaging entries
+are removed by this fix candidate. No customer report or product was deleted.
+
+This fix still requires its own complete release gate, same-bundle deployment
+and actual C browser acceptance. A/B are not to be regenerated.

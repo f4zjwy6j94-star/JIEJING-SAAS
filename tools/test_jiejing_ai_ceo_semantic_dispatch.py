@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from jiejing_saas.ai_ceo_semantic_plan import SemanticPlanError, plan_ai_ceo_turn
+from jiejing_saas.ai_ceo_semantic_plan import SemanticPlanError, plan_ai_ceo_turn, validate_semantic_plan
 
 
 class ModelFixture:
@@ -54,6 +54,24 @@ def decision(**changes):
 
 
 class SemanticDispatchTests(unittest.TestCase):
+    def test_candidate_report_scope_cannot_create_product_and_gets_one_narrow_repair(self):
+        invalid = decision(intent="research", project_action="new", product_name="理线夹与排水口滤网比较",
+            read_images=False, save_artifact=True, candidate_count=2, listing_deferred=True,
+            source_mode="merchant_has_no_source", search="web_search", query="eBay cable clips",
+            research_queries=[{"subject": "cable clips", "query": "eBay cable clips"}])
+        with self.assertRaisesRegex(SemanticPlanError, "^semantic_plan_candidate_report_new_product$"):
+            validate_semantic_plan(invalid, has_current_product=True, has_source_assets=False, message="保存比较报告，暂不建商品。")
+        model = SequenceModelFixture([invalid, {"project_action": "none", "question": ""}])
+        plan = self.plan(model=model, assets=False, current={"product_name": "旧商品"}, message="保存比较报告，暂不建商品。")
+        self.assertEqual("none", plan["project_action"])
+        self.assertTrue(plan["save_artifact"])
+        self.assertEqual(invalid["research_queries"], plan["research_queries"])
+        self.assertEqual(2, len(model.prompts))
+        for response in ({"project_action": "current", "question": ""}, {"project_action": "new", "question": ""},
+                         {"project_action": "none", "question": "", "candidate_count": 5}):
+            with self.subTest(response=response), self.assertRaisesRegex(SemanticPlanError, "semantic_plan_repair_scope_changed"):
+                self.plan(model=SequenceModelFixture([invalid, response]), assets=False, current={"product_name": "旧商品"})
+
     def plan(self, payload=None, *, model=None, current=None, assets=True, message="处理这个商品。"):
         return plan_ai_ceo_turn(model_client=model or ModelFixture(payload), message=message,
             conversation_history=[], active_listing_context=current or {}, has_source_assets=assets)
@@ -304,7 +322,8 @@ class SemanticDispatchTests(unittest.TestCase):
 
     def test_research_delivery_and_bounded_queries_are_strict_model_fields(self):
         query = "site:ebay.com/itm silver measuring scoop"
-        base = {"intent": "research", "search": "web_search", "query": query, "product_name": "silver measuring scoop"}
+        base = {"intent": "research", "project_action": "none", "read_images": False,
+                "search": "web_search", "query": query, "product_name": "silver measuring scoop"}
         invalid = [
             decision(**base, research_delivery="anything"), decision(**base, research_delivery="none"),
             decision(research_delivery="candidate_selection"), decision(**base, research_queries=None),

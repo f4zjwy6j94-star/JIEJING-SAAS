@@ -511,7 +511,6 @@ def run_ai_ceo_chat(
     active_listing_context: dict[str, Any] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
-    on_answer_diagnostic: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Call the merchant model for an AI CEO chat turn."""
     turn_started_at = time.monotonic()
@@ -1074,15 +1073,6 @@ def run_ai_ceo_chat(
         source_records=source_records,
         context=prompt_context,
     )
-    def emit_private_diagnostic(stage: str, text: str, quality: dict[str, Any]) -> None:
-        if on_answer_diagnostic is not None:
-            try:
-                on_answer_diagnostic({"stage": stage, "answer": text,
-                    "accepted": quality.get("accepted"), "blocked_by": quality.get("blocked_by") or [],
-                    "semantic_plan": prompt_context.get("semantic_plan") or {}, "source_records": source_records})
-            except Exception:
-                pass  # Temporary diagnosis must never alter the merchant result.
-    emit_private_diagnostic("initial", answer, answer_quality)
     repair_retry_count = 0
     repair_candidate_answer = ""
     if (
@@ -1145,7 +1135,6 @@ def run_ai_ceo_chat(
                 source_records=source_records,
                 context=prompt_context,
             )
-            emit_private_diagnostic("repair", repair_answer, repair_quality)
             if repair_answer and repair_quality.get("accepted"):
                 result = repair_result
                 answer = repair_answer
@@ -1652,11 +1641,15 @@ def build_ai_ceo_chat_prompts(
                 _looks_like_product_selection_request(message=message, route=route) and not _looks_like_explicit_listing_intake(message)):
             system_prompt += (
             " 当前路由是 eBay 经营任务：输出目标、计划、来源/缺口、风险、需要确认的动作、下一步，并保持真实写入确认边界。"
-            "如果商家问“卖什么”“帮我选品”“不知道卖什么”，必须基于市场调研给出 2-4 个候选商品卡；每张卡包含商品名、推荐度评分、为什么有需求、为什么适合 eBay/轻小件、风险和待补资料。"
+            "如果商家问“卖什么”“帮我选品”“不知道卖什么”，必须基于市场调研给出 2-4 个候选商品卡；每张卡包含商品名、推荐度评分、待验证的使用场景、比较依据、风险和待补资料。"
             "选品类回答必须先输出“候选商品卡”，再写市场调研正文；不要先写长篇市场机会概述，候选商品名必须出现在回答前 500 字内，避免后续 Listing 无法识别具体商品。"
             "不要把“市场调研报告”本身当成商品名；后续 Listing 草稿只能基于某个具体候选商品。"
             "这类回答必须包含一个清晰小节，标题写“候选商品卡”，并用固定格式逐条输出："
-            "“候选商品 1：具体商品名”“推荐度评分：数字/100”“为什么有需求：...”“适合 eBay/轻小件：...”“主要风险：...”“已证实事实：...”“推断依据：...”“待补资料：...”。"
+            "“候选商品 1：具体商品名”“推荐度评分：数字/100”“使用场景（假设）：...”“比较依据：...”“主要风险：...”“已证实事实：...”“推断依据：...”“待补资料：...”。"
+            "推荐度只是当前证据下的找货优先级，不是销量预测。用途只能作为待验证假设，不能据此断言需求持续、复购意愿强。"
+            "搜索命中的页面数不是竞争密度或市场份额，不因为一个方向命中1条、另一个4条就断言前者竞争更低。"
+            "竞争可以描述参考商品的同质化风险，退货原因只能列待验证风险，不编造概率；销量、利润、当前在售状态无证据就逐项未验证。"
+            "价格按对应来源的明确Item price或单件标价引用；原价、节省金额、运费和批量折扣不得当成单件主价，不明确就写主价未验证。"
             "只有商家明确要求进入 Listing 时，才增加“Listing 草稿字段建议”；商家说本轮不要、先不做或暂缓 Listing 时，严禁输出 Listing 标题、字段、SKU、Item specifics 或类目映射。"
             "不能只写字段清单，必须给出真实可理解的商品名。"
             "禁止把“商品 1”“商品 2”“候选品 A”“方向一”这类占位符当成商品名；如果模型只能想到占位符，就要明确让商家补充或重新选择。"
@@ -4824,6 +4817,56 @@ def _research_availability_statements(answer: str) -> list[str]:
     return statements
 
 
+def _research_money_values(text: str) -> set[str]:
+    def number(value: str) -> str:
+        whole, _, fraction = value.replace(",", "").partition(".")
+        return str(int(whole)) + ("." + fraction.rstrip("0") if fraction.rstrip("0") else "")
+    values = re.findall(r"\$\s*(\d[\d,]*(?:\.\d+)?)", text)
+    values += re.findall(r"\$\s*\d[\d,]*(?:\.\d+)?\s*[–—~至-]\s*\$?\s*(\d[\d,]*(?:\.\d+)?)", text)
+    return {number(value) for value in values}
+
+
+def _research_main_item_prices(snippet: str) -> set[str]:
+    """Recognize explicit main prices, not every amount in a product snippet.
+
+    Search snippets are historical only. Ambiguous multi-item extracts stay
+    unknown; a labelled Item price must have one value. Bulk tiers are never
+    silently promoted to the price for buying one item.
+    """
+    all_prices = _research_money_values(snippet)
+    if len(all_prices) <= 1:
+        return all_prices
+    labelled = re.findall(r"\bitem price\s*[:：]?\s*((?:US\s*)?\$\s*\d[\d,]*(?:\.\d+)?)", snippet, re.I)
+    main = _research_money_values(" ".join(labelled))
+    if labelled:
+        return main if len(main) == 1 else set()
+    unit = re.search(r"((?:US\s*)?\$\s*\d[\d,]*(?:\.\d+)?)/ea\s+Condition\s*:", snippet, re.I)
+    if unit and not _research_money_values(snippet[:unit.start()]):
+        prefix = re.sub(r"seller'?s\s+other\s+items", "", snippet[:unit.start()], flags=re.I)
+        if not re.search(r"other items?|recommended|you may also|similar items?", prefix, re.I):
+            return _research_money_values(unit.group(1))
+    # Common eBay compact form: leading unit price, then Was or Bulk savings.
+    # Do not apply this rule to extracts mentioning other/recommended items.
+    leading = re.match(r"\s*((?:US\s*)?\$\s*\d[\d,]*(?:\.\d+)?)(?:/ea)?", snippet, re.I)
+    if leading and not re.search(r"other items?|recommended|you may also|similar items?", snippet, re.I):
+        rest = snippet[leading.end():]
+        boundary = re.search(r"\b(?:was|previous price|bulk savings)\b", rest, re.I)
+        if boundary and not _research_money_values(rest[:boundary.start()]):
+            return _research_money_values(leading.group(1))
+    return set()
+
+
+def _research_qualified_price_mentions(text: str) -> list[tuple[int, int, str, str]]:
+    """Keep a quoted former/bulk price only with its own matching qualifier."""
+    money = r"(?:US\s*)?\$\s*\d[\d,]*(?:\.\d+)?"
+    result = []
+    for match in re.finditer(r"(?:原价|\bwas|\bprevious price)\s*[:：]?\s*(" + money + r")", text, re.I):
+        result.append((match.start(1), match.end(1), "former", next(iter(_research_money_values(match.group(1))))))
+    for match in re.finditer(r"\b(\d+)\s*(?:件|个)?\s*(?:以上|起|or more)\s*(?:for)?\s*(" + money + r")", text, re.I):
+        result.append((match.start(2), match.end(2), "bulk_" + str(int(match.group(1))), next(iter(_research_money_values(match.group(2))))))
+    return result
+
+
 def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]]) -> list[str]:
     """Bound source references and reject known ambiguous product attributions.
 
@@ -4867,11 +4910,21 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
         # Model tables often use links without [S#]. Formatting must not bypass
         # the same evidence checks applied to prose with citation labels.
         claim_line = re.sub(r"[*_`]+", "", line)
-        for source in line_sources.values():
-            prices = set(re.findall(r"(?:US\s*)?\$\s*(\d+(?:\.\d+)?)", str(source.get("snippet") or "")))
-            uncertain = re.search(r"(?:主商品)?(?:价格|标价|报价|售价).{0,8}(?:未验证|未核实|不确定|无法确认)|"
-                                  r"(?:不能|无法).{0,20}(?:标价|报价|价格)|(?:not verified|unverified|not the item price)", claim_line, re.I)
-            if len(prices) > 1 and re.search(r"\$\s*\d", claim_line) and not uncertain:
+        uncertain = re.search(r"(?:主商品)?(?:价格|标价|报价|售价).{0,8}(?:未验证|未核实|不确定|无法确认)|"
+                              r"(?:不能|无法).{0,20}(?:标价|报价|价格)|(?:not verified|unverified|not the item price)", claim_line, re.I)
+        qualified_source_prices = {(kind, value) for source in line_sources.values()
+            for _, _, kind, value in _research_qualified_price_mentions(str(source.get("snippet") or ""))}
+        main_claim = claim_line
+        for start, end, kind, value in sorted(_research_qualified_price_mentions(claim_line), reverse=True):
+            if (kind, value) in qualified_source_prices:
+                main_claim = main_claim[:start] + "[qualified-price]" + main_claim[end:]
+        claimed_prices = _research_money_values(main_claim)
+        if line_sources and claimed_prices and not uncertain:
+            main_prices = set().union(*(_research_main_item_prices(str(source.get("snippet") or ""))
+                                       for source in line_sources.values()))
+            # A multi-source range is compared with its cited pool, not with
+            # each peer source's independent price. Missing/ambiguous stays shut.
+            if not claimed_prices <= main_prices:
                 blocked.add("research_ambiguous_main_item_price")
         if re.search(r"(?:均为|都是|品牌(?:是|为|[:：]))\s*(?:unbranded|无品牌)|(?:是|为)无品牌通用款", claim_line, re.I):
             brand_sources = list(line_sources.values()) if line_sources else product_records
@@ -4883,21 +4936,26 @@ def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]])
     # Evaluate each field/assertion separately; a peer/footer caveat cannot
     # cancel a contradictory positive claim.
     for statement in _research_availability_statements(answer):
-        for clause in re.split(r"[。；;！!？?\n，,|]|\b(?:but|however)\b|(?:但是|不过|但)", statement, flags=re.I):
+        for clause in re.split(r"[。；;！!？?\n，,、|]|\b(?:but|however)\b|(?:但是|不过|但)", statement, flags=re.I):
             # An explicitly unknown status field is not a current-sale claim.
             # Bind the entire clause: unknown price/stock must not exempt a
             # positive availability claim elsewhere in the same statement.
             if re.fullmatch(r"\s*(?:当前|目前|现在)?在售(?:状态|情况)\s*[:：]\s*"
                             r"(?:未知|不详|待确认)\s*(?:\[S\d+\])?\s*", clause, re.I):
                 continue
+            # A noun in a pending-facts list is not a statement that it is on
+            # sale. Only the entire bare label is exempt, never trailing prose.
+            if re.fullmatch(r"\s*(?:当前|目前|现在)在售(?:状态|情况)\s*", clause):
+                continue
             if not re.search(
                 r"(?:当前|目前|现在|仍然|仍|正在).{0,8}(?:在售|售卖)|"
                 r"(?:有|存在|均为|都是)\s*在售\s*(?:listing|商品|产品|刊登)|"
+                r"卖家\s*(?:同时|仍然|仍|正在|均|都)?\s*在售|"
                 r"^\s*在售\s*$|(?:状态|status|availability)\s*[:：]\s*(?:在售|active|available|for sale)|"
                 r"\b(?:currently|still|actively)\s+(?:available|listed|for sale)\b", clause, re.I):
                 continue
             if not re.search(
-                r"(?:不能|无法|不应|不可|不要|未验证|未核实|未确认|不确定|待核|尚待|是否|历史|当时|曾经)|"
+                r"(?:不能|无法|不应|不可|不要|不证明|未验证|未核实|未确认|不确定|待核|尚待|是否|历史|当时|曾经)|"
                 r"\b(?:not|cannot|unverified|unknown|unconfirmed|historical)\b", clause, re.I):
                 blocked.add("research_unverified_current_availability")
     return sorted(blocked)
@@ -4933,8 +4991,21 @@ def _selection_answer_constraint_violations(
         r"类目(?:编号|映射)\s*[:：=]?",
         r"刊登(?:标题|字段|草稿)\s*[:：=]?",
     )
-    if listing_deferred and any(re.search(pattern, answer_lower, flags=re.IGNORECASE) for pattern in actionable_listing_markers):
-        blocked_by.append("listing_scope_exceeded")
+    if listing_deferred:
+        for clause in re.split(r"[。；;\n，,]|但是|不过|但", answer_lower):
+            for pattern in actionable_listing_markers:
+                for match in re.finditer(pattern, clause, re.I):
+                    # A scope promise is not a generated field. Exempt only a
+                    # direct negated creation verb, never a footer disclaimer
+                    # or a value assigned after that phrase.
+                    negative = re.search(
+                        r"(?:不会|不再|不要|不应|不|无须|无需)(?:创建|生成|输出|提供)"
+                        r"(?:商品项目|商品草稿|商品|项目)?(?:[、或和及]+(?:创建|生成|输出|提供))*\s*$",
+                        clause[:match.start()])
+                    assigned = re.match(r"\s*[:：=]", clause[match.end():])
+                    if not negative or assigned:
+                        blocked_by.append("listing_scope_exceeded")
+        blocked_by = list(dict.fromkeys(blocked_by))
 
     unknown_facts_explicit = plan.get("source_mode") != "merchant_has_source" if semantic_plan else any(
         marker in merchant_text
@@ -5667,8 +5738,14 @@ def _selection_candidate_blocks(answer: str, *, candidate_names: list[str] | Non
     for match, block in zip(matches, blocks):
         name = _clean_ai_ceo_market_candidate_name(match.group("name").strip(" *#"))
         prose: list[str] = []
+        heading = re.match(r"\s*(#{1,6})\s", block)
+        heading_level = len(heading.group(1)) if heading else 6
         for line in block.splitlines():
             normalized_line = line.replace("*", "").strip()
+            next_heading = re.match(r"(#{1,6})\s", normalized_line)
+            if any(item.strip() for item in prose) and next_heading and len(next_heading.group(1)) <= heading_level:
+                # A new report section cannot belong to the last candidate.
+                break
             if normalized_line.startswith("|"):
                 cells = [cell.strip() for cell in normalized_line.strip("|").split("|")]
                 if _ai_ceo_market_table_product_column(cells) is not None or _ai_ceo_market_table_product_headers(cells):
@@ -5699,9 +5776,29 @@ def _selection_candidate_blocks(answer: str, *, candidate_names: list[str] | Non
     column_candidates, _ = _ai_ceo_market_split_comparison_tables(text)
     for name, block in column_candidates:
         by_name.setdefault(_normalized_candidate_name(name), []).append(block)
+    aliases = {name: {_normalized_candidate_name(alias) for alias in _product_candidate_aliases(name)}
+               | {_normalized_candidate_name(name)} for name in candidate_names}
+    # Later market sections may use an explicit Chinese/English alias from a
+    # candidate heading. Keep their competitor tables with that section, not
+    # with the last card; do not infer translations or silently discard them.
+    _, remaining_lines = _ai_ceo_market_split_comparison_tables(text)
+    section_name, section_level = "", 0
+    for line in remaining_lines:
+        heading = re.match(r"\s*(#{1,6})\s+(.+)", line)
+        if heading:
+            title = re.sub(r"^[一二三四五六七八九十\d]+[、.)：:]\s*", "", heading.group(2)).strip()
+            key = _normalized_candidate_name(title)
+            owners = [name for name, keys in aliases.items() if key in keys]
+            if len(owners) == 1:
+                section_name, section_level = owners[0], len(heading.group(1))
+            elif len(heading.group(1)) <= section_level:
+                section_name, section_level = "", 0
+        if section_name:
+            by_name.setdefault(_normalized_candidate_name(section_name), []).append(line)
     # Align evidence with each extracted product; a duplicated recommendation
     # or another candidate's source cannot fill a missing candidate's evidence.
-    return ["\n".join(by_name.get(_normalized_candidate_name(name), [])) for name in candidate_names]
+    return ["\n".join(block for key, blocks in by_name.items() if key in aliases[name] for block in blocks)
+            for name in candidate_names]
 
 
 def _candidate_block_has_real_item_id(block: str) -> bool:
@@ -5721,6 +5818,8 @@ def _candidate_block_has_ebay_evidence_entry(block: str) -> bool:
 
 def _answer_uses_unsupported_demand_shortcuts(answer: str) -> bool:
     shortcuts = (
+        "持续需求",
+        "复购与多件购买意愿较强",
         "长期稳定需求",
         "需求长期稳定",
         "持续痛点",
@@ -5926,6 +6025,10 @@ def _model_answer_repair_instruction(
         instructions.append("删除所有重量、尺寸、材质、成本、品牌、型号、包装和物流服务的数值或断言；逐项写未知或待核。")
     if "research_unverified_current_availability" in blocked_by:
         instructions.append("商品搜索摘要和历史页面不能证明当前在售；逐句移除当前在售的断言，改为历史页面参考、当前状态未验证，不能只在末尾加免责声明。")
+    if "research_ambiguous_main_item_price" in blocked_by:
+        instructions.append("逐来源核对主价：只有明确Item price或单件标价可引用；Was/原价、You save/节省、批量价不等于主价。不能区分时写主商品价格未验证，不猜数字。")
+    if "research_candidate_source_mismatch" in blocked_by:
+        instructions.append("每个候选卡和后续同名小节只引用该商品的来源；不能把另一候选或不匹配竞品的S编号放入本候选。竞品商品标题不是新增候选，比较表保留相同候选名称。")
     if "excluded_previous_candidate_reused" in blocked_by:
         excluded = "、".join(str(item) for item in selection_contract.get("excluded_candidate_names", []) if str(item))
         instructions.append(f"不得再次推荐这些旧候选：{excluded}。" if excluded else "不得复用上一轮候选。")

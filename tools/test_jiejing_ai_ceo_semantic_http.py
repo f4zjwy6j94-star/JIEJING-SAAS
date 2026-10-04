@@ -11,7 +11,6 @@ import tempfile
 import time
 import unittest
 import uuid
-from datetime import datetime, timedelta, timezone
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -39,7 +38,9 @@ class Model:
     endpoint = ""
     def generate_text(self, **kwargs):
         prompt = str(kwargs.get("user_prompt") or "")
-        if "商品检索词补全器" in str(kwargs.get("system_prompt") or ""):
+        if "候选报告范围纠错器" in str(kwargs.get("system_prompt") or ""):
+            text = json.dumps({"project_action": "none", "question": ""})
+        elif "商品检索词补全器" in str(kwargs.get("system_prompt") or ""):
             data = json.loads(prompt)
             patch = {"research_queries": [{"subject": name, "query": "site:ebay.com/itm/ " + name}
                 for name in ("adhesive cable clips", "silicone drain hair catcher")]}
@@ -109,6 +110,14 @@ class Model:
                         save_artifact=True, research_delivery="candidate_selection", candidate_count=2,
                         listing_deferred=True, search="web_search", query=queries[0]["query"], research_queries=queries)
                     text = json.dumps(plan, ensure_ascii=False)
+                if "源格式验收" in message:
+                    plan = json.loads(text)
+                    queries = [{"subject": name, "query": "site:ebay.com/itm/ source_format_fixture " + name}
+                               for name in ("adhesive cable clips", "silicone drain hair catcher")]
+                    plan.update(intent="research", project_action="new", product_name="两个方向的选品比较",
+                        read_images=False, save_artifact=True, research_delivery="candidate_selection", candidate_count=2,
+                        listing_deferred=True, search="web_search", query=queries[0]["query"], research_queries=queries)
+                    text = json.dumps(plan, ensure_ascii=False)
         else:
             # Report prompt leakage as ordinary provider output so HTTP callers
             # can observe context isolation without mocking the chat function.
@@ -139,9 +148,18 @@ class Model:
                         "排水口硅胶滤网 silicone drain hair catcher", "排水口硅胶滤网")
                 if "交换引用" in prompt:
                     text = text.replace("[S1]", "[TEMP]").replace("[S2]", "[S1]").replace("[TEMP]", "[S2]")
-            if "诊断采样" in prompt:
-                marker = "DIAGNOSTIC_REPAIR" if "上一版回复没有通过" in str(kwargs.get("system_prompt")) else "DIAGNOSTIC_INITIAL"
-                text += "\n当前在售。 " + marker + "。"
+            if "源格式验收" in prompt:
+                text = ("### 候选商品 1：自粘理线夹 / adhesive cable clips\n历史商品参考 [S1]，单件主价 $5.99。\n"
+                    "待补资料：供应商成本、包装规格、图片授权、当前在售状态、真实销量与利润。\n"
+                    "### 候选商品 2：排水口滤网 / silicone drain hair catcher\n历史商品参考 [S2]，标价 $4.99。\n"
+                    "当前在售状态未验证。供应商参数未知，排水口适配风险待实物检验。\n"
+                    "## 市场调研正文\n### 一、自粘理线夹\n"
+                    "| 来源 | 商品标题 | 可辨认价格 |\n|---|---|---|\n"
+                    "| S1 | Adhesive Cable Clips Desk Organizer | $5.99（原价 $8.99） |\n"
+                    "### 二、排水口滤网\n历史来源 [S2]，当前在售状态未验证，商品页不证明今天仍在售。\n"
+                    "建议先找理线夹供应商，核对胶粘力和尺寸。该建议是待验证的找货方向，成交证据不足。")
+                if "修复在售断言" in prompt and "上一版回复没有通过" not in str(kwargs.get("system_prompt")):
+                    text += "\n多个卖家同时在售。"
         return {"text": text, "model": self.model, "model_mode": "live_unit",
             "finish_reason": "stop", "_usage": {"input_tokens": 30, "output_tokens": 40, "total_tokens": 70}}
 
@@ -173,7 +191,7 @@ class ResearchSearch:
                  "1Pc Silicone Hair Drain Catcher Sink Strainer Filter Shower Drain Protector")
         return {"status": "ready", "provider": config.provider, "query": config.query,
                 "results": [{"title": title, "url": "https://www.ebay.com/itm/" + item,
-                             "snippet": "US $" + price},
+                             "snippet": ("Was US $8.99 Item price US $5.99 You save US $3.00" if first and "source_format_fixture" in config.query else "US $" + price)},
                             {"title": "Adhesive cable ties" if first else "Silicone drain cleaning brush",
                              "url": "https://www.ebay.com/itm/123456789003", "snippet": "US $8.99"}]}
 chat.PublicSearchProbeAdapter = ResearchSearch
@@ -627,52 +645,26 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         self.assertEqual(1, len(chats))
         self.assertEqual(3, chats[0]["output"]["model_request_count"])
 
-    def test_scoped_private_diagnostic_captures_both_attempts_without_public_leak_or_report_write(self):
-        before = self.reports()
-        message = "无货源研究候选，检索合同纠错，诊断采样：仅研究两种商品，不创建项目。"
-        body = self.envelope(message)
-        path = f"/stores/{self.store}/merchant-ceo/chat"
-        root = Path(self.temp.name) / ".private-ai-ceo-answer-capture"
-        root.mkdir(mode=0o700, exist_ok=True)
-        now = datetime.now(timezone.utc)
-        control = {
-            "capture_id": "capture_http_" + uuid.uuid4().hex,
-            "enabled": True, "company_id": self.old["task"]["company_id"],
-            "user_id": self.old["task"]["user_id"], "store_id": self.store,
-            "project_key": self.old_identity["key"],
-            "message_sha256": hashlib.sha256(message.encode()).hexdigest(),
-            "approved_at": now.isoformat(), "expires_at": (now + timedelta(minutes=5)).isoformat(),
-        }
-        control_path = root / "control.json"
-        control_path.write_text(json.dumps(control), encoding="utf-8")
-        control_path.chmod(0o600)
-        try:
+    def test_real_source_formats_save_two_candidates_without_creating_product_or_changing_old_facts(self):
+        for suffix in ("", "修复在售断言"):
+            before = self.reports()
+            body = self.envelope("无货源研究候选，源格式验收。保存比较报告，不建项目，不改旧商品。" + suffix)
+            path = f"/stores/{self.store}/merchant-ceo/chat"
             status, result = self.call(path, body)
-            self.assertEqual(202, status)
-            self.assertEqual("model_answer_rejected", result["ai_ceo_chat"]["status"])
-            self.assertEqual(before, self.reports())
-            sample_path = root / (control["capture_id"] + ".answer.json")
-            self.assertTrue(sample_path.is_file(), "consented diagnostic missing from the actual HTTP chat path")
-            sample = json.loads(sample_path.read_text(encoding="utf-8"))
-            self.assertEqual(["initial", "repair"], [x["stage"] for x in sample["attempts"]])
-            self.assertIn("DIAGNOSTIC_INITIAL", sample["attempts"][0]["answer"])
-            self.assertIn("DIAGNOSTIC_REPAIR", sample["attempts"][1]["answer"])
-            self.assertTrue(all("research_unverified_current_availability" in x["blocked_by"] for x in sample["attempts"]))
-            self.assertEqual(2, len(sample["source_records"]))
-            self.assertEqual("none", sample["semantic_plan"]["project_action"])
-            self.assertFalse(control_path.exists())
-            for route in ("/tasks", "/reports", "/ai-ceo/chat-history"):
-                _, public = self.call(route)
-                self.assertNotIn("DIAGNOSTIC_INITIAL", json.dumps(public))
-                self.assertNotIn("DIAGNOSTIC_REPAIR", json.dumps(public))
-            previous_bytes = sample_path.read_bytes()
-            self.call(path, body)  # Idempotent replay cannot capture again.
-            self.call(path, self.envelope(message))  # New request also lacks consent.
-            self.assertEqual(previous_bytes, sample_path.read_bytes())
-            self.assertEqual(before, self.reports())
-        finally:
-            if control_path.exists():
-                control_path.unlink()
+            self.assertEqual(201, status, result.get("ai_ceo_chat", {}).get("answer_quality"))
+            self.assertEqual("none", result["semantic_dispatch"]["project_action"])
+            self.assertEqual({}, result["semantic_dispatch"]["target_project_identity"])
+            self.assertIsNone(result.get("product_vision_report"))
+            self.assertTrue(result["ai_ceo_chat"]["answer_quality"]["accepted"])
+            self.assertNotIn("多个卖家同时在售", result["ai_ceo_chat"]["answer"])
+            report = result["ai_ceo_market_report"]
+            self.assertEqual(2, len(report["report"]["product_candidates"]))
+            after = self.reports()
+            self.assertEqual(before, [item for item in after if item["report_id"] != report["report_id"]])
+            status, replay = self.call(path, body)
+            self.assertEqual(201, status)
+            self.assertTrue(replay["idempotent_replay"])
+            self.assertEqual(after, self.reports())
 
     def test_query_completion_cannot_create_a_project_or_change_reports(self):
         before = self.reports()
