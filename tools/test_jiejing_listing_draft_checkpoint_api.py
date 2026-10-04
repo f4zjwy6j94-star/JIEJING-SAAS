@@ -859,6 +859,24 @@ class CheckpointHTTPTests(unittest.TestCase):
         self.assertEqual(self.request("/reports")[1], before)
         self.assertFalse(read["model_called"] or read["usage_consumed"] or read["real_platform_writes_enabled"])
 
+    def test_fact_head_remains_independent_of_newer_copy_and_rejects_other_origins(self):
+        facts = self.report_fixture("current_facts", "merchant.product_facts", "2090-01-01T00:00:00+00:00")
+        copy_report = self.report_fixture("newer_copy", "listing.package", "2091-01-01T00:00:00+00:00")
+        for key in ("key", "source_report_id", "candidate_id"):
+            self.report_fixture("foreign_facts_" + key, "merchant.product_facts", "2092-01-01T00:00:00+00:00",
+                                identity={**self.identity, key: "foreign"})
+        self.report_fixture("failed_facts", "merchant.product_facts", "2093-01-01T00:00:00+00:00", status="failed")
+        before = self.request("/reports")[1]
+        status, read = self.request(self.path + self.query)
+        self.assertEqual(status, 200)
+        self.assertEqual(read["current_base_report_id"], copy_report)
+        self.assertEqual(read["current_product_fact_report"]["report_id"], facts)
+        self.assertEqual(read["current_product_fact_report"]["company_id"], self.company_id)
+        self.assertEqual(read["current_product_fact_report"]["store_id"], self.store_id)
+        self.assertEqual(read["current_product_fact_report"]["report"]["listing_project_identity"], self.identity)
+        self.assertEqual(self.request("/reports")[1], before)
+        self.assertFalse(read["model_called"] or read["usage_consumed"] or read["real_platform_writes_enabled"])
+
     def test_market_fallback_requires_each_explicit_anchor(self):
         with closing(sqlite3.connect(self.root / "saas.sqlite")) as conn, conn:
             conn.execute("update reports set status = 'failed' where report_id = ?", (self.base_report_id,))

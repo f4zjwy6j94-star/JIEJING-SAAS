@@ -9592,7 +9592,12 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
       ? ["source_url"]
       : ["merchant_owned_product_confirmed"];
   const unknownFacts = Array.from(
-    new Set([...requiredUnknownFacts, ...visionSuggestionUnknownFacts, ...sourceConfirmationUnknown]),
+    new Set([...requiredUnknownFacts, ...visionSuggestionUnknownFacts, ...sourceConfirmationUnknown,
+      ...(existing.unknown_facts || []).filter(key =>
+        saasMerchantProductFactDefinitions().some(group => group.fields.some(([name]) => name === key)) &&
+        !saasMerchantProductFactValuePresent(key, sourceConfirmed[key]) &&
+        !saasMerchantProductFactValuePresent(key, merchantConfirmed[key]) &&
+        !(key === "merchant_owned_product_confirmed" && confirmedSourceUrl))]),
   );
   const listingReadinessUnknownFacts = new Set([...requiredUnknownFacts, ...sourceConfirmationUnknown]);
   const total = requiredKeys.length + 1;
@@ -16184,6 +16189,10 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
         const incomingBody = item.report && typeof item.report === "object" ? item.report : {};
         const previousPacket = previousBody.merchant_product_fact_packet || {};
         const incomingPacket = incomingBody.merchant_product_fact_packet || {};
+        const previousIdentity = saasNormalizeListingProjectIdentity(previousBody.listing_project_identity);
+        const incomingIdentity = saasNormalizeListingProjectIdentity(incomingBody.listing_project_identity);
+        const sameFactScope = previousIdentity && incomingIdentity &&
+          ["key", "source_report_id", "candidate_id"].every(key => previousIdentity[key] === incomingIdentity[key]);
         const mergeArray = (previous = [], incoming = []) =>
           Array.from(new Map([...previous, ...incoming].map((value) => [JSON.stringify(value), value])).values());
         const mergeSourceRecords = (previous = [], incoming = []) => {
@@ -16239,7 +16248,12 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
               derived_listing_suggestions: mergedDerivedSuggestions,
               listing_copy: { ...(previousPacket.listing_copy || {}), ...(incomingPacket.listing_copy || {}) },
               field_evidence: { ...(previousPacket.field_evidence || {}), ...(incomingPacket.field_evidence || {}) },
-              fact_conflicts: mergeArray(previousPacket.fact_conflicts || [], incomingPacket.fact_conflicts || []),
+              // These are complete scoped snapshots, not conflict patches.
+              // Reintroducing an older explanation can make an unchanged
+              // image save look like a new fact and break copy adoption.
+              fact_conflicts: sameFactScope && Array.isArray(incomingPacket.fact_conflicts)
+                ? [...incomingPacket.fact_conflicts]
+                : mergeArray(previousPacket.fact_conflicts || [], incomingPacket.fact_conflicts || []),
               unknown_facts: Array.isArray(incomingPacket.unknown_facts) ? [...incomingPacket.unknown_facts] : [...(previousPacket.unknown_facts || [])],
               source_records: mergeSourceRecords(previousPacket.source_records || [], incomingPacket.source_records || []),
               blocked_by: Array.isArray(incomingPacket.blocked_by) ? [...incomingPacket.blocked_by] : [...(previousPacket.blocked_by || [])],
@@ -16412,10 +16426,12 @@ function restoreSaasListingComposerDraftFromBackendReports(options = {}) {
             ...(currentPacket.field_evidence || {}),
             ...(incomingPacket.field_evidence || {}),
           },
-          fact_conflicts: mergeUnique(
-            [...(incomingPacket.fact_conflicts || []), ...(currentPacket.fact_conflicts || [])],
-            (item) => `${String(item?.field || "")}:${JSON.stringify(item?.values || [])}`,
-          ),
+          fact_conflicts: exactIdentityMatch && Array.isArray(incomingPacket.fact_conflicts)
+            ? [...incomingPacket.fact_conflicts]
+            : mergeUnique(
+                [...(incomingPacket.fact_conflicts || []), ...(currentPacket.fact_conflicts || [])],
+                (item) => `${String(item?.field || "")}:${JSON.stringify(item?.values || [])}`,
+              ),
           unknown_facts: exactIdentityMatch
             ? [...(incomingPacket.unknown_facts || [])]
             : mergeUnique([...(incomingPacket.unknown_facts || []), ...(currentPacket.unknown_facts || [])], (item) => String(item || "")),
@@ -30788,6 +30804,8 @@ async function refreshSaasMerchantProjectStatus(options = {}) {
   const store = options.store || activeSaasStore();
   const storeId = String(store?.store_id || "").trim();
   const projectId = String(options.projectId || saasCurrentMerchantProjectId() || "").trim();
+  const companyId = String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "");
+  const userId = String(state.saasIdentity?.user_id || state.saasUser?.user_id || "");
   // This generation is a project/store scope epoch, not a per-request counter.
   // Concurrent refreshes for the same scope must be allowed to complete; scope
   // resets increment the epoch so responses from the previous project/store are
@@ -30798,7 +30816,7 @@ async function refreshSaasMerchantProjectStatus(options = {}) {
     if (state.view === "cockpit") refreshSaasAiCeoTaskContext();
     return null;
   }
-  const requestKey = `${requestGeneration}:${storeId}:${projectId}`;
+  const requestKey = JSON.stringify([requestGeneration, companyId, userId, storeId, projectId]);
   if (saasMerchantProjectStatusInFlight?.key === requestKey) {
     return saasMerchantProjectStatusInFlight.promise;
   }
@@ -30822,6 +30840,8 @@ async function refreshSaasMerchantProjectStatus(options = {}) {
     const snapshotProjectId = String(snapshot?.project?.project_id || "").trim();
     if (
       requestGeneration !== Number(state.saasMerchantProjectStatusRequestGeneration || 0) ||
+      companyId !== String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "") ||
+      userId !== String(state.saasIdentity?.user_id || state.saasUser?.user_id || "") ||
       activeStoreId !== storeId ||
       currentProjectId !== projectId ||
       (snapshotProjectId && snapshotProjectId !== projectId)
@@ -30834,6 +30854,9 @@ async function refreshSaasMerchantProjectStatus(options = {}) {
     if (state.view === "cockpit" && previousRenderSignature !== nextRenderSignature) {
       refreshSaasAiCeoTaskContext();
     }
+    await restoreSaasListingProjectFromBackendStatus(state.saasMerchantProjectStatus, {
+      companyId, userId, storeId, projectId, requestGeneration,
+    });
     return state.saasMerchantProjectStatus;
   })();
   const requestEntry = { key: requestKey, promise: requestPromise };
@@ -30844,6 +30867,61 @@ async function refreshSaasMerchantProjectStatus(options = {}) {
     if (saasMerchantProjectStatusInFlight === requestEntry) {
       saasMerchantProjectStatusInFlight = null;
     }
+  }
+}
+
+async function restoreSaasListingProjectFromBackendStatus(snapshot, scope) {
+  // The recent reports feed is not a project index. A cold visit may have no
+  // draft at all after other products push every saved version out of it.
+  // Only this live, authenticated status response may supply the full anchor;
+  // a URL key or cached status alone must never authorize source restoration.
+  if (state.saasListingComposerDraft || !scope.companyId || !scope.userId ||
+      snapshot?.snapshot_version !== "merchant_project_status_v1" ||
+      snapshot.source !== "tenant_scoped_backend_evidence" ||
+      snapshot.project?.project_id !== scope.projectId ||
+      snapshot.blocker?.code === "listing_project_identity_conflict") return false;
+  const rawIdentity = snapshot.project.listing_project_identity;
+  const identity = saasNormalizeListingProjectIdentity(rawIdentity);
+  if (!identity || identity.key !== scope.projectId ||
+      !["key", "source_report_id", "candidate_id"].every(key =>
+        Object.hasOwn(rawIdentity, key) && typeof rawIdentity[key] === "string" && rawIdentity[key] === identity[key])) return false;
+  const context = { companyId: scope.companyId, userId: scope.userId, storeId: scope.storeId, identity,
+    key: JSON.stringify([scope.companyId, scope.userId, scope.storeId, identity.key, identity.source_report_id, identity.candidate_id]),
+    path: `/stores/${encodeURIComponent(scope.storeId)}/listing-drafts/${encodeURIComponent(identity.key)}/checkpoint` };
+  const epoch = saasListingCloudEpoch;
+  const refreshGeneration = saasStateRefreshGeneration;
+  const current = () => !state.saasListingComposerDraft && !state.saasSessionExpiryHandled &&
+    epoch === saasListingCloudEpoch && refreshGeneration === saasStateRefreshGeneration &&
+    scope.requestGeneration === Number(state.saasMerchantProjectStatusRequestGeneration || 0) &&
+    scope.companyId === String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "") &&
+    scope.userId === String(state.saasIdentity?.user_id || state.saasUser?.user_id || "") &&
+    scope.storeId === String(activeSaasStore()?.store_id || "") &&
+    scope.projectId === saasCurrentMerchantProjectId();
+  if (!current()) return false;
+  try {
+    const payload = await saasFetchWithTimeout(`${context.path}?${new URLSearchParams({
+      source_report_id: identity.source_report_id, candidate_id: identity.candidate_id })}`,
+      { saasRequestIsCurrent: current, saasDeferUnauthorizedTermination: true }, 15000);
+    if (!current()) return false;
+    const { base, generation, facts, superseded } = saasListingCloudValidatePayload(payload, context);
+    const reports = [...new Map([base, generation, facts].filter(Boolean).map(report => [report.report_id, report])).values()];
+    const record = saasListingCloudRecord(context);
+    for (const id of superseded) record.supersededRewriteReportIds.add(id);
+    record.supersededRewriteReportIds.delete(base.report_id);
+    const draft = restoreSaasListingComposerDraftFromBackendReports({ reports,
+      preferBackendLatest: true, projectId: identity.key });
+    if (!saasListingCloudSameIdentity(saasNormalizeListingProjectIdentity(draft?.listing_project_identity), identity)) {
+      state.saasListingComposerDraft = null;
+      state.saasListingSourceMode = "";
+      return false;
+    }
+    state.saasReports = [...reports, ...(state.saasReports || [])
+      .filter(item => !reports.some(report => report.report_id === item.report_id))];
+    // Normal hydration still checks revisions, pending edits and conflicts;
+    // this read only restores the missing project, never adopts or saves copy.
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -34880,6 +34958,34 @@ function ensureSaasListingCloudCheckpoint() {
   void Promise.resolve().then(() => hydrateSaasListingCloudCheckpoint());
 }
 
+function saasListingCloudValidatePayload(payload, context) {
+  const checkpoint = payload.checkpoint ? saasListingCloudReceipt(payload.checkpoint, context) : null;
+  if (payload.checkpoint && !checkpoint) throw new Error("invalid_checkpoint_receipt");
+  if (!Number.isSafeInteger(payload.current_revision) || payload.current_revision < 0 ||
+      !/^[A-Za-z0-9._:-]{1,160}$/.test(payload.current_base_report_id || "")) throw new Error("invalid_checkpoint_head");
+  const base = payload.current_base_report;
+  if (!saasListingCloudReportMatchesContext(base, context) || base.report_id !== payload.current_base_report_id) throw new Error("invalid_checkpoint_base");
+  const superseded = payload.superseded_rewrite_report_ids ?? [];
+  if (!Array.isArray(superseded) || superseded.length > 2000 ||
+      superseded.some((id) => typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(id)) ||
+      superseded.includes(base.report_id) || superseded.includes(checkpoint?.base_report_id)) throw new Error("invalid_superseded_rewrite_ids");
+  const generation = payload.validated_generation_report;
+  if (generation != null && (!saasListingCloudReportMatchesContext(generation, context) ||
+      !["listing.package", "product.listing"].includes(generation.report_type) ||
+      generation.runtime_run_id !== "listing_draft_generation" ||
+      generation.report?.contract_version !== "listing_ai_draft_generation_v1" ||
+      generation.report?.listing_handoff?.source_mode !== "project_scoped_live_model" ||
+      generation.report?.listing_handoff?.ready_for_listing_draft !== true ||
+      !/^[A-Za-z0-9._:-]{1,160}$/.test(generation.report_id || "") ||
+      superseded.includes(generation.report_id))) throw new Error("invalid_checkpoint_generation");
+  const facts = payload.current_product_fact_report;
+  if (facts != null && (!saasListingCloudReportMatchesContext(facts, context) ||
+      facts.report_type !== "merchant.product_facts" || !facts.report?.merchant_product_fact_packet ||
+      !/^[A-Za-z0-9._:-]{1,160}$/.test(facts.report_id || "") ||
+      superseded.includes(facts.report_id))) throw new Error("invalid_checkpoint_facts");
+  return { checkpoint, base, superseded, generation, facts };
+}
+
 async function hydrateSaasListingCloudCheckpoint(options = {}) {
   const context = saasListingCloudContext();
   const record = saasListingCloudRecord(context);
@@ -34900,33 +35006,15 @@ async function hydrateSaasListingCloudCheckpoint(options = {}) {
       const payload = await saasFetchWithTimeout(`${context.path}?${new URLSearchParams({ source_report_id: context.identity.source_report_id, candidate_id: context.identity.candidate_id })}`,
         { saasRequestIsCurrent: current, saasDeferUnauthorizedTermination: true }, 15000);
       if (!current()) return false;
-      const checkpoint = payload.checkpoint ? saasListingCloudReceipt(payload.checkpoint, context) : null;
-      if (payload.checkpoint && !checkpoint) throw new Error("invalid_checkpoint_receipt");
-      if (!Number.isSafeInteger(payload.current_revision) || payload.current_revision < 0 ||
-          !/^[A-Za-z0-9._:-]{1,160}$/.test(payload.current_base_report_id || "")) throw new Error("invalid_checkpoint_head");
+      const { checkpoint, base, superseded, generation, facts } = saasListingCloudValidatePayload(payload, context);
       const localBaseId = saasListingCloudBaseReport(context)?.report_id || "";
-      const base = payload.current_base_report;
-      if (!saasListingCloudReportMatchesContext(base, context) || base.report_id !== payload.current_base_report_id) throw new Error("invalid_checkpoint_base");
-      const superseded = payload.superseded_rewrite_report_ids ?? [];
-      if (!Array.isArray(superseded) || superseded.length > 2000 ||
-          superseded.some((id) => typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(id)) ||
-          superseded.includes(base.report_id) || superseded.includes(checkpoint?.base_report_id)) throw new Error("invalid_superseded_rewrite_ids");
-      const generation = payload.validated_generation_report;
-      if (generation != null && (!saasListingCloudReportMatchesContext(generation, context) ||
-          !["listing.package", "product.listing"].includes(generation.report_type) ||
-          generation.runtime_run_id !== "listing_draft_generation" ||
-          generation.report?.contract_version !== "listing_ai_draft_generation_v1" ||
-          generation.report?.listing_handoff?.source_mode !== "project_scoped_live_model" ||
-          generation.report?.listing_handoff?.ready_for_listing_draft !== true ||
-          !/^[A-Za-z0-9._:-]{1,160}$/.test(generation.report_id || "") ||
-          superseded.includes(generation.report_id))) throw new Error("invalid_checkpoint_generation");
       // An earlier multi-query read can straddle another device's adoption.
       // This fully validated current head/receipt is positive scoped proof;
       // it overrides only those two old exclusions, not unrelated history.
       record.supersededRewriteReportIds.delete(base.report_id);
       if (checkpoint) record.supersededRewriteReportIds.delete(checkpoint.base_report_id);
       for (const id of superseded) record.supersededRewriteReportIds.add(id);
-      const scopedReports = generation && generation.report_id !== base.report_id ? [base, generation] : [base];
+      const scopedReports = [...new Map([base, generation, facts].filter(Boolean).map(report => [report.report_id, report])).values()];
       state.saasReports = [...scopedReports, ...(state.saasReports || [])
         .filter((item) => !scopedReports.some(report => report.report_id === item.report_id))];
       const latestBase = payload.current_base_report_id;
@@ -35392,7 +35480,11 @@ async function persistSaasMerchantProductFacts(isCurrentRequest = () => true) {
       current.buyer_copy_requires_validated_listing_generation === true,
     field_evidence: current.field_evidence && typeof current.field_evidence === "object" ? { ...current.field_evidence } : {},
     fact_conflicts: Array.isArray(current.fact_conflicts) ? [...current.fact_conflicts] : [],
-    unknown_facts: collected.unknownFacts,
+    // Retain explicit clears of optional facts across save/reload, without
+    // turning every untouched empty optional input into a new tombstone.
+    unknown_facts: collected.unknownFacts.filter(key =>
+      saasMerchantProductFactRequiredKeys().includes(key) || (current.unknown_facts || []).includes(key) ||
+      collected.explicitUnknownFacts.includes(key) || collected.pendingSuggestionFacts.includes(key)),
     source_records: sourceRecords,
     saved_at: new Date().toISOString(),
     secret_exposed: false,

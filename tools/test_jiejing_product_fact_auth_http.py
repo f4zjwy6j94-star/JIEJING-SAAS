@@ -138,6 +138,26 @@ class ProductFactAuthHttpTests(unittest.TestCase):
         self.assertEqual(["simulation_only_product_facts"], result["source_blockers"])
         self.assertTrue(result["simulation_only"])
 
+    def test_optional_unknowns_survive_http_roundtrip_until_explicitly_confirmed(self):
+        packet = self.packet()
+        packet["unknown_facts"] = ["net_weight_g", "product_origin", "not_a_fact"]
+        status, saved = self.save(packet)
+        self.assertEqual(201, status)
+        for key in ("net_weight_g", "product_origin"):
+            self.assertIn(key, saved["merchant_product_fact_packet"]["unknown_facts"])
+            self.assertNotIn(key, saved["merchant_product_fact_packet"]["derived_listing_suggestions"])
+        self.assertNotIn("not_a_fact", saved["merchant_product_fact_packet"]["unknown_facts"])
+        status, repeated = self.save(saved["merchant_product_fact_packet"], expected=saved["report"]["report_id"])
+        self.assertEqual(201, status)
+        self.assertEqual(saved["merchant_product_fact_packet"], repeated["merchant_product_fact_packet"])
+        confirmed = copy.deepcopy(repeated["merchant_product_fact_packet"])
+        confirmed["merchant_confirmed_facts"].update(net_weight_g="42", product_origin="China")
+        status, newer = self.save(confirmed, expected=repeated["report"]["report_id"])
+        self.assertEqual(201, status)
+        for key in ("net_weight_g", "product_origin"):
+            self.assertNotIn(key, newer["merchant_product_fact_packet"]["unknown_facts"])
+            self.assertEqual(confirmed["merchant_confirmed_facts"][key], newer["merchant_product_fact_packet"]["merchant_confirmed_facts"][key])
+
     def test_nonsimulated_saved_vision_facts_validate_sources_not_execution(self):
         packet = self.packet(simulation=False)
         packet["merchant_save_attestation"] = {"authority": "client_forgery"}

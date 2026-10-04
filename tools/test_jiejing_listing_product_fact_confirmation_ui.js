@@ -805,6 +805,27 @@ test("product fact summary separates AI suggestions awaiting confirmation from g
   });
 });
 
+test("cleared optional net weight and origin remain explicit unknowns after saving", async () => {
+  await withProductFactPage(async (page) => {
+    await page.evaluate(() => {
+      Object.assign(state.saasListingComposerDraft.merchant_product_fact_packet.derived_listing_suggestions,
+        { net_weight_g: "120", product_origin: "Jieyang, Guangdong" });
+      document.querySelector("#product-fact-test-root").innerHTML =
+        renderSaasMerchantProductFactsModule(state.saasListingComposerDraft);
+    });
+    for (const key of ["net_weight_g", "product_origin"]) {
+      await page.locator(`[data-saas-product-fact-field="${key}"]`).fill("");
+    }
+    await page.locator('[data-saas-action="save-merchant-product-facts"]').click();
+    await page.evaluate(() => window.__productFactSavePromise);
+    const packet = await page.evaluate(() => state.saasListingComposerDraft.merchant_product_fact_packet);
+    for (const key of ["net_weight_g", "product_origin"]) {
+      assert.equal(packet.derived_listing_suggestions[key], undefined);
+      assert.ok(packet.unknown_facts.includes(key), `${key}: clearing must survive later history reconstruction`);
+    }
+  });
+});
+
 test("saving confirmed facts preserves untouched AI suggestions in the suggestion layer", async () => {
   await withProductFactPage(async (page) => {
     await page.locator('[data-saas-action="save-merchant-product-facts"]').click();

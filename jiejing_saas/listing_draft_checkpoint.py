@@ -258,10 +258,18 @@ def _view(repository, conn, company_id, store_id, identity):
         raise KeyError("listing_draft_not_found")
     superseded = []
     base = _base(repository, conn, company_id, store_id, identity, superseded=superseded)
+    try:
+        facts = _base_candidate(repository, conn, company_id, store_id, identity, [],
+                                report_types=("merchant.product_facts",))
+    except KeyError:
+        facts = None
     return {"contract_version": CONTRACT_VERSION, "status": "saved" if checkpoint else "empty",
             "checkpoint": checkpoint, "current_revision": checkpoint["revision"] if checkpoint else 0,
             "current_base_report_id": base["report_id"], "current_base_report": base,
             "validated_generation_report": _generation_evidence(repository, conn, company_id, store_id, identity, superseded),
+            # Generation may be the latest copy base, but later fact saves
+            # still need the separate fact head for optimistic concurrency.
+            "current_product_fact_report": facts,
             "base_changed": bool(checkpoint and checkpoint["base_report_id"] != base["report_id"]),
             **({"superseded_rewrite_report_ids": superseded} if superseded else {}), **SAFETY}
 

@@ -6307,7 +6307,12 @@ class SaaSRepository:
             if previous:
                 merged["product_name"] = previous.get("product_name") or packet.get("product_name")
                 known = set(merged["merchant_confirmed_facts"]) | set(merged["source_confirmed_facts"])
-                merged["unknown_facts"] = [key for key in dict.fromkeys([*(previous.get("unknown_facts") or []), *(packet.get("unknown_facts") or [])]) if key not in known]
+                # A confirmed supplier URL and owned-product attestation are
+                # alternatives. An empty text-intake packet must not revoke
+                # the source path already saved in this exact product scope.
+                source_facts = {**merged["source_confirmed_facts"], **merged["merchant_confirmed_facts"]}
+                resolved_missing = known | ({"merchant_owned_product_confirmed"} if source_facts.get("source_url") else set())
+                merged["unknown_facts"] = [key for key in dict.fromkeys([*(previous.get("unknown_facts") or []), *(packet.get("unknown_facts") or [])]) if key not in resolved_missing]
                 merged["listing_copy"] = previous.get("listing_copy") or {}
                 merged["field_evidence"] = {**(previous.get("field_evidence") or {}),
                     **{key: value for key, value in (packet.get("field_evidence") or {}).items() if key not in known}}
@@ -6322,7 +6327,7 @@ class SaaSRepository:
                 merged["fact_conflicts"] = conflicts
                 merged["blocked_by"] = list(dict.fromkeys([
                     *(item for item in [*(previous.get("blocked_by") or []), *(packet.get("blocked_by") or [])]
-                      if not str(item).startswith("merchant_product_fact_missing:") or str(item).split(":", 1)[1] not in known),
+                      if not str(item).startswith("merchant_product_fact_missing:") or str(item).split(":", 1)[1] not in resolved_missing),
                     *("merchant_product_fact_conflict:" + str(item["field"]) for item in conflicts),
                 ]))
                 merged["listing_readiness"] = {**(previous.get("listing_readiness") or {}),
@@ -19413,6 +19418,12 @@ def normalize_merchant_product_fact_packet(
     merchant_owned_product_confirmed = merchant_confirmed.get("merchant_owned_product_confirmed") is True
     if not source_url and not merchant_owned_product_confirmed:
         unknown.append("merchant_owned_product_confirmed")
+    # Optional facts can be explicitly cleared too. Keep that negative
+    # evidence so later history reconstruction cannot revive an old suggestion.
+    submitted_unknown = raw.get("unknown_facts") if isinstance(raw.get("unknown_facts"), list) else []
+    unknown = list(dict.fromkeys([*unknown, *(key for key in submitted_unknown
+        if isinstance(key, str) and key in MERCHANT_PRODUCT_FACT_KEYS and key not in merchant_confirmed
+        and not (key == "merchant_owned_product_confirmed" and source_url))]))
     if source_url:
         source_records.append(
             {

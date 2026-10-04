@@ -35,10 +35,10 @@ const otherReport = { ...baseReport, report_id: "checkpoint-other-base", task_id
   report: { ...baseReport.report, product: "Other Tablet Holder", listing_project_identity: otherIdentity,
     listing_handoff: { ...baseReport.report.listing_handoff,
       listing_fields: { ...baseReport.report.listing_handoff.listing_fields, title: "Other project title" } } } };
-let server, browser, base, checkpoint, requests, unexpected, checkpointHandler, factHandler;
+let server, browser, base, checkpoint, requests, unexpected, checkpointHandler, factHandler, projectStatus;
 
 function resetFixture() {
-  checkpoint = null; requests = []; unexpected = []; checkpointHandler = null; factHandler = null;
+  checkpoint = null; requests = []; unexpected = []; checkpointHandler = null; factHandler = null; projectStatus = null;
 }
 
 function savedCheckpoint(fields, revision = 1) {
@@ -96,7 +96,7 @@ before(async () => {
         && [...url.searchParams.keys()].length === 1
         && [identity.key, otherIdentity.key].includes(url.searchParams.get("project_id"))) {
       requests.push({ method: "GET", path: url.pathname, query: Object.fromEntries(url.searchParams) });
-      return sendJson(res, 200, { merchant_project_status: null });
+      return sendJson(res, 200, { merchant_project_status: projectStatus });
     }
     if (factHandler && req.method === "POST" && url.pathname === `/stores/${storeId}/product-facts`) {
       let raw = "";
@@ -164,7 +164,7 @@ async function openDevice(options = {}) {
 }
 
 async function seedDevice(page, options = {}) {
-  await page.evaluate(({ companyId, userId, storeId, base, identity, originalFields, baseReport, visual, intakeFirst }) => {
+  await page.evaluate(({ companyId, userId, storeId, base, identity, originalFields, baseReport, visual, intakeFirst, coldProject }) => {
     window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
     localStorage.setItem(saasStorageKeys.storeId, storeId);
     localStorage.setItem("jiejing_saas_backend_session_hint", "1");
@@ -175,17 +175,17 @@ async function seedDevice(page, options = {}) {
     state.saasCompany = { company_id: companyId };
     state.saasPermissions = ["create_task", "view_report"];
     state.saasStores = [{ store_id: storeId, company_id: companyId, platform: "ebay", marketplace: "EBAY_US" }];
-    state.saasReports = [baseReport];
+    state.saasReports = coldProject ? [] : [baseReport];
     state.saasTasks = [];
     state.saasProtectedStateReady = true;
-    state.saasListingComposerDraft = { product: "Foldable Tablet Stand", title: "Original title",
+    state.saasListingComposerDraft = coldProject ? null : { product: "Foldable Tablet Stand", title: "Original title",
       source_report_id: baseReport.report_id, listing_project_identity: identity,
       fields: { ...originalFields }, merchant_edited_fields: [], model_generated: false, safe_local_only: true };
     state.saasDetachedListingProjectDrafts = {};
     state.view = "product";
     bindEvents();
     if (intakeFirst) renderSaasPublishConfirmationIntakePanel(undefined, { includeGuide: false });
-    document.querySelector("#view-product").innerHTML = renderSaasListingDraftEditor();
+    if (!coldProject) document.querySelector("#view-product").innerHTML = renderSaasListingDraftEditor();
     if (visual) {
       document.documentElement.classList.add("app-ready");
       document.body.classList.add("saas-public-mvp");
@@ -194,7 +194,115 @@ async function seedDevice(page, options = {}) {
       document.querySelectorAll(".view").forEach((view) => view.classList.toggle("is-active", view.id === "view-product"));
     }
   }, { companyId, userId, storeId, base, identity: options.identity || identity, originalFields,
-    baseReport: options.baseReport || baseReport, visual: options.visual === true, intakeFirst: options.intakeFirst === true });
+    baseReport: options.baseReport || baseReport, visual: options.visual === true, intakeFirst: options.intakeFirst === true,
+    coldProject: options.coldProject === true });
+}
+
+function savedProjectStatus() {
+  return { snapshot_version: "merchant_project_status_v1", source: "tenant_scoped_backend_evidence",
+    project: { project_id: identity.key, listing_project_identity: { ...identity } }, blocker: {} };
+}
+
+test("cold project restoration obtains its full anchor from live status and preserves cloud edits without writing", async () => {
+  resetFixture(); projectStatus = savedProjectStatus();
+  checkpoint = savedCheckpoint({ ...originalFields, title: "Previously saved older project" });
+  const device = await openDevice({ coldProject: true });
+  try {
+    await device.page.evaluate(async () => {
+      await refreshSaasMerchantProjectStatus();
+      await hydrateSaasListingCloudCheckpoint();
+      document.querySelector("#view-product").innerHTML = renderSaasListingDraftEditor();
+    });
+    assert.equal(await device.page.locator('[data-saas-listing-draft-field="title"]').inputValue(), checkpoint.fields.title);
+    assert.deepEqual(await device.page.evaluate(() => state.saasListingComposerDraft.listing_project_identity), identity);
+    assert.equal(requests.filter(item => item.method === "POST").length, 0);
+    const reads = requests.filter(item => item.path === checkpointPath);
+    assert.ok(reads.length >= 1);
+    assert.ok(reads.every(item => item.query.source_report_id === identity.source_report_id && item.query.candidate_id === identity.candidate_id));
+    assert.deepEqual(unexpected, []); assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+for (const invalid of ["company", "store", "project", "source", "candidate", "type", "status", "packet"]) {
+  test(`cold project restoration rejects a ${invalid} mismatch in the independent fact head`, async () => {
+    resetFixture(); projectStatus = savedProjectStatus();
+    const facts = { ...structuredClone(baseReport), report_id: "checkpoint-independent-facts", report_type: "merchant.product_facts" };
+    facts.report.merchant_product_fact_packet = { merchant_confirmed_facts: { product_name: "Tablet Stand" } };
+    if (invalid === "company") facts.company_id = "foreign-company";
+    if (invalid === "store") facts.store_id = "foreign-store";
+    if (invalid === "project") facts.report.listing_project_identity.key = "foreign-project";
+    if (invalid === "source") facts.report.listing_project_identity.source_report_id = "foreign-source";
+    if (invalid === "candidate") facts.report.listing_project_identity.candidate_id = "foreign-candidate";
+    if (invalid === "type") facts.report_type = "ai_ceo.market_research";
+    if (invalid === "status") facts.status = "failed";
+    if (invalid === "packet") delete facts.report.merchant_product_fact_packet;
+    checkpointHandler = (request, res) => {
+      if (request.method !== "GET") return false;
+      sendJson(res, 200, { checkpoint: null, current_revision: 0, current_base_report_id: baseReport.report_id,
+        current_base_report: baseReport, current_product_fact_report: facts });
+      return true;
+    };
+    const device = await openDevice({ coldProject: true });
+    try {
+      await device.page.evaluate(() => refreshSaasMerchantProjectStatus());
+      assert.equal(await device.page.evaluate(() => state.saasListingComposerDraft), null);
+      assert.deepEqual(await device.page.evaluate(() => state.saasReports), []);
+      assert.equal(requests.filter(item => item.method === "POST").length, 0);
+      assert.deepEqual(unexpected, []); assert.deepEqual(device.errors, []);
+    } finally { await device.context.close(); }
+  });
+}
+
+for (const invalid of ["cached", "conflict", "incomplete"]) {
+  test(`cold project restoration does not use ${invalid} status as an origin authority`, async () => {
+    resetFixture(); projectStatus = savedProjectStatus();
+    if (invalid === "conflict") projectStatus.blocker.code = "listing_project_identity_conflict";
+    if (invalid === "incomplete") delete projectStatus.project.listing_project_identity.candidate_id;
+    const device = await openDevice({ coldProject: true });
+    try {
+      if (invalid === "cached") await device.page.evaluate(snapshot => {
+        state.saasMerchantProjectStatus = snapshot;
+        ensureSaasListingCloudCheckpoint();
+      }, projectStatus);
+      else await device.page.evaluate(() => refreshSaasMerchantProjectStatus());
+      assert.equal(await device.page.evaluate(() => state.saasListingComposerDraft), null);
+      assert.equal(requests.filter(item => item.path === checkpointPath).length, 0);
+      assert.deepEqual(unexpected, []); assert.deepEqual(device.errors, []);
+    } finally { await device.context.close(); }
+  });
+}
+
+for (const change of ["company", "user", "store", "project", "refresh", "new-draft"]) {
+  test(`cold project restoration ignores a held response after ${change} changes`, async () => {
+    resetFixture(); projectStatus = savedProjectStatus();
+    const release = deferred();
+    checkpointHandler = async (request, res) => {
+      if (request.method !== "GET") return false;
+      await release.promise;
+      sendJson(res, 200, { checkpoint: null, current_revision: 0, current_base_report_id: baseReport.report_id,
+        current_base_report: baseReport });
+      return true;
+    };
+    const device = await openDevice({ coldProject: true });
+    try {
+      const read = device.page.evaluate(() => refreshSaasMerchantProjectStatus());
+      await waitUntil(() => requests.some(item => item.path === checkpointPath), "the real cold read must be held");
+      await device.page.evaluate(change => {
+        if (change === "company") state.saasIdentity.company_id = "changed-company";
+        if (change === "user") state.saasIdentity.user_id = "changed-user";
+        if (change === "store") { state.saasStores = []; localStorage.removeItem(saasStorageKeys.storeId); }
+        if (change === "project") history.replaceState(null, "", "?start=app&view=product&project=changed-project");
+        if (change === "refresh") saasStateRefreshGeneration += 1;
+        if (change === "new-draft") state.saasListingComposerDraft = { product: "Unsubmitted new input" };
+      }, change);
+      release.resolve(); await read;
+      assert.deepEqual(await device.page.evaluate(() => state.saasReports), []);
+      assert.deepEqual(await device.page.evaluate(() => state.saasListingComposerDraft),
+        change === "new-draft" ? { product: "Unsubmitted new input" } : null);
+      assert.equal(requests.filter(item => item.method === "POST").length, 0);
+      assert.deepEqual(unexpected, []); assert.deepEqual(device.errors, []);
+    } finally { release.resolve(); await device.context.close(); }
+  });
 }
 
 async function mountPublishIntake(page) {

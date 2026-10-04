@@ -13987,7 +13987,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         # Checkpoints are a validated, secret-rejected merchant-text DTO, not provider metadata.
         # Preserve their exact immutable receipt; retain normal provider projection on source reports.
         safe = dict(data)
-        for report_key in ("current_base_report", "validated_generation_report"):
+        for report_key in ("current_base_report", "validated_generation_report", "current_product_fact_report"):
             base = data.get(report_key)
             if not isinstance(base, dict):
                 continue

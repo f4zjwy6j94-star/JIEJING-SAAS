@@ -226,7 +226,19 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
     def test_old_product_copy_survives_generation_falling_out_of_recent_reports(self):
         self.run_generated_media_copy_browser_loop(simulation_only=True, old_generation=True)
 
-    def run_generated_media_copy_browser_loop(self, *, simulation_only, with_conflicts=False, old_generation=False):
+    def test_old_project_bootstraps_when_all_its_reports_fall_out_of_recent_feed(self):
+        self.run_generated_media_copy_browser_loop(simulation_only=True, all_history_old=True)
+
+    def test_latest_fact_conflict_snapshot_does_not_resurrect_historical_reason(self):
+        self.run_generated_media_copy_browser_loop(simulation_only=False, with_conflicts=True,
+                                                   historical_normalized_reason=True)
+
+    def test_optional_clears_survive_saved_history_image_step_and_cold_reload(self):
+        self.run_generated_media_copy_browser_loop(simulation_only=False, with_conflicts=True,
+                                                   historical_normalized_reason=True, cleared_optional=True)
+
+    def run_generated_media_copy_browser_loop(self, *, simulation_only, with_conflicts=False, old_generation=False,
+                                             historical_normalized_reason=False, cleared_optional=False, all_history_old=False):
         """The full app crosses real fact/checkpoint HTTP after a real generation handler."""
         node = shutil.which("node")
         self.assertIsNotNone(node, "Node is required for the real media-to-publish browser loop")
@@ -241,6 +253,13 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         if with_conflicts:
             packet["fact_conflicts"] = [{"field": "product_dimensions_cm", "values": ["11.5 x 11.5", "20 x 20 x 0.5"],
                 "reason": "Supplier dimension tables refer to an unverified size or package.", "requires_merchant_confirmation": True}]
+        if historical_normalized_reason:
+            # Production history contains an old extraction explanation which
+            # the later saved fact snapshot normalized to empty. Restoring the
+            # latest complete snapshot must not resurrect that older version.
+            packet["fact_conflicts"].append({"field": "currency", "values": ["USD", "CNY"], "reason": ""})
+        if cleared_optional:
+            packet["unknown_facts"] = ["net_weight_g", "product_origin"]
         fact_path = f"/stores/{self.store_id}/product-facts"
         status, anchor = self.request(fact_path, method="POST", body={
             "listing_project_identity": identity, "merchant_product_fact_packet": packet})
@@ -278,7 +297,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
         from jiejing_saas.repository import SaaSRepository
         profile = self.request("/me")[1]
         repository = SaaSRepository(self.root / "saas.sqlite", database_engine="sqlite", database_url="")
-        if old_generation:
+        if old_generation or all_history_old:
             # Real saved generation, then enough unrelated product history to
             # evict it from the UI's recent-24 feed, followed by an unchanged
             # fact successor and an explicitly adopted text checkpoint.
@@ -286,24 +305,33 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
                 repository.save_merchant_product_fact_report(task=facts["task"], packet=facts["merchant_product_fact_packet"],
                     listing_project_identity={**identity, "key": f"unrelated-history-{index}"},
                     _created_at=f"2027-01-01T00:00:{index:02d}+00:00")
-            successor = repository.save_merchant_product_fact_report(task=facts["task"],
-                packet=facts["merchant_product_fact_packet"], listing_project_identity=identity,
-                _created_at="2027-01-02T00:00:00+00:00")
-            status, _ = self.request(checkpoint_path, method="POST", body={
-                "contract_version": "listing_merchant_edit_v1", "listing_project_identity": identity,
-                "base_report_id": successor["report_id"], "expected_revision": 1, "mutation_id": str(uuid.uuid4()),
-                "fields": fields, "merchant_edited_fields": []})
-            self.assertEqual(status, 201)
+            if not all_history_old:
+                successor = repository.save_merchant_product_fact_report(task=facts["task"],
+                    packet=facts["merchant_product_fact_packet"], listing_project_identity=identity,
+                    _created_at="2027-01-02T00:00:00+00:00")
+                status, _ = self.request(checkpoint_path, method="POST", body={
+                    "contract_version": "listing_merchant_edit_v1", "listing_project_identity": identity,
+                    "base_report_id": successor["report_id"], "expected_revision": 1, "mutation_id": str(uuid.uuid4()),
+                    "fields": fields, "merchant_edited_fields": []})
+                self.assertEqual(status, 201)
             recent = self.request("/reports?limit=24")[1]["reports"]
             gc.collect()
             self.assertNotIn(report["report_id"], [item["report_id"] for item in recent])
-            self.assertIn(successor["report_id"], [item["report_id"] for item in recent])
+            if all_history_old:
+                self.assertFalse(any(item["report"].get("listing_project_identity", {}).get("key") == identity["key"]
+                                     for item in recent), "the cold page must start without any project report")
+            else:
+                self.assertIn(successor["report_id"], [item["report_id"] for item in recent])
         if with_conflicts:
             # The original vision report retains provenance metadata, while a
             # later merchant fact save uses the public normalized schema.
             # Both records legitimately exist in the same project history.
             original_packet = copy.deepcopy(facts["merchant_product_fact_packet"])
             original_packet["fact_conflicts"][0].update(image_indexes=[1, 2], requires_merchant_confirmation=True)
+            if historical_normalized_reason:
+                original_packet["fact_conflicts"][1]["reason"] = "本轮文字资料与图片建议不同，均未确认，请核对真实商品资料。"
+            if cleared_optional:
+                original_packet["derived_listing_suggestions"].update(net_weight_g="120", product_origin="Jieyang, Guangdong")
             repository.save_merchant_product_fact_report(task=facts["task"], packet=original_packet,
                 listing_project_identity=identity, _created_at="2020-01-01T00:00:00+00:00")
         pending_media = repository.create_media_asset_job(
@@ -318,6 +346,7 @@ class BuyerCopyRewriteHTTPTests(unittest.TestCase):
             input=json.dumps({"scenario": "new-media-after-generation", "api_base": self.base,
                 "session_token": self.token, "profile": profile, "store_id": self.store_id,
                 "identity": identity, "expected_copy": fields, "simulation_only": simulation_only,
+                "expected_unknown_fields": ["net_weight_g", "product_origin"] if cleared_optional else [],
                 "pending_media": pending_media}))
         # Only the child's fixed diagnostic is surfaced, never a local credential or response body.
         self.assertEqual(result.returncode, 0, "real media-to-publish loop failed: " + result.stderr)

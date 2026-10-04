@@ -2,6 +2,7 @@
 """Hermetic HTTP regressions for model-planned product selection and isolation."""
 from __future__ import annotations
 
+import copy
 import json
 import base64
 import hashlib
@@ -407,6 +408,27 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         self.assertIn("semantic_fact_review_model_failed", payload["ai_ceo_chat"]["blocked_by"])
         self.assertFalse(payload.get("product_vision_report"))
         self.assertEqual(before, self.reports())
+
+    def test_current_text_update_preserves_optional_clears_and_supplier_source_alternative(self):
+        packet = copy.deepcopy(self.old["merchant_product_fact_packet"])
+        packet["merchant_confirmed_facts"].pop("merchant_owned_product_confirmed", None)
+        packet["merchant_confirmed_facts"]["source_url"] = "https://supplier.example.test/current-product"
+        packet["unknown_facts"] = [*packet["unknown_facts"], "net_weight_g", "product_origin"]
+        status, saved = self.call(f"/stores/{self.store}/product-facts", {
+            "listing_project_identity": self.old_identity, "merchant_product_fact_packet": packet})
+        self.assertEqual(201, status)
+        before = saved["merchant_product_fact_packet"]
+        message = "供应商字段分离：继续那把量勺，采购价1.2元，1件起批，PVC，重量120g口径不明。"
+        status, result = self.call(f"/stores/{self.store}/merchant-ceo/chat", self.envelope(message))
+        self.assertEqual(201, status, result)
+        after = result["product_vision_fact_packet"]
+        self.assertEqual(before["merchant_confirmed_facts"], after["merchant_confirmed_facts"])
+        for key in ("net_weight_g", "product_origin"):
+            self.assertIn(key, after["unknown_facts"])
+            self.assertNotIn(key, after["derived_listing_suggestions"])
+        self.assertNotIn("merchant_owned_product_confirmed", after["unknown_facts"])
+        self.assertNotIn("merchant_product_fact_missing:merchant_owned_product_confirmed", after["blocked_by"])
+        self.assertEqual(self.old_identity, result["semantic_dispatch"]["target_project_identity"])
 
     def test_new_image_and_text_facts_preserve_both_sources_without_confirmation(self):
         body = self.envelope("这次单独整理银色木柄15mL咖啡量勺：材质304不锈钢和实木，货号SPOON15，尺寸18×4×2厘米，净重42克。结合本轮图片核对。")

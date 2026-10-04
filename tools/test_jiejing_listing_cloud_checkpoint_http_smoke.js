@@ -110,6 +110,7 @@ async function main() {
           state.saasListingComposerDraft = null; state.saasDetachedListingProjectDrafts = {};
           state.view = "product"; syncSaasPublicMvpMode(); bindEvents();
           restoreSaasListingComposerDraftFromBackendReports({ preferBackendLatest: true, projectId: fixture.identity.key });
+          await refreshSaasMerchantProjectStatus();
           await hydrateSaasListingCloudCheckpoint({ force: true });
           [entryShell, siteShell, onboardingShell].forEach(shell => shell.classList.add("is-hidden"));
           appShell.classList.remove("is-hidden"); document.body.classList.remove("site-locked");
@@ -121,13 +122,40 @@ async function main() {
           context_exists: Boolean(saasListingCloudContext()), step: saasListingWizardRecord()?.step,
           reports: state.saasReports.length, panels: document.querySelectorAll("[data-listing-wizard-step]").length }));
         assert.equal(await page.locator(`#view-product [data-listing-wizard-step="${startStep}"]`).isVisible(), true);
+        if (fixture.expected_unknown_fields?.length) {
+          const restored = await page.evaluate(() => saasMerchantProductFactPacket());
+          for (const key of fixture.expected_unknown_fields) {
+            assert.ok(restored.unknown_facts.includes(key), `${key}: explicit unknown must survive cold restore`);
+            assert.equal(restored.derived_listing_suggestions[key], undefined, `${key}: rejected historical suggestion must not revive`);
+          }
+        }
       }
       async function move(direction, expectedStep) {
+        const beforeMove = await page.evaluate(() => ({ signature: JSON.parse(saasListingMediaCopyFactSignature(saasMerchantProductFactPacket())),
+          revision: saasListingCloudRecord()?.revision, seq: saasListingCloudRecord()?.seq }));
         await page.locator(`#view-product [data-saas-action="listing-wizard-${direction}"]`).click();
         await page.waitForFunction(() => !saasListingWizardRecord()?.busy);
         const actual = await page.evaluate(() => ({ step: saasListingWizardRecord()?.step,
           status: saasListingCloudRecord()?.status, conflict: Boolean(saasListingCloudRecord()?.conflict) }));
         diagnostic.navigation = actual;
+        if (actual.step !== expectedStep) diagnostic.fact_signature_difference = await page.evaluate(() => {
+          const current = JSON.parse(saasListingMediaCopyFactSignature(state.saasListingComposerDraft.merchant_product_fact_packet));
+          const generated = state.saasReports.find(item => item.runtime_run_id === "listing_draft_generation");
+          const prior = JSON.parse(saasListingMediaCopyFactSignature(generated?.report?.merchant_product_fact_packet));
+          return Object.keys({ ...current, ...prior }).filter(key => JSON.stringify(current[key]) !== JSON.stringify(prior[key]));
+        });
+        if (actual.step !== expectedStep) diagnostic.transition_difference = await page.evaluate(before => {
+          const packet = JSON.parse(saasListingMediaCopyFactSignature(saasMerchantProductFactPacket()));
+          const record = saasListingCloudRecord();
+          return { keys: Object.keys({ ...packet, ...before.signature }).filter(key => JSON.stringify(packet[key]) !== JSON.stringify(before.signature[key])),
+            revision_changed: before.revision !== record?.revision, sequence_changed: before.seq !== record?.seq,
+            base_type: saasListingCloudBaseReport(record.context)?.report_type,
+            source_matches_base: state.saasListingComposerDraft.source_product_fact_report_id === saasListingCloudBaseReport(record.context)?.report_id,
+            fact_save_status: state.saasListingProductFactSaveStatus,
+            project_reports: state.saasReports.filter(report => saasListingCloudReportMatchesContext(report, record.context))
+              .map(report => ({ type: report.report_type, created_at: report.created_at,
+                is_source: report.report_id === state.saasListingComposerDraft.source_product_fact_report_id })) };
+        }, beforeMove);
         assert.equal(actual.step, expectedStep, "wizard navigation must complete through the actual save handlers");
         assert.equal(await page.locator(`#view-product [data-listing-wizard-step="${expectedStep}"]`).isVisible(), true,
           "the destination wizard panel must actually be visible");
