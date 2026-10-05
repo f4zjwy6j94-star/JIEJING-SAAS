@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +107,16 @@ def main() -> int:
         if marker.lower() in merchant_copy.lower():
             print(f"FAIL merchant pricing copy exposes stale/internal wording: {marker}")
             return 1
+
+    for label, scope in [
+        ("app plan catalog", public_plan_catalog), ("homepage", index_html),
+        ("billing summary", billing_summary), ("checkout", payment),
+        ("pricing explanation", pricing), ("settings summary", settings_module),
+    ]:
+        assert "加购是否可用以页面状态为准" in scope, f"{label} must not promise unconditional media top-ups"
+
+    module_version = re.search(r'const JIEJING_SETTINGS_PANELS_SRC = "\./assets/jiejing-settings-panels\.js\?v=([A-Za-z0-9._-]+)"', app)
+    assert module_version and module_version[1].endswith(hashlib.sha256(settings_module.encode('utf-8')).hexdigest()[:12]), "changed lazy settings module must not reuse an old browser cache key"
 
     print("PASS jiejing_merchant_pricing_media_copy")
     return 0

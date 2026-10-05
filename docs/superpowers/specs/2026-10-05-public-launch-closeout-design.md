@@ -85,3 +85,43 @@ reported as deployed.
 The changes clarify existing capabilities, do not remove modules, and do not
 grant new authority. The required support address is supplied and approved for
 public display. Acceptance concerns this patch, not another full product journey.
+
+## Owner-directed unified closeout, deployment held
+
+On October 5 the owner explicitly deferred deployment and requested one unified
+public paid-product closeout before going live. This supersedes the earlier
+next-step deployment proposal. Preserve the completed acfa285 baseline and its
+274/274 report, bundle and dry-run; do not apply that bundle or present its
+verification as evidence for later source changes.
+
+The bounded review covers independent customer use, billing and entitlements,
+product-to-eBay publication, tenant/data safety, and feedback/operations. Reuse
+completed real registration, product and operational evidence. Do not repeat
+OAuth, shop sync, real payments, refunds, generation or listing execution.
+Existing R1/J1-J4/B1/C1/D1 acceptance remains the baseline, not a new feature list.
+
+The following concrete public-delivery defects were reproduced and corrected:
+
+1. Price disclosure showed only 99 yuan while both paid plans were selectable.
+   The trust explanation now uses the same public plan catalog as the checkout.
+2. Unavailable payment capability was described as a trial, including for an
+   active paid customer, and led to the old manual-trial application. All mounted
+   billing explanations now separate payment availability from entitlement;
+   preserve the known plan/expiry and expose the existing read-only refresh
+   action. No money, entitlement or platform permission logic changes.
+3. Missing or invalid paid-plan price was displayed as zero; missing account
+   plan data was labelled as a paid plan. Unknowns now remain visibly unverified.
+4. Public plan and checkout descriptions implied extra media points could
+   always be purchased. They now qualify this by actual purchase availability;
+   existing package quotas, amounts and feature switches are unchanged.
+5. The lazy settings asset used an old fixed cache URL. Its URL now includes the
+   source digest, with a regression ensuring future module changes refresh it.
+
+Each behavioral correction has a failing-then-passing regression. Existing
+merchant UI, pricing, homepage, settings, identity isolation, feedback and
+controlled publication checks are retained; no tests are removed or weakened.
+The local browser fixture is labelled, uses synthetic state, and denies business
+writes. It is not a production account or real payment/publish acceptance.
+
+Finish this unified candidate's checks before a future same-source full release
+gate. This continuation performs no packaging, dry-run or production apply.

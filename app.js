@@ -1,4 +1,4 @@
-const JIEJING_SETTINGS_PANELS_SRC = "./assets/jiejing-settings-panels.js?v=20260822-public-commercial-release-v105";
+const JIEJING_SETTINGS_PANELS_SRC = "./assets/jiejing-settings-panels.js?v=20261005-unified-df0d9aec39f9";
 let jiejingSettingsPanelsLoadPromise = null;
 let saasBrowserSessionRefreshPromise = null;
 const SAAS_BROWSER_SESSION_REFRESH_LOCK = "jiejing-browser-session-refresh-v1";
@@ -1612,27 +1612,27 @@ const planDetails = {
   starter: {
     title: "有店铺",
     price: "¥99 / 30 天",
-    desc: "适合已有 1 个店铺的商家。单次购买 30 天，不会自动续费；套餐含 1,000 素材点，用完后再按需加购。",
+    desc: "适合已有 1 个店铺的商家。单次购买 30 天，不会自动续费；套餐含 1,000 素材点，加购是否可用以页面状态为准。",
     cta: "登录后选择方案",
     items: [
       "1 个店铺 · 2 个席位 · 100 个经营任务",
       "单次批量最多 20 行，覆盖 AI CEO、Listing、素材工坊和客服订单",
       "确认中心、来源记录、工作记录和按需报告",
       "商家自带模型；模型费用由商家直接承担",
-      "含 1,000 素材点；套餐内点数当期有效，用完后可按需购买",
+      "含 1,000 素材点；套餐内点数当期有效，加购是否可用以页面状态为准",
     ],
   },
   operator: {
     title: "多店铺",
     price: "¥199 / 30 天",
-    desc: "适合同时经营多个店铺的商家。单次购买 30 天，不会自动续费；套餐含 3,000 素材点，用完后再按需加购。",
+    desc: "适合同时经营多个店铺的商家。单次购买 30 天，不会自动续费；套餐含 3,000 素材点，加购是否可用以页面状态为准。",
     cta: "登录后选择方案",
     items: [
       "3 个店铺 · 5 个席位 · 500 个经营任务",
       "单次批量最多 200 行，支持失败重试和部分成功",
       "店铺级流程模板、确认规则、履约方式和利润底线",
       "跨店复用模板，同时保留每个店铺的例外规则",
-      "含 3,000 素材点；套餐内点数当期有效，用完后可按需购买",
+      "含 3,000 素材点；套餐内点数当期有效，加购是否可用以页面状态为准",
     ],
   },
 };
@@ -41174,27 +41174,26 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
   const domesticBilling = saasMerchantDomesticBillingState();
   const currentPlan = billing.usage?.plan && typeof billing.usage.plan === "object" ? billing.usage.plan : {};
   const currentPlanKey = String(currentPlan.key || billing.planKey || "free").toLowerCase();
-  const currentPlanLabel = currentPlanKey === "free" ? "免费体验" : currentPlanKey === "operator" || currentPlanKey === "team" ? "多店铺" : "有店铺";
-  const currentPlanPrice = Number(currentPlan.amount_minor || 0) > 0 ? `¥${Math.round(Number(currentPlan.amount_minor) / 100)} / 30 天` : "¥0";
-  const hasExternalProvider = domesticBilling.online || Boolean(billing.provider.external_paid_provider_configured);
-  const isTestMode = Boolean(billing.provider.test_billing_provider_configured);
-  const stageLabel = domesticBilling.online ? "微信扫码付款可用" : hasExternalProvider ? "在线付款可用" : isTestMode ? "试用模式，不自动扣费" : "暂未开放在线支付";
+  const currentPlanLabel = currentPlanKey === "free" ? "免费体验" : currentPlanKey === "operator" || currentPlanKey === "team" ? "多店铺" : currentPlanKey === "starter" ? "有店铺" : "套餐待核对";
+  const amountMinor = currentPlan.amount_minor;
+  const currentPlanPrice = Number.isSafeInteger(amountMinor) && amountMinor > 0
+    ? `¥${(amountMinor / 100).toFixed(2).replace(/\.00$/, "")} / 30 天`
+    : currentPlanKey === "free" && amountMinor === 0 ? "¥0" : "价格待核对";
+  const stageLabel = domesticBilling.online ? "微信扫码付款可用" : "在线付款暂不可用";
   const stageDetail = domesticBilling.online
     ? "商家主动扫码购买 30 天；到账后系统开通权益，不会自动续费或自动扣款。"
-    : hasExternalProvider
-      ? "付款和取消按系统账单状态处理，页面不接触支付密钥。"
-    : "当前只展示套餐、额度和停用规则；不会创建真实付款，也不会自动扣款。";
+    : "暂不发起新的付款，不会自动扣款；已有套餐与订单保留，请刷新付款状态。";
   const rows = [
     {
       label: "现在",
       title: stageLabel,
       detail: stageDetail,
-      tone: hasExternalProvider ? "green" : "amber",
+      tone: domesticBilling.online ? "green" : "amber",
     },
     {
       label: "软件套餐",
       title: `${currentPlanLabel} · ${currentPlanPrice}`,
-      detail: "免费体验不赠送生图素材点；有店铺含 1,000 素材点，多店铺含 3,000 素材点；套餐点用完后再加购，付费套餐不延长平台 AI 试用。",
+      detail: "免费体验不赠送生图素材点；有店铺含 1,000 素材点，多店铺含 3,000 素材点；加购是否可用以页面状态为准，付费套餐不延长平台 AI 试用。",
       tone: "green",
     },
     {
@@ -41222,7 +41221,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
         <div>
           <span>订阅和用量总览</span>
           <strong>套餐权益、商家模型、素材点和平台成本清楚可查</strong>
-          <p>免费体验：7 天内最多 20 次平台 AI 调用，不赠送生图素材点。付费套餐已包含素材点；用完后才需要加购，不延长平台 AI 试用。固定加购为 1,000 点 / ¥10、5,000 点 / ¥50、10,000 点 / ¥100。自接模型费用由商家另付，电商平台经营成本仍由商家在对应平台结算。</p>
+          <p>免费体验：7 天内最多 20 次平台 AI 调用，不赠送生图素材点。付费套餐已包含素材点；用完后才需要加购，不延长平台 AI 试用。加购是否可用以页面状态为准；开放时固定加购为 1,000 点 / ¥10、5,000 点 / ¥50、10,000 点 / ¥100。自接模型费用由商家另付，电商平台经营成本仍由商家在对应平台结算。</p>
         </div>
         <em>${escapeHtml(stageLabel)}</em>
       </div>
@@ -41245,7 +41244,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       </div>
       <div class="saas-merchant-billing-plain-safety" hidden aria-hidden="true">
         <span>merchant_billing_plain_summary_v1</span>
-        <span>billing_now_no_real_charge=${!hasExternalProvider}</span>
+        <span>billing_now_no_real_charge=${!domesticBilling.online}</span>
         <span>base_subscription_is_feature_fee=true</span>
         <span>ai_media_usage_has_plan_allowance=true</span>
         <span>purchased_media_points_separate=true</span>
@@ -41650,13 +41649,11 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
         ? "试用申请待确认"
         : online
           ? "微信支付可用"
-          : "在线付款暂未开放";
-  const actionDisabled = state.saasLoading || entitlementActive || Boolean(pendingTrial) ? "disabled" : "";
-  const actionLabel = entitlementActive ? "套餐已开通" : pendingTrial ? "试用申请已提交" : "申请免费试用";
+          : "在线付款暂不可用";
   const rows = [
-    ["当前状态", status, previewEntitlement ? previewDescription : online ? (entitlementActive ? (validActiveUntil ? `当前套餐有效期至 ${activeUntilLabel}。` : "套餐期限待核对，暂不提供续购；现有权益与历史记录保留，请联系支持。") : "微信扫码付款，到账后自动开通套餐和额度。") : "当前不会自动扣款，也不会生成可付款二维码。"],
+    ["当前状态", status, previewEntitlement ? previewDescription : entitlementActive ? (validActiveUntil ? `当前套餐有效期至 ${activeUntilLabel}。` : "套餐期限待核对，暂不提供续购；现有权益与历史记录保留，请联系支持。") : online ? "微信扫码付款，到账后自动开通套餐和额度。" : "当前暂不发起新的付款，不会自动扣款；请刷新付款状态。"],
     [legacyTeamEntitlement ? "历史团队套餐" : checkoutPlan.title, legacyTeamEntitlement ? "继续保留现有权益" : checkoutPlan.price, legacyTeamEntitlement ? "历史权益不会被降级；续购时需要明确选择当前公开套餐。" : "单次购买 30 天，不会自动续费；再次购买前会重新确认。"],
-    ["生效时间", online ? "付款成功后自动开通" : "试用资格确认后开通", online ? "以微信支付确认结果为准；付款后可刷新订单状态。" : "当前不会创建付款二维码，也不会自动扣费。"],
+    ["生效时间", online ? "付款成功后自动开通" : "付款恢复后可开通或续购", online ? "以微信支付确认结果为准；付款后可刷新订单状态。" : "付款通道状态不改变已有套餐；权益与期限以账号内状态为准。"],
   ];
   const orderMarkup = paymentOrders.slice(0, 5).map((order) => {
     const orderStatus = String(order?.status || "");
@@ -41692,8 +41689,8 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
       <div class="saas-settings-card-head">
         <div>
           <span>订阅开通</span>
-          <strong>${escapeHtml(online ? entitlementActive ? "当前套餐与续购" : "微信扫码开通，付款成功后自动生效" : "先使用试用套餐，在线付款开放后可微信扫码")}</strong>
-          <p>${escapeHtml(online ? "付款由微信支付处理；捷境展示订单与到账结果。未付款订单可以取消，不会自动扣款。" : "当前不会自动扣款。在线付款开放后，付款成功并经后台确认，所选软件套餐权益会自动生效。")}</p>
+          <strong>${escapeHtml(entitlementActive ? "当前套餐与续购" : online ? "微信扫码开通，付款成功后自动生效" : "在线付款暂不可用，请稍后刷新")}</strong>
+          <p>${escapeHtml(online ? "付款由微信支付处理；捷境展示订单与到账结果。未付款订单可以取消，不会自动扣款。" : "暂不发起新的付款，不会自动扣款。已有套餐与历史订单保留；请刷新付款状态，仍未恢复时联系捷境支持。")}</p>
         </div>
         <em>${escapeHtml(status)}</em>
       </div>
@@ -41715,7 +41712,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
         <div class="saas-subscription-plan-choices" aria-label="选择要开通的软件套餐">
           <div class="saas-subscription-plan-choice-head">
             <strong>选择要开通的软件套餐</strong>
-            <small>有店铺和多店铺均已包含对应素材点；用完后再加购，商家自带模型费用另行承担。</small>
+            <small>有店铺和多店铺均已包含对应素材点；加购是否可用以页面状态为准，商家自带模型费用另行承担。</small>
           </div>
           <div class="saas-subscription-plan-choice-grid">
             <button class="${checkoutPlanKey === "starter" ? "is-selected" : ""}" type="button" data-saas-action="domestic-billing-select-plan" data-domestic-plan-key="starter" aria-pressed="${checkoutPlanKey === "starter"}">
@@ -41784,7 +41781,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
         </div>
       ` : !online ? `
         <div class="saas-manual-beta-payment-actions">
-          <button class="primary-action compact-action" type="button" data-saas-action="manual-beta-create-order" data-manual-beta-plan-key="starter" ${actionDisabled}>${escapeHtml(actionLabel)}</button>
+          <button class="secondary-action compact-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新付款状态</button>
         </div>
       ` : ""}
       ${orderMarkup ? `
@@ -41820,7 +41817,7 @@ function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkben
           key: "current_charge_status",
           label: "当前是否扣费",
           title: domesticBilling.online ? "微信扫码付款可用" : "当前不会自动扣费",
-          detail: domesticBilling.online ? "只有商家主动创建并扫码的订单才会付款。" : "公开付款开关关闭时，不会生成可付款二维码。",
+          detail: domesticBilling.online ? "只有商家主动创建并扫码的订单才会付款。" : "在线付款暂不可用，暂不发起新的付款；请刷新付款状态。",
           ready: true,
         },
         {
@@ -41877,18 +41874,10 @@ function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkben
           ready: Boolean(billing.quotaEnforcementEnabled),
         },
       ];
-  const stageLabel = domesticBilling.configuredPath
-    ? domesticBilling.online ? "微信支付可用" : "微信支付待开放"
-    : path.current_stage === "online_subscription_ready"
-      ? "在线订阅可用"
-      : path.current_stage === "service_confirmed_trial"
-        ? "试用确认开通"
-        : path.current_stage === "invited_beta_no_real_charge"
-          ? "受邀试用"
-          : "暂未自动扣费";
-  const headline = domesticBilling.configuredPath
-    ? domesticBilling.online ? "微信付款由商家主动发起，到账后系统开通权益" : "微信支付链路已配置，公开付款开关仍关闭"
-    : path.headline || (billing.entitlementActive ? "订阅已生效，额度受系统保护" : "当前不会自动扣费，订阅确认后才发放额度");
+  const stageLabel = domesticBilling.online ? "微信支付可用" : "付款暂不可用";
+  const headline = domesticBilling.online
+    ? "微信付款由商家主动发起，到账后系统开通权益"
+    : "在线付款暂不可用，已有套餐与订单仍保留";
   const ruleRows = [
     ["资料安全", "支付资料不进入浏览器", "页面只显示状态，不保存卡号、支付凭证或密钥。"],
     ["恢复方式", "账单恢复不重连店铺或 AI", "处理订阅状态即可恢复符合条件的权益，不要求重新连接店铺或重新配置 AI。"],
@@ -42138,8 +42127,10 @@ function renderLegacySaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWor
 
 function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbenchContext()) {
   const domesticBilling = saasMerchantDomesticBillingState();
+  const publicPlanPrices = ["starter", "operator"]
+    .map((key) => `${planDetails[key].title} ${planDetails[key].price}`).join("；");
   const cards = [
-    ["价格与续购", "¥99 / 30 天，单次购买 30 天；不会自动续费或自动扣款。"],
+    ["价格与续购", `${publicPlanPrices}。单次购买 30 天；不会自动续费或自动扣款。`],
     ["微信扫码付款", "微信扫码，不输入银行卡；捷境浏览器不保存付款密钥或付款凭证。"],
     ["订单与付款记录", "付款状态和订单号保留在当前捷境账号，可用于客服核对。"],
     ["发票申请", "按已付款订单人工受理；订单记录不等同税务发票。"],
@@ -42152,9 +42143,9 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
         <div>
           <span>付费前客户信任说明</span>
           <strong>付款前看清价格、期限、记录、发票和退款方式</strong>
-          <p>${escapeHtml(domesticBilling.online ? "当前使用微信扫码付款。每次购买 30 天，不会自动续费；支付结果由系统确认后发放权益。" : "当前仍处于试用阶段，不会生成可付款二维码，也不会自动扣款。微信支付开放后，每次购买 30 天并由商家主动确认。")}</p>
+          <p>${escapeHtml(domesticBilling.online ? "当前使用微信扫码付款。每次购买 30 天，不会自动续费；支付结果由系统确认后发放权益。" : "在线付款暂不可用，暂不发起新的付款，也不会自动扣款。已有套餐与订单仍保留，请刷新付款状态或联系捷境支持。")}</p>
         </div>
-        <em>${escapeHtml(domesticBilling.online ? "微信支付" : "试用阶段")}</em>
+        <em>${escapeHtml(domesticBilling.online ? "微信支付" : "付款暂不可用")}</em>
       </div>
       <div class="saas-merchant-billing-trust-grid">
         ${cards
@@ -42193,7 +42184,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
 function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const domesticBilling = saasMerchantDomesticBillingState();
-  const billingModeLabel = domesticBilling.online ? "微信扫码付款" : billing.provider.external_paid_provider_configured ? "在线付款已接入" : "试用模式";
+  const billingModeLabel = domesticBilling.online ? "微信扫码付款" : "在线付款暂不可用";
   const splitRows = [
     ["01", "软件套餐", "¥0 / ¥99 / ¥199", "免费体验不含生图点数；有店铺含 1,000 素材点，多店铺含 3,000 素材点。付费套餐单次购买 30 天。"],
     ["02", "商家自带模型", "费用由商家承担", "普通问答、Listing 文案、联网总结和长报告使用商家账号绑定的模型，不消耗素材点。"],
@@ -42201,7 +42192,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
     ["04", "平台经营成本", "捷境不代扣", "eBay 成交费、广告费、物流、退款和店铺订阅只进入利润测算与确认中心。"],
   ];
   const usageRouteRows = [
-    ["先看订阅", billing.entitlementActive ? "基础权益可用" : "试用阶段不自动扣费"],
+    ["先看订阅", billing.entitlementActive ? "基础权益可用" : "以账号套餐状态为准"],
     ["再看用量", billing.blocksNow ? "高成本任务已暂停" : "AI 和素材按额度保护"],
     ["最后确认", "发布、付款、退款、广告仍进决策中心"],
   ];
@@ -42209,7 +42200,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
     {
       label: "软件套餐",
       title: "三个公开方案按业务规模选择",
-      detail: "免费体验不赠送生图点数；有店铺含 1,000 素材点，多店铺含 3,000 素材点。套餐点用完后再购买。",
+      detail: "免费体验不赠送生图点数；有店铺含 1,000 素材点，多店铺含 3,000 素材点。套餐点用完后再购买，加购是否可用以页面状态为准。",
       tone: "green",
     },
     {
@@ -42232,7 +42223,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
     },
   ];
   const billingRules = [
-    ["先显示后收费", domesticBilling.online ? "付款前显示套餐、金额、30 天期限和用量边界；只有商家主动扫码才会付款。" : "正式收费前，商家必须能看清套餐、金额、续购入口和用量记录；当前环境仍不触发真实扣费。"],
+    ["先显示后收费", domesticBilling.online ? "付款前显示套餐、金额、30 天期限和用量边界；只有商家主动扫码才会付款。" : "当前暂不发起新的付款；金额、期限和权益分别以订单与账号状态为准，不会自动扣款。"],
     ["欠费不删资料", "欠费、取消或额度耗尽时，只停联网模型、素材生成和高成本任务，历史资料继续可读。"],
     ["高风险仍确认", "真实发布、采购付款、退款、广告预算和敏感客服承诺仍进入决策中心。"],
   ];

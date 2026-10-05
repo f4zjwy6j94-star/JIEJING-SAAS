@@ -23,7 +23,7 @@
     const mediaRemaining = Number.isFinite(Number(quota.remaining_media_points)) ? Number(quota.remaining_media_points) : null;
     return `
       <section class="saas-settings-card saas-merchant-billing-summary" data-contract="merchant_billing_copy_public_safe_v1" aria-label="订阅与付款">
-        <div class="saas-settings-card-head"><div><span>订阅与付款</span><strong>${escape(planName(plan))}</strong><p>套餐已包含对应素材点；用完后才需要加购。页面不展示任何支付密钥。</p></div></div>
+        <div class="saas-settings-card-head"><div><span>订阅与付款</span><strong>${escape(planName(plan))}</strong><p>套餐已包含对应素材点；用完后才需要加购，加购是否可用以页面状态为准。页面不展示任何支付密钥。</p></div></div>
         <div class="saas-settings-status-list">
           <article class="${subscription.entitlement_active === true ? "is-green" : "is-amber"}"><span>当前模式</span><strong>${subscription.entitlement_active === true ? "权益生效中" : "免费体验或待开通"}</strong><small>${escape(subscription.ends_at ? `有效期至 ${subscription.ends_at}` : "不绑卡，不自动续费")}</small></article>
           <article><span>续费 / 取消</span><strong>由商家主动操作</strong><small>付款、退款和套餐变更都会先显示订单与结果。</small></article>

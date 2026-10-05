@@ -238,6 +238,70 @@ def check_media_balance_browser(app: str) -> None:
                 }""", expiry)
                 assert page.get_by_role('button', name='续购当前套餐').is_disabled()
                 assert '顺延到现有有效期' not in page.locator('#billing-test').inner_text()
+            for plan_key, title, price in (('starter', '有店铺', '¥99 / 30 天'), ('operator', '多店铺', '¥199 / 30 天')):
+                page.evaluate("""(planKey) => {
+                    state.selectedPlan = planKey;
+                    state.saasBillingUsage = {subscription: {access_kind:'free_trial', provider:'free_trial',
+                        status:'free_trial_active', entitlement_active:true, plan_key:'free', active_until:'2099-10-24T00:00:00Z'}};
+                    document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel()
+                        + renderSaasMerchantBillingCustomerTrustPanel();
+                }""", plan_key)
+                selected = page.locator('[data-saas-action="domestic-billing-select-plan"][aria-pressed="true"]')
+                assert selected.get_attribute('data-domestic-plan-key') == plan_key
+                assert price in selected.inner_text()
+                assert page.get_by_role('button', name=f'微信扫码开通 {title}').is_enabled()
+                prices = page.locator('.saas-merchant-billing-trust-grid article').filter(has_text='价格与续购').inner_text()
+                assert '有店铺 ¥99 / 30 天' in prices, 'trust explanation must identify the starter plan price'
+                assert '多店铺 ¥199 / 30 天' in prices, 'trust explanation must not present every plan as ¥99'
+                assert '不会自动续费或自动扣款' in prices
+            for contract in (None, {'provider':'wechat_pay_native', 'real_checkout_ready':False, 'charge_now_allowed':False}):
+                page.evaluate("""(contract) => {
+                    state.saasDomesticBillingContract = contract;
+                    state.saasBillingUsage = {subscription: {status:'active', entitlement_active:true,
+                        plan_key:'operator', active_until:'2099-10-24T00:00:00Z'}};
+                    document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel()
+                        + renderSaasMerchantBillingCustomerTrustPanel() + renderSaasMerchantBillingPlainSummaryPanel()
+                        + renderSaasMerchantPricingModelPanel() + renderSaasMerchantBillingEntitlementPathPanel();
+                }""", contract)
+                degraded = page.locator('#billing-test').inner_text()
+                assert '当前套餐与续购' in degraded, 'payment outage must not relabel an active customer as a trial'
+                assert '当前套餐有效期至 2099-10-24。' in degraded
+                assert '试用阶段' not in degraded and '先使用试用套餐' not in degraded
+                assert '试用模式' not in degraded
+                assert '公开付款开关' not in degraded
+                assert page.get_by_role('button', name='刷新付款状态', exact=True).is_enabled()
+                assert page.locator('[data-saas-action="manual-beta-create-order"]').count() == 0
+                assert page.locator('[data-saas-action="domestic-billing-create-order"]').count() == 0
+                assert page.get_by_role('button', name='联系捷境支持').is_enabled()
+                assert page.evaluate('state.saasBillingUsage.subscription.plan_key') == 'operator'
+                page.evaluate("""() => {
+                    state.saasDomesticBillingContract = {provider:'wechat_pay_native', real_checkout_ready:true, charge_now_allowed:true};
+                    document.querySelector('#billing-test').innerHTML = renderSaasMerchantDomesticPaymentPanel();
+                }""")
+                renewal = page.get_by_role('button', name='续购当前套餐', exact=True)
+                assert renewal.is_enabled() and renewal.get_attribute('data-domestic-plan-key') == 'operator'
+                assert '当前套餐有效期至 2099-10-24。' in page.locator('#billing-test').inner_text()
+                assert page.locator('[data-saas-action="manual-beta-create-order"]').count() == 0
+            for amount, expected in ((None, '价格待核对'), (0, '价格待核对'), (-1, '价格待核对'),
+                                     ('invalid', '价格待核对'), (19900, '¥199 / 30 天')):
+                page.evaluate("""(amount) => {
+                    state.saasBillingUsage = {subscription: {status:'active', entitlement_active:true, plan_key:'operator'},
+                        plan: {key:'operator', amount_minor:amount}};
+                    document.querySelector('#billing-test').innerHTML = renderSaasMerchantBillingPlainSummaryPanel();
+                }""", amount)
+                summary_plan = page.locator('.saas-merchant-billing-plain-grid article').filter(has_text='软件套餐')
+                assert f'多店铺 · {expected}' in summary_plan.inner_text(), 'missing or invalid paid price must not be shown as free'
+            page.evaluate("""() => {
+                state.saasBillingUsage = {subscription:{plan_key:'free'}, plan:{key:'free', amount_minor:0}};
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantBillingPlainSummaryPanel();
+            }""")
+            assert '免费体验 · ¥0' in page.locator('#billing-test').inner_text()
+            page.evaluate("""() => {
+                state.saasBillingPlan = {};
+                state.saasBillingUsage = null;
+                document.querySelector('#billing-test').innerHTML = renderSaasMerchantBillingPlainSummaryPanel();
+            }""")
+            assert '套餐待核对 · 价格待核对' in page.locator('#billing-test').inner_text(), 'missing account billing data must not invent a paid plan'
             assert errors == []
         finally:
             browser.close()
