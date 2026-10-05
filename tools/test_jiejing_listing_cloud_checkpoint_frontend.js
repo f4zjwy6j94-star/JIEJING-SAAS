@@ -914,6 +914,15 @@ async function mediaStepFixture(mode = "saved", step = 3) {
     merchant_confirmed_facts: { product_name: "Gold wood-handled measuring set", material: "Gold-tone metal and wood",
       condition: "NEW", image_urls: image, image_rights_confirmed: true },
     source_confirmed_facts: {}, unknown_facts: ["item_location"] };
+  if (mode.startsWith("pending-optional-evidence")) {
+    packet.derived_listing_suggestions = { supplier_brand: "None" };
+    packet.field_evidence = { supplier_brand: { source_type: "ai_extracted_from_merchant_image",
+      confidence: 1, image_indexes: [6], merchant_confirmation_received: false } };
+    if (mode.endsWith("-confirmed-brand")) {
+      packet.merchant_confirmed_facts.supplier_brand = "Original Supplier";
+      packet.field_evidence.supplier_brand.merchant_confirmation_received = true;
+    }
+  }
   if (visionGeneratedCopy) {
     Object.assign(packet, { source: "backend_product_vision_extraction", source_mode: "merchant_source_supplied",
       vision_contract_version: "jiejing_ai_ceo_product_vision_intake_v1",
@@ -984,6 +993,18 @@ async function mediaStepFixture(mode = "saved", step = 3) {
     currentBase = { ...facts, report_id: factSaveCount === 1 ? "media-facts-after" : `media-facts-after-${factSaveCount}`,
       created_at: `2026-09-06T02:00:${String(factSaveCount).padStart(2, "0")}Z`,
       report: { ...facts.report, merchant_product_fact_packet: request.body.merchant_product_fact_packet } };
+    if (mode.startsWith("pending-optional-evidence-")) {
+      const savedFacts = currentBase.report.merchant_product_fact_packet;
+      if (mode.endsWith("-new-unknown")) savedFacts.unknown_facts.push("supplier_item_number");
+      if (mode.endsWith("-confirmed-brand")) {
+        delete savedFacts.merchant_confirmed_facts.supplier_brand;
+        savedFacts.unknown_facts.push("supplier_brand");
+        savedFacts.field_evidence.supplier_brand.merchant_confirmation_received = false;
+      }
+      if (mode.endsWith("-changed-evidence")) savedFacts.field_evidence.supplier_brand.source_type = "different_supplier_evidence";
+      if (mode.endsWith("-concurrent")) checkpoint = { ...checkpoint, revision: checkpoint.revision + 1,
+        fields: { ...checkpoint.fields, title: "Other device reviewed copy" } };
+    }
     if (normalizedSources) {
       // The real fact API rebuilds link/image evidence from confirmed facts;
       // it omits empty snapshot defaults and adds its own safety metadata.
@@ -1159,6 +1180,46 @@ test("reopened unchanged facts tolerate source-record representation defaults wi
     assert.deepEqual(device.errors, []);
   } finally { await device.context.close(); }
 });
+
+test("saving unchanged pending optional evidence never strands reviewed copy on an older fact head", async () => {
+  const { device, originalCopy, latest } = await mediaStepFixture("pending-optional-evidence", 1);
+  try {
+    await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+    await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+    await device.page.evaluate(async () => { const read = saasListingCloudRecord()?.read; if (read) await read; });
+    assert.equal(await device.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).count(), 0,
+      "an untouched unconfirmed source hint is already unknown, not a newly changed product fact");
+    assert.equal(checkpoint.base_report_id, latest().report_id);
+    assert.equal(latest().report.merchant_product_fact_packet.merchant_confirmed_facts.supplier_brand, undefined);
+    for (const key of ["title", "selling_points", "description"]) assert.equal(checkpoint.fields[key], originalCopy[key]);
+    await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+    await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+    assert.equal(await device.page.evaluate(() => saasListingWizardRecord().step), 3);
+    assert.deepEqual(unexpected, []); assert.deepEqual(device.errors, []);
+  } finally { await device.context.close(); }
+});
+
+for (const boundary of ["new-unknown", "confirmed-brand", "changed-evidence", "concurrent"]) {
+  test(`pending evidence normalization cannot dismiss a real ${boundary} change`, async () => {
+    const { device, originalCopy } = await mediaStepFixture(`pending-optional-evidence-${boundary}`, 1);
+    try {
+      await device.page.getByRole("button", { name: "保存并继续", exact: true }).click();
+      await device.page.waitForFunction(() => !saasListingWizardRecord().busy);
+      await device.page.evaluate(async () => { const read = saasListingCloudRecord()?.read; if (read) await read; });
+      assert.equal(await device.page.getByRole("button", { name: "保留本机修改并重新保存", exact: true }).count(), 1);
+      const writes = requests.filter(x => x.method === "POST" && x.path === checkpointPath);
+      if (boundary === "concurrent") {
+        // A race discovered by the POST is still protected by the server CAS.
+        assert.ok(writes.length <= 1);
+        if (writes.length) assert.equal(writes[0].body.expected_revision, 1);
+        assert.equal(checkpoint.revision, 2, "the competing device remains the only saved new revision");
+        assert.equal(checkpoint.base_report_id, baseReport.report_id);
+      } else assert.equal(writes.length, 0);
+      assert.equal(checkpoint.fields.title, boundary === "concurrent" ? "Other device reviewed copy" : originalCopy.title);
+      assert.deepEqual(unexpected, []); assert.deepEqual(device.errors, []);
+    } finally { await device.context.close(); }
+  });
+}
 
 for (const evidenceChange of ["url", "rights", "hash", "asset"]) {
   test(`source-record normalization still requires review for a real ${evidenceChange} change`, async () => {

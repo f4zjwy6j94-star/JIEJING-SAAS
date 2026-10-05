@@ -11129,6 +11129,16 @@ function saasListingMediaCopyFactSignature(packet = {}, { includeMedia = false }
     }
   }
   const unknownFacts = [...(packet.unknown_facts || [])];
+  // Older image intake can retain an explicitly unconfirmed evidence item
+  // without listing it in unknown_facts. Saving its untouched suggestion then
+  // adds that marker. It was already unknown; canonicalize that representation
+  // without granting confirmation, erasing an actual unknown, or changing the
+  // immutable evidence. A confirmed value still participates in the signature.
+  for (const [key, evidence] of Object.entries(packet.field_evidence || {})) {
+    if (evidence?.merchant_confirmation_received === false &&
+        confirmed.every(facts => !saasMerchantProductFactValuePresent(key, facts[key])) &&
+        !unknownFacts.includes(key)) unknownFacts.push(key);
+  }
   // That migration exposes an unknown sale currency; explicitly recording it
   // is not a new buyer-copy fact. No other unknown or currency is discarded.
   if (confirmed.some(facts => facts.unit_cost && facts.unit_cost_currency) &&
