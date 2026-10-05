@@ -15141,7 +15141,7 @@ def _publish_confirmation_payload_from_body(
         "condition": _safe_publish_condition(listing_in.get("condition")),
         "price": {
             "value": _safe_publish_decimal(price_in.get("value")),
-            "currency": _safe_publish_text(price_in.get("currency") or "USD", limit=8) or "USD",
+            "currency": _safe_publish_text(price_in.get("currency", "USD"), limit=8).upper(),
         },
         "quantity": _safe_publish_int(listing_in.get("quantity")),
         "item_specifics": _clean_publish_text_map(item_specifics_in, key_limit=80, value_limit=180),

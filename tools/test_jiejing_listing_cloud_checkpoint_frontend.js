@@ -681,6 +681,62 @@ test("publish intake preserves long literal descriptions and image paths while r
   } finally { await device.context.close(); }
 });
 
+test("unknown sale currency survives source restore and cloud save without erasing an explicit intake choice", async () => {
+  resetFixture();
+  projectStatus = savedProjectStatus();
+  const generation = structuredClone(baseReport);
+  generation.report.merchant_product_fact_packet = {
+    merchant_confirmed_facts: { product_name: "PVC drain cover", condition: "NEW", material: "PVC",
+      unit_cost: "1.2", unit_cost_currency: "CNY" },
+    unknown_facts: ["selling_price", "currency"],
+  };
+  const fields = { ...originalFields, title: "PVC drain cover", price: "" };
+  generation.report.listing_handoff.listing_fields = { ...fields, description_seed: fields.description };
+  checkpoint = savedCheckpoint(fields);
+  checkpointHandler = async (request, res) => {
+    if (request.method !== "GET") return false;
+    sendJson(res, 200, { status: "saved", checkpoint, current_revision: checkpoint.revision,
+      current_base_report_id: generation.report_id, current_base_report: generation, base_changed: false });
+    return true;
+  };
+  const first = await openDevice({ coldProject: true });
+  let second;
+  try {
+    await first.page.evaluate(async () => { await refreshSaasMerchantProjectStatus(); await hydrateSaasListingCloudCheckpoint({ force: true }); });
+    const form = await mountPublishIntake(first.page);
+    assert.equal(await form.locator('[name="currency"]').inputValue(), "", "unknown fact must not become the USD default in the actual DOM");
+    assert.equal(await form.locator('[name="price"]').inputValue(), "");
+    assert.equal(await form.locator('[name="procurement_cost_currency"]').inputValue(), "CNY");
+    assert.equal(requests.some(item => item.method === "POST"), false, "restoration itself must not save guessed data");
+    for (const name of ["shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "net_profit"]) {
+      await form.locator(`[name="${name}"]`).fill("1");
+    }
+    const submitted = await first.page.evaluate(() => readSaasPublishIntakeForm());
+    assert.equal(submitted.listing.price.currency, "", "the request must not silently replace the visible unknown currency");
+    assert.equal(submitted.finance_review.procurement_cost_money.currency, "CNY");
+    for (const name of ["shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "net_profit"]) {
+      assert.equal(submitted.finance_review[`${name}_money`].currency, "", `${name}: unknown sale currency must remain unknown in money payloads`);
+    }
+    await first.page.locator('[data-saas-listing-cloud-action="save-publish-intake"]').click();
+    await waitUntil(() => checkpoint?.publish_intake?.values.currency === "", "explicit cloud save must retain unknown sale currency");
+    second = await openDevice({ coldProject: true });
+    await second.page.evaluate(async () => { await refreshSaasMerchantProjectStatus(); await hydrateSaasListingCloudCheckpoint({ force: true }); });
+    const restored = await mountPublishIntake(second.page);
+    assert.equal(await restored.locator('[name="currency"]').inputValue(), "");
+    assert.equal(await restored.locator('[name="procurement_cost_currency"]').inputValue(), "CNY");
+    await restored.locator('[name="currency"]').fill("USD");
+    await waitUntil(() => checkpoint.publish_intake.values.currency === "USD", "a later explicit merchant choice remains valid input");
+    await second.page.reload();
+    await seedDevice(second.page, { coldProject: true });
+    await second.page.evaluate(async () => { await refreshSaasMerchantProjectStatus(); await hydrateSaasListingCloudCheckpoint({ force: true }); });
+    const chosen = await mountPublishIntake(second.page);
+    assert.equal(await chosen.locator('[name="currency"]').inputValue(), "USD", "fact-level unknown must not erase a later explicit intake choice");
+    assert.deepEqual(unexpected, []);
+    assert.deepEqual(first.errors, []);
+    assert.deepEqual(second.errors, []);
+  } finally { await first.context.close(); if (second) await second.context.close(); }
+});
+
 test("legacy 35-field cloud intake preserves saved fees when newly added source fields are empty", async () => {
   resetFixture();
   checkpoint = savedCheckpoint({ ...originalFields, title: "Saved merchant title", price: "12.99 USD",

@@ -528,6 +528,7 @@ def build_publish_readiness(
     )
 
     price = listing.get("price") if isinstance(listing.get("price"), dict) else {"value": listing.get("price"), "currency": "USD"}
+    sale_currency = str(price.get("currency", "USD") or "").strip().upper()
     unit_price = _float(price.get("value"))
     quantity = _int(listing.get("quantity"))
     exposure = _float(round(unit_price * quantity, 2)) if unit_price is not None and quantity is not None else None
@@ -537,7 +538,7 @@ def build_publish_readiness(
     price_issues = [issue for issue in value_issues if issue["key"].startswith(("listing.price", "listing.quantity"))]
     if unit_price is not None and quantity is not None and not price_issues:
         price_status = "passed"
-        price_summary = f"本次发布预计占用 {price.get('currency') or 'USD'} {exposure:.2f} 的刊登额度。"
+        price_summary = f"本次发布预计占用 {sale_currency} {exposure:.2f} 的刊登额度。"
     if price_issues:
         price_status = "blocked"
         price_summary = "售价或库存数量无效，请按提示修正后重新检查。"
@@ -553,7 +554,7 @@ def build_publish_readiness(
         blocking=bool(prior_limit_error or unit_price is None or quantity is None or price_issues),
         details={
             "unit_price": unit_price,
-            "currency": price.get("currency") or "USD",
+            "currency": sale_currency,
             "quantity": quantity,
             "estimated_listing_amount": exposure,
             "last_platform_error": prior_limit_error or {},
@@ -575,7 +576,6 @@ def build_publish_readiness(
     net_profit = _money_float(finance.get("net_profit_money"))
     if net_profit is None:
         net_profit = _float(finance.get("net_profit"))
-    sale_currency = str(price.get("currency") or "USD").strip().upper()
     procurement_cost = publish_procurement_cost_in_sale_currency(finance, sale_currency)
     shipping_cost = _money_float(finance.get("shipping_cost_money"))
     if shipping_cost is None:
@@ -595,13 +595,14 @@ def build_publish_readiness(
     if effective_profit is not None and effective_profit < 0:
         profit_blocking = True
     profit_issues = [issue for issue in value_issues if issue["key"].startswith("finance_review.")]
+    profit_issues.extend(issue for issue in value_issues if issue["key"] == "listing.price.currency")
     profit_blocking = profit_blocking or bool(profit_issues)
     calculation_input_prefixes = tuple(f"finance_review.{key}" for key in (
         "procurement_cost", "shipping_cost", "ebay_fee", "ad_budget",
         "return_risk_reserve", "exchange_rate",
     ))
     invalid_calculation_input = any(issue["key"].startswith(calculation_input_prefixes) for issue in profit_issues)
-    invalid_calculation_input = invalid_calculation_input or any(issue["key"] == "listing.price.value" for issue in value_issues)
+    invalid_calculation_input = invalid_calculation_input or any(issue["key"] in ("listing.price.value", "listing.price.currency") for issue in value_issues)
     if invalid_calculation_input:
         # Invalid amounts/currencies cannot support a displayed profit. A real
         # loss from valid costs is still useful evidence and must stay visible.

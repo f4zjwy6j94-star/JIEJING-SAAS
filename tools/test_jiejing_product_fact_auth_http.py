@@ -266,6 +266,38 @@ class ProductFactAuthHttpTests(unittest.TestCase):
             self.assertEqual("blocked", profit()["status"])
             self.assertIsNone(profit()["details"]["calculated_contribution_profit"])
 
+    def test_explicitly_unknown_sale_currency_is_not_defaulted_or_used_for_profit(self):
+        _, saved = self.save()
+        body = self.precheck_body(saved["report"]["report_id"])
+        body["listing"]["price"] = {"value": "10", "currency": "USD"}
+        body["finance_review"] = {
+            "procurement_cost_money": {"value": "2", "currency": "USD"},
+            "shipping_cost_money": {"value": "1", "currency": "USD"},
+            "ebay_fee_money": {"value": "1", "currency": "USD"},
+            "ad_budget_money": {"value": "0", "currency": "USD"},
+            "return_risk_reserve_money": {"value": "0", "currency": "USD"},
+            "net_profit_money": {"value": "6", "currency": "USD"},
+            "exchange_rate": "1", "exchange_rate_basis": "sale_currency_per_cost_currency",
+        }
+        valid = {row["key"]: row for row in self.precheck(saved["report"]["report_id"], body=body)["publish_readiness"]["checks"]}
+        self.assertEqual("passed", valid["profit_and_fee_sanity"]["status"])
+        for currency in ("", None, " ", "12", "USDX"):
+            with self.subTest(currency=currency):
+                body["listing"]["price"]["currency"] = currency
+                checks = {row["key"]: row for row in self.precheck(saved["report"]["report_id"], body=body)["publish_readiness"]["checks"]}
+                price = checks["price_quantity_exposure"]
+                self.assertEqual("blocked", price["status"])
+                self.assertTrue(any(issue["key"] == "listing.price.currency" for issue in price["details"]["validation_issues"]))
+                self.assertNotEqual("USD", price["details"]["currency"])
+                profit = checks["profit_and_fee_sanity"]
+                self.assertEqual("blocked", profit["status"])
+                self.assertIsNone(profit["details"]["calculated_contribution_profit"])
+                self.assertIsNone(profit["details"]["effective_profit"])
+        body["listing"]["price"]["currency"] = "USD"
+        restored = {row["key"]: row for row in self.precheck(saved["report"]["report_id"], body=body)["publish_readiness"]["checks"]}
+        self.assertEqual("passed", restored["profit_and_fee_sanity"]["status"])
+        self.assertEqual(6, restored["profit_and_fee_sanity"]["details"]["calculated_contribution_profit"])
+
     def test_optional_unknowns_survive_http_roundtrip_until_explicitly_confirmed(self):
         packet = self.packet()
         packet["unknown_facts"] = ["net_weight_g", "product_origin", "not_a_fact"]

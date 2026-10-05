@@ -372,6 +372,10 @@ def validate_publish_input_values(payload: dict[str, Any]) -> list[dict[str, str
     amount = finite_publish_number(price.get("value"))
     if amount is None or amount <= 0:
         issues.append(PreflightIssue("listing.price.value", "售价必须是大于 0 的有效数字。").to_dict())
+    sale_currency = str(price.get("currency", "USD") or "").strip().upper()
+    currency_valid = len(sale_currency) == 3 and sale_currency.isascii() and sale_currency.isalpha()
+    if not currency_valid:
+        issues.append(PreflightIssue("listing.price.currency", "请确认售价币种，并填写 3 位币种代码（如 USD）；未知币种不能计算利润或发布。").to_dict())
     quantity = finite_publish_number(listing.get("quantity"))
     if quantity is None or quantity < 0 or not quantity.is_integer() or quantity > 9007199254740991:
         issues.append(PreflightIssue("listing.quantity", "库存必须是非负整数，不能截取小数或使用无效数字。").to_dict())
@@ -391,7 +395,6 @@ def validate_publish_input_values(payload: dict[str, Any]) -> list[dict[str, str
                 issues.append(PreflightIssue(f"supplier_facts.package_dimensions_cm.{axis}", f"包装{axis_label}（cm）必须填写大于 0 的有效数字。").to_dict())
     finance = payload.get("finance_review") if isinstance(payload.get("finance_review"), dict) else {}
     cost_values = []
-    sale_currency = str(price.get("currency") or "USD").strip().upper()
     for key in ("procurement_cost", "shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "net_profit"):
         field = f"{key}_money" if f"{key}_money" in finance else key
         value = finance.get(field)
@@ -414,7 +417,7 @@ def validate_publish_input_values(payload: dict[str, Any]) -> list[dict[str, str
                 issues.append(PreflightIssue(f"finance_review.{key}", message).to_dict())
     declared = finance.get("net_profit_money", finance.get("net_profit"))
     declared_profit = finite_publish_number(declared.get("value") if isinstance(declared, dict) else declared)
-    if amount is not None and all(value is not None for value in cost_values):
+    if currency_valid and amount is not None and all(value is not None for value in cost_values):
         calculated_profit = finite_publish_number(round(amount - sum(cost_values), 2))
         if calculated_profit is None:
             issues.append(PreflightIssue("finance_review.calculated_contribution_profit", "费用合计超出可计算范围，请核对输入。").to_dict())

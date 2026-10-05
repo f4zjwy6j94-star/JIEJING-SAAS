@@ -284,6 +284,18 @@ test("procurement and sale currencies stay separate and cleared prices cannot re
   assert.notEqual(legacy.publish_prefill.currency, "CNY");
 });
 
+test("explicitly unknown sale currency stays unknown from saved facts through publish intake", () => {
+  const draft = applyFactPacket({ product: "PVC drain cover", publish_prefill: {}, fields: { price: "" } }, {
+    merchant_confirmed_facts: { product_name: "PVC drain cover", unit_cost: "1.2", unit_cost_currency: "CNY" },
+    unknown_facts: ["selling_price", "currency"],
+  });
+  const result = publishPrefill({ draft });
+  assert.equal(result.currency, "", "an explicitly unknown sale currency must not fall through to the legacy USD default");
+  assert.equal(result.price, "");
+  assert.equal(result.procurement_cost_currency, "CNY");
+  assert.equal(result.procurement_cost, "1.2");
+});
+
 test("source quotes roles SKU and conflict references survive local snapshot without authority", () => {
   const evidence = { source_type: "merchant_message", source_quote: "参数PVC", evidence_role: "product_material", source_id: "photo-24", sku: "DRAIN-GRY", image_indexes: [1], platform_verified: true };
   const packet = { field_evidence: { material: evidence }, pending_field_evidence: { material: evidence },
