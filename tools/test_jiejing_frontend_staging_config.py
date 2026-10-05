@@ -15,6 +15,7 @@ import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from html.parser import HTMLParser
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,41 @@ ROOT = Path(__file__).resolve().parents[1]
 def fail(message: str) -> int:
     print(f"FAIL {message}")
     return 1
+
+
+def validate_public_support_contact() -> None:
+    """Check the public contact and no-login route through HTML link semantics."""
+    class Links(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.hrefs: list[str] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag == "a":
+                self.hrefs.append(dict(attrs).get("href") or "")
+
+    email = "zongshuding4@gmail.com"
+    for name in ("support.html", "refund-policy.html"):
+        source = (ROOT / name).read_text(encoding="utf-8")
+        links = Links()
+        links.feed(source)
+        assert f"mailto:{email}" in links.hrefs, f"{name} must offer the approved direct email address"
+        assert email in source and "密码" in source and "无法登录" in source
+        assert "当前尚未提供匿名客服入口" not in source
+    support = (ROOT / "support.html").read_text(encoding="utf-8")
+    assert 'id="email"' in support
+    assert "不会自动转发到客服邮箱" in support
+    assert "点击不会自动发送" in support
+    entry = (ROOT / "index.html").read_text(encoding="utf-8")
+    login = entry[entry.index('id="entryLoginForm"'):entry.index('id="entryModeArea"')]
+    assert 'href="./support.html#email"' in login, "help must be reachable before login succeeds"
+    app_html = (ROOT / "app.html").read_text(encoding="utf-8")
+    assert 'href="./support.html#email"' in app_html, "workbench auth fallback must retain no-login help"
+    app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+    assert app_js.count('href="./support.html#email"') >= 2, "both rendered login variants must retain no-login help"
+    terms = (ROOT / "terms.html").read_text(encoding="utf-8")
+    assert "通过 eBay API 正式发布" in terms
+    assert "eBay 真实公开发布、自动扣费和自动续费仍未开放" not in terms
 
 
 def validate_prepare_bundle_contract() -> str:
@@ -284,6 +320,7 @@ def validate_prepare_bundle_contract() -> str:
 
 
 def main() -> int:
+    validate_public_support_contact()
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
     index_html = (ROOT / "index.html").read_text(encoding="utf-8")
     app_html = (ROOT / "app.html").read_text(encoding="utf-8")
@@ -674,7 +711,7 @@ def main() -> int:
         "试用数据默认只标记和报告，不自动删除",
         "基础订阅是软件功能费",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
-        "更新日期：2026-08-22",
+        "更新日期：2026-10-05",
     ]:
         if marker not in terms_html:
             return fail(f"terms page missing launch-boundary marker: {marker}")
@@ -683,8 +720,9 @@ def main() -> int:
         "在线付款已经开放，不会自动续费或自动扣款",
         "退款必须由人工审核并在后端执行",
         "eBay 成交费、广告费、店铺订阅费、物流费、采购款、买家退款",
-        "当前尚未提供匿名客服入口",
-        "更新日期：2026-08-22",
+        "无法登录",
+        "mailto:zongshuding4@gmail.com",
+        "更新日期：2026-10-05",
     ]:
         if marker not in refund_html:
             return fail(f"refund policy page missing payment-review marker: {marker}")
@@ -694,7 +732,7 @@ def main() -> int:
         "意见箱只记录流程意见和上下文编号，不保存密钥、平台凭证或身份资料",
         "不会替商家直接发布商品、改价、改库存、退款、投广告",
         "提交前请准备",
-        "更新日期：2026-08-22",
+        "更新日期：2026-10-05",
     ]:
         if marker not in support_html:
             return fail(f"support page missing payment-review marker: {marker}")

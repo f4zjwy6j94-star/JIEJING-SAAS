@@ -14,11 +14,11 @@
     <meta name="twitter:title" content="捷境 · 跨境电商 AI 经营工作台" />
     <meta name="twitter:description" content="捷境是 eBay 商家的 AI 经营工作台：整理商品资料、生成草稿，重要操作由商家确认。" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20261005-quality-4a96d467d6d3" as="script" />
+    <link rel="prefetch" href="./app.js?v=20261005-quality-ebd44f58e56b" as="script" />
     <link rel="prefetch" href="./styles.css?v=20261005-quality-12c42c3b6650" as="style" />
     <title>捷境 · 跨境电商 AI 经营工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
-    <link rel="stylesheet" href="./assets/homepage-finish.css?v=20260929-finish-v12" />
+    <link rel="stylesheet" href="./assets/homepage-finish.css?v=20261005-public-scope-v1" />
 <link rel="stylesheet" href="./assets/jiejing-home-entry.css?v=20260929-finish-v12" />
 <link rel="preload" href="./assets/jiejing-serif-20260928.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="./assets/jiejing-sans-20260928.woff2" as="font" type="font/woff2" crossorigin />
@@ -375,11 +375,12 @@
             <p>3 个店铺、5 个席位、500 个经营任务；含 3,000 素材点。</p>
           </button>
         </div>
+        <p class="home-plan-scope" aria-label="当前服务范围">捷境支持准备商品资料、生成 Listing 与素材，并在店铺授权、套餐权限、资料与预检条件满足后，由你确认，通过 eBay API 正式发布。订阅不会解除 eBay 账号限制，也不会自动发送买家消息。<a href="./terms.html" target="_blank" rel="noopener">查看服务范围与条款</a></p>
         <div class="hero-actions">
           <button class="button-text" type="button" id="choosePlan">登录后查看套餐与付款</button>
         </div>
         <div class="home-faq-grid" aria-label="常见问题">
-          <article><h3>会未经确认直接发布吗？</h3><p>不会。商家核对内容、通过发布前检查并确认操作后，捷境才向平台提交发布请求。改价、库存和政策调整同样需要确认。</p></article>
+          <article><h3>会未经确认直接发布吗？</h3><p>不会。保存 eBay 未发布草稿与正式发布是不同操作；店铺授权、套餐权限、资料和发布前检查满足要求后，由你在确认中心确认，再通过 eBay API 正式发布。账号受限或资料缺失时会提示原因，最终结果以 eBay 返回为准。</p></article>
           <article><h3>免费体验会自动扣费吗？</h3><p>不会。免费体验不绑卡、不自动续费；需要付费时会再次显示方案和金额。</p></article>
           <article><h3>AI 设置和账单在哪里？</h3><p>登录后在“设置”统一管理店铺连接、AI 服务、权限、套餐、素材点和账单。</p></article>
         </div>
@@ -448,6 +449,7 @@
                 </button>
               </div>
             </form>
+            <p><a href="./support.html#email" target="_blank" rel="noopener noreferrer">无法登录？联系客服</a></p>
             <div class="entry-auth-footnote">
               <span>工作状态</span>
               <span>先完成身份向导，再进入 AI CEO 工作台</span>
@@ -482,7 +484,7 @@
       function warmWorkspaceAssets() {
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
-          ["preload", "./app.js?v=20261005-quality-4a96d467d6d3", "script"],
+          ["preload", "./app.js?v=20261005-quality-ebd44f58e56b", "script"],
           ["preload", "./styles.css?v=20261005-quality-12c42c3b6650", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
@@ -571,7 +573,7 @@
             "1 个账号空间 · 1 个席位 · 1 个店铺只读连接",
             "7 天内最多 20 次捷境托管 AI 对话",
             "完成 1 套市场分析、Listing、利润和风险检查",
-            "可保存 1 条未发布 Listing 草稿；真实发布仍需确认",
+            "可保存 1 条未发布 Listing 草稿；真实发布需符合套餐权限并单独确认",
             "免费体验不赠送生图素材点；需要生图时可在套餐与付款中查看可用方案",
           ],
         },
@@ -580,7 +582,7 @@
           desc: "¥99 单次购买 30 天，不会自动续费；覆盖 1 个店铺的 AI CEO、Listing、素材工坊、客服订单和确认中心，含 1,000 素材点。",
           items: [
             "1 个 eBay 店铺工作台",
-            "完整选品/上架项目流、素材工坊和客服物流基础流程",
+            "选品调研、Listing、素材生成与客服草稿；符合条件并确认后通过 eBay API 正式发布",
             "按店铺查看固定业务流程、资料缺口和确认事项",
             "支持确认中心、来源资料、结果历史和按需 PDF 导出",
             "含 1,000 素材点；套餐内点数用完后再按需购买",

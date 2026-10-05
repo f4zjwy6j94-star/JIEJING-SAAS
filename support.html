@@ -14,7 +14,7 @@
       h1 { font-size:clamp(34px,5vw,58px); line-height:1.05; margin:0 0 18px; letter-spacing:0; }
       h2 { font-size:22px; margin:34px 0 10px; letter-spacing:0; }
       p,li { color:var(--muted); font-size:16px; }
-      a { color:var(--teal); font-weight:800; text-decoration:none; }
+      a { color:var(--teal); font-weight:800; text-decoration:none; overflow-wrap:anywhere; }
       a:hover { text-decoration:underline; }
       .panel { border:1px solid var(--line); border-radius:8px; padding:18px; background:rgba(242,248,245,.82); }
       .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:16px; }
@@ -29,12 +29,23 @@
     <main>
       <p class="badge">JIEJING / 捷境</p>
       <h1>客服与反馈入口</h1>
-      <p>这里是捷境客服说明页。在线付款已经开放；当前统一通过登录后的意见箱受理产品、计费、订阅和退款核对问题。</p>
+      <p>在线付款已经开放。已登录用户可通过工作台的“意见”入口反馈；无法登录或希望通过邮件联系时，可使用下方客服邮箱。</p>
 
       <section class="panel">
-        <strong>当前可用入口</strong>
+        <strong>工作台意见箱</strong>
         <p>已登录商家可在工作台右下角“意见”入口提交流程问题、页面问题、结果不对、缺少动作或计费疑问。意见箱只记录流程意见和上下文编号，不保存密钥、平台凭证或身份资料。</p>
         <a class="button" href="./app.html?start=app">进入捷境工作台</a>
+        <p>意见箱反馈由捷境团队在内部后台查看和处理，不会自动转发到客服邮箱。</p>
+      </section>
+
+      <section id="email" aria-labelledby="email-title">
+        <h2 id="email-title">无法登录？通过邮件联系</h2>
+        <div class="panel">
+          <p>客服邮箱：<a href="mailto:zongshuding4@gmail.com">zongshuding4@gmail.com</a></p>
+          <p>点击邮箱地址会打开你的邮件应用，点击不会自动发送；若未打开邮件应用，可复制地址后自行发信。</p>
+          <p>请说明遇到的问题、发生时间，并提供注册邮箱或订单号（如有）。截图请先遮住无关个人信息；不要发送密码、验证码、eBay 凭证、支付密钥、身份证件或银行卡资料。</p>
+          <p>涉及账号或订单的请求须核验归属后处理。发送邮件不会自动修改账号、发布商品或执行退款。</p>
+        </div>
       </section>
 
       <h2>我们会处理的问题</h2>
@@ -58,7 +69,7 @@
         <a href="./risk-disclosure.html">风险披露与确认中心边界</a>
       </p>
 
-      <p class="meta">更新日期：2026-08-22</p>
+      <p class="meta">更新日期：2026-10-05</p>
     </main>
   </body>
 </html>

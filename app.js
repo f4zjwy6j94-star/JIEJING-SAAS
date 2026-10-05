@@ -901,7 +901,7 @@ const wizard = [
   },
   {
     title: "连接 eBay 官方授权，减少手工搬运后台数据",
-    reason: "eBay 官方连接不是把账号密码交给捷境。起步阶段建议先接官方只读授权：读取店铺、Listing、订单、费用和广告表现，用来预填资料、减少手工复制；真实发布、退款、改价、广告和客服发送仍然关闭。",
+    reason: "eBay 官方连接不是把账号密码交给捷境。起步阶段建议先接官方只读授权：读取店铺、Listing、订单、费用和广告表现，用来预填资料、减少手工复制。本次只读授权不会发布、退款、改价、投广告或发送客服消息；正式发布须另行通过确认中心。",
     field: "ebayApiMode",
     options: [
       ["oauth_ready", "推荐：捷境带我连接 eBay", "打开 eBay 官方授权页，像网页登录一样确认；只读读取店铺上下文，不会发布、退款、改价或投广告"],
@@ -1695,7 +1695,7 @@ const manualActionDetails = {
   },
   ebay_oauth: {
     title: "连接 eBay 官方授权",
-    intro: "新手商家也可以尽早连接 eBay 官方资料，但不需要研究技术授权细节。捷境会生成 eBay 官方授权链接，商家只需要登录 eBay、确认授权范围，再回到捷境继续。发布、退款、改价、广告执行和客服发送仍然关闭。",
+    intro: "新手商家也可以尽早连接 eBay 官方资料，但不需要研究技术授权细节。捷境会生成 eBay 官方授权链接，商家只需要登录 eBay、确认授权范围，再回到捷境继续。本次只读授权不会发布、退款、改价、投广告或发送客服消息；正式发布须另行通过确认中心。",
     items: [
       "推荐先授权读取店铺、Listing、订单、费用和广告表现，让 AI 少问你、少让你复制粘贴。",
       "授权页必须来自 eBay 官方；捷境不要求你提供 eBay 密码。",
@@ -2278,7 +2278,7 @@ const jiejingProductCopyReplacements = [
   [/\bJingjing\b/g, "JIEJING"],
   [/\bJiejing\b/g, "JIEJING"],
   [/高保真/g, "产品化"],
-  [/当前仍为受控环境/g, "当前真实平台写入关闭"],
+  [/当前仍为受控环境/g, "真实操作须通过确认中心"],
   [/当前为受控状态/g, "当前处于内测受控状态"],
   [/当前只展示待同步数据/g, "当前等待后端连接或真实同步"],
   [/eBay 待同步数据/g, "eBay 只读同步状态"],
@@ -11587,9 +11587,9 @@ function renderSaasProductListingCenter(view) {
             <small>发布、改价、库存、政策和承诺必须确认。</small>
           </article>
           <article class="${isSaasRealPlatformWritesEnabled() ? "is-amber" : "is-green"}">
-            <span>真实写入</span>
+            <span>全面写入</span>
             <strong>${escapeHtml(saasRealPlatformWriteLabel())}</strong>
-            <small>${escapeHtml(isSaasRealPlatformWritesEnabled() ? "启用但发布、付款、退款、广告和政策仍进决策中心。" : "确认后也只记录受控交接。")}</small>
+            <small>${escapeHtml(saasListingPublicationCapabilityView().detail)}</small>
           </article>
         </div>
       </section>
@@ -23635,7 +23635,7 @@ function renderSaasConfirmPanel() {
     activeListingScope.sku ||
     saasWorkflowProductLabel(latestTask) ||
     saasModelValueProductLabel();
-  const realWritesEnabled = state.saasEbayWriteAdapter?.real_platform_writes_enabled === true;
+  const publicationCapability = saasListingPublicationCapabilityView();
   const pendingProducts = [...new Set(pending.map((card) => saasConfirmationCardProductLabel(card, productLabel)))];
   const headlineProduct = pendingProducts.length === 1 && pendingProducts[0] ? pendingProducts[0] : "当前账号";
   panel.innerHTML = `
@@ -23645,7 +23645,7 @@ function renderSaasConfirmPanel() {
         <p>核对本次操作的对象、内容与影响，再决定是否批准。缺少资料时可返回补充。</p>
       </div>
       <div class="saas-page-next-action">
-        <small>${realWritesEnabled ? "平台操作仍需单独确认" : "eBay 正式发布暂未开放"}</small>
+        <small>${escapeHtml(publicationCapability.label)}</small>
         <button class="secondary-action" type="button" data-saas-action="refresh">刷新待办</button>
       </div>
     </section>
@@ -23861,6 +23861,7 @@ function renderSaasLoginCard(options = {}) {
           </button>
         </div>
         <p class="saas-auth-footnote">当前只开放邮箱账号登录。第三方扫码登录不作为本阶段入口，系统只保存会话和安全引用，不把原始凭证返回浏览器。</p>
+        <p class="saas-auth-footnote"><a href="./support.html#email" target="_blank" rel="noopener noreferrer">无法登录？联系客服</a></p>
       </section>
     `;
   }
@@ -23887,6 +23888,7 @@ function renderSaasLoginCard(options = {}) {
         <button class="secondary-action" type="button" data-saas-action="login-session" ${state.saasLoading ? "disabled" : ""}>登录进入工作台</button>
         <button class="primary-action" type="button" data-saas-action="register-session" ${state.saasLoading ? "disabled" : ""}>注册并进入工作台</button>
       </div>
+      <p class="saas-auth-footnote"><a href="./support.html#email" target="_blank" rel="noopener noreferrer">无法登录？联系客服</a></p>
     </div>
   `;
 }
@@ -29938,14 +29940,35 @@ function isSaasRealPlatformWritesEnabled() {
   return state.saasEbayWriteAdapter?.real_platform_writes_enabled === true;
 }
 
+function saasListingPublicationCapabilityView(adapter = state.saasEbayWriteAdapter) {
+  // Display only: the controlled publish lane does not enable broad write permissions.
+  if (adapter?.real_platform_writes_enabled === true || adapter?.controlled_existing_draft_publish_enabled === true) {
+    return {
+      status: "enabled",
+      label: "发布需单独确认",
+      detail: "店铺授权、套餐权限、资料与发布前检查满足要求，并由你确认后，可通过 eBay API 正式发布；最终结果以 eBay 返回为准。",
+    };
+  }
+  if (adapter?.real_platform_writes_enabled === false && adapter?.controlled_existing_draft_publish_enabled === false) {
+    return {
+      status: "disabled",
+      label: "发布暂不可用",
+      detail: "当前发布通道未启用；商品资料与草稿可继续保存。正式发布仍须通过检查并单独确认。",
+    };
+  }
+  return {
+    status: "unknown",
+    label: "发布状态待核对",
+    detail: "连接店铺并刷新发布状态；完成检查并由你确认前，不会提交发布。",
+  };
+}
+
 function saasRealPlatformWriteLabel() {
   return isSaasRealPlatformWritesEnabled() ? "已开启" : "未开启";
 }
 
 function saasRealPlatformWriteDetail() {
-  return isSaasRealPlatformWritesEnabled()
-    ? "后端写入开关已开启；真实发布、改价、库存、政策、退款、付款、广告和敏感客服承诺仍必须先过决策中心。"
-    : "后端写入开关未开启；确认中心只会记录受控交接，不会写入 eBay。";
+  return saasListingPublicationCapabilityView().detail;
 }
 
 function saasMediaProviderBoundary() {
@@ -41674,6 +41697,11 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
         </div>
         <em>${escapeHtml(status)}</em>
       </div>
+      <div class="saas-merchant-billing-trust-note" aria-label="当前服务范围">
+        <strong>付款前确认服务范围</strong>
+        <p>捷境支持准备商品资料、生成 Listing 与素材，并在店铺授权、套餐权限、资料与预检条件满足后，由你确认，通过 eBay API 正式发布。订阅不会解除 eBay 账号限制，也不会自动发送买家消息。</p>
+        <a href="./terms.html" target="_blank" rel="noopener">查看服务范围与条款</a>
+      </div>
       <div class="saas-billing-transition-status" aria-label="订阅状态">
         ${rows.map(([label, title, detail]) => `
           <article>
@@ -42140,8 +42168,8 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
       </div>
       <div class="saas-merchant-billing-trust-note">
         <strong>需要订单或发票帮助</strong>
-        <p>在“客服与订单”提交订单号和需求。发票申请仅按已付款订单受理，具体开票信息以客服审核结果为准。</p>
-        <button class="secondary-action compact-action" type="button" data-global-flow-view="service">去客服与订单</button>
+        <p>通过“意见”向捷境团队提交订阅订单号和需求，不会发送给 eBay 买家。发票申请仅按已付款订单受理，具体开票信息以客服审核结果为准；请勿提交密码、支付密钥或身份证件。</p>
+        <button class="secondary-action compact-action" type="button" data-workflow-feedback-open data-workflow-feedback-module="套餐与付款" data-workflow-feedback-stage="订阅与发票支持" data-workflow-feedback-module-key="connect">联系捷境支持</button>
       </div>
       <div class="saas-merchant-billing-trust-safety" hidden aria-hidden="true">
         <span>merchant_billing_customer_trust_packet_v2</span>
@@ -44970,16 +44998,16 @@ function ensureSaasConfirmScaffold() {
   if (!isSaasPublicMvpMode()) return;
   const view = document.querySelector("#view-confirm");
   if (!view) return;
-  const realWritesEnabled = state.saasEbayWriteAdapter?.real_platform_writes_enabled === true;
+  const publicationCapability = saasListingPublicationCapabilityView();
   view.innerHTML = jiejingTrustedTemplate("confirmation.center")`
     <section class="panel full saas-real-confirm-center" aria-label="真实确认中心">
       <div class="section-heading">
         <div>
           <p class="eyebrow">确认中心 · 真实状态</p>
           <h2>只承接高风险动作，不展示历史商品流程</h2>
-          <p class="section-note">发布、付款、退款、改价、广告、政策和敏感客服承诺必须先停住；当前真实 eBay 写入${realWritesEnabled ? "已开启，但发布仍必须先预检并由商家确认" : "保持关闭"}。</p>
+          <p class="section-note">${escapeHtml(publicationCapability.detail)} 付款、退款、改价、广告、政策和敏感客服承诺也须分别核对权限并确认。</p>
         </div>
-        <span class="pill ${realWritesEnabled ? "amber" : "green"}">${realWritesEnabled ? "real writes on" : "real writes off"}</span>
+        <span class="pill amber">${escapeHtml(publicationCapability.label)}</span>
       </div>
       <div id="confirmGrid" class="confirm-grid"></div>
     </section>
@@ -46024,7 +46052,7 @@ function connectionStateItems() {
       name: "真实发布能力",
       status: publishStatus === "published" ? "预检通过" : publishStatus === "pending" ? "等待确认" : "安全锁定",
       tone: publishStatus === "published" ? "green" : publishStatus === "pending" ? "amber" : "red",
-      detail: `${saasRealPlatformWriteDetail()} 正式版要由系统执行服务在确认中心点头后调用 eBay，并写入审计日志。`,
+      detail: saasRealPlatformWriteDetail(),
       action: "launch_gap",
       actionLabel: "看上线缺口",
     },
@@ -46448,7 +46476,7 @@ function renderSaasSettingsStatusCards(ctx = saasMerchantWorkbenchContext()) {
   const connectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "";
   const modelReady = isSaasModelConfigured();
   const pendingCount = ctx.pendingConfirmations.length;
-  const realWritesEnabled = isSaasRealPlatformWritesEnabled();
+  const publicationCapability = saasListingPublicationCapabilityView();
   const accountHealth = saasAccountHealthSnapshot();
   const cards = [
     ["登录", state.saasConnected ? "已恢复" : "未登录", state.saasConnected ? saasAccountDisplayName() : "账号密码登录"],
@@ -46457,7 +46485,7 @@ function renderSaasSettingsStatusCards(ctx = saasMerchantWorkbenchContext()) {
     ["店铺数据", ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 已读取` : "待读取", ctx.hasPacket ? "商品、订单、政策、费用等来源可追溯" : "连接 eBay 后读取店铺资料"],
     ["AI", modelReady ? "已连接" : "待保存", "页面不显示原始凭证"],
     ["待确认", String(pendingCount), "发布、付款、退款、广告、客服承诺"],
-    ["高风险动作", saasRealPlatformWriteLabel(), realWritesEnabled ? "开启但仍走决策中心" : "当前只读/交接"],
+    ["eBay 发布", publicationCapability.label, publicationCapability.detail],
   ];
   return `
     <div class="saas-settings-status-list">
@@ -46519,7 +46547,7 @@ function saasUnpublishedDraftConnectionConfirmationView(ctx = {}, draftSaveAutho
       : { label: "确认已失效", detail: "时间过期或异常 · 不会生成授权链接" },
     rejected: { label: "确认未通过", detail: "未获批准 · 不会打开 eBay 授权" },
     executed: { label: "等待 eBay 返回", detail: "授权计划已使用 · 不会重复生成" },
-    authorized: { label: "草稿权限已开通", detail: "仅可保存未公开草稿 · 公开发布仍关闭" },
+    authorized: { label: "草稿权限已开通", detail: "草稿保存权限已开通 · 正式发布需另行确认" },
     not_started: { label: "开通草稿权限", detail: "先创建待确认单 · 不会公开发布" },
   }[status] || { label: "核对草稿权限", detail: "当前状态不完整 · 不会生成授权链接" };
   return { status, copy };

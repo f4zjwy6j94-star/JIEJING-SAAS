@@ -154,6 +154,8 @@ input{accent-color:var(--accent);caret-color:var(--accent)}
 .home-boundary-strip span{display:block;flex-shrink:0;color:var(--muted);max-width:16em}
 #plans{border-top:1px solid var(--line)}
 .home-plan-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.home-plan-scope{margin-top:20px;font-size:14px;line-height:1.9;color:var(--muted)}
+.home-plan-scope a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;margin-left:.5em}
 .path-card{text-align:left;position:relative;background:#fff;border:1px solid #d8e3d3;border-radius:12px;padding:27px 26px;min-height:235px;display:flex;flex-direction:column;transition:background 180ms,border-color 180ms,transform 180ms}
 .path-card:hover{border-color:#839d7e;background:var(--surface-raised)}
 .path-card.is-active{background:var(--wash);border-color:var(--accent)}

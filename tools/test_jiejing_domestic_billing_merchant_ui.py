@@ -12,6 +12,22 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def check_public_service_scope(app: str) -> None:
+    payment = app[app.index("function renderSaasMerchantDomesticPaymentPanel"):app.index("\nfunction renderSaasMerchantBillingEntitlementPathPanel")]
+    for text in ("通过 eBay API 正式发布", "店铺授权", "套餐权限", "预检", "确认", "订阅不会解除 eBay 账号限制", "不会自动发送买家消息"):
+        assert text in payment, f"checkout must disclose its actual current service scope: {text}"
+    assert "eBay 公开发布暂未开放" not in payment
+    assert payment.index('aria-label="当前服务范围"') < payment.index('data-saas-action="domestic-billing-create-order"'), "service scope must be shown before purchase controls"
+
+
+def check_subscription_support_route(app: str) -> None:
+    trust = app[app.index("function renderSaasMerchantBillingCustomerTrustPanel"):app.index("\nfunction renderSaasMerchantPricingModelPanel")]
+    assert 'data-workflow-feedback-open' in trust, "subscription support must open feedback to Jiejing"
+    assert 'data-workflow-feedback-module-key="connect"' in trust
+    assert 'data-workflow-feedback-stage="订阅与发票支持"' in trust
+    assert 'data-global-flow-view="service"' not in trust, "SaaS payment help must not route to eBay buyer support"
+
+
 def check_media_balance_browser(app: str) -> None:
     """Replay the real Billing fetch/render path; all HTTP is local fixtures."""
     from playwright.sync_api import sync_playwright
@@ -177,6 +193,11 @@ def check_media_balance_browser(app: str) -> None:
             }""")
             preview_text = page.locator('#billing-test').inner_text()
             assert '体验权益可用' in preview_text
+            assert page.locator('[aria-label="当前服务范围"]').is_visible()
+            assert '通过 eBay API 正式发布' in preview_text
+            assert 'eBay 公开发布暂未开放' not in preview_text
+            assert '订阅不会解除 eBay 账号限制' in preview_text
+            assert '不会自动发送买家消息' in preview_text
             assert '到期时间暂未提供' not in preview_text
             assert '顺延到现有有效期' not in preview_text
             assert page.get_by_role('button', name='续购当前套餐').count() == 0
@@ -451,6 +472,8 @@ def main() -> int:
         if marker in merchant_tabs:
             print(f"FAIL merchant settings expose internal operations marker: {marker}")
             return 1
+    check_public_service_scope(app)
+    check_subscription_support_route(app)
     check_media_balance_browser(app)
     print("PASS jiejing_domestic_billing_merchant_ui")
     return 0

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,72 @@ def scope(start_marker: str, end_marker: str) -> str:
     return APP_JS[start:end]
 
 
+def validate_publication_capability_render() -> None:
+    script = r'''
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('app.js', 'utf8').replace(/\r\n/g, '\n');
+function definition(name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert(start >= 0, `missing real renderer/helper: ${name}`);
+  const next = source.indexOf('\nfunction ', start + 1);
+  assert(next > start, `missing function boundary: ${name}`);
+  return source.slice(start, next);
+}
+const code = ['saasListingPublicationCapabilityView', 'isSaasRealPlatformWritesEnabled', 'ensureSaasConfirmScaffold'].map(definition).join('\n');
+assert(definition('renderSaasConfirmPanel').includes('saasListingPublicationCapabilityView('), 'confirmation summary must use the same publication projection');
+const cases = [
+  [{real_platform_writes_enabled:false, controlled_existing_draft_publish_enabled:true}, 'enabled', '通过 eBay API 正式发布'],
+  [{real_platform_writes_enabled:true, controlled_existing_draft_publish_enabled:false}, 'enabled', '通过 eBay API 正式发布'],
+  [{controlled_existing_draft_publish_enabled:true}, 'enabled', '通过 eBay API 正式发布'],
+  [{real_platform_writes_enabled:false, controlled_existing_draft_publish_enabled:false}, 'disabled', '当前发布通道未启用'],
+  [null, 'unknown', '发布状态待核对'],
+  [{}, 'unknown', '发布状态待核对'],
+  [{real_platform_writes_enabled:false}, 'unknown', '发布状态待核对'],
+  [{real_platform_writes_enabled:'true', controlled_existing_draft_publish_enabled:'false'}, 'unknown', '发布状态待核对'],
+];
+for (const [adapter, status, expected] of cases) {
+  const before = JSON.stringify(adapter);
+  const view = {innerHTML:''};
+  const sandbox = {
+    state: {saasEbayWriteAdapter:adapter},
+    document: {querySelector: selector => selector === '#view-confirm' ? view : null},
+    isSaasPublicMvpMode: () => true,
+    escapeHtml: value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])),
+    jiejingTrustedTemplate: () => (parts, ...values) => parts.reduce((text, part, i) => text + part + (values[i] ?? ''), ''),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox);
+  const result = vm.runInContext('saasListingPublicationCapabilityView()', sandbox);
+  assert.equal(result.status, status);
+  vm.runInContext('ensureSaasConfirmScaffold()', sandbox);
+  assert(view.innerHTML.includes(expected), `rendered ${status}: expected ${expected}`);
+  assert(!view.innerHTML.includes('eBay 正式发布暂未开放'));
+  assert(!view.innerHTML.includes('real writes'));
+  assert(view.innerHTML.includes('确认'), 'confirmation boundary must remain visible');
+  assert.equal(JSON.stringify(sandbox.state.saasEbayWriteAdapter), before, 'display must not mutate backend flags');
+  assert.equal(vm.runInContext('isSaasRealPlatformWritesEnabled()', sandbox), adapter?.real_platform_writes_enabled === true, 'broad-write permission helper must remain separate');
+}
+console.log('PASS publication capability real renderer: 8 cases; permissions unchanged');
+'''
+    result = subprocess.run(["node", "-"], input=script, text=True, encoding="utf-8", cwd=ROOT, capture_output=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    print(result.stdout.strip())
+
+
 def main() -> None:
+    validate_publication_capability_render()
+    for obsolete_publication_claim in (
+        "真实发布、退款、改价、广告和客服发送仍然关闭",
+        "发布、退款、改价、广告执行和客服发送仍然关闭",
+        "仅可保存未公开草稿 · 公开发布仍关闭",
+        "确认后也只记录受控交接",
+        "确认中心只会记录受控交接，不会写入 eBay",
+        "当前真实平台写入关闭",
+    ):
+        assert obsolete_publication_claim not in APP_JS + APP_HTML, obsolete_publication_claim
+
     for marker in (
         "为什么要做捷境",
         "不要一开始做“大而全”",

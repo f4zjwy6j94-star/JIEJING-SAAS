@@ -95,6 +95,15 @@ def main() -> None:
     assert_future_platform_copy(marketing_data)
     assert "会未经确认直接发布吗？" in INDEX
     assert "免费体验不绑卡、不自动续费" in INDEX
+    plans = INDEX[INDEX.index('data-home-section="plans"'):INDEX.index("<footer")]
+    public_plan_text = " ".join(visible_text_blocks(plans))
+    assert "通过 eBay API 正式发布" in public_plan_text, "public plans must describe the deployed confirmation-gated publication capability"
+    for boundary in ("店铺授权", "套餐权限", "预检", "确认"):
+        assert boundary in public_plan_text, f"public publication copy must retain its boundary: {boundary}"
+    for closed_copy in ("eBay 公开发布暂未开放", "eBay 正式发布暂未开放"):
+        assert closed_copy not in INDEX, "the broad write switch must not be mistaken for closed controlled publication"
+    assert "订阅不会解除 eBay 账号限制" in public_plan_text
+    assert "不会自动发送买家消息" in public_plan_text
 
     for ident in ("topLogin", "heroWorkbenchLogin", "publicWorkbenchEnter", "choosePlan", "nextStepModal", "nextStepEyebrow", "nextStepTitle", "nextStepBody", "entryLoginForm", "entryAuthEmail", "entryAuthPassword", "entryAuthStatus", "entryLoginSubmit", "entryRegisterSubmit", "entryModeArea", "entryModeGrid", "entryAccountPill", "toast"):
         assert INDEX.count(f'id="{ident}"') == 1, f"auth dependency missing or duplicated: {ident}"
