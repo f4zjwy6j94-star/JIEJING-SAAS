@@ -280,7 +280,7 @@ def main() -> int:
         "微信扫码，不输入银行卡",
         "单次购买 30 天",
         "按已付款订单人工受理",
-        'data-global-flow-view="service"',
+        'data-workflow-feedback-stage="订阅与发票支持"',
         "merchant_billing_customer_trust_packet_v2",
         "wechat_native_qr",
         "merchant_confirmed_one_time_30_day",
