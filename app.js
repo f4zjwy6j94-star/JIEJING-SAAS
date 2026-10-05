@@ -11117,6 +11117,24 @@ async function navigateSaasListingWizard(direction) {
 function saasListingMediaCopyFactSignature(packet = {}, { includeMedia = false } = {}) {
   const omitMedia = (facts = {}) => Object.fromEntries(Object.entries(facts)
     .filter(([key]) => includeMedia || !["image_urls", "image_rights_confirmed"].includes(key)));
+  const sourceFacts = omitMedia(packet.source_confirmed_facts);
+  const merchantFacts = omitMedia(packet.merchant_confirmed_facts);
+  const confirmed = [sourceFacts, merchantFacts];
+  // Compare old cost-only packets using the same currency-role migration as
+  // fact intake. Work on copies: authenticated generation evidence is immutable.
+  for (const facts of confirmed) {
+    if (facts.unit_cost && facts.currency && !facts.selling_price && !facts.unit_cost_currency) {
+      facts.unit_cost_currency = facts.currency;
+      delete facts.currency;
+    }
+  }
+  const unknownFacts = [...(packet.unknown_facts || [])];
+  // That migration exposes an unknown sale currency; explicitly recording it
+  // is not a new buyer-copy fact. No other unknown or currency is discarded.
+  if (confirmed.some(facts => facts.unit_cost && facts.unit_cost_currency) &&
+      confirmed.every(facts => !facts.currency && !facts.selling_price) && !unknownFacts.includes("currency")) {
+    unknownFacts.push("currency");
+  }
   // Vision history carries image indexes and review markers that the fact
   // save API normalizes away. They are provenance, not changed buyer-copy
   // facts. Compare the complete conflict meaning as a set, without modifying
@@ -11135,9 +11153,9 @@ function saasListingMediaCopyFactSignature(packet = {}, { includeMedia = false }
     : [];
   return JSON.stringify(saasCanonicalJsonValue({
     product_name: packet.product_name || "", simulation_only: packet.simulation_only === true,
-    source_confirmed_facts: omitMedia(packet.source_confirmed_facts),
-    merchant_confirmed_facts: omitMedia(packet.merchant_confirmed_facts),
-    unknown_facts: [...(packet.unknown_facts || [])].filter(key => includeMedia || !["image_urls", "image_rights_confirmed"].includes(key)).sort(),
+    source_confirmed_facts: sourceFacts,
+    merchant_confirmed_facts: merchantFacts,
+    unknown_facts: unknownFacts.filter(key => includeMedia || !["image_urls", "image_rights_confirmed"].includes(key)).sort(),
     fact_conflicts: conflicts,
     ...(includeMedia ? {
       source_mode: packet.source_mode || "", source_records: sourceRecords,

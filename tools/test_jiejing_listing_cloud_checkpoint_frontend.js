@@ -737,6 +737,78 @@ test("unknown sale currency survives source restore and cloud save without erasi
   } finally { await first.context.close(); if (second) await second.context.close(); }
 });
 
+test("cold vision checkpoint preserves validated copy across legacy procurement currency migration", async () => {
+  resetFixture(); projectStatus = savedProjectStatus();
+  const fields = { ...originalFields, title: "PVC Floor Drain Filter Cover Gray Single Piece",
+    selling_points: "Made of PVC\nGray color\nSingle piece", description: "PVC floor drain filter cover in gray. Sold as a single piece.",
+    price: "", images: "", logistics: "" };
+  const legacyPacket = { product_name: "PVC drain cover", source: "backend_product_vision_extraction",
+    source_mode: "merchant_source_supplied", simulation_only: false,
+    vision_contract_version: "jiejing_ai_ceo_product_vision_intake_v1",
+    buyer_copy_requires_validated_listing_generation: true, source_confirmed_facts: {},
+    merchant_confirmed_facts: { product_name: "PVC drain cover", condition: "NEW", material: "PVC",
+      source_url: "https://supplier.example.test/drain-cover", sku: "TEST-DRAIN-PVC-GRY-001", unit_cost: "1.2", currency: "CNY" },
+    unknown_facts: ["package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm",
+      "selling_price", "quantity", "item_location", "product_dimensions_cm", "net_weight_g", "product_origin"],
+    fact_conflicts: [{ field: "material", values: ["PVC", "Soft rubber"], reason: "Supplier images disagree" }] };
+  const generation = structuredClone(baseReport);
+  generation.report.product = legacyPacket.product_name;
+  generation.report.merchant_product_fact_packet = structuredClone(legacyPacket);
+  generation.report.listing_handoff.listing_fields = { ...fields, description_seed: fields.description };
+  const currentPacket = structuredClone(legacyPacket);
+  currentPacket.merchant_confirmed_facts.unit_cost_currency = "CNY";
+  delete currentPacket.merchant_confirmed_facts.currency;
+  currentPacket.unknown_facts.push("currency");
+  const facts = { ...structuredClone(baseReport), report_id: "drain-current-facts", report_type: "merchant.product_facts",
+    runtime_run_id: "merchant_product_facts", created_at: "2026-09-06T02:00:00Z",
+    report: { contract_version: "merchant_product_fact_packet_v1", listing_project_identity: identity,
+      merchant_product_fact_packet: currentPacket } };
+  checkpoint = savedCheckpoint(fields, 11);
+  checkpoint.base_report_id = facts.report_id;
+  checkpoint.merchant_edited_fields = ["category", "selling_points"];
+  checkpointHandler = (request, res) => {
+    if (request.method === "GET") {
+      sendJson(res, 200, { status: "saved", checkpoint, current_revision: checkpoint.revision,
+        current_base_report_id: facts.report_id, current_base_report: facts, current_product_fact_report: facts,
+        validated_generation_report: generation, base_changed: false });
+    } else {
+      assert.equal(request.body.base_report_id, facts.report_id);
+      assert.equal(request.body.expected_revision, checkpoint.revision);
+      checkpoint = { ...checkpoint, checkpoint_id: `checkpoint-revision-${checkpoint.revision + 1}`,
+        revision: checkpoint.revision + 1, mutation_id: request.body.mutation_id,
+        fields: request.body.fields, merchant_edited_fields: request.body.merchant_edited_fields,
+        publish_intake: request.body.publish_intake };
+      sendJson(res, 201, { status: "saved", checkpoint });
+    }
+    return true;
+  };
+  const first = await openDevice({ coldProject: true });
+  let second;
+  try {
+    await first.page.evaluate(async () => { await refreshSaasMerchantProjectStatus(); await hydrateSaasListingCloudCheckpoint({ force: true }); });
+    const form = await mountPublishIntake(first.page);
+    assert.equal(await form.locator('[name="title"]').inputValue(), fields.title,
+      "a schema-only procurement currency migration cannot erase the authenticated original buyer copy");
+    assert.equal(await form.locator('[name="description_html"]').inputValue(), `${fields.selling_points}\n\n${fields.description}`);
+    assert.equal(await form.locator('[name="currency"]').inputValue(), "", "unknown retail currency is still unknown");
+    assert.equal(await form.locator('[name="procurement_cost_currency"]').inputValue(), "CNY");
+    assert.equal(requests.some(item => item.method === "POST"), false, "the cold read never rewrites history");
+    assert.deepEqual(await first.page.evaluate(id => state.saasReports.find(item => item.report_id === id).report.merchant_product_fact_packet,
+      generation.report_id), legacyPacket, "comparison never mutates the immutable generation evidence");
+    await form.locator('[name="description_html"]').fill(fields.description);
+    await first.page.locator('[data-saas-listing-cloud-action="save-publish-intake"]').click();
+    await waitUntil(() => checkpoint?.publish_intake?.values.title === fields.title, "the visible original copy is saved normally");
+    second = await openDevice({ coldProject: true });
+    await second.page.evaluate(async () => { await refreshSaasMerchantProjectStatus(); await hydrateSaasListingCloudCheckpoint({ force: true }); });
+    const restored = await mountPublishIntake(second.page);
+    for (const [key, value] of Object.entries({ title: fields.title, description_html: fields.description, currency: "",
+      procurement_cost: "1.2", procurement_cost_currency: "CNY" })) {
+      assert.equal(await restored.locator(`[name="${key}"]`).inputValue(), value, `${key}: new-device recovery preserves the saved value`);
+    }
+    assert.deepEqual(unexpected, []); assert.deepEqual(first.errors, []); assert.deepEqual(second.errors, []);
+  } finally { await first.context.close(); if (second) await second.context.close(); }
+});
+
 test("legacy 35-field cloud intake preserves saved fees when newly added source fields are empty", async () => {
   resetFixture();
   checkpoint = savedCheckpoint({ ...originalFields, title: "Saved merchant title", price: "12.99 USD",
@@ -1589,6 +1661,9 @@ test("merchant editing a vision-origin Listing with matching validated backend f
 for (const mode of ["matching", "media-added", "media-rights-revoked", "media-cleared", "changed-facts", "changed-spec",
   "changed-source-facts", "changed-unknown", "changed-conflicts", "normalized-conflicts", "changed-conflict-values",
   "changed-conflict-reason", "changed-conflict-review", "simulation-downgrade", "changed-copy",
+  "legacy-cost-currency", "legacy-source-cost-currency", "legacy-cost-currency-changed", "legacy-cost-amount-changed",
+  "legacy-cost-sale-added", "legacy-cost-material-changed", "legacy-cost-unrelated-unknown", "legacy-cost-removed",
+  "legacy-cost-no-amount", "legacy-cost-sale-already-present", "legacy-cost-explicit-cost-currency",
   "other-company", "other-store", "other-project", "other-source", "other-candidate", "missing-generation",
   "fake-runtime", "fake-contract", "fake-source", "not-ready"]) {
   test(`unchanged generated vision copy survives a text checkpoint only with authenticated matching evidence: ${mode}`, async () => {
@@ -1598,6 +1673,13 @@ for (const mode of ["matching", "media-added", "media-rights-revoked", "media-cl
       source_confirmed_facts: {}, merchant_confirmed_facts: { product_name: "Foldable Tablet Stand", material: "Aluminum", condition: "NEW" },
       unknown_facts: ["sku"], fact_conflicts: [], simulation_only: true,
       buyer_copy_requires_validated_listing_generation: true };
+    if (mode.startsWith("legacy-")) {
+      const facts = mode === "legacy-source-cost-currency" ? packet.source_confirmed_facts : packet.merchant_confirmed_facts;
+      Object.assign(facts, { unit_cost: "1.2", currency: "CNY" });
+      if (mode === "legacy-cost-no-amount") delete facts.unit_cost;
+      if (mode === "legacy-cost-sale-already-present") facts.selling_price = "12.99";
+      if (mode === "legacy-cost-explicit-cost-currency") facts.unit_cost_currency = "USD";
+    }
     if (mode === "normalized-conflicts" || mode.startsWith("changed-conflict-")) {
       packet.fact_conflicts = [{ field: "product_dimensions_cm", values: ["11.5 x 11.5", "20 x 20"],
         reason: "Supplier sources disagree", image_indexes: [1, 2], requires_merchant_confirmation: true }];
@@ -1620,6 +1702,18 @@ for (const mode of ["matching", "media-added", "media-rights-revoked", "media-cl
         Object.assign(draft, { source_type: "ai_ceo_product_vision", model_generated: false,
           buyer_copy_status: "merchant_edited_requires_review", merchant_edited_fields: [],
           buyer_copy_requires_validated_listing_generation: true, merchant_product_fact_packet: packet });
+        if (mode.startsWith("legacy-")) {
+          const facts = mode === "legacy-source-cost-currency" ? packet.source_confirmed_facts : packet.merchant_confirmed_facts;
+          facts.unit_cost_currency = "CNY";
+          delete facts.currency;
+          packet.unknown_facts.push("currency");
+          if (mode === "legacy-cost-currency-changed") facts.unit_cost_currency = "USD";
+          if (mode === "legacy-cost-amount-changed") facts.unit_cost = "2.4";
+          if (mode === "legacy-cost-sale-added") { facts.selling_price = "12.99"; facts.currency = "USD"; }
+          if (mode === "legacy-cost-material-changed") facts.material = "PVC";
+          if (mode === "legacy-cost-unrelated-unknown") packet.unknown_facts.push("net_weight_g");
+          if (mode === "legacy-cost-removed") delete facts.unit_cost;
+        }
         if (mode === "changed-facts") draft.merchant_product_fact_packet.merchant_confirmed_facts.material = "Steel";
         if (mode === "changed-spec") draft.merchant_product_fact_packet.merchant_confirmed_facts.package_weight_g = "45";
         if (mode === "changed-source-facts") draft.merchant_product_fact_packet.source_confirmed_facts.material = "Steel";
@@ -1657,7 +1751,8 @@ for (const mode of ["matching", "media-added", "media-rights-revoked", "media-cl
         if (mode === "missing-generation") state.saasReports = [];
       }, { packet, mode });
       const form = await mountPublishIntake(device.page);
-      const copyAllowed = ["matching", "media-added", "media-rights-revoked", "media-cleared", "normalized-conflicts"].includes(mode);
+      const copyAllowed = ["matching", "media-added", "media-rights-revoked", "media-cleared", "normalized-conflicts",
+        "legacy-cost-currency", "legacy-source-cost-currency"].includes(mode);
       assert.equal(await form.locator('[name="title"]').inputValue(), copyAllowed ? originalFields.title : "",
         "a saved unchanged generated text must not disappear, but a checkpoint alone cannot grant validation");
       if (copyAllowed) assert.match(await form.locator('[name="description_html"]').inputValue(), /Original description/);
