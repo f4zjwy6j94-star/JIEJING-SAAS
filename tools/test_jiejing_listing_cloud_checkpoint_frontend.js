@@ -681,6 +681,56 @@ test("publish intake preserves long literal descriptions and image paths while r
   } finally { await device.context.close(); }
 });
 
+test("legacy 35-field cloud intake preserves saved fees when newly added source fields are empty", async () => {
+  resetFixture();
+  checkpoint = savedCheckpoint({ ...originalFields, title: "Saved merchant title", price: "12.99 USD",
+    logistics: "包装重量: 380 g; 包装尺寸: 22x12x5 cm" });
+  checkpoint.merchant_edited_fields = ["title", "price", "logistics"];
+  const first = await openDevice();
+  let legacy;
+  try {
+    await first.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
+    await mountPublishIntake(first.page);
+    legacy = await first.page.evaluate(() => ({ values: Object.fromEntries(new FormData(document.querySelector("#saasPublishIntakeForm"))),
+      basis: JSON.parse(document.querySelector("#saasPublishIntakeForm").dataset.intakeBasis) }));
+    for (const section of [legacy.values, legacy.basis]) {
+      delete section.procurement_cost_currency;
+      delete section.exchange_rate_basis;
+    }
+    Object.assign(legacy.values, { procurement_cost: "2.50", shipping_cost: "4.20", ebay_fee: "2.07", ad_budget: "0",
+      return_risk_reserve: "0.65", exchange_rate: "1", net_profit: "3.57", gross_margin_percent: "27.48" });
+    checkpoint.publish_intake = legacy;
+  } finally { await first.context.close(); }
+  const restored = await openDevice();
+  try {
+    await restored.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
+    const form = await mountPublishIntake(restored.page);
+    for (const name of ["procurement_cost", "shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "net_profit", "gross_margin_percent"]) {
+      assert.equal(await form.locator(`[name="${name}"]`).inputValue(), legacy.values[name], `${name}: adding unknown schema fields is not a merchant fact change`);
+    }
+    assert.equal(await form.locator('[name="procurement_cost_currency"]').inputValue(), "", "missing cost currency stays unknown");
+    assert.equal(await form.locator('[name="exchange_rate"]').inputValue(), "", "an undirected historical rate is not implicitly validated");
+    assert.doesNotMatch(await restored.page.locator('[data-saas-publish-intake-draft-status]').textContent(), /资料已变更/);
+    assert.equal(requests.filter(item => item.method === "POST").length, 0, "viewing migration must not write business data");
+    await restored.page.locator('[data-saas-listing-cloud-action="save-publish-intake"]').click();
+    await waitUntil(() => checkpoint.publish_intake?.values.ebay_fee === legacy.values.ebay_fee
+      && Object.hasOwn(checkpoint.publish_intake.values, "procurement_cost_currency"), "explicit save must preserve the legacy fees in the new schema");
+    const saved = structuredClone(checkpoint.publish_intake.values);
+    await restored.page.reload();
+    await seedDevice(restored.page);
+    await restored.page.evaluate(() => hydrateSaasListingCloudCheckpoint({ force: true }));
+    const reloaded = await mountPublishIntake(restored.page);
+    for (const name of ["procurement_cost", "shipping_cost", "ebay_fee", "ad_budget", "return_risk_reserve", "net_profit", "gross_margin_percent"]) {
+      assert.equal(await reloaded.locator(`[name="${name}"]`).inputValue(), saved[name], `${name}: save and cold refresh must preserve the migrated field`);
+    }
+    await reloaded.locator('[name="procurement_cost_currency"]').fill("CNY");
+    for (const name of ["ebay_fee", "return_risk_reserve", "net_profit", "gross_margin_percent"]) {
+      assert.equal(await reloaded.locator(`[name="${name}"]`).inputValue(), "", `${name}: an actual newly entered cost currency still invalidates dependent values`);
+    }
+    assert.deepEqual(unexpected, []); assert.deepEqual(restored.errors, []);
+  } finally { await restored.context.close(); }
+});
+
 for (const [lateRead, changed, intakeFirst] of [[false, false], [true, false], [true, true], [false, false, true]]) test(`publish intake survives full reload plus ${lateRead ? "delayed" : "completed"} cloud checkpoint hydration${changed ? " with changed source" : ""}${intakeFirst ? " after first render" : ""}`, async () => {
   resetFixture();
   checkpoint = savedCheckpoint({ ...originalFields, title: "Saved merchant title", price: "12.99 USD",

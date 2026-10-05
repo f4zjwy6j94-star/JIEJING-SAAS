@@ -32485,7 +32485,7 @@ function snapshotSaasPublishIntakeFormValues(changedName = "") {
   const basis = saasPublishIntakeSourceBasis();
   let renderedBasis = {};
   try { renderedBasis = JSON.parse(form.dataset.intakeBasis || "{}"); } catch { /* Missing source cannot attest to freshness. */ }
-  const changedSource = Object.keys(basis).filter((name) => renderedBasis?.[name] !== basis[name]);
+  const changedSource = Object.keys(basis).filter((name) => (renderedBasis?.[name] ?? "") !== basis[name]);
   const stale = saasPublishIntakeDependentFields(changedSource);
   if (changedName && saasPendingPublishIntakeFormContextKey === context.key &&
       values[changedName] !== saasPendingPublishIntakeFormValues?.[changedName]) {
@@ -32532,7 +32532,9 @@ function currentSaasPendingPublishIntakeValues(baseValues = null) {
   // Startup first restores a generated report, then its newer merchant edit.
   // Do not discard saved fees against that intermediate, older projection.
   if (saasPublishIntakeAwaitingCloudRead()) return { ...saasPendingPublishIntakeFormValues };
-  const changed = Object.keys(basis).filter((name) => saasPendingPublishIntakeFormBasis?.[name] !== basis[name]);
+  // Schema additions with no known value do not change the product facts.
+  // A new non-empty fact still invalidates its dependent saved inputs.
+  const changed = Object.keys(basis).filter((name) => (saasPendingPublishIntakeFormBasis?.[name] ?? "") !== basis[name]);
   if (changed.length) {
     saasPublishIntakeDependentFields(changed).forEach((name) => { delete saasPendingPublishIntakeFormValues[name]; });
     saasPendingPublishIntakeFormBasis = basis;
