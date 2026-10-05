@@ -2,11 +2,13 @@
 
 ## Status and scope
 
-The owner replied “继续推进” to the proposed short maintenance and isolated
-restore verification. This authorises preparation of that bounded recovery task;
-it does not establish that the owner is present with two paper shares. That
-specific availability question remains unanswered. This written design is for
-review before implementation; no new recovery executor is ready or running.
+The owner has now confirmed being at the computer with any two existing A/B/C
+shares and asked to continue the bounded short maintenance and recovery task.
+The implementation passed 18 focused tests locally and on NEW. A no-secret
+remote dry-run and memory-protection probe passed. A separate owner-only hidden
+input window is open; actual recovery success remains unverified until its
+backend receipt and live health have been checked. See the current execution
+index for the exact helper hashes and evidence locations.
 
 This is not a website migration, a new Vault initialization, a rekey, a storage
 engine migration, a deployment, an eBay action, or permission to retire OLD.
@@ -108,7 +110,20 @@ they do not certify this installation or grant maintenance authority.
 
 ## Current stop point
 
-The implementation and its targeted regression tests are not yet complete.
-Production has not been paused, stopped, unsealed or reconfigured in this turn.
-Do not execute the legacy backup shell script or paper initialization controller.
-Resolve owner availability and review this design before creating the executor.
+The bounded R2 drill is now complete and independently read back. Its cold
+archive hash is `41cd2086849455fab1c6a96af8b03372c85138639dd79f57dfdbabb738e851fb`;
+the successful drill receipt hash is
+`8887a56db4144430f7e7623a2d6df4fe60616fe54440d367c7be9ffc94063e13`.
+An owner-only off-host encrypted-storage copy was hash-verified. Only the
+artifact identifier and actual drill timestamp were registered; the 30-day
+policy and existing custody/payment/platform controls were preserved.
+
+The first registration wrapper rejected an old-runtime equality assertion after
+its reload. This failed wrapper receipt is retained. An independent readback
+verified the two-field source change and both runtime environments against the
+actual Compose plus image model without repeating the reload; it then recorded
+completion. The original old-runtime differences were not retained, so their
+exact cause is not retroactively asserted. Public and dual-runtime backup
+readiness are now true. These results do not authorize retiring OLD or writing
+to eBay. See the current execution index for exact evidence paths. Do not rerun
+the completed drill, legacy backup shell or paper initialization controller.

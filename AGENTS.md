@@ -23,7 +23,8 @@ These instructions apply to the whole repository. They exist so local Codex, Cod
 
 ## Product Boundary
 
-- JIEJING is an eBay-first AI CEO SaaS for cross-border commerce operations.
+- JIEJING is an AI CEO SaaS for cross-border commerce operations, delivered eBay-first. Brand direction is cross-border commerce; eBay is the first supported platform, not a permanent exclusive scope. Future platform expansion must not be presented as currently available functionality.
+- Homepage brand copy must distinguish that broad direction from current support. Do not reduce the brand to “为 eBay 商家而生”; place accurate current-platform support in a separate capability statement.
 - Do not reframe it as a generic ERP, generic agent marketplace, or ordinary chatbot.
 - The AI CEO can chat normally, but eBay operating tasks must enter workflows with evidence, audit trails, and confirmation gates.
 - Keep owner-only launch gates, WAF/security diagnostics, billing cutover, and project-readiness panels in internal operations surfaces. Merchant Settings holds actionable account, plan, store, model, and permission controls. Core merchant workflows should stay simple.
