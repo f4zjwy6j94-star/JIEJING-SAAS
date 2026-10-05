@@ -100,7 +100,10 @@ async function stopOwnedBackend(owned) {
   }
   const resolvedRoot = path.resolve(owned.tempRoot);
   if (path.dirname(resolvedRoot) === owned.tempParent && path.basename(resolvedRoot).startsWith("jiejing-project-status-smoke-")) {
-    fs.rmSync(resolvedRoot, { recursive: true, force: true });
+    // Windows can release backend file handles shortly after process exit.
+    // Retry only Node's transient filesystem errors, with a finite bound;
+    // persistent cleanup failures still fail the smoke test.
+    await fs.promises.rm(resolvedRoot, { recursive: true, force: true, maxRetries: 6, retryDelay: 100 });
   }
 }
 
@@ -837,7 +840,7 @@ async function main() {
   }
 }
 
-module.exports = { withOwnedBrowser };
+module.exports = { withOwnedBrowser, startOwnedBackend, stopOwnedBackend };
 
 if (require.main === module) {
   main().catch((error) => {

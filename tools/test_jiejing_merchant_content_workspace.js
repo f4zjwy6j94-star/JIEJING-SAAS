@@ -5,7 +5,97 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const test = require("node:test");
-const { withOwnedBrowser } = require("./codex_jiejing_merchant_project_status_browser_smoke");
+const os = require("node:os");
+const { spawn } = require("node:child_process");
+const { withOwnedBrowser, startOwnedBackend, stopOwnedBackend } = require("./codex_jiejing_merchant_project_status_browser_smoke");
+
+test("browser smoke owned backend releases its temporary directory before stop resolves", async () => {
+  const owned = await startOwnedBackend();
+  try {
+    await stopOwnedBackend(owned);
+    assert.equal(fs.existsSync(owned.tempRoot), false);
+    await assert.rejects(fetch(`${owned.backendBase}/health`, { signal: AbortSignal.timeout(1500) }));
+  } finally {
+    if (owned.child.exitCode === null && owned.child.signalCode === null) owned.child.kill();
+  }
+});
+
+async function holdWindowsFile(filePath, durationMs) {
+  const child = spawn("powershell.exe", ["-NoProfile", "-Command",
+    "$stream = [IO.File]::Open($env:JIEJING_TEST_LOCK_PATH, 'Open', 'Read', 'None'); " +
+    "[Console]::WriteLine('locked'); [Console]::Out.Flush(); " +
+    `Start-Sleep -Milliseconds ${durationMs}; $stream.Dispose()`], {
+    env: { ...process.env, JIEJING_TEST_LOCK_PATH: filePath }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stderr.resume();
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill(); reject(new Error("file lock fixture did not start")); }, 5000);
+    child.stdout.once("data", data => {
+      clearTimeout(timer);
+      if (!String(data).includes("locked")) return reject(new Error("file lock fixture was not ready"));
+      resolve();
+    });
+    child.once("error", error => { clearTimeout(timer); reject(error); });
+  });
+  return child;
+}
+
+test("browser smoke cleanup waits for a briefly locked Windows fixture file", { skip: process.platform !== "win32" }, async () => {
+  const tempParent = path.resolve(os.tmpdir());
+  const tempRoot = fs.mkdtempSync(path.join(tempParent, "jiejing-project-status-smoke-"));
+  const filePath = path.join(tempRoot, "transient-lock.txt");
+  fs.writeFileSync(filePath, "isolated file lock fixture");
+  const lock = await holdWindowsFile(filePath, 350);
+  try {
+    await stopOwnedBackend({ child: { exitCode: 0 }, tempRoot, tempParent });
+    assert.equal(fs.existsSync(tempRoot), false);
+  } finally {
+    if (lock.exitCode === null && lock.signalCode === null) lock.kill();
+  }
+});
+
+test("browser smoke cleanup rejects a persistently locked Windows fixture file", { skip: process.platform !== "win32" }, async () => {
+  const tempParent = path.resolve(os.tmpdir());
+  const tempRoot = fs.mkdtempSync(path.join(tempParent, "jiejing-project-status-smoke-"));
+  const filePath = path.join(tempRoot, "persistent-lock.txt");
+  fs.writeFileSync(filePath, "isolated persistent file lock fixture");
+  const lock = await holdWindowsFile(filePath, 30000);
+  try {
+    await assert.rejects(stopOwnedBackend({ child: { exitCode: 0 }, tempRoot, tempParent }),
+      error => ["EPERM", "EBUSY"].includes(error.code));
+    assert.equal(fs.existsSync(filePath), true);
+  } finally {
+    if (lock.exitCode === null && lock.signalCode === null) {
+      const exited = new Promise(resolve => lock.once("exit", resolve));
+      lock.kill();
+      await exited;
+    }
+    await fs.promises.rm(tempRoot, { recursive: true, force: true, maxRetries: 6, retryDelay: 100 });
+  }
+});
+
+test("browser smoke cleanup leaves a directory outside its owned prefix untouched", async () => {
+  const tempParent = path.resolve(os.tmpdir());
+  const tempRoot = fs.mkdtempSync(path.join(tempParent, "jiejing-cleanup-scope-"));
+  const filePath = path.join(tempRoot, "must-remain.txt");
+  fs.writeFileSync(filePath, "unrelated fixture");
+  try {
+    await stopOwnedBackend({ child: { exitCode: 0 }, tempRoot, tempParent });
+    assert.equal(fs.readFileSync(filePath, "utf8"), "unrelated fixture");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("browser smoke cleanup preserves unrelated filesystem errors", async (context) => {
+  const failure = Object.assign(new Error("isolated filesystem failure"), { code: "EIO" });
+  const tempParent = path.resolve(os.tmpdir());
+  context.mock.method(fs.promises, "rm", async () => { throw failure; });
+  await assert.rejects(stopOwnedBackend({
+    child: { exitCode: 0 }, tempParent,
+    tempRoot: path.join(tempParent, "jiejing-project-status-smoke-error-fixture"),
+  }), error => error === failure);
+});
 
 test("browser smoke closes its owned browser when an assertion fails", async () => {
   const failure = new Error("expected isolated assertion failure");
