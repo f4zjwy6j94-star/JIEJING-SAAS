@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "checkpoint_name": "jiejing-11-video-continuity-20261006",
+  "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
+  "working_branch": "video/jiejing-11-continuity-20261006",
+  "private_root": "/workspace/jiejing-continuity/10.0",
+  "video_output_root": "/workspace/jiejing-deliverables/11.0/20261006-visual-v1",
+  "required_private_controls": [
+    "START_HERE.md",
+    "OWNER_DECISION_20261006.md",
+    "PRIVATE_HISTORY_ACCESS.md"
+  ],
+  "pinned_files": {
+    "repo": {
+      "AGENTS.md": "9ad2c01537cec7fedd0b24c71ff8ed7513b4514d0c20cb3ee973360e3846ddfe",
+      "marketing/douyin-studio/src/Root.tsx": "2ff8d8424c8dadc206555dcfa46d2d183f12c7478e979cef22fd60744d50fa81",
+      "marketing/douyin-studio/src/Douyin11VisualStudy.tsx": "31938fce8e1e93cd1bab02dd9fcc33dcdcb607ba1ee03c8aa60a50a7143354fb",
+      "marketing/douyin-studio/src/index.ts": "957e481dd33a29b4a55ae0e95dbf763b7e48c37c427ca4bd1275faf34bc07a74",
+      "marketing/douyin-studio/package.json": "3d555e7a46381dec7c5b335c2f57416cc482c242a581979d42378b6f958f04f1",
+      "marketing/douyin-studio/package-lock.json": "08fd7d27c45182afe22ae1e36bd0c031fef3779a39ad4aaeee580000484f9ef7",
+      "marketing/douyin-studio/public/brand/jiejing-app-icon.svg": "e6aaa79a4214680e878981f71e38a59e5a77f9c4ba8aece4853c16467a6d54a1",
+      "marketing/douyin-studio/docs/11.0-visual-study-v1.md": "56dfd1e86b96bcf9f97a45f1488eb9f1292007881c471ab9d50d8fbffc334054",
+      "docs/continuity/11.0/00_READ_FIRST.md": "9e71aa1334d7e7f0f671a1ead9fba9fbc2d71b7d1bb4baeded9365c1d0b942df",
+      "docs/continuity/11.0/verify_checkpoint.py": "2769f4298c6f8579ee82c681cee3a0e5923126cfb8fcd6cd02b448f7b423126f"
+    },
+    "private": {
+      "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
+      "working_materials_tools.py": "8908000d28a842051095c646bdd7771f6c415cc39d693dc443acb1cfbb68651e",
+      "history_tools.py": "f19a4275e3d6da7402a288ba3708888696bc85235aa5ca74b3d3b5aac396835a",
+      "media_tools.py": "2ae35314d7227ecce2db624d91e1fd3573def167302e0968b102a6d493028b34",
+      "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c"
+    },
+    "video": {
+      "SAVE_RECEIPT.safe.json": "0e03ff4ffbd4c46428d19c9e3cffe669e559d720aa0007100b0614fa71c8c3c3",
+      "jiejing-11.0-visual-study-v1.zip": "3df5316d2e64ee5e2680872d95308ae59872a0e0a841da0279518600e31f608a"
+    },
+    "evidence": {
+      "SAFE_ACCEPTANCE.json": "6a62be8b4bb9d99e122ab44b4e29f278451c0e52ad0dc9480bb12fa115253b0f",
+      "SAFE_ACCEPTANCE.md": "b02ef0446ace31b153ea6f6527984e7e9db77e1b16d071dbcd335431fc3891ea",
+      "first-migration-node20-265-of-274/original-report.json": "abddb5e266a3688945de6b461513cbab6c7ff07787289a40246e8d52f6c4f486"
+    }
+  },
+  "video_direction_approved": false,
+  "full_film_approved": false,
+  "publication_approved": false,
+  "original_local_materials_not_all_uploaded": true,
+  "full_274_gate_pass_claimed": false,
+  "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash."
+}

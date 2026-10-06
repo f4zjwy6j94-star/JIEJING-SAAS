@@ -1,4 +1,5 @@
 import "./index.css";
+import { FactsFilm, Douyin11ConceptBoard, Douyin11Storyboard } from "./Douyin11VisualStudy";
 import { Composition, Still } from "remotion";
 import { DouyinLaunch01 } from "./DouyinLaunch01";
 import { DouyinCover01 } from "./stills/DouyinCover01";
@@ -8,6 +9,9 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="Douyin11StyleA" component={FactsFilm} durationInFrames={360} fps={30} width={1080} height={1920} />
+      <Still id="Douyin11ConceptBoard" component={Douyin11ConceptBoard} width={2320} height={1670} />
+      <Still id="Douyin11Storyboard" component={Douyin11Storyboard} width={1800} height={2190} />
       <Composition
         id="DouyinLaunch01"
         component={DouyinLaunch01}

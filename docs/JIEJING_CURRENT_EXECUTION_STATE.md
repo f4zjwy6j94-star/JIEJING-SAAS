@@ -4,6 +4,65 @@
 
 ## 当前接续摘要（以本区续接，不按历史段落直接执行）
 
+### 10-06 持续接续优先：保存视频可编辑检查点，回到既有分镜与样片
+
+- 经营者明确要保障本地成果与云端持续接续、重要决定不遗漏，然后继续视频。云端主工作、本地10.0保留、额外COS取消；不承诺设备实时同步或自动拥有所有聊天记忆。已交付历史/资料/图片按清单验证，未迁入的本地保留类别继续如实标注。后续新决定先写入口/索引，再按需检索原文，不重复盘问已确认定位。
+- 当前可编辑视频及接续文档的保存目标为独立私人分支 `video/jiejing-11-continuity-20261006`；固定迁移分支0b4与main/PR#2分别保留。准确提交与远端读回以 `/workspace/onboarding-evidence/20261006-cloud-handoff-review/CONTINUATION_CHECKPOINT_20261006.safe.json` 为准；不得只凭此计划文字称已推送。此前视频源文件和文档dirty已先逐文件备份，保存仅纳入明确的视频/接续文件，不上传历史、原图、输出视频、数据库、日志或秘密。
+- 新启动入口 `docs/continuity/11.0/00_READ_FIRST.md`，校验 `python3 docs/continuity/11.0/verify_checkpoint.py`；带 `--remote` 时还要求工作树无未提交更改且HEAD等于远端工作分支。缺文件/哈希错误必须报错，任何新工作先保留再更新检查点，不reset/clean回初始快照。完整已导入包的既有校验脚本继续使用。
+- 本轮资料完整校验exit0，新增样片第238帧已从现有源码渲染并实际查看，字体和画面可读；原12秒样片、三方向板和六帧分镜保留且未重打包。接下来从这些成果评审视觉方向，确认后完整成片，发布另行确认。生产部署和三个SaaS失败不作为视频制作前置条件，也不借本轮重开业务开发。
+- 原265/274及三失败保留，未跑全门禁、未改业务源码/断言/依赖/网络/权限，未main合并、部署或发布环境。启动草稿和远端源码保存与新快照/独立新任务恢复分别验收；在新任务实测前不宣称全部冷启动通过。后续继续维护本索引，重要成果必须给出版本/位置及读回回执。
+
+### 10-06 11:13 云端问题已分层诊断，本环境开发服务恢复，经营者电脑无需开机
+
+- 经营者要求自行检查，无需接管。已按原CI的Deployment automation guardrails步骤顺序在当前云端复验：前六条exit0，第七条AGENTS检查exit1，后续三条依原失败即停止规则未执行；不是274全门禁。迁移0b4相对父提交只将AGENTS产品定位改成跨境AI CEO/eBay第一平台，而测试第30行仍逐字要求旧句，确定为本地文本合同不匹配；未改断言、产品定位或业务代码。远端步骤的原始日志仍不可读，不把本地复验冒充远端逐命令结果。
+- GitHub 403响应头进一步确认接口权限边界：runner/Actions设置需administration=read，deployment需deployments=read，秘密名称需secrets=read；当前集成均被拒绝，exit1。不是经营者电脑故障，不据此认定runner离线或远端无密钥，不扩网络/连接器权限。日志主机的Forbidden仍与GitHub API权限403分开。
+- 环境恢复后8788/8080未监听且无对应进程；按现有start_skill只启动自有后端PID4016、前端PID4017，cwd/命令/当前0b4源码读回一致。health/startup为200、ok/ready，真实写入false；前端index/app.js哈希与工作树一致。local_dev readiness的生产就绪false及4阻断/20警告不代表腾讯云线上状态；本轮未访问生产。
+- 新回执 `/workspace/onboarding-evidence/20261006-cloud-handoff-review/CLOUD_DIAGNOSIS_20261006.safe.json`及同名MD，关联原CI阶段复验、API响应头和自有服务恢复回执。默认生产私钥/known_hosts/SSH agent仍未提供，远端秘密元数据未知；正式发布身份/通道尚未验收。原3失败、首次265/274、旧视频和dirty保留，无全门禁、部署、main合并、新依赖/权限/网络或环境发布。后续先读此条，不按旧PID判断当前进程；仍须实际检查归属。云端开发/视频可继续，原本地10.0保留、COS额外归档取消。
+
+### 10-06 10:50 云环境恢复，GitHub 对齐草稿 #2 已远端保存，main 与生产未变
+
+- 经营者已授权继续处理版本对齐。本次同一环境恢复后实际核对：HEAD仍`0b4e29970c3446f2785084a7439970396cba39ef`、迁移分支、695提交、非浅克隆；原视频/文档dirty及视频包保留。统一资料校验exit0，460会话/48335消息、31增量、9351实体/10176路径、44图片可访问；93243本地保留记录仍仅索引。不是独立新任务冷启动验收。
+- 此前已授权的api.github.com现在实际可用。私有仓库已创建并读回草稿PR #2：`https://github.com/f4zjwy6j94-star/JIEJING-SAAS/pull/2`，migration→main，候选0b4；open/draft、未合并。main仍d809cfb，behind342/ahead0，448文件差异。没有新Git提交/推送；当前未提交视频和本索引不属于PR候选。
+- 旧CLS工作流实际`disabled_manually`，没有重启它。GitHub Environment列表为空；runner、deployment、秘密名称和Actions设置接口各exit1/HTTP403 `Resource not accessible by integration`，不能据此断言runner离线或秘密不存在；没有读凭据值/扩集成权限。
+- PR自动触发常规CI `37405890838`，已completed/failure：安装、安全扫描、编译、语法、后端检查通过，Deployment automation guardrails步骤exit1，后续前端合同跳过。日志下载目的地主机不在现有可用范围，未扩大网络，具体远端失败子命令仍未证实。本地只复验AGENTS单项exit1（缺旧固定eBay-first文案）；不把它冒充为远端日志归因。原265/274、原三失败均保留，没有重跑全门禁或修改断言/业务源码。
+- 当前可继续云端开发/视频；正式发布工具默认私钥和known_hosts文件均不存在（只查存在）。新正式Actions入口、受保护发布身份与连接/dry-run/apply未接通/验收，旧staging路线不能替代。无生产/拼嘚/数据库/DNS/Caddy操作、无merge或部署、无重新发布环境。安全回执：`/workspace/onboarding-evidence/20261006-cloud-handoff-review/GITHUB_ALIGNMENT_EXECUTED_20261006.safe.json`及同名MD。独立新任务恢复、CI失败处理、正式通道和新视频成果持久保存仍分别待完成；COS取消不变。
+
+### 10-06 10:17 GitHub旧部署与现行基线已比对：main落后342提交，尚未改远端
+
+- 经营者要求核对记忆中的GitHub云端部署项目并对齐。实际git ls-remote exit0：默认main=`d809cfb62e52a12dce4cbfe6e4742372831c829c`（08-23），旧工作分支=`523c5da567183f8b563c01df90bf01aacb701826`（09-23），迁移分支=`0b4e29970c3446f2785084a7439970396cba39ef`。前两者均为迁移祖先，分别behind342/112、ahead0，文件差异448/220；无fetch、切换、覆盖、merge或push。
+- 最新已上传源码就在迁移分支。其直接父提交是交接最后生产版`1e94f2b798b158c8d34f224185151fcb95aaf912`，差异仅AGENTS及12份docs，业务代码相同；本轮没有查询生产现场。此前视频和索引dirty仍单独保留，不算已上传。
+- 找到旧Jiejing Staging Manual Deploy等8份工作流。旧部署只让main进入self-hosted jiejing-staging，目标/opt/jiejing-staging，不能直接当/opt/jiejing-production正式入口。main→迁移仅2份工作流变更，其中部署文件仅超时25→45分钟。生产Python工具在旧main和迁移已指向同一主机，不能简化为换IP；应复用当前正式工具、正常审阅源码对齐并补独立正式发布入口，不复活旧staging runner。
+- 额外发现旧CLS工作流cron=`17 */12 * * *`，仍指向staging runner；实际启用/在线状态未知，更新默认分支前须核实。CI push只匹配main/codex/**，不匹配migration/**，迁移分支上传不等于旧入口已使用新代码。
+- 六项gh api GET元数据请求均exit1/Forbidden；当前restricted网络未列api.github.com，未扩权限/网络，不据此称runner离线或密钥失效。后续如经营者允许，仅增加该域名用于现有身份的只读元数据查询；接口授权仍需实测。
+- 安全对齐说明和JSON：`/workspace/onboarding-evidence/20261006-cloud-handoff-review/GITHUB_ALIGNMENT.md`、`GITHUB_ALIGNMENT.safe.json`。仅保存报告/索引；未修改工作流/业务代码、触发部署、提交/推送、接入秘密或访问生产。原265/274及三项exit1失败、COS取消、本地保留和共享拼嘚保护边界不变。
+
+### 10-06 云端独立部署通道：只读方案核对，尚未接通或获准部署
+
+- 经营者询问如何实现本机关机后由云端修改并更新腾讯云网站。已核对现有正式部署工具、打包/同源门禁合同和GitHub工作流；建议独立GitHub托管的手动正式发布流程，复用现有生产工具，不复活旧staging runner，不在共享生产机安装runner。
+- Codex当前HTTPS代理秘密不等同于可用SSH私钥文件，不能承诺填入密钥即可直连。Git读已验证，push/Actions API权限、仓库保护功能/配额及发布执行机到现有SSH入口仍待核验。私钥只可由经营者经官方受保护设置提供，不经聊天/附件/Git；服务器授权或网络变更须具体批准。
+- 方案路径：批准分支保存固定候选 → 完整同源门禁/白名单包 → 经批准的连接与dry_run → 经营者确认同候选apply → 线上版本/健康回执。原三项exit1须真实处理，不能绕过；此次没有跑全门禁、创建/触发工作流、修改配置/权限、推送、连接生产或发布。
+- 具体待审方案：`/workspace/onboarding-evidence/20261006-cloud-handoff-review/CLOUD_DEPLOYMENT_PATH_PROPOSAL.md`。这是建议，未视为经营者已选择路线或授予生产权限；原网站无需因交接重部署，本地部署能力保留。
+
+### 10-06 09:26 云端接续全面复查：开发与视频可继续，生产部署和自动同步仍独立验收
+
+- 当前云端可以继续捷境开发、资料检索和视频，无需为接续重建/重部署产品。HEAD仍`0b4e29970c3446f2785084a7439970396cba39ef`，迁移分支、695提交、非浅克隆；Git完整性及远端迁移分支读取exit0。此前视频与文档dirty保留，未push。
+- 统一资料验证exit0；460会话/48335消息、31条增量、9351实体/10176路径、44图片通过，93243本地保留记录仍仅索引。两类查询通过；锁版本检查、pip check、安全扫描、app.js语法、视频lint/版本、新单帧渲染及已有MP4解码exit0。没有重跑274门禁，原265/274和三项exit1失败保留。
+- 本轮开始本地8788/8080未运行；按既有启动说明启动本环境后端PID3594和前端PID3597，均来自当前仓库，health/startup为200/ok/ready，真实平台写入false，前端文件哈希与当前源码一致。历史`backend-service.json`中的PID57712是旧证据，不代表当前进程；以后仍须核对实际进程。
+- 配置读取有已发布base version且无待编辑draft，未修改配置/重新发布。当前实例资料/工具/本地服务可用；独立新任务恢复未验收。启动入口不无条件reset/checkout/clean；安装脚本仍核对初始迁移SHA，未来改版本不能为满足旧断言而回退源码。
+- 生产工具默认SSH身份和known_hosts均不存在（仅查存在，不读内容），配置无生产秘密绑定；未连接生产、未执行dry-run/apply。已验证历史部署路线在本地，云端生产部署另行授权/接通/验收。现有腾讯云网站不因本次开发工作台迁移而要求重部署，本轮不宣称当前线上健康。
+- 新视频源码未提交，已有成果包哈希通过，但无新快照/远端保存回执，不宣称跨任务自动同步或永久保存。经营者现可直接在云端继续视频；抖音登录/发布仍未验收。复查证据：`/workspace/onboarding-evidence/20261006-cloud-handoff-review/FULL_REVIEW.safe.json`及同名MD；本轮无业务源码、依赖、网络/权限、生产/拼嘚、推送、部署或发布操作。COS额外归档继续取消。
+
+### 10-06 云端11.0正式接收，资料恢复通过，推进首条视觉研究
+
+- 经营者确认私人环境“捷境 10.0 · 开发与视频 · 私有”revision12已于07:25:48发布，这是开发环境快照；以后云端主工作、本地10.0保留、额外COS归档取消，既有生产COS/备份不变。旧local-first/fallback及“11.0在本机”是历史策略。
+- 当前接收实例只读核验：migration/jiejing-10-cloud-20261006，HEAD `0b4e29970c3446f2785084a7439970396cba39ef`，非浅克隆，695提交，开工前clean。统一资料校验exit0：460会话/48335消息、31条独立增量、9351工作实体/10176路径和44图片；93243本地保留记录只有索引，另4张账号截图未迁入。已完整读取六份continuity交接，旧文中的生产行为没有重做。
+- 接收范围：代码/已导入资料/固定视频依赖在此实例可恢复使用；不把它扩大为全应用、抖音登录或生产部署独立冷启动验收。Python3.12.14、激活Node20.20.2、Remotion4.0.518可用。初次版本读取用了宿主Node24，之后已按Node20重新核对并用于全部视频制作。
+- 11.0仅续接既有marketing/douyin-studio。三个视觉方向A资料编辑室、B经营路线图、C先别猜；推荐A，六帧分镜及12秒无声风格样片供方向评审，非已批准成片。详情 `marketing/douyin-studio/docs/11.0-visual-study-v1.md`。不复用被否决37.5秒网页裁切，不做AI短剧。
+- 成果及接收回执：`/workspace/jiejing-deliverables/11.0/20261006-visual-v1`；便携交付包 `/workspace/jiejing-deliverables/11.0/20261006-visual-v1/jiejing-11.0-visual-study-v1.zip`，以最终SAVE_RECEIPT.safe.json为实际写入/读回依据。视频源码和本索引本轮未提交/未push；没有永久保存或跨任务自动同步声明，下一任务核对最新成果版本。
+- 同一交接再次核验：统一资料校验仍为exit0，11份已全文读取文件及11项交付文件哈希无变化，原265/274报告无变化；HEAD仍为迁移提交，当前dirty来自上述视觉研究与索引，保留已有工作。此次安全回执为同一成果目录下 `HANDOFF_RECHECK.safe.json`；没有重跑全门禁、重新打包或重新发布环境。
+- 原首次265/274 exit1报告和三项失败（Listing同值状态、AGENTS旧文字、Git/CRLF夹具）继续保留；无全门禁、三商品/OAuth/支付/真实刊登、生产/拼嘚/DNS/Caddy访问或部署。待经营者确认方向后再做完整视频，发布另行确认。
+
+
 ### 10-06 已接收拼嘚23节回传：共享映射对齐完成，仅文档更新、未实施风险修复
 
 - **用户手动交接，明确本轮只做映射与冲突对齐。** 完整原文 `D:/Codex-Verification/pindd-cross-project-handoff-20261006/PINDD_RETURN_HANDOFF_20261006.txt`（SHA256 `0580ed1a31eb09961da99dc785bbff0bcd317997179f80dd855c97db0e4db377`）；本轮已全文读取同目录 `readonly-inventory.safe.json` 和 `console-and-dns.safe.json`，是对方03:09时点采集、本轮本地读取，不是捷境重新登录服务器/云后台或跑健康检查。对齐补充 `D:/Codex-Verification/handoff-15dfg7.md`，含映射表、A—J待办、风险与授权边界；此前 `handoff-cb5V76.md`、`handoff-TWN9bz.md`已加补充入口，旧时点事实保留。
