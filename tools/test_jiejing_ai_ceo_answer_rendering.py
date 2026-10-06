@@ -19,7 +19,7 @@ def main() -> None:
     helper = app_js[start:end]
 
     script = f"""
-const publicRuntimeText = (value = "") => String(value || "");
+const merchantConversationText = (value = "") => String(value || "");
 {helper}
 for (const value of ["一", "二、", "1", "1.", "###"]) {{
   if (saasAiCeoHeadingIsMeaningful(value)) throw new Error(`orphan heading leaked: ${{value}}`);

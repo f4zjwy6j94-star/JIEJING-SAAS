@@ -1,0 +1,497 @@
+/* Existing authentication surface; account/session handlers remain in index.html. */
+.workflow-home{--ink-soft:#38483f;--teal:#315f51;--teal-deep:#234b40;--teal-soft:#eaf0e9;--radius:8px;--shadow:0 24px 70px #263b3226}
+
+
+      .step-modal-panel,
+      .entry-modal-panel{
+        min-width: 0;
+      }
+body.is-auth-mode{
+        min-height: 100vh;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 14% 16%, rgba(15, 166, 151, 0.13), transparent 34%),
+          linear-gradient(140deg, rgba(248, 251, 248, 0.98), rgba(255, 254, 250, 0.98) 46%, rgba(255, 241, 215, 0.54)),
+          #f8fbf8;
+      }
+body.is-auth-mode > .topbar,
+      body.is-auth-mode > main,
+      body.is-auth-mode > .footer,
+      body.is-auth-mode > .page-progress,
+      body.is-auth-mode > .scroll-progress,
+      body.is-auth-mode > .cursor-glow{
+        display: none;
+      }
+.toast{
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        z-index: 80;
+        max-width: min(420px, calc(100vw - 36px));
+        border: 1px solid rgba(8, 118, 110, 0.26);
+        border-radius: var(--radius);
+        padding: 14px 16px;
+        background: rgba(255, 254, 250, 0.94);
+        box-shadow: var(--shadow);
+        color: var(--ink-soft);
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1.6;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(10px);
+        transition:
+          opacity 0.24s var(--ease),
+          transform 0.24s var(--ease);
+      }
+.toast.is-visible{
+        opacity: 1;
+        transform: translateY(0);
+      }
+.step-modal{
+        position: fixed;
+        z-index: 100;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.14s ease;
+      }
+.step-modal.is-open{
+        opacity: 1;
+        pointer-events: auto;
+      }
+.step-modal-backdrop{
+        position: absolute;
+        inset: 0;
+        background: rgba(17, 29, 24, 0.34);
+      }
+body.is-auth-mode .step-modal{
+        padding: 24px;
+        background:
+          radial-gradient(circle at 82% 20%, rgba(220, 162, 69, 0.13), transparent 32%),
+          radial-gradient(circle at 16% 82%, rgba(15, 166, 151, 0.11), transparent 36%),
+          linear-gradient(150deg, rgba(248, 251, 248, 0.98), rgba(255, 254, 250, 0.98));
+      }
+body.is-auth-mode .step-modal-backdrop{
+        background: transparent;
+      }
+.step-modal-panel{
+        position: relative;
+        z-index: 1;
+        width: min(920px, 100%);
+        overflow: hidden;
+        border: 1px solid rgba(220, 231, 223, 0.96);
+        border-radius: var(--radius);
+        padding: 28px;
+        background:
+          linear-gradient(135deg, rgba(226, 243, 239, 0.98), rgba(255, 254, 250, 0.96) 48%, rgba(255, 241, 215, 0.72)),
+          var(--paper);
+        box-shadow: var(--shadow);
+        transform: translateY(12px) scale(0.98);
+        transition: transform 0.16s var(--ease);
+        will-change: transform;
+        contain: layout paint;
+      }
+.step-modal.is-open .step-modal-panel{
+        transform: translateY(0) scale(1);
+      }
+.step-modal-panel h3{
+        margin-bottom: 12px;
+        font-size: clamp(28px, 4vw, 48px);
+        line-height: 1.05;
+      }
+.step-modal-panel p{
+        color: var(--ink-soft);
+        line-height: 1.7;
+      }
+.entry-modal-panel{
+        width: min(780px, calc(100vw - 32px));
+        max-width: 780px;
+        padding: 0;
+        background: var(--paper);
+        box-shadow: 0 30px 90px rgba(17, 29, 24, 0.18);
+      }
+body.is-auth-mode .entry-modal-panel{
+        width: min(1040px, calc(100vw - 48px));
+        max-width: 1040px;
+        max-height: calc(100vh - 48px);
+        overflow: auto;
+        box-shadow: 0 34px 88px rgba(17, 29, 24, 0.13);
+      }
+.entry-auth-shell{
+        display: grid;
+        grid-template-columns: minmax(230px, 0.82fr) minmax(0, 1.18fr);
+        min-height: 456px;
+      }
+body.is-auth-mode .entry-auth-shell{
+        grid-template-columns: minmax(280px, 0.88fr) minmax(0, 1.12fr);
+        min-height: min(660px, calc(100vh - 48px));
+      }
+.entry-auth-brief{
+        display: grid;
+        align-content: space-between;
+        gap: 22px;
+        padding: 26px;
+        background:
+          linear-gradient(180deg, rgba(23, 33, 28, 0.96), rgba(12, 18, 15, 0.98)),
+          #111813;
+        color: #fffefa;
+      }
+.entry-auth-brand{
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+.entry-auth-brand .jj-logo-mark{
+        width: 46px;
+        height: 46px;
+        border-color: rgba(255, 254, 250, 0.22);
+        box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
+      }
+.entry-auth-brand .jj-logo-mark::before{
+        color: #ffffff;
+      }
+.entry-auth-brand .jj-logo-mark::after{
+        color: transparent;
+        background: transparent;
+        -webkit-text-stroke-color: #ffffff;
+        text-stroke-color: #ffffff;
+      }
+.entry-auth-brand strong,
+      .entry-auth-brand small{
+        display: block;
+      }
+.entry-auth-brand strong{
+        font-size: 19px;
+        line-height: 1.1;
+      }
+.entry-auth-brand small{
+        margin-top: 3px;
+        color: rgba(255, 254, 250, 0.62);
+        font-size: 12px;
+        letter-spacing: 0;
+      }
+.entry-auth-route{
+        display: grid;
+        gap: 10px;
+      }
+.entry-auth-route span{
+        min-height: 38px;
+        padding: 10px 12px;
+        border: 1px solid rgba(255, 254, 250, 0.12);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.06);
+        color: rgba(255, 254, 250, 0.88);
+        font-size: 13px;
+        font-weight: 800;
+      }
+.entry-auth-brief p{
+        margin: 0;
+        color: rgba(255, 254, 250, 0.62);
+        font-size: 12px;
+        line-height: 1.7;
+      }
+.entry-auth-main{
+        display: grid;
+        align-content: center;
+        padding: 34px 34px 30px;
+        background:
+          linear-gradient(180deg, rgba(255, 254, 250, 0.98), rgba(248, 251, 248, 0.98)),
+          var(--paper);
+      }
+.entry-auth-main h3{
+        max-width: 420px;
+        margin: 7px 0 10px;
+        font-size: clamp(28px, 4vw, 38px);
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+.entry-auth-main > p:not(.eyebrow){
+        max-width: 440px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.75;
+      }
+.entry-login-form{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin: 24px 0 12px;
+      }
+.entry-login-form .entry-field.is-full{
+        grid-column: 1 / -1;
+      }
+.login-choice{
+        display: grid;
+        align-content: center;
+        justify-items: start;
+        min-height: 82px;
+        padding: 14px 16px;
+        text-align: left;
+        font-size: 17px;
+      }
+.login-choice span,
+      .login-choice small{
+        display: block;
+      }
+.login-choice span{
+        font-weight: 900;
+      }
+.login-choice small{
+        margin-top: 5px;
+        color: rgba(255, 254, 250, 0.68);
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.4;
+      }
+.login-choice.button-ghost small{
+        color: var(--muted);
+      }
+.entry-auth-footnote{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+.entry-auth-footnote span{
+        min-height: 26px;
+        padding: 5px 9px;
+        border: 1px solid rgba(8, 118, 110, 0.14);
+        border-radius: 999px;
+        background: #f3faf7;
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 900;
+      }
+.entry-field{
+        display: grid;
+        gap: 7px;
+      }
+.entry-field span{
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+      }
+.entry-field input{
+        width: 100%;
+        min-height: 48px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 0 14px;
+        background: #ffffff;
+        color: var(--ink);
+        font: inherit;
+      }
+.entry-field input:focus{
+        outline: none;
+        border-color: rgba(8, 118, 110, 0.42);
+        box-shadow: 0 0 0 4px rgba(8, 118, 110, 0.08);
+      }
+.entry-login-actions{
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+.entry-auth-status{
+        grid-column: 1 / -1;
+        margin: 0;
+        padding: 10px 12px;
+        border: 1px solid rgba(213, 166, 70, 0.36);
+        border-radius: var(--radius);
+        background: #fff8e8;
+        color: #7a4b00;
+        font-size: 13px;
+        font-weight: 800;
+        line-height: 1.5;
+      }
+.entry-auth-status.is-error{
+        border-color: rgba(196, 75, 59, 0.28);
+        background: #fff4f1;
+        color: #8b2f22;
+      }
+.entry-auth-status.is-success{
+        border-color: rgba(8, 118, 110, 0.22);
+        background: #f1fbf7;
+        color: var(--teal);
+      }
+.entry-login-actions button[disabled]{
+        cursor: wait;
+        opacity: 0.72;
+      }
+.entry-stage-note{
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+.entry-mode-area[hidden],
+      .entry-login-form[hidden]{
+        display: none;
+      }
+.entry-stage-title{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 22px;
+      }
+.entry-stage-title strong{
+        font-size: 16px;
+      }
+.entry-mode-grid{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin: 14px 0 0;
+      }
+.entry-mode-card{
+        display: grid;
+        gap: 7px;
+        min-height: 132px;
+        padding: 16px;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.88);
+        color: var(--ink);
+        cursor: pointer;
+        font: inherit;
+        text-align: left;
+        transition:
+          transform 0.22s var(--ease),
+          border-color 0.22s var(--ease),
+          background 0.22s var(--ease),
+          box-shadow 0.22s var(--ease);
+      }
+.entry-mode-card:hover,
+      .entry-mode-card.is-active{
+        border-color: rgba(8, 118, 110, 0.42);
+        background: #ffffff;
+        transform: translateY(-3px);
+        box-shadow: 0 14px 30px rgba(17, 29, 24, 0.08);
+      }
+.entry-mode-card strong{
+        display: block;
+        margin-top: 2px;
+        font-size: 19px;
+      }
+.entry-mode-card small{
+        display: block;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+.modal-close{
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        background: rgba(255, 254, 250, 0.82);
+        color: var(--ink);
+        font-weight: 900;
+      }
+@media (max-width: 1120px){
+.entry-login-form{
+          grid-template-columns: minmax(0, 1fr);
+        }
+.entry-auth-shell{
+          grid-template-columns: 1fr;
+        }
+.entry-auth-brief{
+          min-height: 220px;
+        }
+}
+@media (max-width: 680px){
+body.is-auth-mode{
+          overflow: hidden;
+        }
+.step-modal{
+          padding: 12px;
+        }
+body.is-auth-mode .step-modal{
+          position: fixed;
+          min-height: 0;
+          height: 100vh;
+          height: 100dvh;
+          align-items: start;
+          overflow-y: auto;
+          padding: 12px;
+        }
+.entry-modal-panel{
+          width: min(100%, 520px);
+          max-height: calc(100vh - 24px);
+          overflow: auto;
+        }
+body.is-auth-mode .entry-modal-panel{
+          width: 100%;
+          max-height: none;
+          padding: 0;
+        }
+body.is-auth-mode .entry-auth-shell{
+          grid-template-columns: minmax(0, 1fr);
+          min-height: 0;
+        }
+body.is-auth-mode .entry-auth-brief{
+          display: none;
+        }
+.entry-auth-brief,
+        .entry-auth-main{
+          padding: 22px;
+        }
+
+        .entry-mode-grid,
+        .entry-login-form{
+          grid-template-columns: 1fr;
+        }
+
+        .entry-login-actions .button,
+        .entry-login-actions .button-ghost{
+          width: 100%;
+        }
+}
+@media (max-width: 420px){
+.entry-auth-brief,
+        .entry-auth-main,
+        .step-modal-panel{
+          padding: 18px;
+        }
+}
+
+      .entry-auth-brand .jj-logo-mark::before,
+      .entry-auth-brand .jj-logo-mark::after{
+        content: "" !important;
+        display: none !important;
+      }
+/* Authentication is a separate visible state, not content underneath the homepage. */
+body.workflow-home.is-auth-mode{overflow:hidden;background:var(--paper)}
+body.workflow-home.is-auth-mode > :not(#nextStepModal):not(#toast):not(script){display:none}
+.workflow-home .step-modal:not(.is-open){visibility:hidden}
+.workflow-home .step-modal.is-open{visibility:visible}
+.workflow-home.is-auth-mode .step-modal{background:#f2f4ee}
+.workflow-home .entry-auth-brief{background:#eaf0e9;color:var(--ink)}
+.workflow-home .entry-auth-brief p,.workflow-home .entry-auth-brand small{color:var(--muted)}
+.workflow-home .entry-auth-route span{color:var(--ink);border-color:var(--line);background:#f8faf5;font-weight:500}
+.workflow-home .entry-auth-main{background:#fffefa}
+.workflow-home .entry-auth-main h3{font-family:var(--font-ui);font-size:28px;line-height:1.5}
+.workflow-home .entry-auth-brand img{width:40px;height:40px}
+.workflow-home .entry-field input{font-size:16px}
+.workflow-home .login-choice{min-height:72px;font-size:16px}
+.workflow-home .login-choice span,.workflow-home .entry-field span{font-weight:600}
+.workflow-home .login-choice small{font-weight:400;color:#fffefa}
+.workflow-home .login-choice.button-ghost small{color:var(--muted)}
+.workflow-home .entry-login-actions .button-ghost{background:#fffefa;color:var(--ink);border:1px solid var(--line);box-shadow:none}
+.workflow-home .entry-login-actions .button-ghost:hover{background:#eaf0e9}
+.workflow-home .entry-login-actions .button::after,.workflow-home .entry-login-actions .button-ghost::after{content:none}
+.workflow-home .entry-auth-footnote{margin-top:8px}
+.workflow-home .entry-auth-footnote span{border:0;background:transparent;padding:0;font-weight:400;color:var(--muted)}
+.workflow-home #entryChallengeWidget{grid-column:1/-1}
+@media(max-width:600px){.workflow-home .entry-auth-main h3{font-size:24px}.workflow-home .entry-login-actions{grid-template-columns:1fr}.workflow-home .entry-auth-main{padding:24px}}
+@media(prefers-reduced-motion:reduce){.workflow-home .step-modal,.workflow-home .step-modal-panel{transition:none}}

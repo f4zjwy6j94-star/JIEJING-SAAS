@@ -17,6 +17,7 @@ import os
 import re
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone, tzinfo
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable
@@ -27,6 +28,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jiejing_runtime.models import now_iso
 from jiejing_runtime.public_search import PublicSearchProbeAdapter, PublicSearchProbeConfig
+from .ai_ceo_semantic_plan import is_semantic_plan
+from .market_quote_evidence import market_quote_answer_quality, new_york_market_time
+from .timely_evidence import (merchant_followup, timely_request_kind, temporal_evidence_contract,
+                             source_temporal_evidence, temporal_evidence_fallback,
+                             review_temporal_answer)
 from .model_provider_catalog import (
     MODEL_SECRET_PURPOSE,
     READY_MODEL_SECRET_STATUSES,
@@ -50,6 +56,442 @@ MEMORY_POLICY_MERCHANT_RULE = "merchant_rule"
 
 _DEFAULT_WEB_CONTEXT_CACHE: dict[str, tuple[datetime, dict[str, Any]]] = {}
 
+_AUTHORIZED_EBAY_CONNECTION_STATUSES = {
+    "read_only_authorized",
+    "draft_save_authorized",
+    "publish_authorized",
+    "read_write_authorized",
+    "authorized",
+    "connected",
+}
+
+AI_CEO_TURN_PLAN_CONTRACT_VERSION = "ai_ceo_turn_plan_v1"
+AI_CEO_WORKING_STATE_CONTRACT_VERSION = "ai_ceo_working_state_v1"
+
+_AI_CEO_NON_TICKER_TOKENS = {
+    "AI",
+    "CEO",
+    "EBAY",
+    "GPT",
+    "HTTP",
+    "SKU",
+    "USD",
+    "USA",
+    "US",
+}
+
+
+def build_ai_ceo_turn_plan(
+    message: str,
+    *,
+    conversation_history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the backend-authoritative, no-write plan for one AI CEO turn.
+
+    This is deliberately a bounded safety planner. It does not try to encode
+    every possible topic. It decides whether a turn needs current evidence,
+    which read-only capability is appropriate, how much model capacity is
+    justified, and whether the message belongs to a Jiejing workflow. The
+    answer model still handles the open-ended language and domain reasoning.
+    """
+
+    safe_message = _safe_text(message, limit=900)
+    safe_history = _sanitize_ai_ceo_conversation_history(conversation_history)
+    direct_entities = _ai_ceo_turn_entities(safe_message)
+    previous_entities = _ai_ceo_recent_entities(safe_history)
+    contextual_followup = bool(
+        safe_history and _looks_like_contextual_followup(safe_message) and not direct_entities
+    )
+    entities = direct_entities or (previous_entities if contextual_followup else [])
+    effective_query = safe_message
+    if contextual_followup and entities:
+        effective_query = _safe_text(
+            f"当前延续实体：{', '.join(entities)}\n本轮问题：{safe_message}",
+            limit=1200,
+        )
+    previous_route = ""
+    if safe_history:
+        previous_route = _safe_text(safe_history[-1].get("route") or "", limit=80)
+
+    normalized = _normalized_text(effective_query)
+    direct_normalized = _normalized_text(safe_message)
+    ebay_workflow = _looks_like_ebay_workflow(direct_normalized) or bool(
+        contextual_followup and previous_route == AI_CEO_ROUTE_EBAY_WORKFLOW
+        and merchant_followup(safe_message)
+        and not _classify_local_clock_request(safe_message)
+        and not _classify_external_realtime_request(safe_message)
+    )
+    high_risk = _looks_like_high_risk_action(direct_normalized)
+    explicit_rule = _looks_like_explicit_rule_memory(direct_normalized)
+    ticker = next((entity for entity in entities if re.fullmatch(r"[A-Z]{1,5}", entity)), "")
+
+    weather_request = timely_request_kind(effective_query) == "weather"
+    quote_request = bool(ticker) and any(
+        marker in normalized
+        for marker in ("股价", "股票", "行情", "盘前", "盘后", "涨跌", "收盘", "quote", "stock price")
+    )
+    company_research_markers = (
+        "基本面",
+        "财报",
+        "营收",
+        "利润",
+        "现金流",
+        "资产负债",
+        "估值",
+        "风险",
+        "竞争力",
+        "为什么波动",
+        "为何波动",
+        "波动这么大",
+        "最近波动",
+        "为什么跌",
+        "为什么涨",
+        "fundamental",
+        "earnings",
+        "revenue",
+        "valuation",
+        "cash flow",
+        "why did",
+        "volatility",
+    )
+    company_research = bool(ticker) and any(marker in normalized for marker in company_research_markers)
+    classified_realtime = _classify_external_realtime_request(effective_query)
+
+    realtime_kind = ""
+    required_tools: list[str] = []
+    freshness_required = False
+    research_depth = "none"
+    if not ebay_workflow and weather_request:
+        realtime_kind = "weather"
+        required_tools = ["weather"]
+        freshness_required = True
+        research_depth = "quick"
+    elif not ebay_workflow and quote_request:
+        realtime_kind = "stock_quote"
+        required_tools = ["stock_quote"]
+        freshness_required = True
+        research_depth = "quick"
+    elif not ebay_workflow and company_research:
+        realtime_kind = "company_research"
+        required_tools = ["company_fundamentals", "web_search"]
+        freshness_required = True
+        research_depth = "deep"
+    elif not ebay_workflow and classified_realtime:
+        realtime_kind = classified_realtime
+        required_tools = [classified_realtime]
+        freshness_required = True
+        research_depth = "quick" if classified_realtime != "news_search" else "deep"
+
+    explicit_listing_intake = _looks_like_explicit_listing_intake(safe_message)
+    product_selection_request = not explicit_listing_intake and (
+        _looks_like_product_selection_request(
+            message=safe_message,
+            route=AI_CEO_ROUTE_EBAY_WORKFLOW,
+        )
+        or (
+            ebay_workflow
+            and any(marker in direct_normalized for marker in ("商品", "产品", "品类", "product"))
+            and any(marker in direct_normalized for marker in ("帮我找", "推荐", "筛选", "选择", "research", "recommend"))
+        )
+    )
+
+    if explicit_rule:
+        route = AI_CEO_ROUTE_MERCHANT_RULE
+        response_mode = "jiejing_workflow"
+    elif high_risk:
+        route = AI_CEO_ROUTE_CONFIRMATION
+        response_mode = "confirmation_required"
+    elif ebay_workflow:
+        route = AI_CEO_ROUTE_EBAY_WORKFLOW
+        response_mode = "jiejing_workflow"
+        # Selection uses the sourced, model-backed workflow and its candidate
+        # quality gate. Words like "now" or "latest information" must not
+        # short-circuit it through a generic news/search answer. Other explicit
+        # read-only web questions retain their existing realtime fallback.
+        realtime_kind = "" if explicit_listing_intake or product_selection_request else classified_realtime
+        required_tools = [] if explicit_listing_intake else ["ebay_public_research"]
+        freshness_required = not explicit_listing_intake
+        research_depth = "none" if explicit_listing_intake else "deep" if product_selection_request else "quick"
+    elif realtime_kind:
+        route = AI_CEO_ROUTE_EXTERNAL_REALTIME
+        response_mode = "research_answer"
+    else:
+        route = AI_CEO_ROUTE_GENERAL
+        response_mode = "direct_answer"
+
+    # An explicit offline revision must not silently refresh citations, even
+    # when the surrounding product/research words normally require search.
+    if _merchant_disallows_web_search(safe_message) or _merchant_reuses_report_sources(safe_message):
+        realtime_kind, required_tools, freshness_required, research_depth = "", [], False, "none"
+
+    workflow_target = ""
+    source_mode = ""
+    blocked_by: list[str] = []
+    if route == AI_CEO_ROUTE_EBAY_WORKFLOW:
+        workflow_target = "listing_draft" if explicit_listing_intake else "market_research" if product_selection_request or _merchant_reuses_report_sources(safe_message) else "ebay_operation"
+        no_source_markers = (
+            "没有货源",
+            "无货源",
+            "没有供应商",
+            "不知道卖什么",
+            "no source",
+            "no supplier",
+        )
+        if workflow_target == "market_research" and any(marker in direct_normalized for marker in no_source_markers):
+            source_mode = "merchant_has_no_source"
+            blocked_by.append("merchant_product_source_required")
+
+    complexity_markers = (
+        "分析",
+        "调研",
+        "比较",
+        "对比",
+        "方案",
+        "规划",
+        "基本面",
+        "财报",
+        "估值",
+        "为什么",
+        "风险",
+        "analyze",
+        "research",
+        "compare",
+        "strategy",
+        "fundamental",
+        "earnings",
+    )
+    multi_step = len(safe_message) >= 120 or sum(marker in direct_normalized for marker in complexity_markers) >= 2
+    if research_depth == "deep" or workflow_target == "market_research" or multi_step:
+        model_tier = "pro"
+    elif research_depth == "quick" and any(marker in direct_normalized for marker in complexity_markers):
+        model_tier = "thinking"
+    else:
+        model_tier = "fast"
+
+    continuation_key = f"ticker:{ticker}" if ticker else ""
+    topic = (
+        "weather"
+        if realtime_kind == "weather"
+        else "company_research"
+        if realtime_kind == "company_research"
+        else "market_quote"
+        if realtime_kind == "stock_quote"
+        else workflow_target
+        or ("external_research" if realtime_kind else "open_domain")
+    )
+    working_state = {
+        "contract_version": AI_CEO_WORKING_STATE_CONTRACT_VERSION,
+        "current_topic": topic,
+        "current_entities": entities,
+        "continuation_key": continuation_key,
+        "workflow_target": workflow_target,
+        "confirmed_facts": [],
+        "inferences": [],
+        "unknown_facts": blocked_by,
+        "last_tool_summaries": [],
+        "secret_exposed": False,
+    }
+    return {
+        "contract_version": AI_CEO_TURN_PLAN_CONTRACT_VERSION,
+        "response_mode": response_mode,
+        "route": route,
+        "topic": topic,
+        "entities": entities,
+        "freshness_required": freshness_required,
+        "research_depth": research_depth,
+        "required_tools": required_tools,
+        "realtime_kind": realtime_kind,
+        "workflow_target": workflow_target,
+        "source_mode": source_mode,
+        "risk_level": "high" if high_risk else "low",
+        "confirmation_required": high_risk,
+        "model_tier": model_tier,
+        "continuation_key": continuation_key,
+        "effective_query": effective_query,
+        "blocked_by": blocked_by,
+        "working_state": working_state,
+        "planner_policy": "backend_bounded_open_domain_planner",
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _ai_ceo_turn_entities(message: str) -> list[str]:
+    safe_message = _safe_text(message, limit=1200)
+    entities: list[str] = []
+    aliases = (
+        (("英伟达", "nvidia"), "NVDA"),
+        (("特斯拉", "tesla"), "TSLA"),
+        (("苹果公司", "apple stock"), "AAPL"),
+    )
+    lowered = safe_message.lower()
+    for markers, symbol in aliases:
+        if any(marker in lowered for marker in markers):
+            entities.append(symbol)
+    for match in re.finditer(r"(?<![A-Za-z0-9])\$?([A-Z]{1,5})(?![A-Za-z0-9])", safe_message):
+        token = match.group(1)
+        suffix = safe_message[match.end() : match.end() + 1]
+        prefix = safe_message[max(0, match.start() - 1) : match.start()]
+        if suffix in {"-", "_"} or prefix in {"-", "_"}:
+            continue
+        symbol = token.upper()
+        if symbol not in _AI_CEO_NON_TICKER_TOKENS and symbol not in entities:
+            entities.append(symbol)
+    return entities[:8]
+
+
+def _ai_ceo_recent_entities(history: list[dict[str, Any]]) -> list[str]:
+    for turn in reversed(history[-4:]):
+        entities = _ai_ceo_turn_entities(str(turn.get("user_text") or ""))
+        if entities:
+            return entities
+    return []
+
+
+def _public_ai_ceo_turn_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Project only auditable, merchant-safe planner fields."""
+
+    public = {
+        "contract_version": AI_CEO_TURN_PLAN_CONTRACT_VERSION,
+        "response_mode": _safe_text(plan.get("response_mode") or "direct_answer", limit=40),
+        "route": _safe_text(plan.get("route") or AI_CEO_ROUTE_GENERAL, limit=60),
+        "topic": _safe_text(plan.get("topic") or "open_domain", limit=80),
+        "entities": [
+            _safe_text(item, limit=80)
+            for item in (plan.get("entities") if isinstance(plan.get("entities"), list) else [])[:8]
+            if _safe_text(item, limit=80)
+        ],
+        "freshness_required": plan.get("freshness_required") is True,
+        "research_depth": _safe_text(plan.get("research_depth") or "none", limit=20),
+        "required_tools": [
+            _safe_text(item, limit=80)
+            for item in (plan.get("required_tools") if isinstance(plan.get("required_tools"), list) else [])[:8]
+            if _safe_text(item, limit=80)
+        ],
+        "workflow_target": _safe_text(plan.get("workflow_target") or "", limit=80),
+        "source_mode": _safe_text(plan.get("source_mode") or "", limit=80),
+        "risk_level": _safe_text(plan.get("risk_level") or "low", limit=20),
+        "confirmation_required": plan.get("confirmation_required") is True,
+        "model_tier": _safe_text(plan.get("model_tier") or "fast", limit=20),
+        "continuation_key": _safe_text(plan.get("continuation_key") or "", limit=100),
+        "blocked_by": [
+            _safe_text(item, limit=100)
+            for item in (plan.get("blocked_by") if isinstance(plan.get("blocked_by"), list) else [])[:12]
+            if _safe_text(item, limit=100)
+        ],
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+    if is_semantic_plan(plan):
+        # Preserve the validated decision for artifact eligibility and browser
+        # projection. No model-supplied IDs or authority fields are accepted.
+        for key in ("planner_policy", "status", "intent", "project_action", "product_name", "question",
+                    "search", "query", "read_images", "save_artifact", "candidate_count",
+                    "excluded_candidates", "listing_deferred", "steps", "research_delivery", "research_queries",
+                    "product_fact_proposals", "simulation_request"):
+            if key in plan:
+                public[key] = copy.deepcopy(plan[key])
+    return public
+
+
+def normalize_ai_ceo_active_listing_context(value: Any) -> dict[str, Any]:
+    """Allowlist the authenticated browser's current, already-loaded Listing snapshot."""
+
+    raw = value if isinstance(value, dict) else {}
+    if raw.get("contract_version") != "active_listing_context_v1":
+        return {}
+
+    def clean(value: Any, *, limit: int, identifier: bool = False) -> str:
+        text = _safe_text(value, limit=limit)
+        if (
+            not text
+            or "[redacted]" in text
+            or "[model_key_redacted]" in text
+            or (identifier and not re.fullmatch(r"[A-Za-z0-9._:-]+", text))
+        ):
+            return ""
+        return text
+
+    raw_identity = raw.get("listing_project_identity") if isinstance(raw.get("listing_project_identity"), dict) else {}
+    identity = {
+        "key": clean(raw_identity.get("key"), limit=160, identifier=True),
+        "source_report_id": clean(raw_identity.get("source_report_id"), limit=160, identifier=True),
+        "candidate_id": clean(raw_identity.get("candidate_id"), limit=120, identifier=True),
+    }
+    if not identity["key"]:
+        return {}
+    fact_allowlist = {
+        "product_name", "sku", "supplier_item_number", "material", "brand", "mpn", "condition",
+        "net_weight_g", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm",
+        "length_cm", "width_cm", "height_cm", "unit_cost", "selling_price", "quantity",
+        "handling_time_days", "country_of_origin", "item_location", "packaging",
+    }
+    raw_listing = raw.get("listing") if isinstance(raw.get("listing"), dict) else {}
+    raw_known = raw_listing.get("known_facts") if isinstance(raw_listing.get("known_facts"), dict) else {}
+    known_facts = {
+        key: cleaned
+        for key, raw_value in raw_known.items()
+        if key in fact_allowlist and (cleaned := clean(raw_value, limit=240))
+    }
+    missing_fact_keys = [
+        key for key in raw_listing.get("missing_fact_keys", [])[:24]
+        if isinstance(key, str) and key in fact_allowlist
+    ] if isinstance(raw_listing.get("missing_fact_keys"), list) else []
+    for key in missing_fact_keys:
+        known_facts.pop(key, None)
+    raw_media = raw.get("media") if isinstance(raw.get("media"), dict) else {}
+    review_statuses = [
+        cleaned for item in raw_media.get("review_statuses", [])[:8]
+        if (cleaned := clean(item, limit=80, identifier=True))
+    ] if isinstance(raw_media.get("review_statuses"), list) else []
+    asset_manifest_count = max(0, min(_safe_int(raw_media.get("asset_manifest_count") or 0), 100))
+    listing_eligible_asset_count = max(0, min(_safe_int(raw_media.get("listing_eligible_asset_count") or 0), 100))
+    rights_confirmed_for_listing_draft = bool(
+        raw_media.get("rights_confirmed_for_listing_draft") is True and listing_eligible_asset_count > 0
+    )
+    raw_draft = raw.get("ebay_draft") if isinstance(raw.get("ebay_draft"), dict) else {}
+    offer_status = clean(raw_draft.get("offer_status"), limit=40, identifier=True).upper()
+    offer_id = clean(raw_draft.get("offer_id"), limit=120, identifier=True) if offer_status == "UNPUBLISHED" else ""
+    raw_health = raw.get("account_health") if isinstance(raw.get("account_health"), dict) else {}
+    status = clean(raw_health.get("status"), limit=40, identifier=True).lower()
+    severity = clean(raw_health.get("severity"), limit=20, identifier=True).lower()
+    onboarding_stage = clean(raw_health.get("onboarding_stage"), limit=80, identifier=True).lower()
+    return {
+        "contract_version": "active_listing_context_v1",
+        "source": "authenticated_current_listing_snapshot",
+        "listing_project_identity": identity,
+        "product_name": clean(raw.get("product_name"), limit=120),
+        "listing": {
+            "sku": clean(raw_listing.get("sku"), limit=120, identifier=True),
+            "title": clean(raw_listing.get("title"), limit=180),
+            "known_facts": known_facts,
+            "known_fact_keys": sorted(known_facts),
+            "missing_fact_keys": list(dict.fromkeys(missing_fact_keys)),
+        },
+        "media": {
+            "media_job_id": clean(raw_media.get("media_job_id"), limit=120, identifier=True),
+            "asset_manifest_count": asset_manifest_count,
+            "listing_eligible_asset_count": listing_eligible_asset_count,
+            "rights_confirmed_for_listing_draft": rights_confirmed_for_listing_draft,
+            "product_fact_review_required_before_publish": raw_media.get("product_fact_review_required_before_publish") is True,
+            "review_statuses": list(dict.fromkeys(review_statuses)),
+        },
+        "ebay_draft": {
+            "offer_id": offer_id,
+            "sku": clean(raw_draft.get("sku"), limit=120, identifier=True) if offer_id else "",
+            "offer_status": offer_status if offer_id else "",
+            "execution_id": clean(raw_draft.get("execution_id"), limit=160, identifier=True) if offer_id else "",
+            "confirmation_id": clean(raw_draft.get("confirmation_id"), limit=160, identifier=True) if offer_id else "",
+            "public_listing_created": False if offer_id and raw_draft.get("public_listing_created") is False else None,
+        },
+        "account_health": {
+            "status": status if status in {"normal", "attention", "registration_incomplete", "restricted", "suspended", "payout_hold", "quota_limited", "unknown"} else "unknown",
+            "severity": severity if severity in {"green", "amber", "red"} else "",
+            "onboarding_stage": onboarding_stage,
+        },
+        "secret_exposed": False,
+    }
+
 
 def run_ai_ceo_chat(
     *,
@@ -64,6 +506,9 @@ def run_ai_ceo_chat(
     command: dict[str, Any] | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
     model_resolution: dict[str, Any] | None = None,
+    turn_plan: dict[str, Any] | None = None,
+    product_intake_context: dict[str, Any] | None = None,
+    active_listing_context: dict[str, Any] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -80,6 +525,15 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
     safe_history = _sanitize_ai_ceo_conversation_history(conversation_history)
+    authoritative_turn_plan = (
+        turn_plan
+        if isinstance(turn_plan, dict)
+        and turn_plan.get("contract_version") == AI_CEO_TURN_PLAN_CONTRACT_VERSION
+        else build_ai_ceo_turn_plan(safe_message, conversation_history=safe_history)
+    )
+    semantic_plan = is_semantic_plan(authoritative_turn_plan)
+    if semantic_plan and authoritative_turn_plan.get("project_action") == "new":
+        safe_history = []
     context = build_ai_ceo_chat_context(
         repository=repository,
         company_id=company_id,
@@ -88,23 +542,49 @@ def run_ai_ceo_chat(
         client_now=client_now,
         client_timezone=client_timezone,
     )
+    context = {
+        **context,
+        "working_state": authoritative_turn_plan.get("working_state") or {},
+        "merchant_product_intake": product_intake_context if isinstance(product_intake_context, dict) else {},
+        "active_listing_context": (
+            normalize_ai_ceo_active_listing_context(active_listing_context)
+            if not semantic_plan or authoritative_turn_plan.get("project_action") == "current" else {}
+        ),
+        **({"semantic_plan": _public_ai_ceo_turn_plan(authoritative_turn_plan)} if semantic_plan else {}),
+        "secret_exposed": False,
+    }
+    if semantic_plan and authoritative_turn_plan.get("project_action") != "current":
+        context["confirmations"] = {"pending_count": (context.get("confirmations") or {}).get("pending_count", 0)}
     model_context = _public_model_context(None, model_client, model_resolution)
-    direct_realtime_kind = _classify_external_realtime_request(safe_message)
-    direct_route = _classify_ai_ceo_route(safe_message, realtime_kind=direct_realtime_kind)
-    contextual_followup = bool(
-        safe_history
-        and not direct_realtime_kind
-        and direct_route == AI_CEO_ROUTE_GENERAL
-        and _looks_like_contextual_followup(safe_message)
+    route_message = _safe_text(authoritative_turn_plan.get("effective_query") or safe_message, limit=1200)
+    realtime_kind = _safe_text(authoritative_turn_plan.get("realtime_kind") or "", limit=80)
+    route = _safe_text(authoritative_turn_plan.get("route") or AI_CEO_ROUTE_GENERAL, limit=80)
+    route_meta = {
+        **ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind),
+        "turn_plan": _public_ai_ceo_turn_plan(authoritative_turn_plan),
+        "working_state": authoritative_turn_plan.get("working_state") or {},
+    }
+    if semantic_plan and authoritative_turn_plan.get("status") != "ready":
+        return {
+            "status": "semantic_clarification_required", "answer": authoritative_turn_plan.get("question") or "请说明你希望处理哪个商品或问题。",
+            "blocked_by": authoritative_turn_plan.get("blocked_by") or ["semantic_plan_not_ready"],
+            "context": context, "model_client": model_context, **route_meta,
+            "frontend_gets_model_api_key": False, "runtime_gets_raw_ebay_token": False, "secret_exposed": False,
+        }
+    temporal_contract = temporal_evidence_contract(
+        route_message, realtime_kind, now=now_iso(), client_timezone=client_timezone,
+    ) if realtime_kind and realtime_kind != "stock_quote" and (
+        timely_request_kind(route_message) or realtime_kind in {"weather", "exchange_rate", "news_search", "company_research"}
+    ) else {}
+    selection_contract = _selection_response_contract(
+        message=safe_message,
+        route=route,
+        conversation_history=safe_history,
+        turn_plan=authoritative_turn_plan,
     )
-    route_message = _conversation_followup_query(safe_message, safe_history) if contextual_followup else safe_message
-    previous_route = str(safe_history[-1].get("route") or "") if contextual_followup else ""
-    realtime_kind = direct_realtime_kind
-    if contextual_followup and previous_route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
-        realtime_kind = _classify_external_realtime_request(route_message)
-    route = previous_route if contextual_followup and previous_route else direct_route
-    route_meta = ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind)
-    local_clock_kind = _classify_local_clock_request(safe_message)
+    if selection_contract:
+        context = {**context, "selection_contract": selection_contract}
+    local_clock_kind = "" if semantic_plan else _classify_local_clock_request(message)
     if local_clock_kind:
         return {
             "status": "local_clock_answered",
@@ -120,7 +600,7 @@ def run_ai_ceo_chat(
             "runtime_gets_raw_ebay_token": False,
             "secret_exposed": False,
         }
-    capability_kind = _classify_ai_ceo_capability_request(safe_message)
+    capability_kind = "" if semantic_plan else _classify_ai_ceo_capability_request(message)
     if capability_kind:
         return {
             "status": "capability_status_answered",
@@ -136,11 +616,18 @@ def run_ai_ceo_chat(
         if on_stage is not None:
             on_stage("sources")
         search_started_at = time.monotonic()
-        realtime_search = _run_realtime_search(kind=realtime_kind, message=route_message)
+        realtime_search = _run_realtime_search(kind=realtime_kind, message=route_message,
+                                             **({"query_override": route_message} if semantic_plan else {}),
+                                             **({"temporal_contract": temporal_contract} if temporal_contract else {}))
+        if temporal_contract:
+            realtime_search["temporal_evidence_contract"] = temporal_contract
         search_latency_ms = _elapsed_ms(search_started_at)
         if realtime_search.get("status") == "ready":
             use_model_synthesis = _env_enabled("JIEJING_AI_CEO_REALTIME_MODEL_SYNTHESIS_ENABLED", default=True)
-            if realtime_search.get("provider") == "stooq_public_quote" or not use_model_synthesis:
+            temporal_candidates = [source_temporal_evidence(record, temporal_contract)
+                                   for record in realtime_search.get("source_records") or []] if temporal_contract else []
+            if (realtime_search.get("provider") == "stooq_public_quote" or not use_model_synthesis
+                    or (temporal_contract and not any(item["eligible"] for item in temporal_candidates))):
                 return {
                     "status": "realtime_search_answered_without_model",
                     "answer": _fallback_realtime_search_answer(realtime_kind, realtime_search),
@@ -148,6 +635,10 @@ def run_ai_ceo_chat(
                     "model_client": model_context,
                     "realtime_search": realtime_search,
                     "source_records": realtime_search.get("source_records") or [],
+                    **({"answer_stream_buffered": True, "temporal_evidence_quality": {
+                        "accepted": False, "quality_gate": "timely_evidence_v1", "review_call_count": 0,
+                        "blocked_by": list(dict.fromkeys(item["reason"] for item in temporal_candidates if not item["eligible"])),
+                    }} if temporal_contract else {}),
                     **_ai_ceo_latency_fields(
                         turn_started_at,
                         search_latency_ms=search_latency_ms,
@@ -179,6 +670,9 @@ def run_ai_ceo_chat(
             if on_stage is not None:
                 on_stage("model")
             model_started_at = time.monotonic()
+            quote_quality: dict[str, Any] = {}
+            temporal_quality: dict[str, Any] = {}
+            used_evidence_fallback = False
             try:
                 result = model_client.generate_text(
                     system_prompt=search_prompt[0],
@@ -186,7 +680,8 @@ def run_ai_ceo_chat(
                     temperature=0.1,
                     max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
                     timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
-                    on_text_delta=on_text_delta,
+                    # Time-sensitive claims must be checked before reaching the browser.
+                    on_text_delta=None if realtime_kind == "stock_quote" or temporal_contract else on_text_delta,
                 )
                 result = _complete_truncated_model_result(
                     model_client=model_client,
@@ -200,7 +695,7 @@ def run_ai_ceo_chat(
                 answer = _clean_answer(result.get("text") if isinstance(result, dict) else "")
                 if not answer:
                     raise RuntimeError("empty_realtime_search_answer")
-                if _realtime_answer_needs_repair(
+                if not temporal_contract and _realtime_answer_needs_repair(
                     answer,
                     realtime_search.get("source_records") or [],
                     realtime_kind,
@@ -209,9 +704,12 @@ def run_ai_ceo_chat(
                     repair_result = model_client.generate_text(
                         system_prompt=(
                             search_prompt[0]
-                            + " 上一版回答过短或只说无法判断。请基于已有 source_records 给出可用分析："
-                            "先说明数据时间和能确认的事实，再列主要驱动、偏强/偏弱两种情景与风险。"
-                            "没有精确实时价时可以明确缺口，但不能只返回一句无法分析，也不能编造数字。"
+                            + (" 上一版行情回答未通过证据核验。核对股票或指数、交易日期、数值、涨跌方向和来源编号；"
+                               "抓取时间或文章发布时间不是交易日期。无法核实时简短说明，不猜数字，也不补写无关分析。"
+                               if realtime_kind == "stock_quote" else
+                               " 上一版回答过短或只说无法判断。请基于已有 source_records 给出可用分析："
+                               "先说明数据时间和能确认的事实，再列主要驱动、偏强/偏弱两种情景与风险。"
+                               "没有精确实时价时可以明确缺口，但不能编造数字。")
                         ),
                         user_prompt=search_prompt[1],
                         temperature=0.1,
@@ -234,18 +732,33 @@ def run_ai_ceo_chat(
                             realtime_kind,
                             message=route_message,
                         )
-                        or len(repair_answer) > len(answer)
+                        or (realtime_kind != "stock_quote" and len(repair_answer) > len(answer))
                     ):
                         result = repair_result
                         answer = repair_answer
-                if _realtime_answer_needs_repair(
+                if realtime_kind == "stock_quote":
+                    quote_quality = market_quote_answer_quality(
+                        answer, realtime_search.get("source_records") or [], message=route_message, now=now_iso(),
+                    )
+                if temporal_contract:
+                    temporal_quality = review_temporal_answer(
+                        model_client=model_client, message=route_message, answer=answer,
+                        records=_source_records_for_model(realtime_search.get("source_records") or []),
+                        contract=temporal_contract,
+                        timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
+                    )
+                    model_latency_ms = _elapsed_ms(model_started_at)
+                    realtime_search["temporal_evidence_blocked_by"] = temporal_quality.get("blocked_by") or []
+                if (not temporal_contract and _realtime_answer_needs_repair(
                     answer,
                     realtime_search.get("source_records") or [],
                     realtime_kind,
                     message=route_message,
-                ):
+                )) or (temporal_contract and not temporal_quality.get("accepted")):
                     answer = _fallback_realtime_search_answer(realtime_kind, realtime_search)
-                status = "realtime_search_answered"
+                    used_evidence_fallback = True
+                status = ("realtime_search_answered_without_model"
+                          if used_evidence_fallback and (realtime_kind == "stock_quote" or temporal_contract) else "realtime_search_answered")
             except Exception:
                 model_latency_ms = _elapsed_ms(model_started_at)
                 result = {}
@@ -256,6 +769,10 @@ def run_ai_ceo_chat(
                 "answer": answer,
                 "context": context,
                 "model_client": _public_model_context(result, model_client, model_resolution) if result else model_context,
+                **({"market_quote_quality": quote_quality, "answer_stream_buffered": True}
+                   if realtime_kind == "stock_quote" else {}),
+                **({"temporal_evidence_quality": temporal_quality, "answer_stream_buffered": True}
+                   if temporal_contract else {}),
                 "realtime_search": realtime_search,
                 "source_records": realtime_search.get("source_records") or [],
                 **_ai_ceo_latency_fields(
@@ -305,9 +822,39 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
 
-    if on_stage is not None and _default_web_context_enabled(route=route, message=safe_message):
+    if on_stage is not None and _default_web_context_enabled(
+        route=route,
+        message=safe_message,
+        turn_plan=authoritative_turn_plan,
+    ):
         on_stage("sources")
-    default_web_search = _run_default_web_context_search(route=route, message=safe_message)
+    default_web_search = (
+        _run_default_web_context_search(route=route, message=safe_message,
+                                       **({"turn_plan": authoritative_turn_plan} if semantic_plan else {}))
+        if _default_web_context_enabled(route=route, message=safe_message, turn_plan=authoritative_turn_plan)
+        else {
+            "status": "not_requested",
+            "source_records": [],
+            "search_latency_ms": 0,
+            "frontend_gets_search_api_key": False,
+            "secret_exposed": False,
+        }
+    )
+    if (authoritative_turn_plan.get("search") == "reuse" if semantic_plan else _merchant_reuses_report_sources(safe_message)):
+        default_web_search = _owned_report_source_context(
+            repository=repository, company_id=company_id, store_id=store_id, user_id=user_id,
+            history=safe_history, active_context=context["active_listing_context"],
+        )
+        if default_web_search["status"] != "ready":
+            return {"status": "model_answer_rejected", "context": context, "model_client": model_context,
+                    "answer": "没有找到当前商品可续用的原报告来源。本次未重新联网，也未补写商品事实；请打开原报告继续，或允许重新检索。",
+                    "source_records": [], "answer_quality": {"accepted": False,
+                        "quality_gate": "owned_report_source_continuity_v1",
+                        "blocked_by": ["previous_report_sources_unavailable"]},
+                    **route_meta, "frontend_gets_model_api_key": False, "secret_exposed": False}
+        # The archived report is the evidence anchor, not arbitrary historical
+        # assistant assertions or citation labels belonging to other reports.
+        safe_history = [item for item in safe_history if item.get("market_report_id") == default_web_search["source_report_id"]]
     prompt_context = _context_with_default_web_search(context, default_web_search)
     source_records = _source_records_from_default_web_context(default_web_search)
 
@@ -319,6 +866,7 @@ def run_ai_ceo_chat(
         route=route,
         route_meta=route_meta,
         conversation_history=safe_history,
+        turn_plan=authoritative_turn_plan,
     )
     if on_stage is not None:
         on_stage("model")
@@ -328,12 +876,14 @@ def run_ai_ceo_chat(
         user_prompt=user_prompt,
         route=route,
         realtime_kind=realtime_kind,
-        on_text_delta=on_text_delta,
+        # Product evidence is validated (and may be repaired/rejected) below.
+        # Do not expose an unreviewed attribution during streaming.
+        on_text_delta=None if route == AI_CEO_ROUTE_EBAY_WORKFLOW and source_records else on_text_delta,
     )
     if model_error is not None:  # pragma: no cover - provider dependent
         exc = model_error
         failure_code, failure_reason = _classify_model_failure(exc)
-        source_backed_answer = _source_backed_market_report_fallback_answer(
+        source_backed_answer = "" if semantic_plan else _source_backed_market_report_fallback_answer(
             message=safe_message,
             route=route,
             default_web_search=default_web_search,
@@ -366,7 +916,7 @@ def run_ai_ceo_chat(
                 "runtime_gets_raw_ebay_token": False,
                 "secret_exposed": False,
             }
-        recovery_answer = _market_report_recovery_draft_answer(
+        recovery_answer = "" if semantic_plan else _market_report_recovery_draft_answer(
             message=safe_message,
             route=route,
             default_web_search=default_web_search,
@@ -426,7 +976,7 @@ def run_ai_ceo_chat(
 
     answer = _clean_answer(result.get("text") if isinstance(result, dict) else "")
     if not answer:
-        source_backed_answer = _source_backed_market_report_fallback_answer(
+        source_backed_answer = "" if semantic_plan else _source_backed_market_report_fallback_answer(
             message=safe_message,
             route=route,
             default_web_search=default_web_search,
@@ -459,7 +1009,7 @@ def run_ai_ceo_chat(
                 "runtime_gets_raw_ebay_token": False,
                 "secret_exposed": False,
             }
-        recovery_answer = _market_report_recovery_draft_answer(
+        recovery_answer = "" if semantic_plan else _market_report_recovery_draft_answer(
             message=safe_message,
             route=route,
             default_web_search=default_web_search,
@@ -497,6 +1047,7 @@ def run_ai_ceo_chat(
             "answer": _model_unavailable_fallback_answer(route_meta, "模型服务这次没有返回可展示内容。"),
             "context": prompt_context,
             "model_client": _public_model_context(result, model_client, model_resolution),
+            "provider_error_type": "empty_model_answer",
             "model_initial_retry_count": model_initial_retry_count,
             "default_web_search": default_web_search,
             "source_records": source_records,
@@ -520,20 +1071,53 @@ def run_ai_ceo_chat(
         route=route,
         answer=answer,
         source_records=source_records,
+        context=prompt_context,
     )
     repair_retry_count = 0
-    if not answer_quality.get("accepted") and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True):
+    repair_candidate_answer = ""
+    if (
+        not answer_quality.get("accepted")
+        and not (result or {}).get("bounded_empty_answer_recovery")
+        and not (result or {}).get("bounded_output_recovery")
+        and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True)
+    ):
         repair_started_at = time.monotonic()
         try:
+            active_listing_consistency_failed = any(
+                item in {
+                    "existing_sku_reported_missing",
+                    "existing_media_reported_missing",
+                    "existing_media_rights_reported_blocked",
+                    "existing_unpublished_offer_reported_missing",
+                }
+                for item in (answer_quality.get("blocked_by") or [])
+            )
+            repair_scope_instruction = (
+                "本轮必须逐项读取 active_listing_context：已有 SKU、AssetManifest 素材和 UNPUBLISHED Offer 必须原样承认；"
+                "media.rights_confirmed_for_listing_draft=true 时不得再把图片发布权写成阻断，"
+                "但商品事实与实物一致性复核仍是独立步骤；只把 missing_fact_keys 里的字段列为缺口，不得新建重复 SKU 或 Offer。"
+                if active_listing_consistency_failed
+                else
+                "本轮是既有市场报告的成交证据补证：必须吸收 merchant_message 中的新数字、Item ID 和相对赢家，"
+                "不得重放旧候选卡；明确这不是供应商或可发布证明，并进入供应商事实核验。"
+                if (authoritative_turn_plan.get("research_delivery") == "evidence_comparison" if semantic_plan else
+                    _looks_like_market_evidence_followup(message=safe_message, route=route))
+                else "选品问题必须按要求给出足量的具体候选商品卡，不得回答其他历史问题。"
+                if selection_contract
+                else "继续完成当前商品或当前问题要求的结果，保留本轮格式与阶段边界，不重新选品，不回答其他历史问题。"
+            )
             repair_result = model_client.generate_text(
                 system_prompt=(
                     system_prompt
                     + " 上一版回复没有通过本轮问题一致性检查。只回答当前 merchant_message；"
-                    "选品问题必须按要求给出足量的具体候选商品卡，不得回答其他历史问题。"
-                    "涉及 eBay 规则、政策、图片或发布要求时，必须区分官方强制要求、平台建议和商家最佳实践；"
-                    "每条外部事实使用已有 source_records 的 [S1]、[S2] 等编号引用。"
-                    "没有官方来源支撑时，不得使用‘必须’‘一律’‘绝对’‘禁止’‘会被下架’等断言。"
+                    + repair_scope_instruction
+                    + "引用外部事实时使用已有 source_records 的 [S1]、[S2] 等编号；没有官方来源，不得编造平台强制规则。"
+                    "商家设定的禁止发布等操作边界是本轮要求，不是平台规则；模拟参数仍标为模拟，未知事实仍标为待核对。"
                     "回答必须以完整句子结束；如果上一版停在半句话，改写成更短的完整答案。"
+                    + _model_answer_repair_instruction(
+                        answer_quality=answer_quality,
+                        selection_contract=selection_contract,
+                    )
                 ),
                 user_prompt=user_prompt,
                 temperature=0.1,
@@ -543,11 +1127,13 @@ def run_ai_ceo_chat(
             repair_retry_count = 1
             model_latency_ms += _elapsed_ms(repair_started_at)
             repair_answer = _clean_answer(repair_result.get("text") if isinstance(repair_result, dict) else "")
+            repair_candidate_answer = repair_answer
             repair_quality = validate_ai_ceo_answer_quality(
                 message=safe_message,
                 route=route,
                 answer=repair_answer,
                 source_records=source_records,
+                context=prompt_context,
             )
             if repair_answer and repair_quality.get("accepted"):
                 result = repair_result
@@ -557,18 +1143,89 @@ def run_ai_ceo_chat(
             repair_retry_count = 1
             model_latency_ms += _elapsed_ms(repair_started_at)
 
+    contract_projection_used = False
+    context_correction_used = False
+    if not answer_quality.get("accepted"):
+        if (authoritative_turn_plan.get("research_delivery") == "evidence_comparison" if semantic_plan else
+                _looks_like_market_evidence_followup(message=safe_message, route=route)):
+            projected_answer = _project_market_evidence_followup_answer(safe_message)
+        else:
+            projected_answer = _project_selection_answer_to_contract(
+                message=safe_message,
+                answer=repair_candidate_answer or answer,
+                context=prompt_context,
+                blocked_by=answer_quality.get("blocked_by") or [],
+                source_records=source_records,
+            )
+        if projected_answer:
+            projected_quality = validate_ai_ceo_answer_quality(
+                message=safe_message,
+                route=route,
+                answer=projected_answer,
+                source_records=source_records,
+                context=prompt_context,
+            )
+            if projected_quality.get("accepted"):
+                answer = projected_answer
+                answer_quality = projected_quality
+                contract_projection_used = True
+
+    active_listing_consistency_codes = {
+        "existing_sku_reported_missing",
+        "existing_media_reported_missing",
+        "existing_media_rights_reported_blocked",
+        "existing_unpublished_offer_reported_missing",
+    }
+    if not answer_quality.get("accepted") and active_listing_consistency_codes.intersection(
+        str(item) for item in (answer_quality.get("blocked_by") or [])
+    ):
+        model_answer_blocked_by = [str(item) for item in (answer_quality.get("blocked_by") or [])]
+        corrected_answer = _active_listing_consistency_fallback(prompt_context)
+        corrected_quality = validate_ai_ceo_answer_quality(
+            message=safe_message,
+            route=route,
+            answer=corrected_answer,
+            source_records=source_records,
+            context=prompt_context,
+        )
+        if corrected_quality.get("accepted"):
+            answer = corrected_answer
+            answer_quality = {
+                **corrected_quality,
+                "quality_gate": "active_listing_context_correction_v1",
+                "context_correction_used": True,
+                "model_answer_blocked_by": model_answer_blocked_by,
+            }
+            context_correction_used = True
+
     if not answer_quality.get("accepted"):
         return {
             "status": "model_answer_rejected",
             "blocked_by": answer_quality.get("blocked_by") or ["model_answer_not_grounded_to_request"],
-            "answer": _model_answer_rejected_fallback(
-                message=safe_message,
-                source_records=source_records,
+            "answer": (
+                _active_listing_consistency_fallback(prompt_context)
+                if any(
+                    item in {
+                        "existing_sku_reported_missing",
+                        "existing_media_reported_missing",
+                        "existing_media_rights_reported_blocked",
+                        "existing_unpublished_offer_reported_missing",
+                    }
+                    for item in (answer_quality.get("blocked_by") or [])
+                )
+                else _model_answer_rejected_fallback(
+                    message=safe_message,
+                    source_records=source_records,
+                    blocked_by=answer_quality.get("blocked_by") or [],
+                    turn_plan=authoritative_turn_plan,
+                )
             ),
             "answer_quality": {
                 **answer_quality,
                 "initial_retry_count": model_initial_retry_count,
                 "repair_retry_count": repair_retry_count,
+                "contract_projection_used": contract_projection_used,
+                "output_recovery_used": bool((result or {}).get("bounded_output_recovery")),
             },
             "context": prompt_context,
             "model_client": _public_model_context(result, model_client, model_resolution),
@@ -591,14 +1248,23 @@ def run_ai_ceo_chat(
         }
 
     model_mode = str((result or {}).get("model_mode") or "")
-    status = "model_answered" if model_mode.startswith("live_") else "model_answered_non_live"
+    status = (
+        "model_answered_with_context_correction"
+        if context_correction_used
+        else "model_answered"
+        if model_mode.startswith("live_")
+        else "model_answered_non_live"
+    )
     return {
         "status": status,
+        "blocked_by": answer_quality.get("blocked_by") or [],
         "answer": answer,
         "answer_quality": {
             **answer_quality,
             "initial_retry_count": model_initial_retry_count,
             "repair_retry_count": repair_retry_count,
+            "contract_projection_used": contract_projection_used,
+            "output_recovery_used": bool((result or {}).get("bounded_output_recovery")),
         },
         "context": prompt_context,
         "model_client": _public_model_context(result, model_client, model_resolution),
@@ -612,6 +1278,7 @@ def run_ai_ceo_chat(
             route=route,
             realtime_kind=realtime_kind,
             **_default_web_context_performance_kwargs(default_web_search),
+            fallback_answer_used=context_correction_used,
         ),
         **route_meta,
         "frontend_gets_model_api_key": False,
@@ -635,8 +1302,14 @@ def run_ai_ceo_fast_turn(
     message: str,
     client_now: str = "",
     client_timezone: str = "",
+    conversation_history: list[dict[str, Any]] | None = None,
+    turn_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Answer routes that do not need merchant model secret resolution."""
+    # Semantic turns are answered by the model after server planning; legacy
+    # fast helpers must not make a second intent decision from the raw text.
+    if is_semantic_plan(turn_plan):
+        return None
     safe_message = _safe_text(message, limit=900)
     if not safe_message:
         return None
@@ -658,10 +1331,20 @@ def run_ai_ceo_fast_turn(
             "merchant_pays_provider_directly": False,
         },
     )
-    realtime_kind = _classify_external_realtime_request(safe_message)
-    route = _classify_ai_ceo_route(safe_message, realtime_kind=realtime_kind)
-    route_meta = ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind)
-    local_clock_kind = _classify_local_clock_request(safe_message)
+    authoritative_turn_plan = (
+        turn_plan
+        if isinstance(turn_plan, dict)
+        and turn_plan.get("contract_version") == AI_CEO_TURN_PLAN_CONTRACT_VERSION
+        else build_ai_ceo_turn_plan(safe_message, conversation_history=conversation_history)
+    )
+    realtime_kind = _safe_text(authoritative_turn_plan.get("realtime_kind") or "", limit=80)
+    route = _safe_text(authoritative_turn_plan.get("route") or AI_CEO_ROUTE_GENERAL, limit=80)
+    route_meta = {
+        **ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind),
+        "turn_plan": _public_ai_ceo_turn_plan(authoritative_turn_plan),
+        "working_state": authoritative_turn_plan.get("working_state") or {},
+    }
+    local_clock_kind = _classify_local_clock_request(message)
     if local_clock_kind:
         return {
             "status": "local_clock_answered",
@@ -677,7 +1360,7 @@ def run_ai_ceo_fast_turn(
             "runtime_gets_raw_ebay_token": False,
             "secret_exposed": False,
         }
-    capability_kind = _classify_ai_ceo_capability_request(safe_message)
+    capability_kind = _classify_ai_ceo_capability_request(message)
     if capability_kind:
         model_connection = _store_model_connection_context(
             repository=repository,
@@ -707,7 +1390,19 @@ def run_ai_ceo_fast_turn(
         )
         if model_connection.get("configured"):
             return None
-    realtime_search = _run_realtime_search(kind=realtime_kind, message=safe_message)
+    route_message = _safe_text(authoritative_turn_plan.get("effective_query") or safe_message, limit=1200)
+    temporal_contract = temporal_evidence_contract(
+        route_message, realtime_kind, now=now_iso(), client_timezone=client_timezone,
+    ) if realtime_kind and realtime_kind != "stock_quote" and (
+        timely_request_kind(route_message) or realtime_kind in {"weather", "exchange_rate", "news_search", "company_research"}
+    ) else {}
+    realtime_search = _run_realtime_search(
+        kind=realtime_kind,
+        message=route_message,
+        **({"temporal_contract": temporal_contract} if temporal_contract else {}),
+    )
+    if temporal_contract:
+        realtime_search["temporal_evidence_contract"] = temporal_contract
     if realtime_search.get("status") == "ready":
         return {
             "status": "realtime_search_answered_without_model",
@@ -756,7 +1451,7 @@ def ai_ceo_route_metadata(
 ) -> dict[str, Any]:
     """Return public route and memory metadata for a chat message."""
     safe_message = _safe_text(message, limit=900)
-    realtime = realtime_kind or _classify_external_realtime_request(safe_message)
+    realtime = realtime_kind if route else realtime_kind or _classify_external_realtime_request(safe_message)
     selected_route = route or _classify_ai_ceo_route(safe_message, realtime_kind=realtime)
     labels = {
         AI_CEO_ROUTE_GENERAL: "直接回答",
@@ -793,6 +1488,12 @@ def build_ai_ceo_chat_context(
     client_timezone: str = "",
 ) -> dict[str, Any]:
     store = repository.get_store_for_company(company_id=company_id, store_id=store_id) or {}
+    connection = _ai_ceo_store_connection_context(
+        repository=repository,
+        company_id=company_id,
+        store_id=store_id,
+        store=store,
+    )
     packets = repository.list_platform_data_packets(company_id=company_id, store_id=store_id, platform="ebay", limit=1)
     latest_packet = packets[0] if packets else {}
     confirmations = repository.list_confirmations(company_id=company_id, status="pending", limit=50)
@@ -806,12 +1507,9 @@ def build_ai_ceo_chat_context(
         "store": {
             "store_id": store_id,
             "platform": _safe_text(store.get("platform") or "ebay", limit=40),
-            "store_name": _safe_text(store.get("store_name") or "", limit=160),
+            "store_name": _ai_ceo_store_name_for_model(store.get("store_name"), connection),
             "marketplace": _safe_text(store.get("marketplace") or "", limit=60),
-            "connection_status": _safe_text(
-                store.get("connection_status") or store.get("status") or "",
-                limit=80,
-            ),
+            **connection,
         },
         "latest_packet": {
             "packet_id": _safe_text(latest_packet.get("packet_id") or "", limit=120),
@@ -836,6 +1534,64 @@ def build_ai_ceo_chat_context(
     }
 
 
+def _ai_ceo_store_connection_context(
+    *,
+    repository: Any,
+    company_id: str,
+    store_id: str,
+    store: dict[str, Any],
+) -> dict[str, Any]:
+    """Return an authorization-only, no-secret connection summary for the model."""
+
+    connections: list[dict[str, Any]] = []
+    list_connections = getattr(repository, "list_connections", None)
+    if callable(list_connections):
+        try:
+            rows = list_connections(company_id=company_id, store_id=store_id)
+            connections = [item for item in rows if isinstance(item, dict)] if isinstance(rows, list) else []
+        except Exception:
+            connections = []
+    ebay_connections = [
+        item for item in connections if _safe_text(item.get("platform") or "ebay", limit=40).lower() == "ebay"
+    ]
+    active = next(
+        (
+            item
+            for item in ebay_connections
+            if _safe_text(item.get("status") or "", limit=80).lower() in _AUTHORIZED_EBAY_CONNECTION_STATUSES
+        ),
+        None,
+    )
+    selected = active or (ebay_connections[0] if ebay_connections else {})
+    status = _safe_text(
+        selected.get("status") or store.get("connection_status") or store.get("status") or "",
+        limit=80,
+    ).lower()
+    authorized = status in _AUTHORIZED_EBAY_CONNECTION_STATUSES
+    return {
+        "connection_status": status,
+        "connection_authorized": authorized,
+        "read_only_authorized": authorized,
+        "draft_save_authorized": status in {"draft_save_authorized", "publish_authorized", "read_write_authorized"},
+        "publish_authorized": status in {"publish_authorized", "read_write_authorized"},
+        "oauth_required": not authorized,
+        "connection_status_source": "platform_connections" if selected else "store_record_fallback",
+    }
+
+
+def _ai_ceo_store_name_for_model(value: Any, connection: dict[str, Any]) -> str:
+    name = _safe_text(value or "", limit=160)
+    lowered = name.lower()
+    stale_pending_label = (
+        ("等待" in name and "授权" in name)
+        or "pending authorization" in lowered
+        or "disconnected ebay store" in lowered
+    )
+    if connection.get("connection_authorized") and stale_pending_label:
+        return "已连接 eBay 店铺"
+    return name
+
+
 def build_ai_ceo_chat_prompts(
     *,
     message: str,
@@ -845,7 +1601,9 @@ def build_ai_ceo_chat_prompts(
     route: str = AI_CEO_ROUTE_GENERAL,
     route_meta: dict[str, Any] | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
+    turn_plan: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
+    semantic_plan = is_semantic_plan(turn_plan)
     system_prompt = (
         "你是捷境 Jiejing 的 AI CEO，产品定位是 eBay-first AI 经营工作台，不是通用 ERP、Agent 市场或普通聊天机器人。"
         "但你必须具备完整文字大模型的普通咨询能力：翻译、写作、解释概念、经营常识、沟通话术、利润算法、非实时政策理解和普通知识问答，都要自然直接回答，不能因为问题不属于 eBay 就拒答。"
@@ -861,40 +1619,83 @@ def build_ai_ceo_chat_prompts(
         "商家可见回答不要出现“正在调用模型”“后端模型已返回”“BYOK 模型已返回”等实现过程文案；只展示直接回答、经营任务、实时数据缺口或等待确认等产品状态。"
         "商家可见回答必须使用简体中文；eBay、SKU、Listing、Market Report、Listing Package 等专有名词可以保留英文。"
         "回答要像产品级 SaaS 工作台里的 AI CEO：清楚、具体、可执行，不空泛。"
+        "如果 current_context.merchant_product_intake 存在，它是后端视觉层从商家本轮图片提取的来源证据："
+        "可以据此整理待核对 Listing，但不得把来源识别写成商家已确认；冲突必须保留，净重不得写成包装重量，商品产地不得写成实际发货地。"
+        "如果 current_context.active_listing_context 存在，它是当前捷境 Listing 项目的权威快照："
+        "已列出的 SKU、AssetManifest 数量、未发布 Offer 和账号状态不得回答为缺失；missing_fact_keys 才是尚待补充的商品事实。"
+        "media.rights_confirmed_for_listing_draft=true 表示现有素材已确认可用于 Listing 草稿，不得再把图片发布权写成阻断；"
+        "商品事实、实物一致性和平台规则复核是另一层发布前检查，不能与素材权利混为一谈。"
+        "同一项目复盘不得新建重复 SKU、重复 Offer 或把已保存的 UNPUBLISHED Offer 说成未保存。"
+        "如果 merchant_message 明确要求新建一个独立商品项目，active_listing_context 只用于保护旧项目不被覆盖；"
+        "新项目不得被强制复用旧项目的 SKU、素材或 Offer，也不得因为新项目尚未写入 eBay 而回退成旧项目。"
     )
     if route == AI_CEO_ROUTE_GENERAL:
         system_prompt += " 当前路由是普通咨询：像 DeepSeek 一样直接回答，不创建经营任务，不写长期经营记忆。"
     elif route == AI_CEO_ROUTE_EBAY_WORKFLOW:
         system_prompt += (
+            " 当前路由是 eBay 经营任务：优先交付当前商品或当前问题要求的结果，保持真实写入确认边界。"
+            "商品资料整理或修订直接使用商家要求的表格或字段格式，不额外展开工作计划、候选商品或重复风险说明。"
+            "current_context.store 中 connection_status、connection_authorized、oauth_required 是授权状态的唯一权威依据；store_name 只是展示名称，绝不能根据名称推断授权状态。"
+        )
+        if (turn_plan.get("research_delivery") == "candidate_selection" if semantic_plan else
+                _looks_like_product_selection_request(message=message, route=route) and not _looks_like_explicit_listing_intake(message)):
+            system_prompt += (
             " 当前路由是 eBay 经营任务：输出目标、计划、来源/缺口、风险、需要确认的动作、下一步，并保持真实写入确认边界。"
-            "如果商家问“卖什么”“帮我选品”“不知道卖什么”，必须先给市场调研报告，再给 2-4 个候选商品卡；每张卡包含商品名、推荐度评分、为什么有需求、为什么适合 eBay/轻小件、风险和待补资料。"
+            "如果商家问“卖什么”“帮我选品”“不知道卖什么”，必须基于市场调研给出 2-4 个候选商品卡；每张卡包含商品名、推荐度评分、待验证的使用场景、比较依据、风险和待补资料。"
             "选品类回答必须先输出“候选商品卡”，再写市场调研正文；不要先写长篇市场机会概述，候选商品名必须出现在回答前 500 字内，避免后续 Listing 无法识别具体商品。"
             "不要把“市场调研报告”本身当成商品名；后续 Listing 草稿只能基于某个具体候选商品。"
             "这类回答必须包含一个清晰小节，标题写“候选商品卡”，并用固定格式逐条输出："
-            "“候选商品 1：具体商品名”“推荐度评分：数字/100”“为什么有需求：...”“适合 eBay/轻小件：...”“主要风险：...”“Listing 草稿字段建议：...”。"
-            "不能只写“名称、推荐度评分、风险和 Listing 草稿字段建议”这类字段清单，必须给出真实可理解的商品名。"
+            "“候选商品 1：具体商品名”“推荐度评分：数字/100”“使用场景（假设）：...”“比较依据：...”“主要风险：...”“已证实事实：...”“推断依据：...”“待补资料：...”。"
+            "推荐度只是当前证据下的找货优先级，不是销量预测。用途只能作为待验证假设，不能据此断言需求持续、复购意愿强。"
+            "搜索命中的页面数不是竞争密度或市场份额，不因为一个方向命中1条、另一个4条就断言前者竞争更低。"
+            "竞争可以描述参考商品的同质化风险，退货原因只能列待验证风险，不编造概率；销量、利润、当前在售状态无证据就逐项未验证。"
+            "价格按对应来源的明确Item price或单件标价引用；原价、节省金额、运费和批量折扣不得当成单件主价，不明确就写主价未验证。"
+            "只有商家明确要求进入 Listing 时，才增加“Listing 草稿字段建议”；商家说本轮不要、先不做或暂缓 Listing 时，严禁输出 Listing 标题、字段、SKU、Item specifics 或类目映射。"
+            "不能只写字段清单，必须给出真实可理解的商品名。"
             "禁止把“商品 1”“商品 2”“候选品 A”“方向一”这类占位符当成商品名；如果模型只能想到占位符，就要明确让商家补充或重新选择。"
             "如果商家只是泛泛说“热销小商品”“批量筛品”“小众品”，且没有明确要求电子、带电、品牌或高客单方向，默认优先推荐不带电、非液体/粉末、非医疗、非大牌侵权、低售后风险的轻小件；"
             "不要把蓝牙耳机、充电器、电池、化妆品、保健品、强品牌配件等高合规/高售后/红海类目作为默认候选。"
             "没有可展示来源支撑时，不要写“月销过万”“搜索量很高”等精确热度话术；只能写“需用 eBay 竞品和真实店铺数据复核”。"
-        )
+            "当商家说明没有供应商、实物或商品参数时，只能提出待验证的产品方向；不得编造材质、重量、尺寸、成本、品牌、型号、包装、物流服务或类目编号。"
+            )
     elif route == AI_CEO_ROUTE_CONFIRMATION:
         system_prompt += " 当前路由是高风险动作：不要声称已执行，只说明需要进入决策中心确认，并列出发布/改价/库存/退款/广告/政策等执行前检查项。"
     elif route == AI_CEO_ROUTE_MERCHANT_RULE:
         system_prompt += " 当前路由是商家规则记忆：确认已理解规则，说明适用范围、例外情况和后续如何在经营任务中使用。"
 
+    if semantic_plan:
+        system_prompt += (
+            " 本轮任务、商品范围、资料来源、搜索需求与阶段边界已由服务器 turn_plan 决定；"
+            "严格使用 intent、project_action、source_mode 和 selection_contract，不再从原文中的关键词另行选择任务。"
+            "project_action=current 才能把 active_listing_context 作为本轮商品事实；"
+            "new/none/clarify 均不得沿用历史商品的 SKU、规格、图片或 Offer。"
+            "候选数量严格使用 selection_contract.required_candidate_count，覆盖通用的数量示例；"
+            "research_delivery=evidence_comparison 时只补证比较并保留商家本轮提交的证据和结论，不重放候选卡；"
+            "single_product_analysis 时围绕已指定单品回答，不额外寻找候选。"
+            "研究中每个候选引用的商品来源必须与该候选相符；research_queries.subject可作为中英文对应名称，"
+            "开放发现没有subject时使用来源可核对的商品名称，不能给一个商品引用另一个商品的证据。"
+            "listing_deferred=true 时不输出 Listing 字段；商家没有货源时只交付待验证方向。"
+            "steps 是有限任务说明，不是执行授权；不得声称已经创建记录或执行真实平台动作。"
+            "product_fact_proposals只包含本条原文可追溯的待确认建议，不是商家确认、供应商证明或图片授权。"
+        )
+
     payload = {
         "merchant_message": message,
         "route": route,
         "route_meta": route_meta or {},
+        "turn_plan": _public_ai_ceo_turn_plan(turn_plan or {}),
+        "working_state": (turn_plan or {}).get("working_state") or context.get("working_state") or {},
+        "selection_contract": context.get("selection_contract") or {},
         "current_context": _prompt_context_for_route(context, route),
         "web_context": _prompt_web_context(context),
         "current_model_client": model_context or {},
-        "frontend_command_plan": _safe_command(command) if route != AI_CEO_ROUTE_GENERAL else {},
+        "frontend_command_plan": _safe_command(command) if route != AI_CEO_ROUTE_GENERAL and not semantic_plan else {},
         "recent_conversation": _sanitize_ai_ceo_conversation_history(conversation_history),
         "response_rules": [
             "Use web_context.source_records for current/public facts when web_context.status is ready; do not invent latest facts when sources are missing.",
             "引用公开事实时使用 source_records.citation_id，例如 [S1]；quality_score 只用于排序，不代表官方背书。",
+            "修订报告时保持 web_context 中每个引用编号、标题、链接与原始日期的对应关系；其他历史回答中的同号引用不可复用。沿用已保存来源不等于今天重新检索。",
+            "片段若包含多个商品、卖家反馈或多个价格，不能把任意价格当作主商品标价；没有明确归属写主商品价格未验证。品牌缺失不能推断为无品牌。竞品规格不是商家的商品事实。",
             "涉及 eBay 规则、政策、图片或发布要求时，区分官方强制要求、平台建议和商家最佳实践。",
             "没有对应官方来源时，不得把建议写成‘必须’‘一律’‘绝对’‘禁止’或‘会被下架’。",
             "先回答用户当前问题，再给必要的下一步。",
@@ -902,6 +1703,17 @@ def build_ai_ceo_chat_prompts(
             "只有明确要求记住规则时才写商家规则。",
             "经营任务体现来源记录、确认中心和审计回流。",
             "没有实时来源记录时不要编造最新外部数据。",
+            "把 current_context.store 的连接布尔值视为权威状态；不要从 store_name 猜测是否授权。",
+            "严格遵守 merchant_message 的阶段边界；商家暂缓 Listing 时只做选品，不扩展到 Listing 字段。",
+            "商品事实必须来自 merchant_message、current_context 或明确 source_records；未知参数写待核，不得补写成事实。",
+            "active_listing_context 是当前项目权威状态；不得把其中已有的 SKU、素材或未发布 Offer 回答为缺失。商家明确要求独立新项目时，它仅作为不可覆盖的历史项目边界。",
+            "active_listing_context.media 中已确认的 Listing 草稿图片权利不得回答为阻断；商品事实和实物一致性复核要单独说明。",
+            "merchant_product_intake 中的 source_confirmed_facts 是带来源的图片提取结果，不等于商家确认；fact_conflicts 不得自行二选一。",
+            "有 selection_contract 时逐项执行；excluded_candidate_names 中的旧候选不得再次成为候选商品。",
+            "selection_contract 要求候选证据入口时，每个候选分别给 eBay US 搜索链接或真实 Item ID；搜索入口不等于成交证据，拿不到具体成交证据时逐项写‘成交证据不足’。",
+            "不要主动改写 current_context.store.connection_status；如果确需提及，必须逐字使用上下文中的真实值。",
+            "把 turn_plan 和 working_state 当作本轮权威任务状态；代词或继续追问优先沿用 continuation_key 和 entities。",
+            "普通开放域问题先完整回答问题本身，不要附加不相关的 eBay 推销或经营任务卡。",
         ],
     }
     return system_prompt, json.dumps(payload, ensure_ascii=False, default=str)
@@ -925,9 +1737,18 @@ def build_ai_ceo_realtime_search_prompts(
         "回答要短、直接、带时间感和来源；不要出现“调用模型”“后端模型”“BYOK”“Tavily API key”等实现词。"
         "涉及 eBay 规则、政策、图片或发布要求时，必须区分官方强制要求、平台建议和商家最佳实践；"
         "强制性表述必须紧跟对应的官方来源编号。没有官方来源支撑时，不得使用‘必须’‘一律’‘绝对’‘禁止’或‘会被下架’等断言。"
-        "如果来源不足以确认精确实时数值，仍要整理来源中能确认的事实、主要驱动、两种可能情景和风险；不能只用一句“无法分析”结束。"
+        "用户要求新闻或基本面分析时，整理来源中能确认的事实、主要驱动和风险；只问行情数字时不要扩展成行情分析。"
         "需要执行真实发布、改价、库存、退款、广告、政策、付款或敏感客服承诺时，必须停在决策中心。"
         "普通实时咨询默认不写长期经营记忆。"
+        "行情问题必须明确股票或指数名称及交易日；纳斯达克综合指数与纳斯达克100不是同一指数。"
+        "抓取时间、文章发布时间与行情所属交易日是不同信息，不能互相代替；北京时间今天也不等于美国已收盘的交易日。"
+        "只有来源明确给出对应交易日期和收盘数值时才可报收盘，使用绝对日期并逐项标注引用。"
+        "数字不足以核实时只需简短说明本次未核实，不要先给确定数字再追加免责声明，也不要凑字数或猜涨跌原因。"
+        "所有时效事实都必须用绝对日期标明适用时点，逐句带来源引用。"
+        "temporal_evidence_contract 给出用户时区的日期及请求时点；只把符合该时点的来源当作当前证据。"
+        "published_at/updated_at只是文章发布或更新记录，captured_at只是抓取记录；不能据此改写旧事件的日期。"
+        "来源相互矛盾、没有日期或没有对应主体证据时，明确说本次未核实，不自行补全。"
+        "优先输出简短事实句或少量要点，每句自带日期和引用；无需表格、泛泛分析或礼貌收尾。"
     )
     source_records = _source_records_for_model(
         realtime_search.get("source_records") if isinstance(realtime_search.get("source_records"), list) else []
@@ -938,6 +1759,9 @@ def build_ai_ceo_realtime_search_prompts(
         "current_context": _prompt_context_for_route(context, AI_CEO_ROUTE_EXTERNAL_REALTIME),
         "current_model_client": model_context or {},
         "recent_conversation": _sanitize_ai_ceo_conversation_history(conversation_history),
+        "market_time_context": _market_time_context(message=message)
+        if (route_meta or {}).get("realtime_kind") == "stock_quote" else {},
+        "temporal_evidence_contract": realtime_search.get("temporal_evidence_contract") or {},
         "realtime_search": {
             "status": realtime_search.get("status"),
             "provider": realtime_search.get("provider"),
@@ -989,22 +1813,45 @@ def _prompt_web_context(context: dict[str, Any]) -> dict[str, Any]:
         "summary": _safe_text(search.get("summary") or "", limit=500),
         "blocked_by": search.get("blocked_by") if isinstance(search.get("blocked_by"), list) else [],
         "source_records": records[:5],
+        "product_research_evidence": search.get("product_research_evidence") or {},
         "frontend_gets_search_api_key": False,
         "secret_exposed": False,
     }
 
 
-def _default_web_context_enabled(*, route: str, message: str) -> bool:
+def _default_web_context_enabled(
+    *,
+    route: str,
+    message: str,
+    turn_plan: dict[str, Any] | None = None,
+) -> bool:
+    semantic_plan = is_semantic_plan(turn_plan)
+    if not semantic_plan and (_merchant_disallows_web_search(message) or _merchant_reuses_report_sources(message)):
+        return False
+    if not _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True):
+        return False
     if not _env_enabled("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED", default=True):
         return False
     if route not in {AI_CEO_ROUTE_GENERAL, AI_CEO_ROUTE_EBAY_WORKFLOW}:
         return False
-    return bool(_safe_text(message, limit=900))
+    if not _safe_text(message, limit=900):
+        return False
+    if semantic_plan:
+        return turn_plan.get("status") == "ready" and turn_plan.get("search") not in {"none", "reuse", None}
+    if isinstance(turn_plan, dict):
+        tools = turn_plan.get("required_tools") if isinstance(turn_plan.get("required_tools"), list) else []
+        return bool(turn_plan.get("freshness_required") or tools)
+    return True
 
 
-def _run_default_web_context_search(*, route: str, message: str) -> dict[str, Any]:
+def _run_default_web_context_search(
+    *,
+    route: str,
+    message: str,
+    turn_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     search_started_at = time.monotonic()
-    if not _default_web_context_enabled(route=route, message=message):
+    if not _default_web_context_enabled(route=route, message=message, turn_plan=turn_plan):
         return {
             "status": "not_requested",
             "source_records": [],
@@ -1012,7 +1859,15 @@ def _run_default_web_context_search(*, route: str, message: str) -> dict[str, An
             "frontend_gets_search_api_key": False,
             "secret_exposed": False,
         }
-    cache_key = _default_web_context_cache_key(route=route, message=message)
+    semantic_plan = is_semantic_plan(turn_plan)
+    search_query = turn_plan.get("effective_query") or turn_plan.get("query") or "" if semantic_plan else message
+    search_kind = turn_plan.get("search") if semantic_plan else "web_search"
+    semantic_product_research = semantic_plan and turn_plan.get("intent") == "research" and search_kind == "web_search"
+    research_queries = turn_plan.get("research_queries") or [] if semantic_product_research else []
+    cache_message = hashlib.sha256(json.dumps(research_queries, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest() if semantic_product_research else search_query
+    cache_key = _default_web_context_cache_key(
+        route=f"{route}:{search_kind}:product" if semantic_product_research else f"{route}:{search_kind}" if semantic_plan else route,
+        message=cache_message)
     cache_ttl_seconds = _env_int("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_CACHE_SECONDS", default=180, minimum=0, maximum=900)
     negative_cache_ttl_seconds = _env_int("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_NEGATIVE_CACHE_SECONDS", default=45, minimum=0, maximum=180)
     if cache_key and (cache_ttl_seconds or negative_cache_ttl_seconds):
@@ -1025,13 +1880,19 @@ def _run_default_web_context_search(*, route: str, message: str) -> dict[str, An
                 cached_result["cache_status"] = "hit" if cached_result.get("used_for_model_prompt") else "hit_no_sources"
                 cached_result["search_latency_ms"] = 0
                 return cached_result
-    budget = _default_web_context_budget(route=route, message=message)
-    search = _run_realtime_search(
-        kind="web_search",
-        message=message,
-        timeout_seconds=budget["timeout_seconds"],
-        max_results=budget["max_results"],
-        search_depth=budget["search_depth"],
+    budget = _default_web_context_budget(route=route, message="" if semantic_plan else message)
+    product_research = semantic_product_research or (not semantic_plan and route == AI_CEO_ROUTE_EBAY_WORKFLOW and not _looks_like_explicit_listing_intake(message) and (
+        _looks_like_product_selection_request(message=message, route=route)
+        or _looks_like_market_evidence_followup(message=message, route=route)
+    ))
+    search = (
+        _run_product_selection_web_search(message=message, budget=budget,
+                                         **({"research_queries": research_queries} if semantic_product_research else {}))
+        if product_research else _run_realtime_search(
+            kind=search_kind, message=search_query, timeout_seconds=budget["timeout_seconds"],
+            max_results=budget["max_results"], search_depth=budget["search_depth"],
+            **({"query_override": search_query} if semantic_plan else {}),
+        )
     )
     records = search.get("source_records") if isinstance(search.get("source_records"), list) else []
     result = {
@@ -1042,6 +1903,7 @@ def _run_default_web_context_search(*, route: str, message: str) -> dict[str, An
         "captured_at": _safe_text(search.get("captured_at") or "", limit=80),
         "summary": _safe_text(search.get("summary") or "", limit=500),
         "source_records": records[:5],
+        "product_research_evidence": search.get("product_research_evidence") or {},
         "used_for_model_prompt": bool(search.get("status") == "ready" and records),
         "search_budget_seconds": _safe_int(search.get("search_budget_seconds") or budget["timeout_seconds"]),
         "search_max_results": _safe_int(search.get("search_max_results") or budget["max_results"]),
@@ -1116,7 +1978,7 @@ def _default_web_context_needs_report_budget(*, route: str, message: str) -> boo
 
 def _default_web_context_cache_key(*, route: str, message: str) -> str:
     safe_route = _safe_text(route or AI_CEO_ROUTE_GENERAL, limit=80)
-    safe_message = re.sub(r"\s+", " ", _safe_text(message or "", limit=500).strip().lower())
+    safe_message = re.sub(r"\s+", " ", _safe_text(message or "", limit=900).strip().lower())
     if not safe_message:
         return ""
     return hashlib.sha1(f"{safe_route}\n{safe_message}".encode("utf-8", errors="ignore")).hexdigest()
@@ -1161,58 +2023,57 @@ def _classify_ai_ceo_route(message: str, *, realtime_kind: str = "") -> str:
 
 
 def _classify_local_clock_request(message: str) -> str:
-    text = _normalized_text(message)
+    # Do not truncate before deciding whether this is the entire request.
+    text = str(message or "").strip().lower()
+    text = re.sub(r"^[?？!！。.,，\s]+|[?？!！。.,，\s]+$", "", text)
+    text = re.sub(r"^(?:你好|您好)[，,\s]*", "", text)
+    text = re.sub(r"^(?:请问(?:一下)?|请告诉我|告诉我|麻烦告诉我|我想知道)[，,\s]*", "", text)
+    text = re.sub(r"(?:你都不知道|你不知道|呢|呀|啊|吗)$", "", text).strip()
     if not text:
         return ""
-    if any(marker in text for marker in ("现在几点", "几点了", "当前时间", "现在时间", "北京时间", "what time", "current time", "time is it")):
+    # Match the whole question, not date/time words inside a merchant task.
+    # Keep this small standalone grammar aligned with the frontend fast path.
+    if re.fullmatch(r"现在几点(?:了|钟)?|几点了|当前时间|现在时间|北京时间(?:现在)?(?:是)?(?:几点(?:了|钟)?)?", text):
         return "time"
-    if any(marker in text for marker in ("今天几号", "今天日期", "今天是几号", "今天星期几", "今天周几", "current date", "today's date", "date today")):
+    if re.fullmatch(r"今天(?:是)?(?:几号|星期几|周几)|今天(?:的)?日期(?:是什么|是多少)?|今日日期|现在是几月几号", text):
+        return "date"
+    if re.fullmatch(r"(?:please\s+)?(?:tell me\s+)?(?:what time(?: is it)?|(?:what is|what's) (?:the )?(?:current time|time)|current time|time is it)(?:,?\s+please)?", text):
+        return "time"
+    if re.fullmatch(r"(?:please\s+)?(?:tell me\s+)?(?:(?:what is|what's) )?(?:the )?(?:current date|today'?s date|date today)(?:,?\s+please)?", text):
         return "date"
     return ""
 
 
 def _classify_ai_ceo_capability_request(message: str) -> str:
-    text = _normalized_text(message)
+    text = str(message or "").strip().lower()
+    text = re.sub(r"^(?:你好|您好)[，,\s]*", "", text)
+    text = re.sub(r"^(?:请问(?:一下)?|请告诉我|告诉我|麻烦告诉我|我想知道)[，,\s]*", "", text)
     if not text:
         return ""
-    subject_markers = ("你", "ai", "aiceo", "ai ceo", "捷境", "deepseek", "大模型")
-    capability_markers = (
-        "连接网络",
-        "接网络",
-        "有联网",
-        "能联网",
-        "联网了吗",
-        "联网搜索",
-        "实时搜索",
-        "连接大模型",
-        "接大模型",
-        "什么大模型",
-        "哪个大模型",
-        "用什么模型",
-        "用哪个模型",
-        "当前模型",
-        "模型状态",
-        "ai 连接",
-        "ai连接",
-        "为什么不可用",
-        "为啥不可用",
-        "怎么不可用",
-        "怎么不能用",
-        "ai 不可用",
-        "ai不可用",
-        "接 deepseek",
-        "连 deepseek",
-        "连接 deepseek",
-        "connected to the internet",
-        "web search",
-        "deepseek connected",
+    # Every clause must ask only about this assistant's connection/model.
+    # "Can you search ... for a product" and quoted questions need normal routing.
+    subject = r"(?:你(?:们)?(?:的)?|ai(?:ceo)?|捷境|deepseek|大模型)?(?:现在|目前|当前)?"
+    chinese_bodies = (
+        r"(?:有|已经|已)?(?:是否|有没有|能不能|可以|能|会)?(?:连(?:接)?(?:到)?(?:网络|deepseek|大模型)|接(?:入)?deepseek|联网(?:搜索)?|实时搜索)(?:了)?(?:吗|没有|呢|呀|啊)?",
+        r"(?:是)?(?:用(?:的)?|使用(?:的)?|接(?:的)?|连接(?:的)?)?(?:什么|哪个|哪种)(?:大模型|模型)(?:吗|呢|呀|啊)?",
+        r"(?:ai)?(?:连接|模型)(?:状态)?(?:是(?:什么|哪个))?(?:怎么样|如何|正常(?:吗)?|可用(?:吗)?|吗)?",
+        r"(?:为什么|为啥|怎么)(?:不可用|不能用|没有联网|不能联网)",
     )
-    question_markers = ("吗", "有没有", "是否", "现在", "状态", "能不能", "可以不", "?")
-    if any(subject in text for subject in subject_markers) and any(marker in text for marker in capability_markers):
-        return "capability_status"
-    if any(marker in text for marker in capability_markers) and any(marker in text for marker in question_markers):
-        return "capability_status"
-    return ""
+    english = (
+        r"(?:are you|is (?:ai|deepseek)) (?:currently )?connected to (?:the )?(?:internet|web|deepseek)",
+        r"can you (?:search (?:the )?web|browse (?:the )?(?:internet|web))",
+        r"(?:what|which) (?:ai )?model (?:are you(?: using)?|do you use)",
+        r"(?:ai|model|web search|deepseek) (?:connection )?status",
+    )
+    clauses = [part.strip() for part in re.split(r"[，,。.;；?？!！\n]+", text) if part.strip()]
+    for clause in clauses:
+        compact = re.sub(r"\s+", "", clause)
+        if any(re.fullmatch(subject + body, compact) for body in chinese_bodies):
+            continue
+        if any(re.fullmatch(pattern, clause) for pattern in english):
+            continue
+        return ""
+    return "capability_status" if clauses else ""
 
 
 def _store_model_connection_context(
@@ -1391,6 +2252,31 @@ def _platform_model_default_context() -> dict[str, Any]:
     }
 
 
+def build_public_search_capability_status() -> dict[str, Any]:
+    """Safe configuration projection; no live request or credential metadata."""
+    enabled = _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True)
+    fallback_enabled = enabled and _env_enabled("JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED", default=True)
+    configured = bool(enabled and PublicSearchProbeAdapter().provider_status(_public_search_provider()).get("configured"))
+    return {
+        "enabled": enabled,
+        "configured": configured,
+        "fallback_enabled": fallback_enabled,
+        "available": enabled and (configured or fallback_enabled),
+        "status": "disabled" if not enabled else "configured" if configured else "fallback_only" if fallback_enabled else "not_configured",
+        "live_probe_performed": False,
+        "secret_exposed": False,
+    }
+
+
+def _public_search_provider() -> str:
+    return _safe_text(
+        os.environ.get("JIEJING_AI_CEO_SEARCH_PROVIDER")
+        or os.environ.get("JIEJING_PUBLIC_SEARCH_PROVIDER")
+        or "tavily",
+        limit=60,
+    )
+
+
 def _ai_ceo_capability_answer(model_context: dict[str, Any], model_connection: dict[str, Any] | None = None) -> str:
     provider = _safe_text(model_context.get("provider_label") or model_context.get("provider_key") or model_context.get("name") or "AI", limit=80) or "AI"
     model = _safe_text(model_context.get("model") or "", limit=80)
@@ -1406,15 +2292,15 @@ def _ai_ceo_capability_answer(model_context: dict[str, Any], model_connection: d
     else:
         connection_ready = True
         ai_label = f"{provider} / {model}" if model else provider
-    search_status = PublicSearchProbeAdapter().provider_status("tavily")
-    generic_search_ready = bool(search_status.get("configured")) and _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True)
-    builtin_web_ready = _env_enabled("JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED", default=True)
-    if generic_search_ready:
-        search_line = "通用实时搜索已接入：最新新闻、网页资料、公开市场信息会先查来源，再给结论。"
-    elif builtin_web_ready:
-        search_line = "实时联网兜底已启用：通用网页、新闻 RSS 和公开股票报价会走后端公共来源检索，前端不会拿到任何搜索 key。"
+    search_status = build_public_search_capability_status()
+    if search_status["status"] == "configured":
+        search_line = "通用实时搜索已配置：需要最新信息时会尝试查找公开来源；能否取得结果以当次检索为准。"
+    elif search_status["status"] == "fallback_only":
+        search_line = "基础实时搜索已启用：可检索公开网页与资讯；覆盖范围和时效以当次可核对的来源为准。"
+    elif search_status["status"] == "disabled":
+        search_line = "实时搜索已暂停；不会发出联网搜索请求，也不会把已有知识当成最新事实。"
     else:
-        search_line = "通用实时搜索 provider 还没配置；需要最新网页信息时我会说明缺口，不会编。"
+        search_line = "实时搜索尚未配置；需要最新信息时会说明缺口，不会编造检索结果。"
     if not connection_ready:
         model_line = "当前账号还没有可用的 AI 连接；捷境不会跨商家、跨账号使用别人的模型连接。到「设置 -> AI 与素材」查看当前账号连接状态。"
     elif model_connection.get("scope") == "account":
@@ -1515,10 +2401,13 @@ def _classify_external_realtime_request(message: str) -> str:
     text = _normalized_text(message)
     if not text:
         return ""
+    if _classify_local_clock_request(message):
+        return ""
     if _looks_like_market_news_request(text):
         return "news_search"
     current_markers = ("现在", "当前", "实时", "最新", "今天", "此刻", "刚刚", "now", "current", "latest", "today")
-    stock_markers = ("股价", "股票", "行情", "报价", "盘前", "盘后", "涨跌", "收盘", "市值", "share price", "stock price", "quote")
+    stock_markers = ("股价", "股價", "股票", "行情", "盘前", "盘后", "涨跌", "收盘", "收盤", "点位", "多少点", "多少點", "市值", "share price", "stock price", "index level")
+    ambiguous_quote_markers = ("报价", "quote", "close")
     market_entities = (
         "英伟达",
         "nvidia",
@@ -1529,6 +2418,9 @@ def _classify_external_realtime_request(message: str) -> str:
         "苹果",
         "aapl",
         "纳斯达克",
+        "納斯達克",
+        "纳指",
+        "納指",
         "nasdaq",
         "标普",
         "s&p",
@@ -1536,6 +2428,8 @@ def _classify_external_realtime_request(message: str) -> str:
     if any(marker in text for marker in stock_markers) and (
         any(entity in text for entity in market_entities) or any(marker in text for marker in current_markers)
     ):
+        return "stock_quote"
+    if any(marker in text for marker in ambiguous_quote_markers) and any(entity in text for entity in market_entities):
         return "stock_quote"
     if any(marker in text for marker in ("最新新闻", "今天新闻", "实时新闻", "刚刚发生", "热搜", "news today", "latest news")):
         return "news_search"
@@ -1551,7 +2445,11 @@ def _classify_external_realtime_request(message: str) -> str:
         return "news_search"
     if any(marker in text for marker in ("帮我搜", "联网查", "搜索一下", "google 一下", "google一下", "web search", "search web")):
         return "web_search"
-    return ""
+    # A merchant describing missing current supplier facts is still supplying
+    # workflow context. Explicit searches above retain their existing route.
+    if _looks_like_ebay_workflow(text):
+        return ""
+    return timely_request_kind(message)
 
 
 def _run_realtime_search(
@@ -1561,15 +2459,14 @@ def _run_realtime_search(
     timeout_seconds: int | None = None,
     max_results: int | None = None,
     search_depth: str | None = None,
+    temporal_contract: dict[str, Any] | None = None,
+    query_override: str = "",
 ) -> dict[str, Any]:
-    provider = _safe_text(
-        os.environ.get("JIEJING_AI_CEO_SEARCH_PROVIDER")
-        or os.environ.get("JIEJING_PUBLIC_SEARCH_PROVIDER")
-        or "tavily",
-        limit=60,
-    )
+    provider = _public_search_provider()
     adapter = PublicSearchProbeAdapter()
-    query = _realtime_search_query(kind=kind, message=message)
+    # Semantic queries have already passed the 900-character schema bound.
+    # Keep trailing constraints intact at the actual provider boundary.
+    query = _safe_text(query_override, limit=900) or _realtime_search_query(kind=kind, message=message, temporal_contract=temporal_contract)
     timeout_seconds = (
         _bounded_int(timeout_seconds, default=4, minimum=1, maximum=20)
         if timeout_seconds is not None
@@ -1588,6 +2485,20 @@ def _run_realtime_search(
     )
     live_enabled = _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True)
     captured_at = now_iso()
+    # This switch covers every provider, the public fallback, and cached context.
+    # Do not resolve credentials or transmit the query when it is disabled.
+    if not live_enabled:
+        return {
+            "status": "blocked",
+            "blocked_by": ["public_search_disabled"],
+            "provider": provider,
+            "query": query,
+            "captured_at": captured_at,
+            "source_records": [],
+            **budget_fields,
+            "frontend_gets_search_api_key": False,
+            "secret_exposed": False,
+        }
     status = adapter.provider_status(provider)
     if not status.get("configured"):
         builtin = _run_builtin_public_realtime_source(
@@ -1809,10 +2720,61 @@ def _workflow_handoff_id(*parts: Any) -> str:
     return f"{prefix}_{digest}"
 
 
-def _realtime_search_query(*, kind: str, message: str) -> str:
+def _market_index_name(message: str) -> str:
+    text = str(message).lower()
+    if re.search(r"nasdaq[\s-]*100|纳(?:斯达克|指)\s*100|納(?:斯達克|指)\s*100|\bndx\b", text):
+        return "NASDAQ-100 NDX"
+    if any(word in text for word in ("纳斯达克", "納斯達克", "纳指", "納指", "nasdaq", "ixic")):
+        return "NASDAQ Composite COMP IXIC"
+    if any(word in text for word in ("标普", "s&p 500", "spx")):
+        return "S&P 500 SPX"
+    if any(word in text for word in ("道琼斯", "道指", "dow jones")):
+        return "Dow Jones Industrial Average DJI"
+    return ""
+
+
+def _market_time_context(*, message: str) -> dict[str, Any]:
+    """Search calendar anchor, not proof of exchange opening/closing."""
+    current = datetime.fromisoformat(now_iso().replace("Z", "+00:00"))
+    market_now = new_york_market_time(current)
+    anchor = market_now.date()
+    if market_now.hour < 16:
+        anchor -= timedelta(days=1)
+    while anchor.weekday() >= 5:
+        anchor -= timedelta(days=1)
+    return {"server_now": current.isoformat(), "exchange_timezone": "America/New_York",
+            "exchange_now": market_now.isoformat(), "exchange_calendar_date": market_now.date().isoformat(),
+            "search_session_anchor_date": anchor.isoformat(), "session_calendar_verified": False,
+            "calendar_note": "仅工作日检索锚点，不是已核验交易日；节假日、提前收盘和行情日期必须由来源确认。",
+            "requested_index": _market_index_name(message)}
+
+
+def _realtime_search_query(*, kind: str, message: str, temporal_contract: dict[str, Any] | None = None) -> str:
+    # Detect product work before compacting the request. Candidate names often
+    # follow the merchant's constraints, beyond the old 260-character cutoff.
+    if kind == "web_search" and (
+        _looks_like_product_selection_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)
+        or _looks_like_market_evidence_followup(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)
+    ):
+        return _ebay_product_selection_search_query(message)
     text = _safe_text(message, limit=260)
     lowered = text.lower()
+    clock = temporal_contract or temporal_evidence_contract(text, kind, now=now_iso())
+    requested_date = clock.get("requested_date") or clock.get("user_calendar_date")
+    temporal_query = f"as of {requested_date} official primary sources publication or update date"
+    if kind == "company_research":
+        symbol = _stock_symbol_from_message(text)
+        entity = symbol or text
+        return (
+            f"{entity} latest fundamentals earnings revenue margin cash flow debt valuation risks "
+            "SEC filings investor relations reliable sources"
+        )
     if kind == "stock_quote":
+        index_name = _market_index_name(text)
+        if index_name:
+            clock = _market_time_context(message=text)
+            return (f"{index_name} {text} {clock.get('search_session_anchor_date', '')} "
+                    "latest completed trading session close points change trading date official source")
         if any(marker in lowered for marker in ("英伟达", "nvidia", "nvda")):
             return "NVDA NVIDIA current stock price today quote official market source"
         if any(marker in lowered for marker in ("特斯拉", "tesla", "tsla")):
@@ -1821,11 +2783,11 @@ def _realtime_search_query(*, kind: str, message: str) -> str:
             return "AAPL Apple current stock price today quote official market source"
         return f"{text} current stock price quote official market source"
     if kind == "exchange_rate":
-        return f"{text} current exchange rate official source"
+        return f"{text} exchange rate {temporal_query}"
     if kind == "weather":
-        return f"{text} current weather official forecast"
+        return f"{text} weather forecast {temporal_query}"
     if kind == "news_search":
-        return f"{text} latest news reliable sources"
+        return f"{text} latest news {temporal_query}"
     if kind == "web_search" and _looks_like_platform_rule_request(
         message=text,
         route=AI_CEO_ROUTE_EBAY_WORKFLOW,
@@ -1836,7 +2798,7 @@ def _realtime_search_query(*, kind: str, message: str) -> str:
         route=AI_CEO_ROUTE_EBAY_WORKFLOW,
     ):
         return _ebay_product_selection_search_query(text)
-    return f"{text} reliable web sources"
+    return f"{text} {temporal_query}" if timely_request_kind(text) else f"{text} reliable web sources"
 
 
 def _ebay_platform_rule_search_query(message: str) -> str:
@@ -1852,16 +2814,193 @@ def _ebay_platform_rule_search_query(message: str) -> str:
 
 
 def _ebay_product_selection_search_query(message: str) -> str:
+    return _ebay_product_selection_search_queries(message)[0]
+
+
+def _ebay_product_search_terms(message: str) -> list[str]:
+    """Keep explicitly supplied names; do not invent a product or use old history."""
+    text = _safe_text(message, limit=900)
+    generic = set("ebay us usa usd item id sold completed listing listings product products research market price prices tools source sources english compare and or on for the a an lightweight small parcel non electric no battery low return risk fragile".split())
+    names: list[str] = []
+    excluded = [name for clause in re.split(r"[，,。；;\n]", text)
+                for name in _explicitly_excluded_candidate_names(clause)]
+
+    def add(value: str) -> None:
+        value = re.sub(r"\s+", " ", value).strip(" \"'“”‘’：:，,。.")
+        words = re.findall(r"[a-z]+", value.lower())
+        if not 3 <= len(value) <= 90 or (words and not any(word not in generic for word in words)):
+            return
+        if any(_candidate_name_matches_exclusion(name, value) for name in excluded):
+            return
+        if value.lower() not in {name.lower() for name in names}:
+            names.append(value)
+
+    # Mixed-language merchant requests commonly supply exact English search
+    # phrases. Prefer those to a translated project title for the same item.
+    if re.search(r"[\u4e00-\u9fff]", text):
+        for match in re.finditer(r"[A-Za-z][A-Za-z0-9'-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9'&/-]*){1,11}", text):
+            prefix = re.split(r"[，,。；;\n]", text[:match.start()])[-1]
+            if not re.search(r"(?:不要|不得|禁止|不沿用|不复用|排除)[^。；;\n]*$", prefix):
+                add(match.group())
+    if not names:
+        for match in re.finditer(r'["“]([^"”\n]{3,90})["”]', text):
+            if not re.search(r"[\u4e00-\u9fff]", match.group(1)) or re.search(
+                r"(?:当前|候选|商品|产品|调研|比较|研究|关键词|搜索)\s*$", text[max(0, match.start()-12):match.start()]
+            ):
+                add(match.group(1))
+    if not names:
+        for match in re.finditer(r"(?:商品名称|产品名称|目标商品|商品方向|关键词|搜索词)\s*[:：]\s*([^。；;\n]{3,180})", text):
+            for value in re.split(r"[、，,]", match.group(1)):
+                add(value)
+    if not names and not re.search(r"[\u4e00-\u9fff]", text):
+        match = re.search(r"(?:compare|research|product ideas\s*:)\s+(.+?)(?:\s+(?:on|for)\s+ebay|[.;]|$)", text, re.I)
+        if match:
+            for value in re.split(r",|\s+and\s+", match.group(1), flags=re.I):
+                add(value)
+    return names[:3]
+
+
+def _ebay_product_selection_search_queries(message: str) -> list[str]:
+    names = _ebay_product_search_terms(message)
+    if names:
+        return [f"site:ebay.com/itm/ {name} eBay US price USD" for name in names]
     text = _normalized_text(message)
-    constraints = ["eBay US", "product research", "niche demand", "sold listings"]
+    constraints = ["site:ebay.com/itm/", "eBay US", "price USD"]
     if any(marker in text for marker in ("轻小", "小件", "轻量", "small parcel", "lightweight")):
-        constraints.extend(["lightweight", "small parcel"])
+        constraints.extend(["lightweight", "small"])
     if any(marker in text for marker in ("不带电", "无电", "非电子", "no battery", "non-electric")):
-        constraints.extend(["non-electric", "no battery"])
-    if any(marker in text for marker in ("低售后", "低退货", "low return")):
-        constraints.append("low return risk")
-    year = datetime.now(timezone.utc).year
-    return " ".join(dict.fromkeys([*constraints, str(year), "marketplace trends"]))
+        constraints.append("non-electric")
+    return [" ".join(dict.fromkeys(constraints))]
+
+
+def _run_product_selection_web_search(*, message: str, budget: dict[str, Any],
+                                     research_queries: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    """At most three independent, bounded searches; never an extra model call."""
+    # The semantic planner supplies bounded subjects and exact queries. The
+    # same product-source filter, balanced window and coverage report still run.
+    queries = [item["query"] for item in research_queries] if research_queries is not None else _ebay_product_selection_search_queries(message)[:3]
+    candidates = [item["subject"] for item in research_queries] if research_queries is not None else _ebay_product_search_terms(message)
+    # The model chooses products and wording. The evidence adapter owns the
+    # fixed eBay-US item-page boundary it already enforces on returned URLs.
+    # Apply that same scope before searching; broad /b or /sch results are not
+    # useful evidence. Preserve phrases, exclusions, and the original plan.
+    queries = [_ebay_item_evidence_query(query) for query in queries]
+
+    def search(query: str) -> dict[str, Any]:
+        try:
+            return _run_realtime_search(
+                kind="web_search", message=message, query_override=query,
+                timeout_seconds=budget["timeout_seconds"],
+                max_results=budget["max_results"], search_depth=budget["search_depth"],
+            )
+        except Exception:
+            # A partial provider failure must neither discard the other
+            # candidates nor expose a transport error containing credentials.
+            return {"status": "blocked", "blocked_by": ["public_search_provider_error"],
+                    "query": query, "source_records": [], "secret_exposed": False}
+
+    if len(queries) == 1:
+        searches = [search(queries[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+            searches = list(pool.map(search, queries))
+    captured_at = now_iso()
+    groups: list[list[dict[str, Any]]] = []
+    non_item_count = 0
+    for query_index, (query, result) in enumerate(zip(queries, searches)):
+        group = []
+        for record in result.get("source_records") or []:
+            url = _public_source_http_url(str(record.get("url") or ""))
+            parsed = urlparse(url)
+            host = str(parsed.hostname or "").lower()
+            is_item = (host == "ebay.com" or host.endswith(".ebay.com")) and bool(
+                re.fullmatch(r"/itm/(?:[^/]+/)?\d{9,15}/?", parsed.path)
+            )
+            candidate = candidates[query_index] if query_index < len(candidates) else ""
+            if not is_item or (candidate and not _product_source_matches_candidate(record, candidate)):
+                non_item_count += 1
+                continue
+            group.append({**record, "query": query, "market_evidence_role": "item_listing_reference",
+                          "verified_transaction": False, "merchant_product_facts_confirmed": False})
+        groups.append(group)
+    # One source per candidate first; a popular candidate must not crowd out
+    # the other candidates in the model's bounded source window.
+    balanced = [group[index] for index in range(5) for group in groups if index < len(group)]
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in balanced:
+        canonical = _canonical_public_source_url(record["url"])
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        records.append({**record, "citation_id": f"S{len(records) + 1}"})
+        if len(records) >= 5:
+            break
+    evidence = {
+        "contract_version": "product_listing_search_evidence_v1",
+        "search_queries": queries, "search_query_count": len(queries),
+        "failed_query_count": sum(item.get("status") != "ready" for item in searches),
+        "query_coverage": [{"query": query, "item_source_count": len(group)} for query, group in zip(queries, groups)],
+        "item_source_count": len(records), "non_item_source_count": non_item_count,
+        "sales_verification": "not_established", "merchant_product_facts_confirmed": False,
+        "current_availability_verification": "not_established",
+        "rule": "只可引用片段明确出现的商品和标价；检索时间不是商品或成交日期。商品页链接、在售标价和搜索摘要均不证明当前在售、已售成交、销量、需求或退货率；无证据逐项写未验证。",
+    }
+    return {
+        **searches[0], "status": "ready" if records else "blocked",
+        "query": " | ".join(queries), "captured_at": captured_at,
+        "source_records": records, "product_research_evidence": evidence,
+        "blocked_by": [] if records else list(dict.fromkeys([
+            "candidate_product_sources_missing", *[code for item in searches for code in item.get("blocked_by") or []],
+        ])),
+        "summary": "候选商品页面检索；商品标价不等于成交证据。" if records else "未获得候选商品页面，工具教程不作为商品市场证据。",
+        "secret_exposed": False,
+    }
+
+
+def _ebay_item_evidence_query(query: str) -> str:
+    if re.search(r"(?<!\S)site:(?:https?://)?(?:www\.)?ebay\.com/itm/?(?=\s|$)", query, re.I):
+        return query
+    scoped, count = re.subn(
+        r"(?<!\S)site:(?:https?://)?(?:www\.)?ebay\.com(?:/(?:itm/?)?)?(?=\s|$)",
+        "site:ebay.com/itm/", query, flags=re.I,
+    )
+    return scoped if count else "site:ebay.com/itm/ " + query
+
+
+def _product_candidate_aliases(candidate: str) -> list[str]:
+    """Recognize explicit bilingual labels, without translating or guessing."""
+    if not re.search(r"[\u4e00-\u9fff]", candidate):
+        return [candidate.strip().lower()]
+    aliases = []
+    for part in re.split(r"[/、]", candidate.lower()):
+        part = part.strip()
+        if len(part) < 2:
+            continue
+        segments = [value.strip() for value in re.split(
+            r"[（）()]|(?<=[\u4e00-\u9fff])\s+(?=[a-z])|(?<=[a-z])\s+(?=[\u4e00-\u9fff])", part) if value.strip()]
+        chinese = [value for value in segments if re.search(r"[\u4e00-\u9fff]", value) and not re.search(r"[a-z]", value)]
+        english = [value for value in segments if not re.search(r"[\u4e00-\u9fff]", value)
+                   and len(re.findall(r"[a-z]{3,}", value)) >= 2]
+        # A lone acronym, size or model number is not an English product alias.
+        aliases.extend(chinese + english if chinese and english else [part])
+    return list(dict.fromkeys(aliases))
+
+
+def _product_source_matches_candidate(record: dict[str, Any], candidate: str) -> bool:
+    """Conservative relevance, not proof of price, availability or a sale."""
+    searchable = _normalized_text(f"{record.get('title', '')} {record.get('snippet', '')}")
+    source_terms = {word.rstrip("s") for word in re.findall(r"[a-z]{3,}", searchable)}
+    for alias in _product_candidate_aliases(candidate):
+        if re.search(r"[\u4e00-\u9fff]", alias):
+            if alias in searchable:
+                return True
+            continue
+        terms = [word.rstrip("s") for word in re.findall(r"[a-z]{3,}", alias)
+                 if word not in {"and", "for", "with", "set", "pack", "kit", "the"}]
+        if terms and terms[-1] in source_terms and sum(term in source_terms for term in terms) >= (len(terms) * 3 + 4) // 5:
+            return True
+    return False
 
 
 def _run_builtin_public_realtime_source(
@@ -2139,8 +3278,12 @@ def _normalize_public_search_url(value: Any) -> str:
         return ""
     if url.startswith("//"):
         url = "https:" + url
-    parsed = urllib.parse.urlparse(url)
-    if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return ""
+    host = str(parsed.hostname or "").lower()
+    if (host == "duckduckgo.com" or host.endswith(".duckduckgo.com")) and parsed.path.startswith("/l/"):
         target = urllib.parse.parse_qs(parsed.query).get("uddg", [""])[0]
         if target:
             return urllib.parse.unquote(target)
@@ -2264,6 +3407,7 @@ def _source_records_from_search_snapshot(snapshot: dict[str, Any]) -> list[dict[
                 "domain": domain,
                 "snippet": snippet,
                 "published_at": _safe_text(item.get("published_at") or item.get("published_date") or "", limit=100),
+                "updated_at": _safe_text(item.get("updated_at") or "", limit=100),
                 "captured_at": _safe_text(item.get("captured_at") or "", limit=80),
                 "source_type": "live_public_search",
                 "provider": provider,
@@ -2277,6 +3421,25 @@ def _source_records_from_search_snapshot(snapshot: dict[str, Any]) -> list[dict[
 def _fallback_realtime_search_answer(kind: str, realtime_search: dict[str, Any]) -> str:
     records = realtime_search.get("source_records") if isinstance(realtime_search.get("source_records"), list) else []
     captured_at = _safe_text(realtime_search.get("captured_at") or "", limit=80)
+    if realtime_search.get("temporal_evidence_contract"):
+        links = []
+        for record in records[:3]:
+            url = _public_source_http_url(str(record.get("url") or ""))
+            if url:
+                links.append(f"[{_domain_from_url(url)}]({url})")
+        return temporal_evidence_fallback(
+            records, conflict="unresolved_source_conflict" in (realtime_search.get("temporal_evidence_blocked_by") or []),
+        ) + ("\n\n可核对来源：" + "、".join(links) if links else "")
+    if kind == "stock_quote":
+        # Never launder the same unverified numbers through a fallback.
+        links = []
+        for record in records[:3]:
+            url = _public_source_http_url(str(record.get("url") or ""))
+            if url:
+                links.append(f"[{_domain_from_url(url)}]({url})")
+        return ("本次未核实到与所问股票或指数、交易日期一致的行情，暂不能确认收盘点位或涨跌。"
+                "知道当前日期不等于已经取得该交易日的收盘数据；搜索到的旧报价不能当作最新行情。"
+                + ("\n\n可核对来源：" + "、".join(links) if links else ""))
     if not records:
         return "我尝试了实时搜索，但当前没有拿到足够来源。这个问题不能用旧知识硬答，需要换一个搜索词或检查后端搜索 provider。"
     intro = "我已查到公开网页来源，但当前来源片段不足以让我直接确认精确实时数值。" if kind == "stock_quote" else "我已查到公开网页来源，先按来源给你一个简短结论。"
@@ -2309,7 +3472,9 @@ def _realtime_answer_needs_repair(
     )
     if not policy_quality.get("accepted"):
         return True
-    minimum_length = 80 if kind in {"stock_quote", "exchange_rate", "weather"} else 120
+    if kind == "stock_quote":
+        return not market_quote_answer_quality(text, source_records, message=message, now=now_iso())["accepted"]
+    minimum_length = 80 if kind in {"exchange_rate", "weather"} else 120
     if source_records and len(text) < minimum_length:
         return True
     refusal_markers = ("无法给出", "无法分析", "不能分析", "无法判断", "不能判断")
@@ -2319,17 +3484,34 @@ def _realtime_answer_needs_repair(
 def _domain_from_url(url: str) -> str:
     if not url:
         return ""
-    return urlparse(url if "://" in url else f"https://{url}").netloc.lower().removeprefix("www.")
+    try:
+        return str(urlparse(url if "://" in url else f"https://{url}").hostname or "").lower().removeprefix("www.")
+    except ValueError:
+        return ""
+
+
+def _public_source_http_url(value: str) -> str:
+    """Only attributable HTTP(S) links may become evidence for an AI answer."""
+    try:
+        safe_url = _normalize_public_search_url(value)
+        if not safe_url or re.search(r"[\x00-\x20\x7f\\]", safe_url):
+            return ""
+        parsed = urlparse(safe_url)
+        if parsed.scheme.lower() not in {"https", "http"} or not parsed.hostname:
+            return ""
+        if parsed.username is not None or parsed.password is not None:
+            return ""
+        _ = parsed.port  # Reject malformed port values before rendering/ranking.
+    except ValueError:
+        return ""
+    return safe_url
 
 
 def _canonical_public_source_url(url: str) -> str:
-    safe_url = _normalize_public_search_url(url)
+    safe_url = _public_source_http_url(url)
     if not safe_url:
         return ""
-    try:
-        parsed = urlparse(safe_url)
-    except ValueError:
-        return ""
+    parsed = urlparse(safe_url)
     host = parsed.netloc.lower().removeprefix("www.")
     path = re.sub(r"/{2,}", "/", parsed.path or "/").rstrip("/") or "/"
     return f"{parsed.scheme.lower()}://{host}{path}"
@@ -2374,7 +3556,7 @@ def _public_source_trust(domain: str, query: str) -> tuple[int, str]:
         return 95, "official_or_primary"
     if any(host == item or host.endswith(f".{item}") for item in established_hosts):
         return 82, "established_publication"
-    if "ebay" in _normalized_text(query) and (host.endswith("ebayinc.com") or host.endswith("ebaystatic.com")):
+    if "ebay" in _normalized_text(query) and any(host == item or host.endswith(f".{item}") for item in ("ebayinc.com", "ebaystatic.com")):
         return 90, "official_marketplace"
     return 60, "public_reference"
 
@@ -2396,6 +3578,8 @@ def _public_source_freshness(published_at: str) -> tuple[int, str]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     age = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+    if age < -timedelta(minutes=5):
+        return 45, "unknown"
     if age <= timedelta(days=2):
         return 100, "current"
     if age <= timedelta(days=30):
@@ -2419,8 +3603,11 @@ def _rank_and_dedupe_public_sources(
         if not isinstance(raw, dict):
             continue
         title, title_instruction_removed = _sanitize_untrusted_source_text(raw.get("title") or "", limit=180)
-        url = _safe_text(raw.get("url") or "", limit=500)
-        domain = _safe_text(raw.get("domain") or _domain_from_url(url), limit=160)
+        url = _public_source_http_url(_safe_text(raw.get("url") or "", limit=500))
+        if not url:
+            continue
+        # Search-provider metadata is untrusted; the actual URL owns identity.
+        domain = str(urlparse(url).hostname or "").lower().removeprefix("www.")
         snippet, snippet_instruction_removed = _sanitize_untrusted_source_text(raw.get("snippet") or "", limit=520)
         canonical_url = _canonical_public_source_url(url)
         title_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())[:160]
@@ -2482,7 +3669,8 @@ def _sanitize_untrusted_source_text(value: Any, *, limit: int) -> tuple[str, boo
     raw = _safe_text(value, limit=limit)
     if not raw:
         return "", False
-    pieces = [item.strip() for item in re.split(r"(?<=[.!?。！？;；])\s*|\n+", raw) if item.strip()]
+    # Sentence sanitation must not split decimal prices or percentage values.
+    pieces = [item.strip() for item in re.split(r"(?<=[!?。！？;；])\s*|(?<=\.)(?!\s*\d)\s*|\n+", raw) if item.strip()]
     retained: list[str] = []
     removed = False
     for piece in pieces:
@@ -2553,7 +3741,9 @@ def _elapsed_ms(started_at: float) -> int:
 
 
 def _ai_ceo_model_timeout_seconds(*, route: str, realtime_kind: str = "") -> int:
-    if realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
+    if realtime_kind == "company_research":
+        default = _env_int("JIEJING_AI_CEO_RESEARCH_MODEL_TIMEOUT_SECONDS", default=30, minimum=8, maximum=90)
+    elif realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
         default = _env_int("JIEJING_AI_CEO_REALTIME_MODEL_TIMEOUT_SECONDS", default=18, minimum=5, maximum=60)
     elif route == AI_CEO_ROUTE_GENERAL:
         default = _env_int("JIEJING_AI_CEO_GENERAL_MODEL_TIMEOUT_SECONDS", default=16, minimum=5, maximum=60)
@@ -2563,7 +3753,9 @@ def _ai_ceo_model_timeout_seconds(*, route: str, realtime_kind: str = "") -> int
 
 
 def _ai_ceo_model_max_output_tokens(*, route: str, realtime_kind: str = "") -> int:
-    if realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
+    if realtime_kind == "company_research":
+        default = _env_int("JIEJING_AI_CEO_RESEARCH_MAX_OUTPUT_TOKENS", default=2200, minimum=512, maximum=4096)
+    elif realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
         default = _env_int("JIEJING_AI_CEO_REALTIME_MAX_OUTPUT_TOKENS", default=1000, minimum=128, maximum=2400)
     elif route == AI_CEO_ROUTE_GENERAL:
         default = _env_int("JIEJING_AI_CEO_GENERAL_MAX_OUTPUT_TOKENS", default=1200, minimum=128, maximum=2400)
@@ -2585,6 +3777,7 @@ def _generate_model_text_with_initial_retry(
     timeout_seconds = _ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind)
     max_output_tokens = _ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind)
     fallback_model_client = getattr(model_client, "jiejing_fallback_model_client", None)
+    empty_answer_client = getattr(model_client, "jiejing_empty_answer_model_client", None)
     try:
         result = model_client.generate_text(
             system_prompt=system_prompt,
@@ -2594,15 +3787,73 @@ def _generate_model_text_with_initial_retry(
             timeout_seconds=timeout_seconds,
             on_text_delta=on_text_delta,
         )
-        result = _complete_truncated_model_result(
-            model_client=model_client,
-            result=result,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            route=route,
-            realtime_kind=realtime_kind,
-            on_text_delta=on_text_delta,
+        partial_budget_recovery = bool(
+            empty_answer_client is not None
+            and str((result or {}).get("finish_reason") or "").lower() in {"length", "max_tokens", "max_output_tokens"}
+            and str((result or {}).get("text") or "").strip()
+            and _ai_ceo_answer_completeness_blockers(str((result or {}).get("text") or ""))
         )
+        if not partial_budget_recovery:
+            result = _complete_truncated_model_result(
+                model_client=model_client,
+                result=result,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                route=route,
+                realtime_kind=realtime_kind,
+                on_text_delta=on_text_delta,
+            )
+        recovery_client = empty_answer_client or fallback_model_client
+        if (_empty_answer_exhausted_output_budget(result) or partial_budget_recovery) and recovery_client is not None:
+            fallback_timeout = _env_int(
+                "JIEJING_AI_CEO_EMPTY_ANSWER_FALLBACK_TIMEOUT_SECONDS",
+                default=min(timeout_seconds, 24 if empty_answer_client else 10),
+                minimum=5,
+                maximum=45 if empty_answer_client else 20,
+            )
+            fallback_tokens = _env_int(
+                "JIEJING_AI_CEO_EMPTY_ANSWER_FALLBACK_MAX_OUTPUT_TOKENS",
+                default=min(max_output_tokens, 2400 if empty_answer_client else 1200),
+                minimum=256,
+                maximum=4096 if empty_answer_client else 2048,
+            )
+            fallback_prompt = (
+                system_prompt
+                + (" 上一次输出预算耗尽，商品表格或正文尚未完成；请从头返回简短、完整的结果，不续写残片。"
+                   if partial_budget_recovery else " 上一次深度思考耗尽了输出预算但没有生成商家可见正文。")
+                + "请直接、简洁地完成当前 merchant_message；未知商品事实继续标为待确认，不得重复分析过程。"
+            )
+            try:
+                fallback_result = recovery_client.generate_text(
+                    system_prompt=fallback_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.1,
+                    max_output_tokens=fallback_tokens,
+                    timeout_seconds=fallback_timeout,
+                    # A full rewrite replaces the incomplete body; do not
+                    # append its stream to the previous partial answer.
+                    on_text_delta=None if partial_budget_recovery else on_text_delta,
+                )
+                if empty_answer_client is None:
+                    fallback_result = _complete_truncated_model_result(
+                        model_client=recovery_client,
+                        result=fallback_result,
+                        system_prompt=fallback_prompt,
+                        user_prompt=user_prompt,
+                        route=route,
+                        realtime_kind=realtime_kind,
+                        on_text_delta=on_text_delta,
+                    )
+                else:
+                    # The private recovery's one extra request is a hard cost
+                    # boundary: no continuation or answer-repair recursion.
+                    fallback_result["bounded_empty_answer_recovery"] = True
+                    fallback_result["bounded_output_recovery"] = True
+                fallback_result["empty_answer_failover_used"] = True
+                fallback_result["primary_finish_reason"] = str(result.get("finish_reason") or "")
+                return fallback_result, _elapsed_ms(started_at), 1, None
+            except Exception as fallback_exc:  # pragma: no cover - provider dependent
+                return None, _elapsed_ms(started_at), 1, fallback_exc
         return result, _elapsed_ms(started_at), 0, None
     except Exception as exc:  # pragma: no cover - provider dependent
         failure_code, _failure_reason = _classify_model_failure(exc)
@@ -2678,6 +3929,16 @@ def _should_retry_initial_model_failure(*, failure_code: str, elapsed_ms: int, t
     if failure_code == "model_network_or_timeout" and elapsed_ms >= full_timeout_threshold_ms:
         return False
     return elapsed_ms <= retry_window_ms
+
+
+def _empty_answer_exhausted_output_budget(result: dict[str, Any] | None) -> bool:
+    if not isinstance(result, dict) or str(result.get("text") or "").strip():
+        return False
+    return str(result.get("finish_reason") or "").strip().lower() in {
+        "length",
+        "max_tokens",
+        "max_output_tokens",
+    }
 
 
 def _complete_truncated_model_result(
@@ -2763,8 +4024,62 @@ def _sanitize_ai_ceo_conversation_history(value: Any) -> list[dict[str, Any]]:
             AI_CEO_ROUTE_MERCHANT_RULE,
         }:
             route = AI_CEO_ROUTE_GENERAL
-        history.append({"user_text": user_text, "assistant_text": assistant_text, "route": route})
+        report_id = _safe_text(item.get("market_report_id") or "", limit=120)
+        history.append({"user_text": user_text, "assistant_text": assistant_text, "route": route,
+                        **({"market_report_id": report_id} if re.fullmatch(r"report_[A-Za-z0-9_-]+", report_id) else {})})
     return history
+
+
+def _merchant_disallows_web_search(message: str) -> bool:
+    return bool(re.search(
+        r"(?:不要|不得|不允许|禁止|无需|无须|不用|不再|不)(?:重新|再次|继续)?(?:联网|上网|搜索|检索)|"
+        r"\b(?:do not|don't|without|no)\s+(?:(?:web|internet|online)\s+)?(?:search(?:ing)?|brows(?:e|ing))\b",
+        message, re.IGNORECASE,
+    ))
+
+
+def _merchant_reuses_report_sources(message: str) -> bool:
+    for clause in re.split(r"[。！？;；，,\n]", message):
+        reuse = re.search(r"(?:沿用|复用|只用|仅用).{0,24}(?:来源|证据)", clause)
+        if reuse and not re.search(r"(?:不|不要|不得|禁止)(?:再|继续|重新)?$", clause[:reuse.start()]):
+            return True
+    return _merchant_disallows_web_search(message) and bool(re.search(
+        r"(?:修订|修正|纠正|更正)[^。！？;；\n]{0,24}(?:报告|调研)|"
+        r"\b(?:revise|correct)\b.{0,30}\breport\b", message, re.IGNORECASE))
+
+
+def _owned_report_source_context(*, repository: Any, company_id: str, store_id: str,
+                                 user_id: str, history: list[dict[str, Any]],
+                                 active_context: dict[str, Any]) -> dict[str, Any]:
+    """Resolve one report server-side; never promote client-supplied snippets.
+
+    Citation IDs are local to that report. Do not merge different reports or
+    silently fall back to a different project/account if the reference fails.
+    """
+    empty = {"status": "blocked", "source_records": [], "provider": "saved_report",
+             "blocked_by": ["previous_report_sources_unavailable"], "search_latency_ms": 0,
+             "used_for_model_prompt": False, "secret_exposed": False}
+    project_key = (active_context.get("listing_project_identity") or {}).get("key")
+    report_id = next((item.get("market_report_id") for item in reversed(history) if item.get("market_report_id")), "")
+    if not project_key or not report_id or not hasattr(repository, "get_report_for_company"):
+        return empty
+    report = repository.get_report_for_company(company_id=company_id, report_id=report_id) or {}
+    body = report.get("report") if isinstance(report.get("report"), dict) else {}
+    task = repository.get_task(company_id=company_id, task_id=report["task_id"]) if report.get("task_id") else {}
+    if (report.get("store_id") != store_id or not task or task.get("user_id") != user_id
+            or (body.get("listing_project_identity") or {}).get("key") != project_key):
+        return empty
+    records = _source_records_for_model(body.get("source_records") or [])
+    if not records:
+        return empty
+    return {**empty, "status": "ready", "blocked_by": [], "source_records": records, "cache_status": "report_reuse",
+            "used_for_model_prompt": True, "source_report_id": report_id,
+            "product_research_evidence": {
+                "current_availability_verification": "not_established", "sales_verification": "not_established",
+                "merchant_product_facts_confirmed": False,
+                "rule": "历史商品页只证明曾有相关页面，不能证明当前在售。来源日期与当前状态未核实时逐项写未验证；不可先断言在售再用末尾免责声明抵消。",
+            },
+            "summary": "沿用已保存报告的原始来源与原始检索日期，本轮未联网。历史回答不是新的事实证据。"}
 
 
 def _looks_like_contextual_followup(message: str) -> bool:
@@ -2884,6 +4199,7 @@ def _looks_like_explicit_rule_memory(text: str) -> bool:
 
 
 def _looks_like_high_risk_action(text: str) -> bool:
+    actionable_text = _without_negated_high_risk_actions(text)
     high_risk_patterns = (
         r"(现在|马上|直接|立刻|真实|正式).{0,12}(发布|上架|刊登|publish|list it)",
         r"(发布|上架|刊登|publish).{0,12}(到|去)?\s*ebay",
@@ -2896,11 +4212,86 @@ def _looks_like_high_risk_action(text: str) -> bool:
         r"(承诺买家|保证送达|敏感客服承诺|promise buyer)",
         r"(下架|结束 listing|end listing|delete offer|cleanup test listing)",
     )
-    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in high_risk_patterns)
+    return any(re.search(pattern, actionable_text, flags=re.IGNORECASE) for pattern in high_risk_patterns)
+
+
+def _without_negated_high_risk_actions(text: str) -> str:
+    """Remove explicit no-action constraints before detecting real writes.
+
+    Merchant intake often says things such as ``不要上传、复用或发布原图``
+    followed by ``不保存 eBay 草稿``. Those clauses describe a safety
+    boundary, not an instruction to execute a publish. Sentence pivots and
+    imperative words stop the coordinated-negation match, so an affirmative
+    follow-up still reaches the confirmation route.
+    """
+
+    safe_text = re.sub(
+        r"(?:真实|正式|公开)?\s*(?:发布|上架|刊登)前\s*(?:预检|检查|体检|核对|准备)",
+        "发布前检查",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    )
+    action_terms = (
+        r"发布|上架|刊登|publish|list it|改价|调整价格|改库存|调整库存|退款|退钱|refund|"
+        r"付款|采购付款|打款|投广告|开广告|修改政策|承诺买家|保证送达|下架|结束\s*listing|"
+        r"end\s*listing|delete\s*offer|真实写入"
+    )
+    # Strip the complete bounded list before stripping a single action; otherwise
+    # "不要发布、退款或付款" leaves the last two actions looking affirmative.
+    list_action = (
+        rf"(?:(?:自动|擅自|公开|最终|真实|正式|任何|进行|执行|触发|实际|平台)\s*){{0,3}}"
+        rf"(?:采购(?:下单|付款)?|(?:保存|创建|写入)\s*(?:eBay\s*)?(?:未发布)?草稿|{action_terms})"
+    )
+    prohibited_list = re.compile(
+        rf"(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)\s*"
+        rf"{list_action}(?:\s*(?:、|或|和|以及|及)\s*{list_action})+",
+        flags=re.IGNORECASE,
+    )
+    safe_text = prohibited_list.sub(" ", safe_text)
+    direct_negation = re.compile(
+        rf"(?:本轮|这轮|当前|现在|此次|这次)?\s*"
+        rf"(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)\s*"
+        rf"(?:(?:自动|擅自|公开|最终|真实|正式|直接|立即|立刻|任何|进行|执行|触发|实际|平台)\s*){{0,3}}"
+        rf"(?:{action_terms})",
+        flags=re.IGNORECASE,
+    )
+    coordinated_negation = re.compile(
+        rf"(?:本轮|这轮|当前|现在|此次|这次)?\s*"
+        rf"(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)"
+        rf"(?:(?!(?:但|但是|不过|然后|随后|现在|马上|请|帮我|直接|立即|立刻|真实|正式|[，,。；;！？!?])).){{0,32}}?"
+        rf"(?:{action_terms})",
+        flags=re.IGNORECASE,
+    )
+    cleaned = direct_negation.sub(" ", safe_text)
+    return coordinated_negation.sub(" ", cleaned)
 
 
 def _looks_like_ebay_workflow(text: str) -> bool:
+    # "listing", "刊登" and "上架" are platform-neutral commerce terms.  Only
+    # an explicit eBay mention may override another named platform.
+    explicit_ebay_markers = ("ebay",)
+    non_ebay_platform_markers = (
+        "淘宝",
+        "天猫",
+        "京东",
+        "拼多多",
+        "亚马逊",
+        "amazon",
+        "shopify",
+        "shopee",
+        "lazada",
+        "temu",
+        "tiktok shop",
+        "抖音小店",
+        "快手小店",
+        "微信小店",
+    )
+    if any(marker in text for marker in non_ebay_platform_markers) and not any(
+        marker in text for marker in explicit_ebay_markers
+    ):
+        return False
     concrete_verbs = (
+        "新建",
         "生成",
         "创建",
         "跑",
@@ -2934,6 +4325,15 @@ def _looks_like_ebay_workflow(text: str) -> bool:
         "recommend",
         "research",
         "analyze",
+        "继续",
+        "沿用",
+        "接着",
+        "承接",
+        "复用",
+        "复核",
+        "核对",
+        "检查",
+        "验收",
     )
     workflow_markers = (
         "ebay",
@@ -2943,6 +4343,7 @@ def _looks_like_ebay_workflow(text: str) -> bool:
         "ip 防侵权",
         "侵权",
         "刊登",
+        "上架",
         "上架资料",
         "铺货",
         "选品",
@@ -2969,10 +4370,30 @@ def _looks_like_ebay_workflow(text: str) -> bool:
         "确认中心",
         "决策中心",
         "利润模型",
-        "费用",
-        "毛利",
     )
     if any(marker in text for marker in workflow_markers) and any(verb in text for verb in concrete_verbs):
+        return True
+    finance_markers = ("费用", "毛利", "利润", "cost", "fee", "margin")
+    merchant_finance_context = (
+        "ebay",
+        "listing",
+        "店铺",
+        "订单",
+        "商品",
+        "sku",
+        "平台费",
+        "成交费",
+        "广告费",
+        "采购成本",
+        "商品成本",
+        "运费",
+        "履约",
+    )
+    if (
+        any(marker in text for marker in finance_markers)
+        and any(marker in text for marker in merchant_finance_context)
+        and any(verb in text for verb in concrete_verbs)
+    ):
         return True
     if "基于当前" in text and any(marker in text for marker in workflow_markers):
         return True
@@ -3044,7 +4465,7 @@ def _classify_model_failure(exc: Exception) -> tuple[str, str]:
         return "model_quota_or_billing_limited", "AI 用量、余额、套餐或服务商账单限制挡住了本次回复。"
     if "429" in lowered or any(item in lowered for item in ("rate limit", "rate_limit", "too many requests")):
         return "model_rate_limited", "AI 服务商当前请求较多，本次连接被临时限流。"
-    if any(item in lowered for item in ("timeout", "timed out", "connection", "network", "temporarily unavailable")):
+    if isinstance(exc, (TimeoutError, ConnectionError)) or any(item in lowered for item in ("timeout", "timed out", "connection", "network", "temporarily unavailable")):
         return "model_network_or_timeout", "AI 连接暂时不稳定或超时。"
     if "401" in lowered or "403" in lowered or any(item in lowered for item in ("unauthorized", "forbidden", "invalid api key")):
         return "model_auth_or_permission_error", "AI 服务商拒绝了这次连接，需要在设置里复核账户、权限或模型名称。"
@@ -3053,26 +4474,185 @@ def _classify_model_failure(exc: Exception) -> tuple[str, str]:
     return "model_provider_error", "AI 服务这次没有返回可展示内容。"
 
 
+def _active_listing_consistency_fallback(context: dict[str, Any]) -> str:
+    active = context.get("active_listing_context") if isinstance(context.get("active_listing_context"), dict) else {}
+    listing = active.get("listing") if isinstance(active.get("listing"), dict) else {}
+    media = active.get("media") if isinstance(active.get("media"), dict) else {}
+    draft = active.get("ebay_draft") if isinstance(active.get("ebay_draft"), dict) else {}
+    health = active.get("account_health") if isinstance(active.get("account_health"), dict) else {}
+    product = _safe_text(active.get("product_name") or "当前商品", limit=120)
+    sku = _safe_text(listing.get("sku") or "", limit=120)
+    offer_id = _safe_text(draft.get("offer_id") or "", limit=120)
+    offer_status = _safe_text(draft.get("offer_status") or "", limit=40).upper()
+    manifest_count = max(0, _safe_int(media.get("asset_manifest_count") or 0))
+    eligible_count = max(0, _safe_int(media.get("listing_eligible_asset_count") or 0))
+    rights_confirmed = media.get("rights_confirmed_for_listing_draft") is True and eligible_count > 0
+    fact_review_required = media.get("product_fact_review_required_before_publish") is True
+    missing = [
+        _safe_text(item, limit=80)
+        for item in (listing.get("missing_fact_keys") if isinstance(listing.get("missing_fact_keys"), list) else [])[:12]
+        if _safe_text(item, limit=80)
+    ]
+    lines = [f"当前项目状态已按捷境记录校正：{product}。"]
+    if sku:
+        lines.append(f"SKU {sku} 已存在，不是缺失项。")
+    if manifest_count:
+        lines.append(f"AssetManifest 已有 {manifest_count} 个素材，其中 {eligible_count} 个当前标记为可用于 Listing 草稿。")
+    if rights_confirmed:
+        lines.append("现有素材的 Listing 草稿使用权已确认，不是当前阻断项。")
+    if fact_review_required:
+        lines.append("商品事实、实物一致性和平台规则仍需在真实发布前复核；这与素材使用权是两项独立检查。")
+    if offer_id and offer_status == "UNPUBLISHED":
+        lines.append(f"eBay Offer {offer_id} 已保存，状态为 UNPUBLISHED，尚未公开发布；不会创建第二个 Offer。")
+    if missing:
+        lines.append(f"仍待补的商品事实：{'、'.join(missing)}。")
+    status = _safe_text(health.get("status") or "", limit=40).lower()
+    if status in {"restricted", "suspended", "payout_hold", "quota_limited"}:
+        lines.append("当前 eBay 账号状态仍阻断真实发布；流程停在只读预检和资料核验，不会重试 OAuth 或真实写入。")
+    lines.append("模型原回复与当前项目记录冲突，系统已拒绝该回复并保留审计记录。")
+    return "\n".join(lines)
+
+
+def _active_listing_answer_contradictions(*, answer: str, context: dict[str, Any]) -> list[str]:
+    active = context.get("active_listing_context") if isinstance(context.get("active_listing_context"), dict) else {}
+    listing = active.get("listing") if isinstance(active.get("listing"), dict) else {}
+    media = active.get("media") if isinstance(active.get("media"), dict) else {}
+    draft = active.get("ebay_draft") if isinstance(active.get("ebay_draft"), dict) else {}
+    text = _safe_text(answer, limit=12000)
+    blockers: list[str] = []
+    sku = _safe_text(listing.get("sku") or "", limit=120)
+    sku_claims = list(
+        re.finditer(r"sku[^。；;\n]{0,32}(?:未指定|未填写|缺失|没有|待补|阻断)", text, flags=re.IGNORECASE)
+    )
+    if sku and any(
+        not re.search(r"(?:不是|并非|不属于|不再是)[^。；;\n]{0,12}(?:缺失|未指定|未填写|待补|阻断)", match.group(0))
+        for match in sku_claims
+    ):
+        blockers.append("existing_sku_reported_missing")
+    manifest_count = _safe_int(media.get("asset_manifest_count") or 0)
+    eligible_count = _safe_int(media.get("listing_eligible_asset_count") or 0)
+    media_claims = list(
+        re.finditer(
+            r"(?:素材|图片|asset\s*manifest)[^。；;\n]{0,50}(?:尚未生成|没有生成|未生成|不存在|没有素材|为\s*0|不含[^。；;\n]{0,12}可(?:发布|用)|无可(?:发布|用))",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if max(manifest_count, eligible_count) > 0 and any(
+        not re.search(r"(?:不是|并非|不属于|不再是)[^。；;\n]{0,12}(?:未生成|不存在|没有素材|为\s*0|不含|无可)", match.group(0))
+        for match in media_claims
+    ):
+        blockers.append("existing_media_reported_missing")
+    rights_confirmed = media.get("rights_confirmed_for_listing_draft") is True and eligible_count > 0
+    media_rights_claims = list(
+        re.finditer(
+            r"(?:素材|图片)[^。；;\n]{0,36}(?:发布权|商业使用权|图片权利|使用权|授权)[^。；;\n]{0,24}(?:阻断|未确认|缺失|待补)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if rights_confirmed and any(
+        not re.search(
+            r"(?:不是|并非|不属于|不再是|已确认)[^。；;\n]{0,18}(?:阻断|未确认|缺失|待补)",
+            match.group(0),
+        )
+        for match in media_rights_claims
+    ):
+        blockers.append("existing_media_rights_reported_blocked")
+    offer_id = _safe_text(draft.get("offer_id") or "", limit=120)
+    offer_status = _safe_text(draft.get("offer_status") or "", limit=40).upper()
+    offer_claims = list(
+        re.finditer(
+            r"(?:offer|草稿)[^。；;\n]{0,40}(?:没有保存|未保存|不存在|尚未创建|没有草稿|未创建)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if offer_id and offer_status == "UNPUBLISHED" and any(
+        not re.search(r"(?:不是|并非|不属于|不再是)[^。；;\n]{0,12}(?:未保存|不存在|未创建|没有草稿)", match.group(0))
+        for match in offer_claims
+    ):
+        blockers.append("existing_unpublished_offer_reported_missing")
+    return list(dict.fromkeys(blockers))
+
+
+def _ai_ceo_answer_completeness_blockers(answer: str) -> list[str]:
+    """Detect transport-like truncation before a workflow answer becomes an artifact."""
+
+    text = _safe_text(answer, limit=12000).rstrip()
+    if not text:
+        return ["empty_model_answer"]
+    blockers: list[str] = []
+    if re.search(r"(?:^|\n)\s*\|\s*$", text):
+        blockers.append("model_answer_truncated_table")
+    if text.count("```") % 2:
+        blockers.append("model_answer_unclosed_code_fence")
+    if re.search(r"(?:[:：、，,；;（(]|(?:并且|以及|然后|包括|如下))\s*$", text):
+        blockers.append("model_answer_incomplete_ending")
+    return list(dict.fromkeys(blockers))
+
+
 def validate_ai_ceo_answer_quality(
     *,
     message: str,
     route: str,
     answer: str,
     source_records: list[dict[str, Any]] | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Reject workflow answers that cannot become the merchant's requested work item."""
 
+    completeness_blockers = _ai_ceo_answer_completeness_blockers(answer)
+    if completeness_blockers:
+        return {
+            "accepted": False,
+            "quality_gate": "answer_completeness_v1",
+            "blocked_by": completeness_blockers,
+            "secret_exposed": False,
+        }
+    context = context or {}
+    plan = context.get("semantic_plan") or {}
+    semantic_plan = is_semantic_plan(plan)
+    search = context.get("default_web_search") or {}
+    if (semantic_plan and plan.get("intent") == "research" and plan.get("search") == "web_search"
+            and search.get("status") != "ready"):
+        return {"accepted": False, "quality_gate": "product_listing_search_evidence_v1",
+                "blocked_by": search.get("blocked_by") or ["candidate_product_sources_missing"], "secret_exposed": False}
+    check_current_product = (
+        plan.get("project_action") == "current" if semantic_plan else not _explicit_new_listing_project_request(message)
+    )
+    active_listing_blockers = _active_listing_answer_contradictions(answer=answer, context=context) if check_current_product else []
+    if active_listing_blockers:
+        return {
+            "accepted": False,
+            "quality_gate": "active_listing_state_consistency_v1",
+            "blocked_by": active_listing_blockers,
+            "secret_exposed": False,
+        }
+    research_source_blockers = _research_source_answer_blockers(answer, source_records or []) if route == AI_CEO_ROUTE_EBAY_WORKFLOW else []
+    if semantic_plan and plan.get("intent") == "research":
+        research_source_blockers.extend(_semantic_research_candidate_source_blockers(
+            answer=answer, records=source_records or [], plan=plan))
+    if research_source_blockers:
+        return {"accepted": False, "quality_gate": "research_source_attribution_v1",
+                "blocked_by": research_source_blockers, "secret_exposed": False}
     source_quality = _platform_rule_answer_quality(
         message=message,
         route=route,
         answer=answer,
         source_records=source_records or [],
+        turn_plan=plan if semantic_plan else None,
     )
     if not source_quality.get("accepted"):
         return source_quality
-    if _looks_like_platform_rule_request(message=message, route=route) and source_records:
+    if not semantic_plan and _looks_like_platform_rule_request(message=message, route=route) and source_records:
         return source_quality
-    if not _looks_like_product_selection_request(message=message, route=route):
+    if (plan.get("research_delivery") == "evidence_comparison" if semantic_plan else
+            _looks_like_market_evidence_followup(message=message, route=route)):
+        return _market_evidence_followup_answer_quality(message=message, answer=answer)
+    selection_requested = (plan.get("research_delivery") == "candidate_selection" if semantic_plan else
+        not _looks_like_explicit_listing_intake(message) and _looks_like_product_selection_request(message=message, route=route))
+    if not selection_requested:
         return {
             "accepted": bool(_safe_text(answer, limit=6000)),
             "quality_gate": "non_selection_answer_present_v1",
@@ -3084,31 +4664,477 @@ def validate_ai_ceo_answer_quality(
     try:
         from .repository import _ai_ceo_market_product_candidates
 
-        candidates = _ai_ceo_market_product_candidates(message=message, answer=answer)
+        candidates = _ai_ceo_market_product_candidates(message="" if semantic_plan else message, answer=answer)
     except Exception:
         candidates = []
-    required_count = _requested_product_candidate_count(message)
+    required_count = plan["candidate_count"] if semantic_plan else _requested_product_candidate_count(message)
     candidate_count = len(candidates)
     first_window = _safe_text(answer, limit=900)
     first_candidate_visible = bool(
         candidates
         and any(_safe_text(item.get("name") or "", limit=140) in first_window for item in candidates[:required_count])
     )
-    accepted = candidate_count >= required_count and first_candidate_visible
+    constraint_violations = _selection_answer_constraint_violations(
+        message=message,
+        answer=answer,
+        context=context or {},
+        candidates=candidates,
+        source_records=source_records or [],
+    )
+    accepted = candidate_count >= required_count and first_candidate_visible and not constraint_violations
     blocked_by = []
     if candidate_count < required_count:
         blocked_by.append("missing_concrete_product_candidates")
     if candidates and not first_candidate_visible:
         blocked_by.append("candidate_products_not_visible_early")
+    blocked_by.extend(constraint_violations)
     return {
         "accepted": accepted,
-        "quality_gate": "ebay_product_selection_answer_v1",
+        "quality_gate": "ebay_product_selection_answer_v2",
         "candidate_count": candidate_count,
         "required_candidate_count": required_count,
         "first_candidate_visible": first_candidate_visible,
+        "constraint_violation_count": len(constraint_violations),
         "blocked_by": blocked_by or (["model_answer_not_grounded_to_request"] if not accepted else []),
         "secret_exposed": False,
     }
+
+
+def _semantic_research_candidate_source_blockers(*, answer: str, records: list[dict[str, Any]],
+                                               plan: dict[str, Any]) -> list[str]:
+    """Retain candidate-level attribution even for open discovery queries.
+
+    Subjects/queries come from the validated model plan; source matching uses
+    the existing conservative product filter, never a new intent classifier.
+    """
+    product_records = [item for item in records if isinstance(item, dict) and (
+        item.get("market_evidence_role") == "item_listing_reference"
+        or re.search(r"https://(?:www\.)?ebay\.com/itm/", str(item.get("url") or "")))]
+    if not product_records:
+        return []
+    from .repository import _ai_ceo_market_product_candidates
+    names = [item["name"] for item in _ai_ceo_market_product_candidates(message="", answer=answer)]
+    blocks = _selection_candidate_blocks(answer, candidate_names=names)
+    queries = plan.get("research_queries") or []
+    if not names and plan.get("research_delivery") == "single_product_analysis":
+        name = plan.get("product_name") or (queries[0]["subject"] if len(queries) == 1 else "")
+        names, blocks = ([name], [answer]) if name else ([], [])
+    if plan.get("research_delivery") == "evidence_comparison":
+        # Comparisons can mix cards and prose. Bind each following
+        # reference to its explicitly named planned subject, not to whichever
+        # of the globally available sources happens to match another product.
+        from .repository import (_ai_ceo_market_normalize_source_cells, _ai_ceo_market_split_comparison_tables,
+                                 _ai_ceo_market_table_product_column, _clean_ai_ceo_market_candidate_name)
+        table_blocks, remaining_lines = _ai_ceo_market_split_comparison_tables(
+            _ai_ceo_market_normalize_source_cells(answer))
+        prose_lines = []
+        product_column = None
+        for line in remaining_lines:
+            if not line.startswith("|"):
+                product_column = None
+            elif not re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                header_column = _ai_ceo_market_table_product_column(cells)
+                if header_column is not None:
+                    product_column = header_column
+                    continue
+                if product_column is not None and len(cells) > product_column:
+                    name = _clean_ai_ceo_market_candidate_name(cells[product_column])
+                    if name:
+                        table_blocks.append((name, line))
+                        continue
+            prose_lines.append(line)
+        # Reuse the established row/column table ownership. Only the remaining
+        # prose is segmented, so a table's peer sources cannot contaminate a
+        # product, and a correct table cannot conceal a wrong trailing winner.
+        prose = "\n".join(prose_lines)
+        subjects = [item["subject"] for item in queries] + [plan.get("product_name") or ""] + names
+        mentions = [(match.start(), match.end(), alias.strip())
+            for subject in subjects for part in re.split(r"[/、]", subject)
+            for alias in _product_candidate_aliases(part) if len(alias.strip()) >= 2
+            for match in re.finditer(re.escape(alias.strip()), prose, flags=re.IGNORECASE)]
+        spans: list[tuple[int, int, str]] = []
+        for start, end, name in sorted(mentions, key=lambda item: (item[0], -item[1])):
+            if not spans or start >= spans[-1][1]:
+                spans.append((start, end, name))
+        # Prefix or wholly unnamed citations have no safe subject binding.
+        # Retain them as an anonymous block so references cannot escape checks.
+        names = [name for name, _ in table_blocks] + [""] + [name for _, _, name in spans]
+        blocks = [block for _, block in table_blocks] + [prose[:spans[0][0]] if spans else prose] + [
+            prose[start:spans[index + 1][0] if index + 1 < len(spans) else len(prose)]
+            for index, (start, _, _) in enumerate(spans)]
+    by_id = {str(item.get("citation_id")): item for item in product_records if item.get("citation_id")}
+    by_url = {_canonical_public_source_url(str(item.get("url") or "")): item for item in product_records}
+    by_item_id = {match.group(1): item for item in product_records
+                  if (match := re.search(r"/itm/(?:[^/]+/)?(\d{9,15})(?:[/?#]|$)", str(item.get("url") or "")))}
+    for name, block in zip(names, blocks):
+        cited = [by_id[ref] for ref in dict.fromkeys(re.findall(r"\[(S\d+)\]", block)) if ref in by_id]
+        for group in re.findall(r"item\s*ids?\s*[:：#]?\s*(\d{9,15}(?:\s*[/,、]\s*\d{9,15})*)", block, flags=re.IGNORECASE):
+            for item_id in re.findall(r"\d{9,15}", group):
+                if item_id not in by_item_id:
+                    return ["research_citation_not_in_evidence"]
+                if by_item_id[item_id] not in cited:
+                    cited.append(by_item_id[item_id])
+        for url in re.findall(r"https?://[^\s\]<>|）)]+", block):
+            record = by_url.get(_canonical_public_source_url(url.rstrip(".,;。；，")))
+            if record is not None and record not in cited:
+                cited.append(record)
+        aliases = [name]
+        for item in queries:
+            subject = item["subject"]
+            if _normalized_candidate_name(name) in {
+                _normalized_candidate_name(alias) for part in subject.split("/") for alias in _product_candidate_aliases(part)
+            }:
+                aliases.append(subject)
+        if any(not any(alias and _product_source_matches_candidate(record, alias) for alias in aliases) for record in cited):
+            return ["research_candidate_source_mismatch"]
+    return []
+
+
+def _research_availability_statements(answer: str) -> list[str]:
+    """Pair Markdown availability labels with their values, not peer caveats.
+
+    A header such as '当前在售状态' is a question/field, not an assertion.
+    Only aligned tables are projected; malformed tables remain conservative.
+    Source/price/brand checks continue to inspect their original source cells.
+    """
+    lines = re.sub(r"[*_`]+", "", str(answer or "")).splitlines()
+    label = re.compile(r"(?:(?:当前|目前|现在)?(?:在售)?(?:状态|情况)|"
+                       r"(?:current\s+)?(?:availability|status))", re.I)
+
+    def cells(line: str) -> list[str]:
+        return [x.strip() for x in line.strip().strip("|").split("|")]
+
+    statements: list[str] = []
+    index = 0
+    while index < len(lines):
+        if not (lines[index].strip().startswith("|") and index + 1 < len(lines)
+                and re.fullmatch(r"\|?\s*[-:|\s]+\|?", lines[index + 1].strip())):
+            statements.append(lines[index])
+            index += 1
+            continue
+        headers = cells(lines[index])
+        end = index + 2
+        while end < len(lines) and lines[end].strip().startswith("|"):
+            end += 1
+        rows = [cells(line) for line in lines[index + 2:end]]
+        if len(headers) < 2 or not rows or any(len(row) != len(headers) for row in rows):
+            statements.extend(lines[index:end])
+        else:
+            # Do not hide affirmative assertions disguised as table headings.
+            statements.extend(header for header in headers if not label.fullmatch(header))
+            for row in rows:
+                if label.fullmatch(row[0]):
+                    statements.extend(f"{row[0]}：{value}" for value in row[1:])
+                else:
+                    statements.extend(f"{header}：{value}" for header, value in zip(headers, row))
+        index = end
+    return statements
+
+
+def _research_money_values(text: str) -> set[str]:
+    def number(value: str) -> str:
+        whole, _, fraction = value.replace(",", "").partition(".")
+        return str(int(whole)) + ("." + fraction.rstrip("0") if fraction.rstrip("0") else "")
+    values = re.findall(r"\$\s*(\d[\d,]*(?:\.\d+)?)", text)
+    values += re.findall(r"\$\s*\d[\d,]*(?:\.\d+)?\s*[–—~至-]\s*\$?\s*(\d[\d,]*(?:\.\d+)?)", text)
+    return {number(value) for value in values}
+
+
+def _research_main_item_prices(snippet: str) -> set[str]:
+    """Recognize explicit main prices, not every amount in a product snippet.
+
+    Search snippets are historical only. Ambiguous multi-item extracts stay
+    unknown; a labelled Item price must have one value. Bulk tiers are never
+    silently promoted to the price for buying one item.
+    """
+    all_prices = _research_money_values(snippet)
+    if len(all_prices) <= 1:
+        return all_prices
+    labelled = re.findall(r"\bitem price\s*[:：]?\s*((?:US\s*)?\$\s*\d[\d,]*(?:\.\d+)?)", snippet, re.I)
+    main = _research_money_values(" ".join(labelled))
+    if labelled:
+        return main if len(main) == 1 else set()
+    unit = re.search(r"((?:US\s*)?\$\s*\d[\d,]*(?:\.\d+)?)/ea\s+Condition\s*:", snippet, re.I)
+    if unit and not _research_money_values(snippet[:unit.start()]):
+        prefix = re.sub(r"seller'?s\s+other\s+items", "", snippet[:unit.start()], flags=re.I)
+        if not re.search(r"other items?|recommended|you may also|similar items?", prefix, re.I):
+            return _research_money_values(unit.group(1))
+    # Common eBay compact form: leading unit price, then Was or Bulk savings.
+    # Do not apply this rule to extracts mentioning other/recommended items.
+    leading = re.match(r"\s*((?:US\s*)?\$\s*\d[\d,]*(?:\.\d+)?)(?:/ea)?", snippet, re.I)
+    if leading and not re.search(r"other items?|recommended|you may also|similar items?", snippet, re.I):
+        rest = snippet[leading.end():]
+        boundary = re.search(r"\b(?:was|previous price|bulk savings)\b", rest, re.I)
+        if boundary and not _research_money_values(rest[:boundary.start()]):
+            return _research_money_values(leading.group(1))
+    return set()
+
+
+def _research_qualified_price_mentions(text: str) -> list[tuple[int, int, str, str]]:
+    """Keep a quoted former/bulk price only with its own matching qualifier."""
+    money = r"(?:US\s*)?\$\s*\d[\d,]*(?:\.\d+)?"
+    result = []
+    for match in re.finditer(r"(?:原价|\bwas|\bprevious price)\s*[:：]?\s*(" + money + r")", text, re.I):
+        result.append((match.start(1), match.end(1), "former", next(iter(_research_money_values(match.group(1))))))
+    for match in re.finditer(r"\b(\d+)\s*(?:件|个)?\s*(?:以上|起|or more)\s*(?:for)?\s*(" + money + r")", text, re.I):
+        result.append((match.start(2), match.end(2), "bulk_" + str(int(match.group(1))), next(iter(_research_money_values(match.group(2))))))
+    return result
+
+
+def _research_source_answer_blockers(answer: str, records: list[dict[str, Any]]) -> list[str]:
+    """Bound source references and reject known ambiguous product attributions.
+
+    This is not a general fact checker: it guards observable source mismatches.
+    A snippet with a single number still is not transaction/supplier evidence.
+    """
+    product_records = [s for s in records if isinstance(s, dict) and (
+        s.get("market_evidence_role") == "item_listing_reference"
+        or re.search(r"https://(?:www\.)?ebay\.com/itm/", str(s.get("url") or "")))]
+    if not product_records:
+        return []
+    by_id = {str(s.get("citation_id")): s for s in records if isinstance(s, dict) and s.get("citation_id")}
+    by_url = {_canonical_public_source_url(str(s.get("url") or "")): s for s in records if isinstance(s, dict)}
+    allowed_urls = set(by_url)
+    blocked = set()
+    from .repository import _ai_ceo_market_normalize_source_cells, _ai_ceo_market_split_comparison_tables
+
+    column_candidates, claim_lines = _ai_ceo_market_split_comparison_tables(_ai_ceo_market_normalize_source_cells(answer))
+    for _, block in column_candidates:
+        # Price/brand attributes inherit only this product column's explicit
+        # references. Formatting must not bypass checks or contaminate peers.
+        refs = list(dict.fromkeys(re.findall(r"\[(S\d+)\]", block)))
+        suffix = " " + " ".join(f"[{ref}]" for ref in refs) if refs else ""
+        claim_lines.extend(line + suffix for line in block.splitlines()[1:])
+    for line in claim_lines:
+        refs = list(dict.fromkeys(re.findall(r"\[(S\d+)\]", line)))
+        line_sources = {ref: by_id[ref] for ref in refs if ref in by_id}
+        if any(ref not in by_id for ref in refs):
+            blocked.add("research_citation_not_in_evidence")
+        urls = re.findall(r"https?://[^\s\]<>|）)]+", line)
+        for url in urls:
+            canonical = _canonical_public_source_url(url.rstrip(".,;。；，"))
+            if canonical in by_url:
+                linked_source = by_url[canonical]
+                line_sources[str(linked_source.get("citation_id") or canonical)] = linked_source
+            if re.search(r"ebay\.com/itm/", url) and canonical not in allowed_urls:
+                blocked.add("research_product_url_not_in_evidence")
+            if len(refs) == 1 and refs[0] in by_id and canonical in allowed_urls:
+                if canonical != _canonical_public_source_url(str(by_id[refs[0]].get("url") or "")):
+                    blocked.add("research_citation_url_mismatch")
+        # Model tables often use links without [S#]. Formatting must not bypass
+        # the same evidence checks applied to prose with citation labels.
+        claim_line = re.sub(r"[*_`]+", "", line)
+        uncertain = re.search(r"(?:主商品)?(?:价格|标价|报价|售价).{0,8}(?:未验证|未核实|不确定|无法确认)|"
+                              r"(?:不能|无法).{0,20}(?:标价|报价|价格)|(?:not verified|unverified|not the item price)", claim_line, re.I)
+        qualified_source_prices = {(kind, value) for source in line_sources.values()
+            for _, _, kind, value in _research_qualified_price_mentions(str(source.get("snippet") or ""))}
+        main_claim = claim_line
+        for start, end, kind, value in sorted(_research_qualified_price_mentions(claim_line), reverse=True):
+            if (kind, value) in qualified_source_prices:
+                main_claim = main_claim[:start] + "[qualified-price]" + main_claim[end:]
+        claimed_prices = _research_money_values(main_claim)
+        if line_sources and claimed_prices and not uncertain:
+            main_prices = set().union(*(_research_main_item_prices(str(source.get("snippet") or ""))
+                                       for source in line_sources.values()))
+            # A multi-source range is compared with its cited pool, not with
+            # each peer source's independent price. Missing/ambiguous stays shut.
+            if not claimed_prices <= main_prices:
+                blocked.add("research_ambiguous_main_item_price")
+        if re.search(r"(?:均为|都是|品牌(?:是|为|[:：]))\s*(?:unbranded|无品牌)|(?:是|为)无品牌通用款", claim_line, re.I):
+            brand_sources = list(line_sources.values()) if line_sources else product_records
+            if not re.search(r"(?:不能|不应|不可|无法|未验证|未核实|不能认定|并非)", claim_line) and not (brand_sources and all(
+                re.search(r"\bunbranded\b|品牌[:：]\s*无品牌", str(s.get("title") or "")+" "+str(s.get("snippet") or ""), re.I)
+                for s in brand_sources)):
+                blocked.add("research_unverified_unbranded_claim")
+    # Snippets remain historical references, never proof of a live listing.
+    # Evaluate each field/assertion separately; a peer/footer caveat cannot
+    # cancel a contradictory positive claim.
+    for statement in _research_availability_statements(answer):
+        # A closed noun enumeration can share one negative predicate. Splitting
+        # its ideographic commas first turns "当前在售、销量均未验证" into a
+        # false affirmative. Do not extend this to comma-separated clauses or
+        # predicates such as "卖家同时在售"; peer caveats still cannot excuse them.
+        unknown_field = (r"(?:(?:当前|目前|现在)?在售(?:状态|情况)?|(?:实际|真实)?销量|"
+                         r"(?:市场)?需求|(?:实际|真实)?利润|成交(?:记录|情况)?|库存|价格|退货率)")
+        unknown_enumeration = (r"\s*(?:[-+]\s*)?" + unknown_field
+                               + r"(?:\s*(?:、|和|及|与)\s*" + unknown_field + r")+"
+                               + r"\s*[:：]?\s*(?:均|皆|全部|都)?\s*(?:尚未|未)(?:验证|核实|确认)"
+                               + r"\s*[.]?\s*")
+        statement = "\n".join(sentence for sentence in re.split(r"[。；;！!？?\n]", statement)
+                              if not re.fullmatch(unknown_enumeration, sentence, re.I))
+        for clause in re.split(r"[。；;！!？?\n，,、|]|\b(?:but|however)\b|(?:但是|不过|但)", statement, flags=re.I):
+            # An explicitly unknown status field is not a current-sale claim.
+            # Bind the entire clause: unknown price/stock must not exempt a
+            # positive availability claim elsewhere in the same statement.
+            if re.fullmatch(r"\s*(?:当前|目前|现在)?在售(?:状态|情况)\s*[:：]\s*"
+                            r"(?:未知|不详|待确认)\s*(?:\[S\d+\])?\s*", clause, re.I):
+                continue
+            # A noun in a pending-facts list is not a statement that it is on
+            # sale. Only the entire bare label is exempt, never trailing prose.
+            if re.fullmatch(r"\s*(?:当前|目前|现在)在售(?:状态|情况)\s*", clause):
+                continue
+            if not re.search(
+                r"(?:当前|目前|现在|仍然|仍|正在).{0,8}(?:在售|售卖)|"
+                r"(?:有|存在|均为|都是)\s*在售\s*(?:listing|商品|产品|刊登)|"
+                r"卖家\s*(?:同时|仍然|仍|正在|均|都)?\s*在售|"
+                r"^\s*在售\s*$|(?:状态|status|availability)\s*[:：]\s*(?:在售|active|available|for sale)|"
+                r"\b(?:currently|still|actively)\s+(?:available|listed|for sale)\b", clause, re.I):
+                continue
+            if not re.search(
+                r"(?:不能|无法|不应|不可|不要|不证明|未验证|未核实|未确认|不确定|待核|尚待|是否|历史|当时|曾经)|"
+                r"\b(?:not|cannot|unverified|unknown|unconfirmed|historical)\b", clause, re.I):
+                blocked.add("research_unverified_current_availability")
+    return sorted(blocked)
+
+
+def _selection_answer_constraint_violations(
+    *,
+    message: str,
+    answer: str,
+    context: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    source_records: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    merchant_text = _normalized_text(message)
+    answer_text = _safe_text(answer, limit=12000)
+    answer_lower = answer_text.lower()
+    blocked_by: list[str] = []
+    plan = context.get("semantic_plan") or {}
+    semantic_plan = is_semantic_plan(plan)
+
+    store_context = context.get("store") if isinstance(context.get("store"), dict) else {}
+    if store_context.get("connection_authorized") is True and _answer_claims_store_unauthorized(answer_text):
+        blocked_by.append("connected_store_reported_as_unauthorized")
+    expected_connection_status = _safe_text(store_context.get("connection_status") or "", limit=80).lower()
+    if expected_connection_status and _answer_claims_different_connection_status(answer_text, expected_connection_status):
+        blocked_by.append("connection_status_mismatch")
+
+    listing_deferred = plan["listing_deferred"] if semantic_plan else _merchant_defers_listing(merchant_text)
+    actionable_listing_markers = (
+        r"listing\s*(?:草稿\s*)?(?:字段|标题|建议|package)",
+        r"item\s+specifics",
+        r"(?:^|\n)\s*sku\s*[:：=]",
+        r"类目(?:编号|映射)\s*[:：=]?",
+        r"刊登(?:标题|字段|草稿)\s*[:：=]?",
+    )
+    if listing_deferred:
+        for clause in re.split(r"[。；;\n，,]|但是|不过|但", answer_lower):
+            for pattern in actionable_listing_markers:
+                for match in re.finditer(pattern, clause, re.I):
+                    # A scope promise is not a generated field. Exempt only a
+                    # direct negated creation verb, never a footer disclaimer
+                    # or a value assigned after that phrase.
+                    negative = re.search(
+                        r"(?:不会|不再|不要|不应|不|无须|无需)(?:创建|生成|输出|提供)"
+                        r"(?:商品项目|商品草稿|商品|项目)?(?:[、或和及]+(?:创建|生成|输出|提供))*\s*$",
+                        clause[:match.start()])
+                    assigned = re.match(r"\s*[:：=]", clause[match.end():])
+                    if not negative or assigned:
+                        blocked_by.append("listing_scope_exceeded")
+        blocked_by = list(dict.fromkeys(blocked_by))
+
+    unknown_facts_explicit = plan.get("source_mode") != "merchant_has_source" if semantic_plan else any(
+        marker in merchant_text
+        for marker in (
+            "不要编造",
+            "不得编造",
+            "不能编造",
+            "没有供应商",
+            "无供应商",
+            "没有实物",
+            "商品参数未知",
+            "都未知",
+        )
+    )
+    if unknown_facts_explicit and _answer_invents_unknown_product_facts(answer_text):
+        blocked_by.append("invented_unknown_product_facts")
+
+    selection_contract = context.get("selection_contract") if isinstance(context.get("selection_contract"), dict) else {}
+    excluded_names = [
+        _safe_text(name, limit=80)
+        for name in selection_contract.get("excluded_candidate_names", [])
+        if _safe_text(name, limit=80)
+    ]
+    candidate_names = [_safe_text(item.get("name") or "", limit=120) for item in candidates if isinstance(item, dict)]
+    if any(
+        _candidate_name_matches_exclusion(excluded, candidate)
+        for excluded in excluded_names
+        for candidate in candidate_names
+    ):
+        blocked_by.append("excluded_previous_candidate_reused")
+
+    if selection_contract.get("candidate_evidence_entry_required"):
+        candidate_blocks = _selection_candidate_blocks(answer_text, candidate_names=candidate_names)
+        required_count = plan["candidate_count"] if semantic_plan else _requested_product_candidate_count(message)
+        sources_by_id = {str(record.get("citation_id")): str(record.get("url") or "")
+                         for record in source_records or [] if isinstance(record, dict) and record.get("citation_id")}
+        inspected_blocks = [block + "\n" + "\n".join(
+            sources_by_id[ref] for ref in dict.fromkeys(re.findall(r"\[(S\d+)\]", block)) if ref in sources_by_id
+        ) for block in candidate_blocks]
+        if len(inspected_blocks) < required_count or any(not _candidate_block_has_ebay_evidence_entry(block) for block in inspected_blocks):
+            blocked_by.append("missing_candidate_ebay_evidence_entry")
+        if any(
+            _candidate_block_has_search_entry(block)
+            and "成交证据不足" not in block
+            and not _candidate_block_has_real_item_id(block)
+            for block in inspected_blocks
+        ):
+            blocked_by.append("search_entry_presented_as_demand_evidence")
+
+    if selection_contract.get("common_sense_demand_claims_forbidden") and _answer_uses_unsupported_demand_shortcuts(answer_text):
+        blocked_by.append("unsupported_common_sense_demand_claim")
+    return list(dict.fromkeys(blocked_by))
+
+
+def _merchant_defers_listing(message: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:本轮|这轮|当前|现在|先|暂时|暂缓)?\s*(?:不要|不做|不建|不创建|不生成|不需要|无须|不必|不允许|无需|不进入|先不|暂不).{0,18}(?:listing|上架|刊登|草稿)",
+            _normalized_text(message),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _answer_claims_store_unauthorized(answer: str) -> bool:
+    markers = ("未授权", "尚未授权", "没有授权", "等待授权", "未连接", "重新授权", "完成授权")
+    for clause in re.split(r"(?<=[。！？；])|\n+", answer):
+        compact = clause.strip()
+        if not compact or not any(marker in compact for marker in markers):
+            continue
+        if any(marker in compact for marker in ("无需", "不需要", "不用", "并非", "不是", "已经授权", "已授权", "已连接")):
+            continue
+        return True
+    return False
+
+
+def _answer_claims_different_connection_status(answer: str, expected_status: str) -> bool:
+    mentioned = {
+        status
+        for status in _AUTHORIZED_EBAY_CONNECTION_STATUSES
+        if re.search(rf"(?<![a-z_]){re.escape(status)}(?![a-z_])", answer, flags=re.IGNORECASE)
+    }
+    return bool(mentioned and expected_status not in mentioned)
+
+
+def _answer_invents_unknown_product_facts(answer: str) -> bool:
+    speculative_markers = ("待核", "待确认", "未知", "未提供", "假设", "示例", "预计", "需供应商", "不是商品参数")
+    numeric_spec = re.compile(
+        r"(?<![/\d])\d+(?:\.\d+)?(?:\s*[-~至到]\s*\d+(?:\.\d+)?)?\s*"
+        r"(?:mg|g|kg|oz|lb|lbs|mm|cm|m|inch|inches|克|公斤|千克|磅|毫米|厘米|英寸)\b",
+        flags=re.IGNORECASE,
+    )
+    fact_field = re.compile(r"(?:材质|重量|尺寸|采购价|采购成本|成本|包装|品牌|型号|物流服务)\s*[:：=]\s*\S+", flags=re.IGNORECASE)
+    asserted_composition = re.compile(r"(?:采用|使用|配备|由).{0,35}(?:制成|材质|胶|钢|硅胶|塑料|金属)", flags=re.IGNORECASE)
+    asserted_shipping = re.compile(r"(?<![A-Za-z])(?:USPS|UPS|FedEx)\b\s+[A-Za-z ]{2,40}", flags=re.IGNORECASE)
+    for clause in re.split(r"(?<=[。！？；])|\n+", answer):
+        compact = clause.strip()
+        if not compact or any(marker in compact for marker in speculative_markers):
+            continue
+        if numeric_spec.search(compact) or fact_field.search(compact) or asserted_composition.search(compact) or asserted_shipping.search(compact):
+            return True
+    return False
 
 
 def _platform_rule_answer_quality(
@@ -3117,9 +5143,22 @@ def _platform_rule_answer_quality(
     route: str,
     answer: str,
     source_records: list[dict[str, Any]],
+    turn_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     text = _safe_text(answer, limit=12000)
-    if not _looks_like_platform_rule_request(message=message, route=route) or not source_records:
+    semantic_plan = is_semantic_plan(turn_plan)
+    official_claim_markers = ("eBay 规定", "eBay规定", "eBay 要求", "eBay要求", "官方要求", "平台规定", "平台禁止")
+    strong_markers = ("必须", "一律", "绝对", "禁止", "不得", "不允许", "会被下架", "必然下架")
+    # Semantic turns keep the planned task. Check actual platform assertions
+    # against evidence instead of reclassifying a quoted request as policy work.
+    policy_claims_present = any(marker in text for marker in official_claim_markers) or any(
+        re.search(r"ebay|平台|官方", clause, flags=re.IGNORECASE)
+        and any(marker in clause for marker in strong_markers)
+        and "确认中心" not in clause and "决策中心" not in clause
+        for clause in re.split(r"(?<=[。！？；])|\n+", text)
+    )
+    if (not policy_claims_present if semantic_plan else
+            not _looks_like_platform_rule_request(message=message, route=route) or not source_records):
         return {
             "accepted": bool(text),
             "quality_gate": "platform_rule_source_quality_v1",
@@ -3138,11 +5177,12 @@ def _platform_rule_answer_quality(
     valid_ids = {item.upper() for item in valid_ids if item}
     valid_citations = cited_ids & valid_ids
 
-    strong_markers = ("必须", "一律", "绝对", "禁止", "不得", "不允许", "会被下架", "必然下架")
     unsupported_strong_claims = []
     for clause in re.split(r"(?<=[。！？；])|\n+", text):
         compact = clause.strip()
         is_internal_confirmation_boundary = "确认中心" in compact or "决策中心" in compact
+        if semantic_plan and not re.search(r"ebay|平台|官方", compact, flags=re.IGNORECASE):
+            continue
         if compact and not is_internal_confirmation_boundary and any(marker in compact for marker in strong_markers):
             clause_citations = {item.upper() for item in re.findall(r"\[(S\d{1,2})\]", compact, flags=re.IGNORECASE)}
             if not clause_citations.intersection(valid_ids):
@@ -3155,7 +5195,6 @@ def _platform_rule_answer_quality(
         domain = _safe_text(item.get("domain") or _domain_from_url(str(item.get("url") or "")), limit=120).lower()
         if _is_official_ebay_domain(domain):
             official_ids.add(_safe_text(item.get("citation_id") or f"S{index}", limit=20).upper())
-    official_claim_markers = ("eBay 规定", "eBay规定", "eBay 要求", "eBay要求", "官方要求", "平台规定", "平台禁止")
     unsupported_official_claims = []
     for clause in re.split(r"(?<=[。！？；])|\n+", text):
         compact = clause.strip()
@@ -3191,6 +5230,11 @@ def _looks_like_platform_rule_request(*, message: str, route: str) -> bool:
     text = _normalized_text(message)
     if "ebay" not in text and "listing" not in text:
         return False
+    if _looks_like_product_selection_request(message=message, route=route) or _looks_like_market_evidence_followup(
+        message=message,
+        route=route,
+    ):
+        return False
     rule_markers = (
         "规则",
         "政策",
@@ -3212,6 +5256,65 @@ def _looks_like_platform_rule_request(*, message: str, route: str) -> bool:
     )
 
 
+def _looks_like_market_evidence_followup(*, message: str, route: str) -> bool:
+    if route != AI_CEO_ROUTE_EBAY_WORKFLOW:
+        return False
+    text = _normalized_text(message)
+    evidence_markers = ("成交证据", "sold & completed", "已售", "item id", "在售数量", "价格中位数")
+    decision_markers = ("三选一", "赢家", "相对赢家", "只补", "继续现有市场调研", "report_")
+    return any(marker in text for marker in evidence_markers) and any(marker in text for marker in decision_markers)
+
+
+def _market_evidence_followup_expected_winner(message: str) -> str:
+    text = _safe_text(message, limit=900)
+    match = re.search(
+        r"(?:相对赢家|最终赢家|赢家)\s*(?:应为|为|是|[:：])\s*([^。；;\n，,]{2,80})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    winner = re.split(r"(?:请|下一步|这只是|仅)", match.group(1), maxsplit=1)[0]
+    return winner.strip(" ：:，,。；;（）()[]【】")[:80]
+
+
+def _market_evidence_followup_answer_quality(*, message: str, answer: str) -> dict[str, Any]:
+    text = _safe_text(answer, limit=12000)
+    expected_winner = _market_evidence_followup_expected_winner(message)
+    normalized_answer = _normalized_candidate_name(text)
+    normalized_winner = _normalized_candidate_name(expected_winner)
+    submitted_item_ids = list(dict.fromkeys(re.findall(r"(?<!\d)\d{9,15}(?!\d)", message)))
+    has_winner_conclusion = bool(
+        re.search(r"(?:相对赢家|最终赢家|赢家|三选一结论|市场成交证据结论)", text, flags=re.IGNORECASE)
+    )
+    winner_preserved = not normalized_winner or normalized_winner in normalized_answer
+    submitted_evidence_preserved = (
+        any(item_id in text for item_id in submitted_item_ids)
+        if submitted_item_ids
+        else bool(re.search(r"(?:已售样本|sold\s*(?:&|and)?\s*completed|在售(?:数量|竞争)?|中位价)", text, flags=re.IGNORECASE))
+    )
+    supplier_step_required = "供应商" in message
+    supplier_step_preserved = not supplier_step_required or "供应商" in text
+    blocked_by = []
+    if not text:
+        blocked_by.append("empty_model_answer")
+    if not has_winner_conclusion or not winner_preserved:
+        blocked_by.append("missing_market_evidence_winner")
+    if not submitted_evidence_preserved:
+        blocked_by.append("missing_submitted_market_evidence")
+    if not supplier_step_preserved:
+        blocked_by.append("missing_supplier_fact_next_step")
+    return {
+        "accepted": bool(text) and not blocked_by,
+        "quality_gate": "market_evidence_followup_grounding_v1",
+        "expected_winner": expected_winner,
+        "submitted_item_id_count": len(submitted_item_ids),
+        "submitted_evidence_preserved": submitted_evidence_preserved,
+        "blocked_by": blocked_by,
+        "secret_exposed": False,
+    }
+
+
 def _is_official_ebay_domain(domain: str) -> bool:
     normalized = _safe_text(domain, limit=120).lower().removeprefix("www.")
     return normalized == "ebay.com" or normalized.endswith(".ebay.com") or normalized.endswith(".ebaystatic.com")
@@ -3219,6 +5322,8 @@ def _is_official_ebay_domain(domain: str) -> bool:
 
 def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
     if route != AI_CEO_ROUTE_EBAY_WORKFLOW:
+        return False
+    if _looks_like_market_evidence_followup(message=message, route=route):
         return False
     text = _normalized_text(message)
     markers = (
@@ -3228,29 +5333,765 @@ def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
         "小众品",
         "热销小商品",
         "候选商品",
+        "候选",
         "产品方向",
         "商品方向",
         "product ideas",
         "product selection",
         "what to sell",
     )
-    return any(marker in text for marker in markers)
+    # Selection quality rules must follow affirmative intent, not words inside
+    # boundaries such as "不重新选品" in an existing product's spec revision.
+    # Check occurrences independently so a later affirmative request still wins.
+    modifiers = r"(?:\s|再|重新|重复|继续|直接|立即|自动|帮我|为我|先|去|做|进行|提供|推荐|比较|筛选)*"
+    prior_action = r"(?:联网|调研|搜索|检索|选品|候选商品|候选|产品方向|商品方向)"
+    for marker in markers:
+        for match in re.finditer(re.escape(marker), text):
+            prefix = text[:match.start()]
+            if re.search(
+                r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁|不需要|不必|无须|不允许|不许)"
+                rf"(?:{modifiers}{prior_action}\s*(?:、|或|和|以及|及))*{modifiers}$",
+                prefix,
+            ):
+                continue
+            if re.search(
+                r"\b(?:do not|don't|must not|no|without|stop)\s+"
+                r"(?:(?:new|more|any|further|repeat|repeating|redo|redoing|another|additional)\s+)*$",
+                prefix,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            return True
+    return False
+
+
+def _looks_like_explicit_listing_intake(message: str) -> bool:
+    text = _normalized_text(message)
+    patterns = (
+        r"(?:新建|创建|生成|整理|导入|带入|填写|填进|自动填).{0,16}(?:ebay\s*)?listing",
+        r"(?:ebay\s*)?listing.{0,16}(?:草稿|字段|建档|创建|生成|填写|带入|package)",
+        r"(?:新建|创建|生成|整理|导入|带入|填写|填进|自动填).{0,16}(?:刊登草稿|上架资料)",
+        r"(?:刊登草稿|上架资料).{0,16}(?:创建|生成|填写|带入)",
+    )
+    explicit_intake = False
+    for clause in re.split(r"[。；;，,！!\n]", text):
+        for pattern in patterns:
+            for match in re.finditer(pattern, clause, flags=re.IGNORECASE):
+                prefix = clause[:match.start()]
+                # "不创建 Listing" is a no-write boundary in a research
+                # request, not permission to bypass candidate research.
+                if re.search(r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁|不需要|不必|无须|不允许|不许)(?:\s|再|重新|重复|直接|立即|自动|帮我|为我|先|去|做|新建|创建|生成|整理|导入|带入|填写|填进)*$", prefix):
+                    continue
+                if re.search(r"(?:不|不要|不得|禁止|无需|不用|暂不|不再|严禁|不需要|不必|无须|不允许|不许).{0,8}(?:创建|生成|填写|带入)", match.group()):
+                    continue
+                explicit_intake = True
+    if not explicit_intake:
+        return False
+    if not _merchant_defers_listing(message):
+        return True
+    external_write_deferred = bool(
+        re.search(
+            r"(?:不保存|不要保存|暂不保存|先不保存).{0,12}ebay.{0,8}草稿|"
+            r"(?:不|不要|暂不|先不).{0,8}(?:公开|真实|正式).{0,4}(?:发布|上架|刊登)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    return external_write_deferred
+
+
+def _explicit_new_listing_project_request(message: str) -> bool:
+    """Return true only when the merchant positively asks for a separate project.
+
+    Active Listing consistency protects the current project.  It must not make
+    a brand-new project inherit the current project's SKU, media, or Offer.
+    Negated phrases such as ``不得新建重复项目`` are deliberately excluded.
+    """
+
+    text = _normalized_text(message)
+    if not text:
+        return False
+    text = re.sub(r"重新(?:创建|新建)", "创建", text, flags=re.IGNORECASE)
+    text = re.sub(r"单独(?:创建|新建|建|开)", "另建", text, flags=re.IGNORECASE)
+    text = re.sub(r"另外(?:创建|新建|建|开)", "另建", text, flags=re.IGNORECASE)
+    text = re.sub(r"新增", "新建", text, flags=re.IGNORECASE)
+    text = re.sub(r"新开", "新建", text, flags=re.IGNORECASE)
+    text = re.sub(r"另开", "另建", text, flags=re.IGNORECASE)
+    text = re.sub(r"建立", "创建", text, flags=re.IGNORECASE)
+    text = re.sub(r"新起", "另起", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(^|(?:确认|确定|再|直接|开始|马上|立即|同意|批准|请|帮我|给我))\s*建(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        r"\1新建",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(^|(?:确认|确定|再|直接|开始|马上|立即|同意|批准|请|帮我|给我))\s*开(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        r"\1新建",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(帮我|给我)建(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        r"\1新建",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(帮我|给我)开(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        r"\1新建",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"我想开(?=(?:一|个|这|那|全新|新的|独立|商品|listing))",
+        "我想新建",
+        text,
+        flags=re.IGNORECASE,
+    )
+    positive_patterns = (
+        r"(?:新建|创建|另建|另起|开启|启动)[^。；;！!？?，,]{0,18}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)",
+        r"(?:新建|创建|另建|另起|开启|启动)[^。；;！!？?，,]{0,14}?(?:独立|全新|新的)[^。；;！!？?，,]{0,10}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)",
+        r"(?:新建|创建|另建|另起)[^。；;！!？?，,]{0,10}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)[^。；;！!？?，,]{0,24}?(?:不复用|不要复用|独立于|区别于)",
+        r"(?:独立|全新|新的)[^。；;！!？?，,]{0,10}?(?:商品|listing)[^。；;！!？?，,]{0,8}?(?:项目|草稿)[^。；;！!？?，,]{0,12}?(?:新建|创建|另建|另起)",
+        r"(?:新建|创建|另建|另起|开启|启动)[^。；;！!？?，,]{0,24}?(?:独立|全新|新的)[^。；;！!？?，,]{0,8}?(?:项目|草稿)",
+    )
+    negative_action = re.compile(
+        r"(?:不|不要|不得|禁止|严禁|无需|不用|避免)\s*(?:再|重复)?\s*(?:新建|创建|另建|另起|开启|启动)",
+        flags=re.IGNORECASE,
+    )
+    for pattern in positive_patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            clause_start = max(
+                text.rfind("。", 0, match.start()),
+                text.rfind("；", 0, match.start()),
+                text.rfind(";", 0, match.start()),
+                text.rfind("！", 0, match.start()),
+                text.rfind("!", 0, match.start()),
+                text.rfind("？", 0, match.start()),
+                text.rfind("?", 0, match.start()),
+                text.rfind("，", 0, match.start()),
+                text.rfind(",", 0, match.start()),
+            )
+            clause_ends = [
+                index
+                for separator in ("。", "；", ";", "！", "!", "？", "?", "，", ",")
+                if (index := text.find(separator, match.end())) >= 0
+            ]
+            clause_end = min(clause_ends) if clause_ends else len(text)
+            clause = text[clause_start + 1 : clause_end]
+            action_prefix = clause[: max(0, match.start() - (clause_start + 1))].strip()
+            direct_imperative = bool(
+                re.search(
+                    r"^(?:(?:确认执行[：:]?|(?:我)?(?:确定|决定|确认|同意|批准|认可)(?:要)?|我希望你|我希望|我打算|确认按(?:这个|上述|以上|前述|该|此)方案|就按(?:这个|上述|以上|前述|该|此)方案|按(?:这个|上述|以上|前述|该|此)方案|就按|就这样|那就|直接|立即|马上|开始|再|劳烦|请替我|替我|请执行|执行|请协助我|协助我|请你|请|你|给我|帮我|帮忙|我要|我需要|我想要|我想|想要|让你|现在就|现在|这次|麻烦你|麻烦|是否可以|能否|可以|可不可以|能不能|能)\s*)*$",
+                    action_prefix,
+                    flags=re.IGNORECASE,
+                )
+            )
+            has_explicit_execution_prefix = bool(action_prefix) and direct_imperative
+            polite_request = direct_imperative and bool(
+                re.search(
+                    r"(?:是否可以|能否|可以|可不可以|能不能|能)",
+                    action_prefix,
+                    flags=re.IGNORECASE,
+                )
+            )
+            reordered_imperative = bool(
+                re.search(
+                    r"^(?:请\s*)?(?:把|将).{0,24}(?:新建|创建|另建|另起)",
+                    clause.strip(),
+                    flags=re.IGNORECASE,
+                )
+            )
+            historical_or_question = re.compile(
+                r"(?:为什么|为何|怎么|如何|是否|是不是|有没有).{0,18}(?:新建|创建|另建|另起|开启|启动)|"
+                r"(?:刚才|上次|之前|此前|已经|已).{0,18}(?:新建|创建|另建|另起|开启|启动)|"
+                r"(?:新建|创建|另建|另起)(?:的|过的|好了|完成了)|"
+                r"(?:项目|草稿).{0,8}(?:已经|已)(?:新建|创建|建立)",
+                flags=re.IGNORECASE,
+            )
+            clause_prefix = text[clause_start + 1 : match.end()]
+            match_end_in_clause = match.end() - (clause_start + 1)
+            clause_suffix = clause[max(0, match_end_in_clause) :]
+            sentence_ends = [
+                index
+                for separator in ("。", "；", ";", "！", "!", "？", "?")
+                if (index := text.find(separator, match.end())) >= 0
+            ]
+            sentence_end = min(sentence_ends) if sentence_ends else len(text)
+            sentence_suffix = text[match.end() : sentence_end]
+            sentence_start = max(
+                text.rfind("。", 0, match.start()),
+                text.rfind("；", 0, match.start()),
+                text.rfind(";", 0, match.start()),
+                text.rfind("！", 0, match.start()),
+                text.rfind("!", 0, match.start()),
+                text.rfind("？", 0, match.start()),
+                text.rfind("?", 0, match.start()),
+            )
+            sentence_text = text[sentence_start + 1 : sentence_end]
+            sentence_prefix = text[sentence_start + 1 : match.start()]
+            semantic_question = re.search(
+                r"(?:什么|哪些|多少|几(?:个|种|项|步|次|条)|为何|为什么|怎么|如何|哪里|哪儿|何时|什么时候|多久|谁(?:来|负责)?|是否|是不是|有没有|可否|告诉我|介绍|讲讲|说明|好处|区别|差别|适合|场景|用途)",
+                sentence_suffix,
+                flags=re.IGNORECASE,
+            )
+            generic_question_shape = re.search(
+                r"(?:吗|么|呢)\s*$|(?:难不难|值不值得|需不需要|能不能|可不可以|会不会|有没有|是不是|要不要)",
+                sentence_suffix.strip(),
+                flags=re.IGNORECASE,
+            )
+            choice_or_conditional = re.search(
+                r"(?:也可以|或者|还是|二选一|你判断|由你判断|看情况|视情况|如果|假如|要不要)|"
+                r"(?:^|[，,])\s*(?:若(?!干)|倘若|假若|要是|一旦|除非|万一|前提是)|"
+                r"[^。；;！!？?，,]{1,18}的话\s*[，,]|"
+                r"(?:或|或者).{0,32}(?:任选|任选一种|选择|你定|你决定)",
+                sentence_text,
+                flags=re.IGNORECASE,
+            )
+            reported_speech = re.search(
+                r"(?:客户|商家|用户|买家|同事|老板|朋友|他|她|他们|别人|有人|对方)(?:的)?(?:问题(?:是|为)|\s*(?:想|在|正在|可能)?\s*(?:问|说|咨询|了解|确认|知道|提问|提到|表示|好奇|请教|核实)|\s*(?:让|要|叫|请)(?:我|人)?\s*(?:转告|传达|复述)|\s*(?:建议|提醒)(?:我)?)[^。；;！!？?]{0,32}$|"
+                r"(?:^|[，,])\s*(?:我有(?:个|一个)?问题|我想确认一下|我确认下|我问你|请问|请教一下|我好奇|我想请教|我想核实|我想知道|(?:我)?(?:想|要)?(?:问|咨询|了解)(?:你|一下|下)?)[^。；;！!？?]{0,32}$",
+                sentence_prefix,
+                flags=re.IGNORECASE,
+            )
+            example_or_copy_frame = re.search(
+                r"^(?:例如|比如(?:说)?|举例(?:来说)?|举个例子|例句|示例|文案(?:可以|可)?写|用户可能(?:会)?(?:输入|说)|假设(?:用户|商家)?(?:输入|说))\s*[，,:：]|"
+                r"^(?:把|将).{0,16}(?:提示|示例|按钮|对话|输入)?文案.{0,12}(?:改成|写成|设置为)\s*[：:]",
+                sentence_text.strip(),
+                flags=re.IGNORECASE,
+            )
+            question_terminated = clause_end < len(text) and text[clause_end] in ("？", "?")
+            polite_question_suffix = re.fullmatch(
+                r"(?:|吗|呢|好吗|行吗|可以吗|好不好)",
+                clause_suffix.strip(),
+                flags=re.IGNORECASE,
+            )
+            question_is_explicit_execution = bool(
+                has_explicit_execution_prefix and polite_question_suffix and not reported_speech
+            )
+            trimmed_sentence_suffix = sentence_suffix.strip()
+            bare_execution = not action_prefix and (
+                not trimmed_sentence_suffix
+                or bool(re.search(r"^[：:]\s*[^\s：:，,。；;！!？?]", trimmed_sentence_suffix))
+                or bool(
+                    re.search(
+                        r"^(?:[，,]\s*)?(?:目标(?:是|为)|产品(?:是|为)|商品(?:是|为)|品类|类目|名称|sku|规格|参数|售价|成本|数量|面向|用于|用途|要求|其他(?:信息|资料|参数)|独立于|不复用|不要复用|不要|不得|并且|同时|全部|其余|开始|执行|现在开始|就这样)",
+                        trimmed_sentence_suffix,
+                        flags=re.IGNORECASE,
+                    )
+                )
+            )
+            explanatory_suffix = re.search(
+                r"(?:会不会|是否会|是不是|有什么|有何|为什么|为何|怎么|如何|流程|风险|含义|意思|好处|区别|差别|适合|场景|用途|介绍|讲讲|说明|比较)|"
+                r"会.{0,24}[吗呢]\s*$|^(?:了[吗么]|了没有|过[吗么]|好(?:了[吗么]|了没有)|(?:完成|成功)(?:了[吗呢么]|了没有|[吗呢么])?)",
+                clause_suffix,
+                flags=re.IGNORECASE,
+            ) or ((semantic_question or generic_question_shape) and not question_is_explicit_execution) or (
+                question_terminated and not question_is_explicit_execution
+            )
+            if (
+                (has_explicit_execution_prefix or polite_request or reordered_imperative or bare_execution)
+                and not negative_action.search(clause_prefix)
+                and not choice_or_conditional
+                and not reported_speech
+                and not example_or_copy_frame
+                and (not historical_or_question.search(clause) or polite_request)
+                and not explanatory_suffix
+            ):
+                return True
+    return False
+
+
+def _selection_response_contract(
+    *,
+    message: str,
+    route: str,
+    conversation_history: list[dict[str, Any]] | None = None,
+    turn_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if is_semantic_plan(turn_plan):
+        if turn_plan.get("research_delivery") != "candidate_selection" or turn_plan.get("status") != "ready":
+            return {}
+        return {
+            "contract_version": "ai_ceo_selection_acceptance_v1",
+            "required_candidate_count": turn_plan["candidate_count"],
+            "excluded_candidate_names": list(turn_plan["excluded_candidates"]),
+            "must_be_new_vs_recent_conversation": bool(turn_plan["excluded_candidates"]),
+            "listing_deferred": turn_plan["listing_deferred"],
+            "unknown_product_facts": turn_plan.get("source_mode") != "merchant_has_source",
+            "candidate_evidence_entry_required": True,
+            "common_sense_demand_claims_forbidden": True,
+            "evidence_rule": "每个候选提供可复核来源；搜索入口不等于成交证明，没有成交记录逐项写成交证据不足。",
+            "unknown_fact_rule": "未知商品参数保持待核；市场竞品信息不是商家的供应商事实。",
+            "secret_exposed": False,
+        }
+    # A merchant may explicitly request an internal Listing and state that
+    # this turn must *not* rerun product selection.  Listing intake owns that
+    # turn; selection acceptance rules would otherwise reject a valid product
+    # draft for not inventing additional candidate products.
+    if _looks_like_explicit_listing_intake(message):
+        return {}
+    if not _looks_like_product_selection_request(message=message, route=route):
+        return {}
+    text = _normalized_text(message)
+    excluded_names = _explicitly_excluded_candidate_names(message)
+    wants_new_candidates = any(marker in text for marker in ("全新候选", "重新给", "重新筛", "更换", "禁止复用", "不要复用"))
+    if wants_new_candidates:
+        for item in _sanitize_ai_ceo_conversation_history(conversation_history):
+            for candidate_name in _selection_candidate_names_from_text(item.get("assistant_text") or ""):
+                if candidate_name not in excluded_names:
+                    excluded_names.append(candidate_name)
+    unknown_product_facts = any(
+        marker in text
+        for marker in (
+            "不要编造",
+            "不得编造",
+            "不能编造",
+            "严禁编造",
+            "没有供应商",
+            "无供应商",
+            "没有实物",
+            "商品参数未知",
+            "都未知",
+        )
+    )
+    evidence_entry_required = any(marker in text for marker in ("可点击", "搜索链接", "ebay us 链接", "item id"))
+    return {
+        "contract_version": "ai_ceo_selection_acceptance_v1",
+        "required_candidate_count": _requested_product_candidate_count(message),
+        "excluded_candidate_names": excluded_names[:20],
+        "must_be_new_vs_recent_conversation": wants_new_candidates,
+        "listing_deferred": _merchant_defers_listing(message),
+        "unknown_product_facts": unknown_product_facts,
+        "candidate_evidence_entry_required": evidence_entry_required,
+        "common_sense_demand_claims_forbidden": "不要把常识当需求证据" in text,
+        "evidence_rule": (
+            "每个候选分别给 https://www.ebay.com/sch/i.html?_nkw=... 搜索入口或真实 Item ID；"
+            "搜索入口只用于商家复核，不是成交证据；没有具体成交记录时逐项写成交证据不足。"
+            if evidence_entry_required
+            else "没有候选级成交来源时明确写证据不足。"
+        ),
+        "unknown_fact_rule": (
+            "材质、重量、尺寸、成本、品牌、型号、包装和物流服务全部写未知或待核，不给示例数值。"
+            if unknown_product_facts
+            else "只陈述商家资料或来源记录能支持的商品事实。"
+        ),
+        "secret_exposed": False,
+    }
+
+
+def _explicitly_excluded_candidate_names(message: str) -> list[str]:
+    text = _safe_text(message, limit=900)
+    values: list[str] = []
+    for match in re.finditer(
+        r"(?:淘汰|排除|禁止复用|不要复用|不再使用|禁止(?:推荐|选择|使用)|不得(?:推荐|选择|使用)|不要(?:再)?(?:推荐|选择|使用))"
+        r"(.{1,140}?)(?=重新|更换|[。；;\n]|$)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        segment = match.group(1).strip(" ：:，,（）()[]【】")
+        segment = re.sub(r"^(?:掉|上一轮(?:的)?|这些?|以下|候选\s*\d*)", "", segment, flags=re.IGNORECASE)
+        for part in re.split(r"[、，,/]|\s+(?:和|与|及)\s+", segment):
+            candidate = re.sub(r"^(?:候选(?:商品|品)?\s*\d*[:：]?|商品\s*\d*[:：]?)", "", part.strip())
+            candidate = candidate.strip(" ：:，,。；;（）()[]【】")
+            if 2 <= len(candidate) <= 60 and candidate not in values:
+                values.append(candidate)
+    return values
+
+
+def _selection_candidate_names_from_text(answer: str) -> list[str]:
+    names: list[str] = []
+    for match in re.finditer(
+        r"(?:^|\n)\s*(?:[-*]\s*)?(?:#{1,6}\s*)?(?:候选商品|候选品|候选)\s*[一二三四五六七八九十\dA-Z]*\s*[:：.)、-]\s*([^\n]+)",
+        _safe_text(answer, limit=12000),
+        flags=re.IGNORECASE,
+    ):
+        name = re.split(r"[（(]|\s+[—–-]\s+", match.group(1).strip())[0].strip(" *#：:，,。")
+        if 2 <= len(name) <= 80 and name not in names:
+            names.append(name)
+    return names
+
+
+def _normalized_candidate_name(value: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").lower())
+
+
+def _candidate_name_matches_exclusion(excluded_name: str, candidate_name: str) -> bool:
+    """Match an excluded product direction after removing descriptive packaging noise."""
+
+    excluded = _normalized_candidate_name(excluded_name)
+    candidate = _normalized_candidate_name(candidate_name)
+    if len(excluded) < 2 or len(candidate) < 2:
+        return False
+    if excluded in candidate or candidate in excluded:
+        return True
+
+    packaging_suffix = re.compile(r"(?:\d+(?:件|个|只|片|枚|套)?装|套装|组合装|组合|合集)$")
+    excluded_base = packaging_suffix.sub("", excluded)
+    candidate_base = packaging_suffix.sub("", candidate)
+    if len(excluded_base) < 2 or len(candidate_base) < 2:
+        return False
+    if excluded_base in candidate_base or candidate_base in excluded_base:
+        return True
+
+    generic_suffixes = {"商品", "产品", "用品", "配件", "工具", "饰品", "摆件", "套装", "组合", "系列", "小件"}
+    max_suffix = min(12, len(excluded_base), len(candidate_base))
+    for size in range(max_suffix, 1, -1):
+        suffix = excluded_base[-size:]
+        if candidate_base.endswith(suffix) and (size >= 3 or suffix not in generic_suffixes):
+            return True
+    return False
+
+
+def _selection_candidate_blocks(answer: str, *, candidate_names: list[str] | None = None) -> list[str]:
+    from .repository import _ai_ceo_market_normalize_source_cells
+
+    text = _ai_ceo_market_normalize_source_cells(_safe_text(answer, limit=12000))
+    pattern = re.compile(
+        r"(?:^|\n)\s*(?:[-*]\s*)?(?:#{1,6}\s*)?(?:候选商品|候选品|候选)\s*[一二三四五六七八九十\dA-Z]*\s*[:：.)、-]\s*(?P<name>[^\n]+)",
+        flags=re.IGNORECASE,
+    )
+    matches = list(pattern.finditer(text))
+    blocks = [text[match.start() : matches[index + 1].start() if index + 1 < len(matches) else len(text)] for index, match in enumerate(matches)]
+    if candidate_names is None:
+        return blocks
+    from .repository import (
+        _ai_ceo_market_table_product_column, _ai_ceo_market_table_product_headers,
+        _ai_ceo_market_split_comparison_tables, _clean_ai_ceo_market_candidate_name,
+    )
+
+    by_name: dict[str, list[str]] = {}
+    for match, block in zip(matches, blocks):
+        name = _clean_ai_ceo_market_candidate_name(match.group("name").strip(" *#"))
+        prose: list[str] = []
+        heading = re.match(r"\s*(#{1,6})\s", block)
+        heading_level = len(heading.group(1)) if heading else 6
+        for line in block.splitlines():
+            normalized_line = line.replace("*", "").strip()
+            next_heading = re.match(r"(#{1,6})\s", normalized_line)
+            if any(item.strip() for item in prose) and next_heading and len(next_heading.group(1)) <= heading_level:
+                # A new report section cannot belong to the last candidate.
+                break
+            if normalized_line.startswith("|"):
+                cells = [cell.strip() for cell in normalized_line.strip("|").split("|")]
+                if _ai_ceo_market_table_product_column(cells) is not None or _ai_ceo_market_table_product_headers(cells):
+                    # A comparison table belongs to all its named products,
+                    # not to whichever candidate heading precedes it. Its
+                    # rows are mapped individually below. Attribute tables
+                    # without a product-name column remain in the prose.
+                    break
+            prose.append(line)
+        by_name.setdefault(_normalized_candidate_name(name), []).append("\n".join(prose))
+    column = None
+    for line in text.replace("*", "").splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            column = None
+            continue
+        if re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        header_column = _ai_ceo_market_table_product_column(cells)
+        if header_column is not None:
+            column = header_column
+            continue
+        if column is not None and len(cells) > column:
+            name = _clean_ai_ceo_market_candidate_name(cells[column])
+            if name:
+                by_name.setdefault(_normalized_candidate_name(name), []).append(line)
+    column_candidates, _ = _ai_ceo_market_split_comparison_tables(text)
+    for name, block in column_candidates:
+        by_name.setdefault(_normalized_candidate_name(name), []).append(block)
+    aliases = {name: {_normalized_candidate_name(alias) for alias in _product_candidate_aliases(name)}
+               | {_normalized_candidate_name(name)} for name in candidate_names}
+    # Later market sections may use an explicit Chinese/English alias from a
+    # candidate heading. Keep their competitor tables with that section, not
+    # with the last card; do not infer translations or silently discard them.
+    _, remaining_lines = _ai_ceo_market_split_comparison_tables(text)
+    section_name, section_level = "", 0
+    for line in remaining_lines:
+        heading = re.match(r"\s*(#{1,6})\s+(.+)", line)
+        if heading:
+            title = re.sub(r"^[一二三四五六七八九十\d]+[、.)：:]\s*", "", heading.group(2)).strip()
+            key = _normalized_candidate_name(title)
+            owners = [name for name, keys in aliases.items() if key in keys]
+            if len(owners) == 1:
+                section_name, section_level = owners[0], len(heading.group(1))
+            elif len(heading.group(1)) <= section_level:
+                section_name, section_level = "", 0
+        if section_name:
+            by_name.setdefault(_normalized_candidate_name(section_name), []).append(line)
+    # Align evidence with each extracted product; a duplicated recommendation
+    # or another candidate's source cannot fill a missing candidate's evidence.
+    return ["\n".join(block for key, blocks in by_name.items() if key in aliases[name] for block in blocks)
+            for name in candidate_names]
+
+
+def _candidate_block_has_real_item_id(block: str) -> bool:
+    return bool(
+        re.search(r"ebay\.com/itm/(?:[^\s/)]+/)?\d{9,15}", block, flags=re.IGNORECASE)
+        or re.search(r"item\s*id\s*[:：#]?\s*\d{9,15}", block, flags=re.IGNORECASE)
+    )
+
+
+def _candidate_block_has_search_entry(block: str) -> bool:
+    return bool(re.search(r"https?://(?:www\.)?ebay\.com/sch/(?:i\.html)?[^\s)\]，。]*", block, flags=re.IGNORECASE))
+
+
+def _candidate_block_has_ebay_evidence_entry(block: str) -> bool:
+    return _candidate_block_has_search_entry(block) or _candidate_block_has_real_item_id(block)
+
+
+def _answer_uses_unsupported_demand_shortcuts(answer: str) -> bool:
+    shortcuts = (
+        "持续需求",
+        "复购与多件购买意愿较强",
+        "长期稳定需求",
+        "需求长期稳定",
+        "持续痛点",
+        "常青需求",
+        "需求持续存在",
+        "替换和备用需求",
+        "需求稳定",
+    )
+    for clause in re.split(r"[。；;!！？\n，,|]|但是|然而|但|却", re.sub(r"[*_`]+", "", answer)):
+        for marker in shortcuts:
+            for match in re.finditer(re.escape(marker), clause):
+                before, after = clause[:match.start()], clause[match.end():]
+                negative = re.search(
+                    r"(?:不能|无法|不应|不要|不得|禁止|尚未|未能|未验证|未核实|没有证据|证据不足)"
+                    r"(?:\s|[“「『\"'：:]|据此|直接|充分|足以|支持|证明|推断|断言|判断|判定|认定|声称|确认|说明|表明|其|存在|具有|有|是|为|的)*$",
+                    before,
+                )
+                uncertain = re.match(r".{0,6}(?:尚未验证|尚未核实|未验证|未核实|待验证|待核验|待核实)", after)
+                if not negative and not uncertain:
+                    return True
+    return False
 
 
 def _requested_product_candidate_count(message: str) -> int:
     text = _normalized_text(message)
-    arabic_match = re.search(r"(?:给我|找|推荐|筛|选)?\s*([1-4])\s*(?:个|款|种|条)", text)
-    if arabic_match:
-        return int(arabic_match.group(1))
-    chinese_counts = (("一个", 1), ("一款", 1), ("一种", 1), ("两个", 2), ("两款", 2), ("二个", 2), ("三个", 3), ("三款", 3), ("四个", 4), ("四款", 4))
-    for marker, count in chinese_counts:
-        if marker in text:
+    numbers = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4}
+    count_pattern = r"(?<!\d)([1-4一二两三四])\s*(?:个|款|种)\s*"
+    qualifiers = r"(?:(?:具体|不同|全新|新的|轻小|不带电|非易碎|可选|原有|原来|原始|现有|既有|原)(?:的)?)*"
+
+    def count_for(pattern: str) -> int | None:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1)
+            return int(value) if value.isdigit() else numbers[value]
+        return None
+
+    # Compare N candidates and recommend one is an N-candidate request.
+    # Source/link limits and quantities in a set are not candidate counts.
+    for pattern in (
+        count_pattern + qualifiers + r"候选(?:商品|产品|品)?",
+        r"(?:比较|对比|筛选|调研)\s*" + count_pattern + qualifiers + r"(?:商品|产品|品类|方向)",
+    ):
+        count = count_for(pattern)
+        if count is not None:
             return count
+    if re.search(r"比较|对比|分别(?:用|搜索|调研)|\bcompare\b", text):
+        names = _ebay_product_search_terms(message)
+        if len(names) > 1:
+            return len(names)
+    count = count_for(count_pattern + qualifiers + r"(?:商品|产品|品类|方向)")
+    if count is not None:
+        return count
+    count = count_for(r"(?:给(?:我|出)?|推荐|筛(?:选)?|选(?:出)?|找(?:出)?)\s*" + count_pattern
+                      + r"(?!来源|链接|页面|商品页|资料|证据|件|套)")
+    if count is not None:
+        return count
     return 2
 
 
-def _model_answer_rejected_fallback(*, message: str, source_records: list[dict[str, Any]]) -> str:
-    if _looks_like_platform_rule_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW):
+def _project_market_evidence_followup_answer(message: str) -> str:
+    """Preserve merchant-verified market evidence when the model replays stale context."""
+
+    winner = _market_evidence_followup_expected_winner(message)
+    if not winner:
+        return ""
+    evidence_clauses: list[str] = []
+    for raw_clause in re.split(r"[；;\n]+", _safe_text(message, limit=900)):
+        clause = raw_clause.strip(" ：:，,。")
+        if not clause or not re.search(
+            r"(?:sold\s*(?:&|and|/)?\s*completed|已售|item\s*ids?|在售|中位价)",
+            clause,
+            flags=re.IGNORECASE,
+        ):
+            continue
+        clause = re.sub(
+            r"^继续\s+report_[0-9a-z]+[^：:]{0,100}[：:]\s*",
+            "",
+            clause,
+            flags=re.IGNORECASE,
+        )
+        evidence_clauses.append(_safe_text(clause, limit=360))
+        if len(evidence_clauses) >= 4:
+            break
+    item_ids = list(dict.fromkeys(re.findall(r"(?<!\d)\d{9,15}(?!\d)", message)))
+    evidence_lines = [f"- {clause}" for clause in evidence_clauses]
+    if item_ids and not any(any(item_id in line for item_id in item_ids) for line in evidence_lines):
+        evidence_lines.append(f"- 人工核验样本 Item IDs：{' / '.join(item_ids[:6])}")
+    if not evidence_lines:
+        return ""
+    return "\n\n".join(
+        (
+            "### 市场成交证据结论",
+            f"候选商品 1：{winner}\n**相对赢家：** {winner}",
+            "**记录依据：** 以下是商家本轮提交并标记为已核验的 eBay US 市场数据，不是模型推测。\n"
+            + "\n".join(evidence_lines),
+            "**证据边界：** 这只能证明该商品方向在本轮三个候选中相对更强；不证明真实供应商、库存、材质、尺寸、重量、成本、图片权利或已经具备发布条件。",
+            "**下一步：** 进入真实供应商事实核验。当前不生成 Listing、不生图、不写入 eBay，也不要求重复 OAuth。",
+        )
+    )
+
+
+def _project_selection_answer_to_contract(
+    *,
+    message: str,
+    answer: str,
+    context: dict[str, Any],
+    blocked_by: list[str],
+    source_records: list[dict[str, Any]] | None = None,
+) -> str:
+    """Convert usable candidate names into an honest, fact-minimal merchant answer."""
+
+    selection_contract = context.get("selection_contract") if isinstance(context.get("selection_contract"), dict) else {}
+    if not selection_contract or not answer:
+        return ""
+    # Once product evidence has been retrieved, deleting every comparison
+    # claim and replacing it with generic search cards is not a successful
+    # research answer. Preserve the failed quality result and its reason.
+    if any(isinstance(record, dict) and (
+        record.get("market_evidence_role") == "item_listing_reference"
+        or re.search(r"https://(?:www\.)?ebay\.com/itm/", str(record.get("url") or ""))
+    ) for record in source_records or []):
+        return ""
+    unprojectable = {
+        "missing_concrete_product_candidates",
+        "excluded_previous_candidate_reused",
+        "empty_model_answer",
+        "model_answer_not_grounded_to_request",
+    }
+    if unprojectable.intersection(str(item) for item in blocked_by):
+        return ""
+    try:
+        from .repository import _ai_ceo_market_product_candidates
+
+        candidates = _ai_ceo_market_product_candidates(
+            message="" if is_semantic_plan(context.get("semantic_plan")) else message, answer=answer)
+    except Exception:
+        candidates = []
+    required_count = max(1, _safe_int(selection_contract.get("required_candidate_count") or 1))
+    if len(candidates) < required_count:
+        return ""
+    excluded_names = [
+        _safe_text(item, limit=80)
+        for item in selection_contract.get("excluded_candidate_names", [])
+        if _safe_text(item, limit=80)
+    ]
+    chosen: list[str] = []
+    for item in candidates:
+        name = _safe_text(item.get("name") or "", limit=120) if isinstance(item, dict) else ""
+        normalized = _normalized_candidate_name(name)
+        if not normalized or any(_candidate_name_matches_exclusion(excluded, name) for excluded in excluded_names):
+            continue
+        if name not in chosen:
+            chosen.append(name)
+        if len(chosen) >= required_count:
+            break
+    if len(chosen) < required_count:
+        return ""
+
+    blocks = ["### 候选商品卡"]
+    for index, name in enumerate(chosen, start=1):
+        search_url = "https://www.ebay.com/sch/i.html?_nkw=" + urllib.parse.quote_plus(name)
+        blocks.append(
+            "\n".join(
+                (
+                    f"候选商品 {index}：{name}",
+                    "为什么进入核验：这是 AI CEO 按商家约束提出的待验证方向，不代表已经证实市场需求。",
+                    f"eBay US 复核入口：[打开 eBay US 搜索]({search_url})",
+                    "成交证据：成交证据不足；搜索入口只用于商家复核，不等于成交记录。",
+                    "已证实事实：当前只证实这是本轮新提出的产品方向；没有供应商、实物或商品参数资料。",
+                    "推断依据：仅按本轮结构、接触、电池、液体、易碎和适配约束形成初筛方向。",
+                    "待补资料：材质、重量、尺寸、采购成本、包装、权利信息、合规要求和可追踪履约方案均未知。",
+                    "本轮结论：进入下一轮实物与供应商核验。",
+                )
+            )
+        )
+    blocks.append(
+        "本轮只保留候选方向和复核入口，不生成 Listing、不生图、不写入 eBay；任何候选在证据或实物核验不通过时直接淘汰。"
+    )
+    return "\n\n".join(blocks)
+
+
+def _model_answer_repair_instruction(
+    *,
+    answer_quality: dict[str, Any],
+    selection_contract: dict[str, Any],
+) -> str:
+    blocked_by = [str(item) for item in answer_quality.get("blocked_by", []) if str(item)]
+    if not blocked_by:
+        return ""
+    instructions = [f" 本轮修复必须消除这些失败代码：{', '.join(blocked_by)}。"]
+    if any(code in blocked_by for code in (
+        "model_answer_truncated_table", "model_answer_unclosed_code_fence", "model_answer_incomplete_ending",
+    )):
+        instructions.append(
+            "从头返回简短完整的结果，不续写残片；表格必须有完整表头和每一行，不留下孤立竖线或未闭合代码块。"
+            "保留商家指定的字段、数值和模拟标记；未知事实仍待核对，不新增未经证实的参数。"
+        )
+    if "connected_store_reported_as_unauthorized" in blocked_by or "connection_status_mismatch" in blocked_by:
+        instructions.append("不要声称店铺未授权，也不要改写连接状态；这轮选品无需主动讨论 OAuth。")
+    if "listing_scope_exceeded" in blocked_by:
+        instructions.append("删除所有 Listing 标题、字段、SKU、Item specifics、类目映射和刊登建议。")
+    if "invented_unknown_product_facts" in blocked_by:
+        instructions.append("删除所有重量、尺寸、材质、成本、品牌、型号、包装和物流服务的数值或断言；逐项写未知或待核。")
+    if "research_unverified_current_availability" in blocked_by:
+        instructions.append("商品搜索摘要和历史页面不能证明当前在售；逐句移除当前在售的断言，改为历史页面参考、当前状态未验证，不能只在末尾加免责声明。")
+    if "research_ambiguous_main_item_price" in blocked_by:
+        instructions.append("逐来源核对主价：只有明确Item price或单件标价可引用；Was/原价、You save/节省、批量价不等于主价。不能区分时写主商品价格未验证，不猜数字。")
+    if "research_candidate_source_mismatch" in blocked_by:
+        instructions.append("每个候选卡和后续同名小节只引用该商品的来源；不能把另一候选或不匹配竞品的S编号放入本候选。竞品商品标题不是新增候选，比较表保留相同候选名称。")
+    if "excluded_previous_candidate_reused" in blocked_by:
+        excluded = "、".join(str(item) for item in selection_contract.get("excluded_candidate_names", []) if str(item))
+        instructions.append(f"不得再次推荐这些旧候选：{excluded}。" if excluded else "不得复用上一轮候选。")
+    if "missing_candidate_ebay_evidence_entry" in blocked_by:
+        instructions.append("每个候选分别给一个可点击的 eBay US /sch/i.html?_nkw= 搜索入口或真实 Item ID。")
+    if "search_entry_presented_as_demand_evidence" in blocked_by or "unsupported_common_sense_demand_claim" in blocked_by:
+        instructions.append("搜索入口不等于成交证明；没有候选级成交记录时，每个候选分别写‘成交证据不足’，不要用常识声称需求稳定。")
+    if selection_contract:
+        instructions.append("严格按 selection_contract 输出，不要解释上一版，也不要复制 recent_conversation 里的旧答案。")
+    else:
+        instructions.append("严格按当前 merchant_message 的任务与格式输出，不要解释上一版，也不要复制旧答案。")
+    return "".join(instructions)
+
+
+def _model_answer_rejected_fallback(
+    *,
+    message: str,
+    source_records: list[dict[str, Any]],
+    blocked_by: list[str] | None = None,
+    turn_plan: dict[str, Any] | None = None,
+) -> str:
+    blocked = {str(item) for item in (blocked_by or [])}
+    semantic_plan = is_semantic_plan(turn_plan)
+    if blocked.intersection({
+        "empty_model_answer", "model_answer_truncated_table", "model_answer_unclosed_code_fence",
+        "model_answer_incomplete_ending", "truncated_platform_rule_answer",
+    }):
+        return (
+            "### 本次回答内容不完整\n\n"
+            "回复未形成完整内容，未用于生成或覆盖 Listing。现有项目和已保存资料保持不变。\n\n"
+            "可以在当前项目重试，或继续补充商品资料。本次没有保存 eBay 草稿或执行发布。"
+        )
+    if blocked.intersection({
+        "missing_source_citation_for_platform_rule", "unsupported_absolute_platform_rule_claim",
+        "official_platform_claim_without_official_source",
+    }) or (not semantic_plan and not blocked and _looks_like_platform_rule_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)):
         official_sources = []
         for index, source in enumerate(source_records[:8], start=1):
             domain = _safe_text(source.get("domain") or _domain_from_url(str(source.get("url") or "")), limit=120)
@@ -3275,9 +6116,32 @@ def _model_answer_rejected_fallback(*, message: str, source_records: list[dict[s
         domain = _safe_text(source.get("domain") or "", limit=80)
         source_lines.append(f"[{citation_id}] {title}{f'（{domain}）' if domain else ''}")
     source_text = "\n".join(source_lines) if source_lines else "这次还没有拿到足够的可核验公开来源。"
+    if (turn_plan.get("research_delivery") != "candidate_selection" if semantic_plan else
+            not _looks_like_product_selection_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW)):
+        return (
+            "### 本次回答未通过校验\n\n"
+            "内容与当前任务或已核对的资料不一致，未用于生成或覆盖 Listing。现有项目和已保存资料保持不变。\n\n"
+            "请在当前项目继续核对资料。本次没有保存 eBay 草稿或执行发布。"
+        )
+    reason_lines = []
+    reason_map = (
+        ("connected_store_reported_as_unauthorized", "错误判断了店铺授权状态"),
+        ("connection_status_mismatch", "改写了真实连接状态"),
+        ("listing_scope_exceeded", "越过了本轮只做选品的范围"),
+        ("invented_unknown_product_facts", "把未知的重量、材质、成本或物流信息写成了事实"),
+        ("research_unverified_current_availability", "把历史商品页面误写成了当前在售证明"),
+        ("excluded_previous_candidate_reused", "复用了已经淘汰的旧候选"),
+        ("missing_candidate_ebay_evidence_entry", "没有为每个候选提供可复核的 eBay US 入口或 Item ID"),
+        ("search_entry_presented_as_demand_evidence", "把搜索入口误当成了成交证据"),
+        ("unsupported_common_sense_demand_claim", "用常识代替了候选级需求证据"),
+    )
+    for code, label in reason_map:
+        if code in blocked:
+            reason_lines.append(label)
+    reason_text = "、".join(reason_lines) if reason_lines else "没有完整对应本轮选品要求"
     return (
-        "### 这次结果没有进入 Listing\n\n"
-        "这次回答没有对应你刚才的选品要求，我已经拦住，没有把无关内容当成商品，也没有生成可发布草稿。\n\n"
+        "### 这次选品没有通过质量门\n\n"
+        f"系统已拦住：{reason_text}。没有把不合格内容送入 Listing，也没有生成可发布草稿。\n\n"
         f"**你的目标：** {_safe_text(message, limit=500)}\n\n"
         f"**已找到的公开来源：**\n{source_text}\n\n"
         "**下一步：** 可以直接重试同一句；也可以补一个目标类目、价格带或采购限制，我会重新生成具体候选商品卡。"
@@ -3352,6 +6216,11 @@ def _market_report_recovery_draft_answer(
         source_note = f"这次联网搜索状态：{search_status}；{source_note}"
     if blocked_by:
         source_note += f" 缺口：{', '.join(_safe_text(item, limit=80) for item in blocked_by[:3])}。"
+    next_step = (
+        "重新生成具体候选商品卡；每个候选必须有商品名、推荐度、需求依据、eBay 适配、主要风险、已证实事实、推断依据和待补资料。"
+        if _merchant_defers_listing(message)
+        else "重新生成具体候选商品卡；每个候选必须有商品名、推荐度、需求依据、eBay 适配、主要风险和待补资料；进入 Listing 前再补字段建议。"
+    )
     return (
         "### AI CEO 市场调研待继续\n\n"
         f"{failure_reason}我已保留你的选品目标，但不会用固定样例补成商品，也不会把不完整结果导入 Listing。"
@@ -3359,7 +6228,7 @@ def _market_report_recovery_draft_answer(
         "**目标市场：** eBay 美国站（EBAY_US）\n"
         f"**本次目标：** {_safe_text(message, limit=500)}\n"
         f"**来源状态：** {source_note}\n\n"
-        "**下一步：** 重新生成具体候选商品卡；每个候选必须有商品名、推荐度、需求依据、eBay 适配、主要风险和 Listing 字段建议。"
+        f"**下一步：** {next_step}"
         "在这些内容对上之前，系统不会把本记录标记为可导入 Listing。"
     )
 
@@ -3503,6 +6372,15 @@ def _public_model_context(
             "endpoint_host": _safe_text(model_resolution.get("endpoint_host") or urlparse(endpoint).netloc, limit=160),
             "mode": _safe_text(model_resolution.get("mode") or "", limit=80),
             "secret_ref_scope": _safe_text(model_resolution.get("secret_ref_scope") or "", limit=80),
+            "model_tier": _safe_text(
+                model_resolution.get("model_tier") or getattr(model_client, "jiejing_model_tier", "fast"),
+                limit=20,
+            ),
+            "reasoning_mode": _safe_text(
+                model_resolution.get("reasoning_mode") or getattr(model_client, "jiejing_reasoning_mode", "disabled"),
+                limit=20,
+            ),
+            "complexity_upgrade": model_resolution.get("complexity_upgrade") is True,
             "merchant_pays_provider_directly": bool(model_resolution.get("merchant_pays_provider_directly", True)),
             "jiejing_pays_provider_usage": bool(model_resolution.get("jiejing_pays_provider_usage", False)),
             "frontend_gets_model_api_key": False,

@@ -38,6 +38,7 @@ class SaaSSettings:
     ebay_read_only_live_enabled: bool
     ebay_write_live_enabled: bool
     ebay_draft_save_live_enabled: bool
+    ebay_controlled_publish_live_enabled: bool
     allow_hermes_adapters: bool
     cors_origin: str
     internal_admin_emails: tuple[str, ...]
@@ -90,6 +91,9 @@ class SaaSSettings:
             ebay_read_only_live_enabled=_env_bool("JIEJING_EBAY_READ_ONLY_LIVE", default=False),
             ebay_write_live_enabled=_env_bool("JIEJING_EBAY_WRITE_LIVE", default=False),
             ebay_draft_save_live_enabled=_env_bool("JIEJING_EBAY_DRAFT_SAVE_LIVE", default=False),
+            ebay_controlled_publish_live_enabled=_env_bool(
+                "JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE", default=False
+            ),
             allow_hermes_adapters=_env_bool("JIEJING_ALLOW_HERMES_ADAPTERS", default=False),
             cors_origin=os.environ.get("JIEJING_CORS_ORIGIN", "*"),
             internal_admin_emails=_env_csv_lower("JIEJING_INTERNAL_ADMIN_EMAILS"),
@@ -142,6 +146,25 @@ class SaaSSettings:
             and self.is_production_like
         )
 
+    @property
+    def effective_ebay_controlled_publish_enabled(self) -> bool:
+        """Allow confirmation-gated publishOffer only for a proven existing draft.
+
+        This deliberately stays separate from the broad real-write switch.  It
+        cannot create inventory items or offers and is valid only while the
+        read-only, token-refresh and unpublished-draft boundaries are live.
+        """
+
+        return bool(
+            self.ebay_controlled_publish_live_enabled
+            and self.ebay_draft_save_live_enabled
+            and self.ebay_token_refresh_live_enabled
+            and self.ebay_read_only_live_enabled
+            and self.is_production_like
+            and not self.requested_real_platform_writes
+            and not self.ebay_write_live_enabled
+        )
+
     def public_dict(self) -> dict[str, Any]:
         return {
             "environment": self.environment,
@@ -172,6 +195,7 @@ class SaaSSettings:
             "ebay_read_only_live_enabled": self.ebay_read_only_live_enabled,
             "ebay_write_live_enabled": self.ebay_write_live_enabled,
             "ebay_draft_save_live_enabled": self.ebay_draft_save_live_enabled,
+            "ebay_controlled_publish_live_enabled": self.ebay_controlled_publish_live_enabled,
             "allow_hermes_adapters": self.allow_hermes_adapters,
             "internal_admin_allowlist_configured": bool(self.internal_admin_emails),
             "cors_origin_configured": bool(self.cors_origin),
@@ -180,6 +204,7 @@ class SaaSSettings:
             "requested_real_platform_writes": self.requested_real_platform_writes,
             "effective_real_platform_writes_enabled": self.effective_real_platform_writes_enabled,
             "effective_ebay_draft_save_enabled": self.effective_ebay_draft_save_enabled,
+            "effective_ebay_controlled_publish_enabled": self.effective_ebay_controlled_publish_enabled,
             "session_secret_configured": self.session_secret_configured,
             "session_secret_is_default": self.session_secret_is_default,
             "secret_exposed": False,

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +100,27 @@ def main() -> int:
             message="empty-market-term",
         )
         empty_calls_after_second = len(calls)
+        # The master switch must stop provider requests AND the no-key fallback.
+        # Otherwise a disabled search can still transmit a merchant's question.
+        for configured in (False, True):
+            if configured:
+                os.environ["TAVILY_API_KEY"] = "synthetic-search-fixture"
+            else:
+                os.environ.pop("TAVILY_API_KEY", None)
+            os.environ["JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED"] = "false"
+            before_disabled = len(calls)
+            disabled = ai_ceo_chat._run_realtime_search(kind="web_search", message="do not transmit this fixture")
+            assert disabled.get("status") == "blocked", "disabled search returned live sources"
+            assert disabled.get("blocked_by") == ["public_search_disabled"]
+            assert len(calls) == before_disabled, "disabled search still called an external fallback"
+            cache_key = ai_ceo_chat._default_web_context_cache_key(
+                route=ai_ceo_chat.AI_CEO_ROUTE_GENERAL, message="Introduce Jiejing in one sentence.")
+            ai_ceo_chat._DEFAULT_WEB_CONTEXT_CACHE[cache_key] = (datetime.now(timezone.utc), default_first)
+            cached_disabled = ai_ceo_chat._run_default_web_context_search(
+                route=ai_ceo_chat.AI_CEO_ROUTE_GENERAL, message="Introduce Jiejing in one sentence.")
+            assert not cached_disabled.get("source_records"), "disabled search reused enabled-session sources"
+            assert cached_disabled.get("used_for_model_prompt") is not True
+            assert len(calls) == before_disabled
     finally:
         ai_ceo_chat.urllib.request.urlopen = old_urlopen
         ai_ceo_chat._DEFAULT_WEB_CONTEXT_CACHE.clear()

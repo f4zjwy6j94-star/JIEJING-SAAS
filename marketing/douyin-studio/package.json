@@ -1,0 +1,38 @@
+{
+  "name": "douyin-studio",
+  "version": "1.0.0",
+  "description": "Jiejing Douyin vertical video production studio",
+  "repository": {},
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "@remotion/captions": "4.0.518",
+    "@remotion/cli": "4.0.518",
+    "@remotion/media": "4.0.518",
+    "@remotion/transitions": "4.0.518",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.518"
+  },
+  "devDependencies": {
+    "@remotion/eslint-config-flat": "4.0.518",
+    "@types/react": "19.2.7",
+    "@types/web": "0.0.166",
+    "eslint": "9.19.0",
+    "prettier": "3.8.1",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "dev": "remotion studio --no-open",
+    "build": "remotion bundle",
+    "render:launch-01": "remotion render src/index.ts DouyinLaunch01 out/launch-01.mp4 --codec=h264 --audio-codec=aac --pixel-format=yuv420p --crf=18 --color-space=bt709 --image-format=png --concurrency=50%",
+    "render:cover-01": "remotion still src/index.ts DouyinCover01 out/cover-01.png --frame=0",
+    "render:cover-horizontal-01": "remotion still src/index.ts DouyinCoverHorizontal01 out/cover-horizontal-01.png --frame=0",
+    "render:avatar": "remotion still src/index.ts JiejingAvatar out/jiejing-avatar.png --frame=0",
+    "upgrade": "remotion upgrade",
+    "lint": "eslint src && tsc"
+  },
+  "sideEffects": [
+    "*.css"
+  ]
+}

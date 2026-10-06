@@ -17,6 +17,11 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from jiejing_saas.repository import SaaSRepository  # noqa: E402
+
 OUT = ROOT / "output" / "jiejing-domestic-billing-api-test"
 
 
@@ -31,7 +36,10 @@ def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     port = _free_port()
     env = dict(os.environ)
-    env.update({"JIEJING_SAAS_ENV": "test"})
+    env.update({
+        "JIEJING_SAAS_ENV": "test",
+        "JIEJING_INTERNAL_ADMIN_EMAILS": "billing-platform-reviewer@example.test",
+    })
     for key in (
         "JIEJING_WECHAT_PAY_APP_ID",
         "JIEJING_WECHAT_PAY_MCH_ID",
@@ -81,6 +89,28 @@ def main() -> int:
         other_token = str(other.get("token") or "")
         if not token or not other_token:
             return fail("test accounts should receive bearer tokens")
+
+        # Read-only point usage is authenticated and cannot be redirected by a company query.
+        media_status, _ = _get_json_expect_error(f"{base}/billing/media-credits")
+        if media_status != 401:
+            return fail("media usage must require authentication")
+        media_company = str(owner['company']['company_id'])
+        media_repository = SaaSRepository(OUT / "saas.sqlite")
+        media_repository.apply_media_credit_operation(company_id=media_company, user_id=None,
+            operation_type='grant', points=80, idempotency_key='http-media-grant-fixture',
+            reference_type='billing_order', reference_id='fixture-media-order', details={'credit_source':'purchased'})
+        media_repository.apply_media_credit_operation(company_id=media_company, user_id=None,
+            operation_type='reserve', points=80, idempotency_key='http-media-reserve-fixture',
+            reference_type='media_job', reference_id='fixture-media-job')
+        media_usage = _get_json(f"{base}/billing/media-credits", token=token)['media_credits']['usage']
+        if media_usage['held_points'] != 80 or len(media_usage['items']) != 1:
+            return fail("authenticated usage must match the owner's reservation")
+        isolated = _get_json(f"{base}/billing/media-credits?company_id={media_company}", token=other_token)['media_credits']['usage']
+        if isolated['held_points'] or isolated['items']:
+            return fail("media usage must ignore foreign company query parameters")
+        quota_usage = _get_json(f"{base}/billing/usage", token=token)['billing_usage']['media_credits']
+        if 'usage' in quota_usage:
+            return fail("quota checks must not load media history again")
 
         contract = _get_json(f"{base}/billing/domestic/contract", token=token).get("domestic_billing", {})
         if contract.get("status") != "not_open" or contract.get("real_checkout_ready") is not False:
@@ -149,6 +179,42 @@ def main() -> int:
         listed = _get_json(f"{base}/billing/domestic/orders", token=token).get("domestic_billing_orders", [])
         if not listed or any(key in listed[0] for key in ("company_id", "user_id", "order", "code_url", "provider_order_id")):
             return fail(f"merchant order history must stay sanitized: {listed}")
+        operator = _post_json(
+            f"{base}/auth/register",
+            {
+                "email": "billing-operator@example.test",
+                "password": "Billing-operator-2026",
+                "company_name": "Billing Operator",
+            },
+        )
+        invited = _post_json(
+            f"{base}/team/invitations",
+            {"email": "billing-operator@example.test", "role": "operator"},
+            token=token,
+        )
+        if invited.get("team_invitation", {}).get("status") != "accepted_existing_user_added":
+            return fail(f"billing permission fixture should join the owner company: {invited}")
+        owner_company_id = str(owner.get("company", {}).get("company_id") or owner.get("company_id") or "")
+        if not owner_company_id:
+            owner_company_id = str(_get_json(f"{base}/me", token=token).get("company", {}).get("company_id") or "")
+        switched = _post_json(
+            f"{base}/auth/switch-company",
+            {"company_id": owner_company_id},
+            token=str(operator.get("token") or ""),
+        )
+        operator_token = str(switched.get("token") or "")
+        if not operator_token:
+            return fail(f"billing permission fixture should switch into the owner company: {switched}")
+        operator_list_status, _ = _get_json_expect_error(f"{base}/billing/domestic/orders", token=operator_token)
+        operator_detail_status, _ = _get_json_expect_error(
+            f"{base}/billing/domestic/orders/{order_id}",
+            token=operator_token,
+        )
+        if operator_list_status != 403 or operator_detail_status != 403:
+            return fail(
+                "team members without manage_billing must not read company payment orders: "
+                f"{operator_list_status}, {operator_detail_status}"
+            )
         other_status, _ = _get_json_expect_error(f"{base}/billing/domestic/orders/{order_id}", token=other_token)
         if other_status != 404:
             return fail(f"another merchant must not discover the order: {other_status}")
@@ -229,6 +295,80 @@ def main() -> int:
         )
         if unauth_refund_execute != 401 or unauth_refund_query != 401:
             return fail(f"refund execution and query routes must require authentication: {unauth_refund_execute}, {unauth_refund_query}")
+
+        refund_order_id = "domestic_refund_generic_route_guard"
+        repository = SaaSRepository(OUT / "saas.sqlite")
+        owner_identity = _get_json(f"{base}/me", token=token)
+        owner_company_id = str(owner_identity.get("company", {}).get("company_id") or "")
+        owner_user_id = str(owner_identity.get("user", {}).get("user_id") or "")
+        repository.create_domestic_billing_order_record(
+            order_id=refund_order_id,
+            company_id=owner_company_id,
+            user_id=owner_user_id,
+            provider="wechat_pay_native",
+            plan_key="starter",
+            amount_minor=9900,
+            currency="CNY",
+            duration_days=30,
+            status="pending_payment",
+            idempotency_key_hash="d" * 64,
+            order={"provider_mode": "generic_route_guard_test"},
+        )
+        repository.mark_domestic_billing_order_paid(
+            company_id=owner_company_id,
+            order_id=refund_order_id,
+            provider_order_id="wx-paid-generic-route-guard",
+            paid_at="2026-08-28T00:00:00+00:00",
+            payment={"signature_verified": True, "amount_verified": True},
+        )
+        refund_review = _post_json(
+            f"{base}/billing/domestic/orders/{refund_order_id}/refund-request",
+            {"reason": "Merchant requested a full refund for the regression test."},
+            token=token,
+        ).get("domestic_billing_refund_request", {})
+        confirmation_id = str(refund_review.get("confirmation_id") or "")
+        if not confirmation_id:
+            return fail(f"refund review should create an exact confirmation: {refund_review}")
+        merchant_review_status, merchant_review_body = _post_json_expect_error(
+            f"{base}/confirmations/{confirmation_id}/decision",
+            {"decision": "approve", "note": "Approve review only; do not move money."},
+            token=token,
+        )
+        if merchant_review_status != 403 or merchant_review_body.get("error") != "domestic_refund_review_requires_platform_operations":
+            return fail(f"merchant must not approve its own SaaS refund: {merchant_review_status}, {merchant_review_body}")
+        pending_refund = repository.get_confirmation(company_id=owner_company_id, confirmation_id=confirmation_id) or {}
+        if pending_refund.get("status") != "pending":
+            return fail("denied merchant approval must leave the refund pending for platform review")
+        reviewer = _post_json(
+            f"{base}/auth/register",
+            {"email": "billing-platform-reviewer@example.test", "password": "Billing-reviewer-fixture-2026", "company_name": "Platform Refund Reviewer"},
+        )
+        review_status, reviewed = _post_json_status(
+            f"{base}/owner/billing/domestic/refunds/{refund_order_id}/review",
+            {"company_id": owner_company_id, "decision": "approve", "review_reason": "Verified the fixture payment and entitlement records; approval alone must not move money."},
+            token=str(reviewer.get("token") or ""),
+            headers={"Host": "ops.jiejing.shop"},
+        )
+        if review_status != 201 or reviewed.get("refund_review", {}).get("status") != "approved":
+            return fail(f"allowlisted platform operations must retain legitimate refund review: {review_status}, {reviewed}")
+        reviewed_order = repository.get_domestic_billing_order(company_id=owner_company_id, order_id=refund_order_id) or {}
+        if reviewed_order.get("status") != "refund_review_requested":
+            return fail("platform approval alone must not submit or complete the refund")
+        generic_status, generic_body = _post_json_expect_error(
+            f"{base}/confirmations/{confirmation_id}/execute",
+            {
+                "idempotency_key": "domestic-refund-wrong-generic-route-v1",
+                "platform": "ebay",
+                "payload": {},
+            },
+            token=token,
+        )
+        if generic_status != 409 or generic_body.get("error") != "domestic_billing_refund_requires_dedicated_execution":
+            return fail(f"generic platform execution must not consume a billing refund approval: {generic_status}, {generic_body}")
+        confirmations = _get_json(f"{base}/confirmations", token=token).get("confirmations", [])
+        guarded = next((item for item in confirmations if item.get("confirmation_id") == confirmation_id), {})
+        if guarded.get("status") != "approved":
+            return fail(f"blocked generic execution must preserve the approved refund for the explicit route: {guarded}")
 
         print("PASS jiejing_domestic_billing_api")
         return 0

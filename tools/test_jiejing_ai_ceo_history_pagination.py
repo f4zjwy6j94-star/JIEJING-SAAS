@@ -26,6 +26,14 @@ def main() -> int:
         "chat.scrollHeight - previousHeight",
         'state.saasAiCeoAutoFollow = false',
         "bindSaasAiCeoHistoryControls(chat)",
+        "saasAiCeoDisplayHistoryTurns",
+        "saasAiCeoHistoryArchive",
+        '"/ai-ceo/chat-history?limit=30',
+        "cursor=${encodeURIComponent(cursor)}",
+        "isCurrentSaasAiCeoHistoryRequest(context)",
+        "resetSaasAiCeoHistoryArchive()",
+        "archive.hasMore",
+        "history_cursor_not_advanced",
     ]
     for marker in required:
         if marker not in app:

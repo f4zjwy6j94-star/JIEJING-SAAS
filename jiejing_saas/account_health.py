@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -22,6 +23,12 @@ ALLOWED_INCIDENT_ACTIONS = [
     "read_only_sync",
     "appeal_draft",
 ]
+
+STICKY_PROVIDER_RESTRICTION_ERROR_IDS = {"25019"}
+TRUSTED_PROVIDER_RESTRICTION_RESOLUTION_TYPES = {
+    "ebay_message_resolution_notice",
+    "ebay_support_case_resolution",
+}
 
 
 def build_account_health_snapshot(
@@ -45,8 +52,24 @@ def build_account_health_snapshot(
     business_policies = _packet_section_data(packet, "account_business_policies")
     finances = _packet_section_data(packet, "finances")
     connections = repository.list_connections(company_id=company_id, store_id=store_id)
-    execution_results = repository.list_execution_results(company_id=company_id, limit=80)
-    recent_platform_errors = _recent_platform_error_summaries(execution_results)
+    execution_results = repository.list_execution_results(
+        company_id=company_id,
+        store_id=store_id,
+        limit=80,
+        include_error_ids=tuple(sorted(STICKY_PROVIDER_RESTRICTION_ERROR_IDS)),
+    )
+    latest_packet_created_at = str(latest_packet.get("created_at") or packet.get("created_at") or "")
+    packet_freshness = _packet_freshness_evidence(latest_packet, packet)
+    provider_restriction_resolution = _provider_restriction_resolution_evidence(
+        repository,
+        company_id=company_id,
+        store_id=store_id,
+    )
+    recent_platform_errors = _active_platform_error_summaries(
+        execution_results,
+        latest_packet_created_at=latest_packet_created_at,
+        provider_restriction_resolution=provider_restriction_resolution,
+    )
 
     raw_status = _first_text(
         store_profile.get("seller_account_status"),
@@ -54,7 +77,13 @@ def build_account_health_snapshot(
         store_profile.get("status"),
     )
     selling_status = _first_text(store_profile.get("selling_status"), raw_status)
+    official_packet_present = bool(packet) and (
+        latest_packet.get("source_mode") == "official_api" or packet.get("source_label") == "official_api"
+    )
+    kyc_check_status = _first_text(store_profile.get("kyc_check_status"))
+    kyc_checks = store_profile.get("kyc_checks") if isinstance(store_profile.get("kyc_checks"), list) else []
     payout_status = _first_text(
+        store_profile.get("payout_status"),
         finances.get("payout_status"),
         finances.get("payment_status"),
         finances.get("payout_hold_status"),
@@ -66,11 +95,15 @@ def build_account_health_snapshot(
         store_profile.get("restriction"),
         store_profile.get("policy_warnings"),
         store_profile.get("verification_status"),
+        (
+            "kyc_status_unknown"
+            if official_packet_present and not kyc_check_status
+            else "kyc_verification_required"
+            if kyc_check_status == "verification_required"
+            else ""
+        ),
     )
 
-    official_packet_present = bool(packet) and (
-        latest_packet.get("source_mode") == "official_api" or packet.get("source_label") == "official_api"
-    )
     present_resource_keys = _packet_resource_keys(packet, "present_resource_keys")
     missing_resource_keys = _packet_resource_keys(packet, "missing_resource_keys")
     business_policies_present = _business_policies_ready(business_policies)
@@ -85,6 +118,9 @@ def build_account_health_snapshot(
         recent_platform_errors=recent_platform_errors,
         has_store_profile=has_store_profile,
     )
+    stale_clear_snapshot = status in {"normal", "attention"} and packet_freshness["blocks_clear_status"]
+    if stale_clear_snapshot:
+        status = "unknown"
     incident_mode = status in {
         "unknown",
         "registration_incomplete",
@@ -107,7 +143,7 @@ def build_account_health_snapshot(
         selling_limits=selling_limits,
     )
     return {
-        "contract_version": "2026-08-02-account-health-seller-onboarding-v2",
+        "contract_version": "2026-08-28-account-health-sticky-provider-restriction-v5",
         "platform": "ebay",
         "company_id": company_id,
         "store_id": store_id,
@@ -121,10 +157,12 @@ def build_account_health_snapshot(
         "can_enter_publish_preflight": not incident_mode and business_policies_present,
         "onboarding_stage": onboarding_stage,
         "business_policy_statuses": business_policy_statuses,
-        "summary": _merchant_summary(
+        "summary": "现有店铺数据已过期或采集时间无法核验；请刷新官方只读资料后再检查账号状态，无需重新授权。" if stale_clear_snapshot else _merchant_summary(
             status,
             has_store_profile=has_store_profile,
             business_policies_present=business_policies_present,
+            recent_platform_errors=recent_platform_errors,
+            restrictions=restrictions,
         ),
         "account_health": account_health_for_publish,
         "evidence_package": {
@@ -132,6 +170,7 @@ def build_account_health_snapshot(
             "packet_id": latest_packet.get("packet_id") or "",
             "packet_source_mode": latest_packet.get("source_mode") or packet.get("source_label") or "",
             "packet_created_at": latest_packet.get("created_at") or packet.get("created_at") or "",
+            "packet_freshness": packet_freshness,
             "official_packet_present": official_packet_present,
             "store_profile_present": has_store_profile,
             "business_policies_present": business_policies_present,
@@ -145,6 +184,10 @@ def build_account_health_snapshot(
             "restriction_count": len(restrictions),
             "restrictions": restrictions[:10],
             "recent_platform_errors": recent_platform_errors[:8],
+            "kyc_check_status": kyc_check_status or "unknown",
+            "kyc_check_count": len(kyc_checks),
+            "kyc_checks": _safe_kyc_evidence(kyc_checks),
+            "provider_restriction_resolution": provider_restriction_resolution,
             "frontend_gets_token": False,
             "runtime_gets_token": False,
             "raw_secret_stored": False,
@@ -157,7 +200,15 @@ def build_account_health_snapshot(
             "allowed_incident_actions": ALLOWED_INCIDENT_ACTIONS,
             "confirmation_center_still_required_when_clear": True,
         },
-        "next_actions": _next_actions(status, business_policies_present=business_policies_present),
+        "next_actions": [
+            "刷新官方只读资料后再检查账号状态；无需重新授权，也无需重建商品草稿。",
+            "账号状态重新核验前暂停真实发布；资料和素材仍可继续整理。",
+        ] if stale_clear_snapshot else _next_actions(
+            status,
+            business_policies_present=business_policies_present,
+            recent_platform_errors=recent_platform_errors,
+            restrictions=restrictions,
+        ),
         "secret_exposed": False,
     }
 
@@ -174,7 +225,7 @@ def merge_account_health_into_payload(
     if not existing and snapshot_health:
         merged["account_health"] = snapshot_health
     elif existing and snapshot_health:
-        merged["account_health"] = {**snapshot_health, **existing}
+        merged["account_health"] = {**existing, **snapshot_health}
     merged["account_health_snapshot"] = {
         "status": account_health_snapshot.get("status"),
         "label": account_health_snapshot.get("label"),
@@ -233,7 +284,13 @@ def _classify_status(
             payout_status,
             " ".join(restrictions),
             str(_safe_public_value(selling_limits)),
-            " ".join(str(item.get("code") or item.get("message") or "") for item in recent_platform_errors),
+            " ".join(
+                " ".join(
+                    str(value or "")
+                    for value in (item.get("error_id"), item.get("code"), item.get("message"))
+                )
+                for item in recent_platform_errors
+            ),
         ]
     ).strip().lower().replace("_", " ")
     if not has_store_profile:
@@ -256,6 +313,8 @@ def _classify_status(
             "unverified",
             "policy violation",
             "verification required",
+            "kyc status unknown",
+            "25019",
         )
     ):
         return "restricted"
@@ -303,6 +362,43 @@ def _packet_section_data(packet: dict[str, Any], key: str) -> dict[str, Any]:
     return {}
 
 
+def _packet_freshness_evidence(latest_packet: dict[str, Any], packet: dict[str, Any]) -> dict[str, Any]:
+    """Apply the packet's declared expiry without inventing a TTL for legacy packets."""
+    freshness = packet.get("freshness") if isinstance(packet.get("freshness"), dict) else {}
+    if "stale_after_seconds" not in freshness:
+        return {"status": "not_declared", "blocks_clear_status": False}
+    threshold = freshness.get("stale_after_seconds")
+    evidence: dict[str, Any] = {"status": "invalid", "blocks_clear_status": True}
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold < float("inf"):
+        return evidence
+    evidence["stale_after_seconds"] = threshold
+    timestamps = [value for value in (
+        freshness.get("snapshot_created_at"), packet.get("created_at"), latest_packet.get("created_at"),
+    ) if value not in (None, "")]
+    if not timestamps:
+        return evidence
+    now = datetime.now(timezone.utc)
+    ages = []
+    for value in timestamps:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return evidence
+            age = (now - parsed).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return evidence
+        if age < -300:
+            return evidence
+        ages.append(max(0.0, age))
+    age = max(ages)
+    evidence.update({
+        "status": "stale" if age >= threshold else "fresh",
+        "age_seconds": int(age),
+        "blocks_clear_status": age >= threshold,
+    })
+    return evidence
+
+
 def _packet_sections(packet: dict[str, Any]) -> list[Any]:
     if isinstance(packet.get("sections"), list):
         return list(packet.get("sections") or [])
@@ -332,36 +428,163 @@ def _business_policy_statuses(policies: dict[str, Any]) -> dict[str, bool]:
     }
 
 
-def _recent_platform_error_summaries(execution_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _recent_platform_error_summaries(
+    execution_results: list[dict[str, Any]],
+    *,
+    since: str = "",
+) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
     for record in execution_results:
+        created_at = str(record.get("created_at") or "")
+        if since and created_at and not _is_after(created_at, since):
+            continue
         result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        seen_errors: set[tuple[str, str, str]] = set()
         for error in _walk_platform_errors(result):
-            code = str(error.get("code") or error.get("errorId") or error.get("category") or "").strip()
+            error_id = str(error.get("error_id") or error.get("errorId") or "").strip()
+            code = str(error.get("code") or error_id or error.get("category") or "").strip()
             message = str(error.get("message") or error.get("longMessage") or error.get("detail") or "").strip()
-            if not code and not message:
+            if not error_id and not code and not message:
                 continue
+            error_key = (error_id, code, message)
+            if error_key in seen_errors:
+                continue
+            seen_errors.add(error_key)
             summaries.append(
                 {
                     "action_type": record.get("action_type") or result.get("action_type") or "",
                     "status": record.get("status") or result.get("status") or "",
+                    "error_id": error_id[:80],
                     "code": code[:80],
                     "message": message[:240],
-                    "created_at": record.get("created_at") or "",
+                    "created_at": created_at,
                 }
             )
-            break
     return summaries
+
+
+def _active_platform_error_summaries(
+    execution_results: list[dict[str, Any]],
+    *,
+    latest_packet_created_at: str,
+    provider_restriction_resolution: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Keep account-level provider restrictions active until explicit proof clears them.
+
+    A new store-profile or KYC packet is not evidence that a separate seller
+    restriction was removed. Other platform errors keep the older behavior and
+    are retired by a newer official packet.
+    """
+
+    all_errors = _recent_platform_error_summaries(execution_results)
+    active: list[dict[str, Any]] = []
+    for error in all_errors:
+        error_id = str(error.get("error_id") or "").strip()
+        if error_id in STICKY_PROVIDER_RESTRICTION_ERROR_IDS:
+            if _provider_restriction_resolution_clears(error, provider_restriction_resolution):
+                continue
+            active.append(error)
+            continue
+        created_at = str(error.get("created_at") or "")
+        if latest_packet_created_at and created_at and not _is_after(created_at, latest_packet_created_at):
+            continue
+        active.append(error)
+    return active
+
+
+def _provider_restriction_resolution_evidence(
+    repository: Any,
+    *,
+    company_id: str,
+    store_id: str,
+) -> dict[str, Any]:
+    finder = getattr(repository, "find_latest_audit_log_by_target", None)
+    audit = {}
+    if callable(finder):
+        found = finder(
+            company_id=company_id,
+            store_id=store_id,
+            action_type="ebay.provider_restriction.resolution_verified",
+            target_type="store",
+            target_id=store_id,
+        )
+        audit = found if isinstance(found, dict) else {}
+    details = audit.get("details") if isinstance(audit.get("details"), dict) else {}
+    status = str(details.get("status") or "").strip().lower()
+    evidence_type = str(details.get("evidence_type") or "").strip().lower()
+    verified_at = str(details.get("verified_at") or "").strip()
+    restriction_error_id = str(details.get("restriction_error_id") or "").strip()
+    trusted = bool(
+        audit.get("actor_type") == "platform_internal_admin"
+        and audit.get("action_type") == "ebay.provider_restriction.resolution_verified"
+        and audit.get("target_type") == "store"
+        and audit.get("target_id") == store_id
+        and status == "clear"
+        and evidence_type in TRUSTED_PROVIDER_RESTRICTION_RESOLUTION_TYPES
+        and verified_at
+        and restriction_error_id in STICKY_PROVIDER_RESTRICTION_ERROR_IDS
+        and _valid_timestamp(verified_at)
+    )
+    return {
+        "status": status or "missing",
+        "evidence_type": evidence_type,
+        "verified_at": verified_at,
+        "restriction_error_id": restriction_error_id,
+        "trusted": trusted,
+        "secret_exposed": False,
+    }
+
+
+def _provider_restriction_resolution_clears(
+    error: dict[str, Any],
+    resolution: dict[str, Any],
+) -> bool:
+    if resolution.get("trusted") is not True:
+        return False
+    if str(resolution.get("restriction_error_id") or "") != str(error.get("error_id") or ""):
+        return False
+    error_created_at = str(error.get("created_at") or "")
+    verified_at = str(resolution.get("verified_at") or "")
+    return bool(error_created_at and verified_at and _timestamp_after(verified_at, error_created_at))
+
+
+def _valid_timestamp(value: str) -> bool:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _timestamp_after(candidate: str, baseline: str) -> bool:
+    try:
+        candidate_at = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        baseline_at = datetime.fromisoformat(baseline.replace("Z", "+00:00"))
+        return candidate_at > baseline_at
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_after(candidate: str, baseline: str) -> bool:
+    """Keep a non-sticky execution incident until a newer official packet supersedes it."""
+
+    try:
+        candidate_at = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        baseline_at = datetime.fromisoformat(baseline.replace("Z", "+00:00"))
+        return candidate_at > baseline_at
+    except (TypeError, ValueError):
+        return True
 
 
 def _walk_platform_errors(value: Any) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     if isinstance(value, dict):
-        if isinstance(value.get("platform_error"), dict):
-            found.append(value["platform_error"])
+        for key in ("platform_error", "provider_error"):
+            if isinstance(value.get(key), dict):
+                found.append(value[key])
         if isinstance(value.get("error"), dict):
             found.append(value["error"])
-        for key in ("errors", "warnings"):
+        for key in ("errors", "warnings", "provider_errors"):
             items = value.get(key)
             if isinstance(items, list):
                 found.extend(item for item in items if isinstance(item, dict))
@@ -370,7 +593,7 @@ def _walk_platform_errors(value: Any) -> list[dict[str, Any]]:
     elif isinstance(value, list):
         for item in value:
             found.extend(_walk_platform_errors(item))
-    return found[:20]
+    return found
 
 
 def _restriction_list(*values: Any) -> list[str]:
@@ -443,7 +666,14 @@ def _status_severity(status: str) -> str:
     return "red"
 
 
-def _merchant_summary(status: str, *, has_store_profile: bool, business_policies_present: bool) -> str:
+def _merchant_summary(
+    status: str,
+    *,
+    has_store_profile: bool,
+    business_policies_present: bool,
+    recent_platform_errors: list[dict[str, Any]] | None = None,
+    restrictions: list[str] | None = None,
+) -> str:
     if status == "registration_incomplete":
         return "eBay 授权和安全凭证可以正常，但卖家注册尚未完成；无需重新授权，先在 eBay 完成身份、地址和收款验证。"
     if status == "normal":
@@ -454,10 +684,20 @@ def _merchant_summary(status: str, *, has_store_profile: bool, business_policies
         return "账号存在需要关注的信号；发布前必须复核额度、政策警告和近期平台错误。"
     if not has_store_profile:
         return "当前没有可追溯的 eBay 账号健康快照；上线前默认进入事故模式，阻止真实写入。"
+    if status in {"restricted", "payout_hold"} and _has_kyc_restriction(restrictions or []):
+        return "eBay 官方仍有待处理的账户资料或 KYC 检查；捷境已在正式发布前进入事故模式并暂停真实写入。"
+    if status == "restricted" and _has_ebay_verification_restriction(recent_platform_errors or []):
+        return "eBay 拒绝了最近一次正式发布并暂时限制账号；KYC 已清除也不代表该限制已解除，Offer 仍未公开，捷境已暂停后续真实写入。"
     return "账号存在冻结、受限、付款冻结或额度风险；系统进入事故模式，只允许诊断、证据包和只读同步。"
 
 
-def _next_actions(status: str, *, business_policies_present: bool) -> list[str]:
+def _next_actions(
+    status: str,
+    *,
+    business_policies_present: bool,
+    recent_platform_errors: list[dict[str, Any]] | None = None,
+    restrictions: list[str] | None = None,
+) -> list[str]:
     if status == "registration_incomplete":
         return [
             "在 eBay 官方页面完成 eBay 卖家注册，包括身份、注册地址和收款验证；无需重新授权。",
@@ -479,11 +719,53 @@ def _next_actions(status: str, *, business_policies_present: bool) -> list[str]:
             "复核 seller limits、policy warnings、业务政策和最近 eBay 拒绝记录。",
             "降低测试发布价格/数量，必要时先跑只读同步和证据包。",
         ]
+    if status in {"restricted", "payout_hold"} and _has_kyc_restriction(restrictions or []):
+        return [
+            "在 eBay 官方页面打开账户资料或 KYC 待办，按 eBay 当前要求完成核验；无需重新授权。",
+            "等待 eBay 清除待办后回到捷境刷新官方只读数据；旧 Offer、Listing 草稿和素材无需重建。",
+            "捷境确认 KYC 状态为 clear 后，再生成新的精确发布确认单，并在动作时确认后提交一次。",
+        ]
+    if status == "restricted" and _has_ebay_verification_restriction(recent_platform_errors or []):
+        return [
+            "在 eBay 站内信打开本次账号限制的官方通知，按通知的实际要求完成资料核验或申诉；无需重新授权。",
+            "收到 eBay 明确的限制解除通知后，将该通知作为解除证据交给捷境；仅 KYC=clear 或普通只读同步不会解除门禁。",
+            "捷境核验证据晚于最近一次 25019 拒绝后，才重新生成精确发布确认单；旧 Offer、Listing 草稿和素材无需重建。",
+        ]
     return [
         "暂停真实发布、改价、库存、退款、广告、政策和敏感客服承诺。",
         "运行只读同步并导出账号证据包，区分 eBay 原因、人工操作和捷境动作。",
         "账号恢复或换新账号后，再重新同步 packet 并跑发布体检。",
     ]
+
+
+def _has_ebay_verification_restriction(errors: list[dict[str, Any]]) -> bool:
+    return any(str(item.get("error_id") or "").strip() == "25019" for item in errors if isinstance(item, dict))
+
+
+def _has_kyc_restriction(restrictions: list[str]) -> bool:
+    text = " ".join(str(item or "") for item in restrictions).lower().replace("_", " ")
+    return "kyc verification required" in text or "kyc status unknown" in text
+
+
+def _safe_kyc_evidence(checks: list[Any]) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    for raw in checks[:10]:
+        if not isinstance(raw, dict):
+            continue
+        evidence.append(
+            {
+                key: value
+                for key, value in {
+                    "data_required": str(raw.get("data_required") or "").strip()[:80],
+                    "alert": str(raw.get("alert") or "").strip()[:240],
+                    "detail": str(raw.get("detail") or "").strip()[:480],
+                    "due_date": str(raw.get("due_date") or "").strip()[:80],
+                    "remedy_available": bool(raw.get("remedy_available")),
+                }.items()
+                if value not in ("", None)
+            }
+        )
+    return evidence
 
 
 def _onboarding_stage(*, status: str, business_policies_present: bool) -> str:

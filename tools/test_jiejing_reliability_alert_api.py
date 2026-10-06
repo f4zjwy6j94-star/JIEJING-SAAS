@@ -17,6 +17,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "jiejing-reliability-alert-api-test"
+OPS_HOST = "ops.jiejing.shop"
 
 
 def fail(message: str) -> int:
@@ -67,6 +68,7 @@ def main() -> int:
             f"{base}/owner/operations-reliability-alerts/reconcile",
             method="POST",
             body={},
+            host=OPS_HOST,
         )
         if unauthenticated["status"] != 401:
             return fail(f"unauthenticated reconcile should receive 401: {unauthenticated}")
@@ -77,22 +79,43 @@ def main() -> int:
             method="POST",
             body={},
             token=merchant_token,
+            host=OPS_HOST,
         )
         if merchant_reconcile["status"] != 403:
             return fail(f"merchant reconcile should receive 403: {merchant_reconcile}")
 
         admin_token = _register(base, "platform-reliability@example.test")
+        app_host_reconcile = _request_json(
+            f"{base}/owner/operations-reliability-alerts/reconcile",
+            method="POST",
+            body={},
+            token=admin_token,
+            host="app.jiejing.shop",
+        )
+        localhost_reconcile = _request_json(
+            f"{base}/owner/operations-reliability-alerts/reconcile",
+            method="POST",
+            body={},
+            token=admin_token,
+        )
+        if app_host_reconcile["status"] != 403 or localhost_reconcile["status"] != 403:
+            return fail(
+                "internal admin escaped the operations host boundary: "
+                f"app={app_host_reconcile}, local={localhost_reconcile}"
+            )
         first = _request_json(
             f"{base}/owner/operations-reliability-alerts/reconcile",
             method="POST",
             body={},
             token=admin_token,
+            host=OPS_HOST,
         )
         second = _request_json(
             f"{base}/owner/operations-reliability-alerts/reconcile",
             method="POST",
             body={},
             token=admin_token,
+            host=OPS_HOST,
         )
         for label, result in (("first", first), ("second", second)):
             if result["status"] != 200:
@@ -111,6 +134,7 @@ def main() -> int:
             method="POST",
             body={"scope": "model", "action_key": "restart_provider"},
             token=admin_token,
+            host=OPS_HOST,
         )
         if invalid_acknowledgement["status"] != 400:
             return fail(f"unknown acknowledgement action should receive 400: {invalid_acknowledgement}")
@@ -120,12 +144,13 @@ def main() -> int:
             method="POST",
             body={"scope": "model", "action_key": "investigating"},
             token=admin_token,
+            host=OPS_HOST,
         )
         if no_open_alert["status"] != 409:
             return fail(f"acknowledging a non-open alert should receive 409: {no_open_alert}")
 
-        before_get = _request_json(f"{base}/owner/operations-overview", token=admin_token)
-        after_get = _request_json(f"{base}/owner/operations-overview", token=admin_token)
+        before_get = _request_json(f"{base}/owner/operations-overview", token=admin_token, host=OPS_HOST)
+        after_get = _request_json(f"{base}/owner/operations-overview", token=admin_token, host=OPS_HOST)
         before_lifecycle = ((before_get["body"].get("operations_overview") or {}).get("provider_reliability_analytics") or {}).get("lifecycle")
         after_lifecycle = ((after_get["body"].get("operations_overview") or {}).get("provider_reliability_analytics") or {}).get("lifecycle")
         if before_get["status"] != 200 or after_get["status"] != 200 or before_lifecycle != after_lifecycle:
@@ -202,6 +227,7 @@ def _request_json(
     method: str = "GET",
     body: dict[str, Any] | None = None,
     token: str = "",
+    host: str = "",
 ) -> dict[str, Any]:
     headers = {"accept": "application/json"}
     data = None
@@ -210,6 +236,9 @@ def _request_json(
         data = json.dumps(body).encode("utf-8")
     if token:
         headers["authorization"] = f"Bearer {token}"
+    if host:
+        headers["host"] = host
+        headers["x-forwarded-proto"] = "https"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=15) as response:

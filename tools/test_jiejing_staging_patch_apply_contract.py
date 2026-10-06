@@ -31,6 +31,10 @@ def fail(message: str) -> int:
 
 def main() -> int:
     text = SCRIPT.read_text(encoding="utf-8") if SCRIPT.exists() else ""
+    retirements = text.split("PUBLIC_ASSET_RETIREMENTS=(", 1)[-1].split(")", 1)[0]
+    for retired in ("jiejing_saas/private_answer_capture.py", "tools/test_jiejing_ai_ceo_private_answer_capture.py"):
+        if f'"{retired}"' not in retirements:
+            return fail("retired one-shot diagnostic must not survive a patch: " + retired)
     dockerfile = DOCKERFILE.read_text(encoding="utf-8") if DOCKERFILE.exists() else ""
     bundle = BUNDLE.read_text(encoding="utf-8") if BUNDLE.exists() else ""
     vault_init = VAULT_INIT.read_text(encoding="utf-8") if VAULT_INIT.exists() else ""
@@ -61,6 +65,9 @@ def main() -> int:
         "deploy/staging-vault-init-unseal.sh",
         "deploy/github-actions/jiejing-runner-doctor.sh",
         "deploy/github-actions/jiejing-cls-probe-auto-refresh.sh",
+        "deploy/jiejing-production-evidence-auto-refresh.sh",
+        "deploy/systemd/jiejing-production-evidence-refresh.service",
+        "deploy/systemd/jiejing-production-evidence-refresh.timer",
         "deploy/github-actions/jiejing-staging-deploy.sh",
         "deploy/github-actions/jiejing-staging-rollback.sh",
         "deploy/apply-cloudflare-origin-ufw.sh",
@@ -104,6 +111,8 @@ def main() -> int:
         "docs/superpowers/specs/2026-08-21-cls-probe-auto-refresh-design.md",
         "docs/superpowers/plans/2026-08-21-cls-probe-auto-refresh-implementation-plan.md",
         "docs/superpowers/specs/2026-08-21-vault-production-grade-recovery-rehearsal-design.md",
+        "docs/superpowers/specs/2026-08-26-production-evidence-auto-refresh-design.md",
+        "docs/superpowers/plans/2026-08-26-production-evidence-auto-refresh-implementation-plan.md",
         "favicon.ico",
         "index.html",
         "app.html",
@@ -168,6 +177,12 @@ def main() -> int:
         "jiejing_saas/worker.py",
         "jiejing_saas/workflow_plan.py",
         "jiejing_saas/migrations/001_initial_schema_postgres.sql",
+        "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
+        "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
+        "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql",
+        "jiejing_saas/migrations/005_listing_draft_edit_checkpoints_postgres.sql",
+        "jiejing_saas/listing_draft_checkpoint.py",
+        "tools/test_jiejing_listing_draft_checkpoint_api.py",
         "tools/jiejing_current_state_guard.py",
         "tools/jiejing_external_launch_blocker_gate.py",
         "tools/jiejing_configure_tencent_runtime_env.py",
@@ -221,6 +236,8 @@ def main() -> int:
         "tools/test_jiejing_infra_cutover_rehearsal.py",
         "tools/jiejing_deploy_channel_doctor.py",
         "tools/jiejing_prepare_public_staging_bundle.py",
+        "tools/jiejing_release_gate_evidence.py",
+        "tools/test_jiejing_release_gate_evidence.py",
         "tools/jiejing_staging_deploy.py",
         "tools/test_jiejing_staging_deploy_channel_contract.py",
         "tools/test_jiejing_staging_deploy_disk_guard.py",
@@ -228,6 +245,7 @@ def main() -> int:
         "tools/test_jiejing_github_actions_deploy_guardrails.py",
         "tools/test_jiejing_github_runner_doctor_guardrails.py",
         "tools/test_jiejing_cls_probe_auto_refresh_guardrails.py",
+        "tools/test_jiejing_production_evidence_auto_refresh_guardrails.py",
         "tools/jiejing_billing_provider_evidence_register.py",
         "tools/jiejing_paid_launch_approval_packet.py",
         "tools/jiejing_production_evidence_ledger.py",
@@ -255,6 +273,8 @@ def main() -> int:
         "tools/test_jiejing_expensive_api_rate_limit.py",
         "tools/test_jiejing_platform_trial_activation_guard.py",
         "tools/test_jiejing_registration_challenge_ui.py",
+        "tools/test_jiejing_homepage_auth_boundary.js",
+        "tools/test_jiejing_homepage_session_refresh.js",
         "tools/test_jiejing_ai_ceo_scroll_retention.py",
         "tools/test_jiejing_ai_ceo_history_pagination.py",
         "tools/test_jiejing_billing_quota_guardrail.py",
@@ -281,6 +301,8 @@ def main() -> int:
         "jiejing_runtime/replacement_readiness.py",
         "jiejing_runtime/runtime.py",
         "tools/jiejing_saas_backend_cli.py",
+        "tools/jiejing_media_controlled_acceptance.py",
+        "tools/jiejing_owner_media_testing.py",
         "tools/test_jiejing_merchant_byok_model_and_memory.py",
         "python3 -m py_compile",
         "COMPOSE_ARGS=(-f \"$COMPOSE_FILE\")",
@@ -333,6 +355,14 @@ def main() -> int:
     if text.count("jiejing_runtime/execution.py") < 2:
         return fail(
             "patch apply must whitelist and syntax-check the ExecutionService implementation used by the SaaS API"
+        )
+    if text.count("tools/jiejing_media_controlled_acceptance.py") < 2:
+        return fail(
+            "patch apply must whitelist and syntax-check the owner-only controlled media acceptance CLI"
+        )
+    if text.count("tools/jiejing_owner_media_testing.py") < 2:
+        return fail(
+            "patch apply must whitelist and syntax-check the private owner media-testing CLI"
         )
     if "*.sh text eol=lf" not in gitattributes:
         return fail("shell scripts must be pinned to LF in .gitattributes")
@@ -522,6 +552,8 @@ def main() -> int:
     if '$PATCH_DIR/tools/jiejing_runtime_env_overlap_guard.py' in text:
         return fail("patch apply must never execute a candidate runtime env guard")
     compiled_or_checked = {
+        "jiejing_saas/listing_draft_checkpoint.py": 2,
+        "tools/test_jiejing_listing_draft_checkpoint_api.py": 2,
         "jiejing_saas/product_feedback.py": 2,
         "tools/test_jiejing_product_feedback_closure.py": 2,
         "tools/test_jiejing_media_nav_and_state_restore.py": 2,
@@ -534,6 +566,142 @@ def main() -> int:
     for marker, minimum_count in compiled_or_checked.items():
         if text.count(marker) < minimum_count:
             return fail(f"patch apply script must whitelist and syntax-check the feedback closure file: {marker}")
+    python_compile_start = text.index("python3 -m py_compile")
+    python_compile_end = text.index("bash -n", python_compile_start)
+    python_compile_block = text[python_compile_start:python_compile_end]
+    if ".js" in python_compile_block:
+        return fail("patch apply must not pass JavaScript files to python py_compile")
+    for path in (
+        "tools/jiejing_release_gate_evidence.py",
+        "tools/test_jiejing_release_gate_evidence.py",
+        "jiejing_saas/listing_draft_checkpoint.py",
+        "tools/test_jiejing_listing_draft_checkpoint_api.py",
+    ):
+        if path not in python_compile_block:
+            return fail(f"source-bound gate evidence dependency must be syntax checked: {path}")
+    if precloud_gate.count('("source_bound_release_gate_evidence", [sys.executable, "tools/test_jiejing_release_gate_evidence.py"])') != 1:
+        return fail("source-bound release gate regression must execute exactly once")
+    if precloud_gate.count('("listing_draft_checkpoint_api", [sys.executable, "tools/test_jiejing_listing_draft_checkpoint_api.py"])') != 1:
+        return fail("Listing checkpoint HTTP regression must run exactly once under Python")
+    node_check_start = text.index('NODE_BIN="${JIEJING_NODE_BIN:-node}"')
+    node_check_end = text.index('COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"', node_check_start)
+    node_check_block = text[node_check_start:node_check_end]
+    for marker in (
+        "tools/codex_jiejing_listing_ai_generation_browser_smoke.js",
+        "tools/test_jiejing_listing_product_fact_confirmation_ui.js",
+        "tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js",
+    ):
+        if marker not in node_check_block:
+            return fail(f"patch apply Node syntax check missing Listing workflow file: {marker}")
+    workflow_browser_checks = {
+        "ai_ceo_history_pagination_browser": "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js",
+        "listing_backend_restore_browser": "tools/test_jiejing_listing_backend_restore.js",
+        "recent_product_tasks_browser": "tools/test_jiejing_recent_product_tasks.js",
+        "listing_cloud_checkpoint_frontend": "tools/test_jiejing_listing_cloud_checkpoint_frontend.js",
+        "workflow_entry_feedback": "tools/test_jiejing_workflow_entry_feedback.js",
+    }
+    whitelist_start = text.index("FILES=(\n")
+    whitelist_end = text.index("\n)", whitelist_start)
+    whitelist_lines = {line.strip() for line in text[whitelist_start:whitelist_end].splitlines()}
+    if '"tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js"' not in whitelist_lines:
+        return fail("real checkpoint HTTP browser integration must ship with the Python regression")
+    node_check_lines = {line.strip() for line in node_check_block.splitlines()}
+    missing_workflow_wiring = []
+    for check_name, script_path in workflow_browser_checks.items():
+        if f'"{script_path}"' not in whitelist_lines:
+            missing_workflow_wiring.append(f"bundle whitelist: {script_path}")
+        if f'"$NODE_BIN" --check {script_path}' not in node_check_lines:
+            missing_workflow_wiring.append(f"Node syntax check: {script_path}")
+        gate_entry = f'("{check_name}", ["node", "{script_path}"])'
+        if precloud_gate.count(gate_entry) != 1:
+            missing_workflow_wiring.append(f"exactly one precloud check: {check_name}")
+    if missing_workflow_wiring:
+        return fail("workflow browser regressions must ship and run: " + "; ".join(missing_workflow_wiring))
+    rewrite_python_checks = {
+        "listing_buyer_copy_rewrite": "tools/test_jiejing_listing_buyer_copy_rewrite.py",
+        "listing_buyer_copy_rewrite_api": "tools/test_jiejing_listing_buyer_copy_rewrite_api.py",
+        "listing_generation_operations": "tools/test_jiejing_listing_generation_operations.py",
+        "listing_generation_legacy_recovery": "tools/test_jiejing_listing_generation_legacy_recovery.py",
+    }
+    rewrite_frontend = "tools/test_jiejing_listing_buyer_copy_rewrite_frontend.js"
+    rewrite_http = "tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js"
+    rewrite_spec = "docs/superpowers/specs/2026-09-09-listing-buyer-copy-rewrite-design.md"
+    rewrite_whitelist = [rewrite_spec, *rewrite_python_checks.values(), rewrite_frontend, rewrite_http,
+        "jiejing_saas/listing_generation_operations.py", "jiejing_saas/listing_generation_legacy_recovery.py",
+        "docs/superpowers/specs/2026-09-09-listing-generation-result-recovery-design.md",
+        "docs/superpowers/plans/2026-09-09-listing-generation-result-recovery-plan.md"]
+    whitelist_entries = [line.strip() for line in text[whitelist_start:whitelist_end].splitlines()]
+    node_check_entries = [line.strip() for line in node_check_block.splitlines()]
+    missing_rewrite_wiring = []
+    for script_path in rewrite_whitelist:
+        if whitelist_entries.count(f'"{script_path}"') != 1:
+            missing_rewrite_wiring.append(f"exactly one bundle entry: {script_path}")
+        if not (ROOT / script_path).is_file():
+            missing_rewrite_wiring.append(f"missing source dependency: {script_path}")
+    for check_name, script_path in rewrite_python_checks.items():
+        if python_compile_block.split().count(script_path) != 1:
+            missing_rewrite_wiring.append(f"exactly one Python syntax check: {script_path}")
+        gate_entry = f'("{check_name}", [sys.executable, "{script_path}"])'
+        if precloud_gate.count(gate_entry) != 1 or precloud_gate.count(script_path) != 1:
+            missing_rewrite_wiring.append(f"exactly one precloud check: {check_name}")
+    for script_path in (rewrite_frontend, rewrite_http):
+        if node_check_entries.count(f'"$NODE_BIN" --check {script_path}') != 1:
+            missing_rewrite_wiring.append(f"exactly one Node syntax check: {script_path}")
+    rewrite_frontend_gate = f'("listing_buyer_copy_rewrite_frontend", ["node", "--test", "{rewrite_frontend}"])'
+    if precloud_gate.count(rewrite_frontend_gate) != 1 or precloud_gate.count(rewrite_frontend) != 1:
+        missing_rewrite_wiring.append("exactly one node --test precloud check: listing_buyer_copy_rewrite_frontend")
+    # This child receives its owned HTTP fixture via stdin from the Python test.
+    # It must ship and syntax-check, but must not run again without that fixture.
+    if rewrite_http in precloud_gate:
+        missing_rewrite_wiring.append("HTTP browser child must run only through the Python API regression")
+    if missing_rewrite_wiring:
+        return fail("buyer-copy rewrite regressions must ship and run: " + "; ".join(missing_rewrite_wiring))
+    expiry_frontend = "tools/test_jiejing_listing_session_expiry_recovery.js"
+    expiry_spec = "docs/superpowers/specs/2026-09-10-listing-expired-session-resume-design.md"
+    for script_path in (expiry_frontend, expiry_spec):
+        if whitelist_entries.count(f'"{script_path}"') != 1 or not (ROOT / script_path).is_file():
+            return fail(f"Listing expired-session recovery dependency must ship exactly once: {script_path}")
+    if node_check_entries.count(f'"$NODE_BIN" --check {expiry_frontend}') != 1:
+        return fail("Listing expired-session recovery regression must receive a Node syntax check")
+    expiry_gate = f'("listing_session_expiry_recovery", ["node", "--test", "{expiry_frontend}"])'
+    if precloud_gate.count(expiry_gate) != 1 or precloud_gate.count(expiry_frontend) != 1:
+        return fail("Listing expired-session recovery regression must run exactly once in precloud gate")
+    auth_boundary = "tools/test_jiejing_auth_reveal_boundary.js"
+    if whitelist_entries.count(f'"{auth_boundary}"') != 1 or not (ROOT / auth_boundary).is_file():
+        return fail("auth reveal boundary regression must ship exactly once")
+    if node_check_entries.count(f'"$NODE_BIN" --check {auth_boundary}') != 1:
+        return fail("auth reveal boundary regression must receive a Node syntax check")
+    auth_gate = f'("auth_reveal_boundary", ["node", "--test", "{auth_boundary}"])'
+    if precloud_gate.count(auth_gate) != 1 or precloud_gate.count(auth_boundary) != 1:
+        return fail("auth reveal boundary regression must run exactly once in precloud gate")
+    boot_recovery = "tools/test_jiejing_workbench_boot_recovery.js"
+    if whitelist_entries.count(f'"{boot_recovery}"') != 1 or not (ROOT / boot_recovery).is_file():
+        return fail("workbench boot recovery regression must ship exactly once")
+    if node_check_entries.count(f'"$NODE_BIN" --check {boot_recovery}') != 1:
+        return fail("workbench boot recovery regression must receive a Node syntax check")
+    boot_gate = f'("workbench_boot_recovery", ["node", "--test", "{boot_recovery}"])'
+    if precloud_gate.count(boot_gate) != 1 or precloud_gate.count(boot_recovery) != 1:
+        return fail("workbench boot recovery regression must run exactly once in precloud gate")
+    media_usage_dependencies = (
+        "jiejing_saas/media_credit_activity.py",
+        "tools/test_jiejing_merchant_media_usage.py",
+        "docs/superpowers/specs/2026-09-25-merchant-media-usage-design.md",
+        "docs/superpowers/plans/2026-09-25-merchant-media-usage.md",
+    )
+    for script_path in media_usage_dependencies:
+        if whitelist_entries.count(f'"{script_path}"') != 1 or not (ROOT / script_path).is_file():
+            return fail(f"merchant media usage dependency must ship exactly once: {script_path}")
+        if script_path.endswith(".py") and python_compile_block.split().count(script_path) != 1:
+            return fail(f"merchant media usage dependency must receive a Python syntax check: {script_path}")
+    media_usage_gate = '("merchant_media_usage", [sys.executable, "tools/test_jiejing_merchant_media_usage.py"])'
+    if precloud_gate.count(media_usage_gate) != 1:
+        return fail("merchant media usage regression must run exactly once in precloud gate")
+    probe_spec = "docs/superpowers/specs/2026-09-25-cls-probe-readback-design.md"
+    if whitelist_entries.count(f'"{probe_spec}"') != 1 or not (ROOT / probe_spec).is_file():
+        return fail("CLS probe readback design must ship exactly once")
+    probe_gate = '("tencent_runtime_env", [sys.executable, "tools/test_jiejing_configure_tencent_runtime_env.py"])'
+    if precloud_gate.count(probe_gate) != 1:
+        return fail("CLS probe readback regression must run exactly once in precloud gate")
     for marker in [
         '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',
@@ -593,7 +761,15 @@ def main() -> int:
     bundle_required = [
         "public_staging_patch_whitelist_v1",
         'APPLY_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"',
+        'ATOMIC_FRONTEND_FILES = ("index.html", "app.html", "app.js", "styles.css")',
         "def _apply_patch_file_list",
+        "def _parse_apply_patch_file_list",
+        "_git_blob_bytes(",
+        "frontend_files_sha256",
+        "files_sha256",
+        "source_commit",
+        "def _verify_bundle_files_in_zip",
+        "refusing to prepare bundle from dirty git worktree",
         "unable to parse FILES whitelist",
         "apply patch script must include itself",
         '"full_assets_included": False',

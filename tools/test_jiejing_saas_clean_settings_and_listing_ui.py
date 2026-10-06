@@ -1,3 +1,4 @@
+import re
 import subprocess
 from pathlib import Path
 
@@ -14,11 +15,49 @@ def require(text: str, needle: str, label: str) -> None:
         raise AssertionError(f"missing {label}: {needle}")
 
 
+def assert_homepage_auth_copy(script: str) -> None:
+    # Protocol property names are not merchant copy. Keep checking string and
+    # template literals; the registration behavior test also checks actual UI sinks.
+    literals = re.findall(r'''(["'`])((?:\\.|(?!\1)[^\\])*)\1''', script, re.S)
+    for _, literal in literals:
+        for marker in ["后端没有返回登录凭证", "登录凭证", "HTTP 401", "provider", "quota", "模型 key"]:
+            if marker in literal:
+                raise AssertionError(f"homepage auth script should keep failure copy merchant-facing: {marker}")
+
+
+def assert_homepage_auth_copy_guard() -> None:
+    assert_homepage_auth_copy('const challenge = { provider: "turnstile" }; showToast("正在完成注册安全验证");')
+    for quote in ('"', "'", "`"):
+        for marker in ("登录凭证", "HTTP 401", "provider", "quota", "模型 key"):
+            try:
+                assert_homepage_auth_copy(f"showToast({quote}注册失败：{marker}{quote});")
+            except AssertionError:
+                continue
+            raise AssertionError("merchant-copy guard accepted an internal term in visible copy")
+
+
+def assert_model_disabled_button_style(styles: str) -> None:
+    selector = "body.saas-public-mvp #appShell .saas-model-provider-panel button:disabled"
+    matching = re.search(re.escape(selector) + r"\s*,\s*" + re.escape(selector + ":hover") + r"\s*,\s*" + re.escape(selector + ":active") + r"\s*\{([^}]+)\}", styles)
+    if not matching:
+        raise AssertionError("model Settings disabled buttons need a scoped, hover-stable visual state")
+    declarations = dict(re.findall(r"([\w-]+)\s*:\s*([^;]+);", matching.group(1)))
+    for property_name, expected in {
+        "cursor": "not-allowed", "box-shadow": "none", "transform": "none",
+        "background": "#edf0ef", "color": "#626c68", "border-color": "#d4dad7",
+    }.items():
+        if declarations.get(property_name, "").strip() != expected:
+            raise AssertionError(f"model Settings disabled button lost {property_name} state")
+    if any(name in declarations for name in ("display", "width", "height", "padding", "margin", "pointer-events")):
+        raise AssertionError("disabled styling must not change layout or bypass native button behavior")
+
+
 def main() -> None:
     app_js = APP_JS.read_text(encoding="utf-8")
     app_html = APP_HTML.read_text(encoding="utf-8")
     index_html = INDEX_HTML.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
+    assert_model_disabled_button_style(styles)
 
     require(app_js, "saasSettingsTab", "settings tab state")
     require(app_js, "function renderSaasSettingsCleanLayout", "clean settings layout")
@@ -62,13 +101,14 @@ def main() -> None:
     require(app_js, '"confirmation.center"', "confirmation center trusted template label")
     require(app_js, '"listing.product_center"', "Listing daily surface trusted sink label")
     require(app_js, '"settings.clean_layout"', "settings trusted sink label")
-    require(app_js, '"settings.legacy_connect_status"', "legacy settings status trusted sink label")
+    if '"settings.legacy_connect_status"' in app_js:
+        raise AssertionError("merchant app must physically remove the legacy Settings status sink")
     if "|on[a-z]+\\s*=" in app_js:
         raise AssertionError("trusted HTML guard must not match ordinary words ending in on")
     require(app_html, "店铺连接、AI 连接和经营资料会按账号空间显示状态，缺少资料会提示补齐", "merchant-facing login credential copy")
     require(app_html, "有真实任务、订单或确认事项后会自动出现在这里", "merchant-facing empty state copy")
     require(app_html, "请稍后重试，或回到设置查看连接状态；系统不会自动执行高风险动作", "merchant-facing error state copy")
-    require(index_html, "高风险动作必须经过确认中心", "merchant-facing homepage footer trust boundary")
+    require(index_html, "重要操作由你确认", "merchant-facing homepage footer trust boundary")
     require(index_html, "未连接前不会读取店铺数据，也不会执行高风险动作", "merchant-facing homepage auth copy")
     require(app_html, "不保存敏感凭证或平台账号资料", "merchant-facing feedback privacy copy")
     require(app_js, "不保存敏感凭证或平台账号资料", "workflow feedback avoids token/key wording")
@@ -193,14 +233,13 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
             "homepage login must accept an HttpOnly cookie session without exposing a token: "
             f"{cookie_session_result.stderr.strip()}"
         )
-    for internal_marker in ["后端没有返回登录凭证", "登录凭证", "HTTP 401", "provider", "quota", "模型 key"]:
-        if internal_marker in index_auth_script_body:
-            raise AssertionError(f"homepage auth script should keep failure copy merchant-facing: {internal_marker}")
+    assert_homepage_auth_copy_guard()
+    assert_homepage_auth_copy(index_auth_script_body)
     for required_copy in [
         "敏感凭证只在后端安全保存",
         "不接触原始平台凭证",
         "不包含敏感凭证、买家敏感信息或平台账号资料",
-        "店铺连接续期证明仍为 0",
+        "未连接时不会继续保存或发布",
         "账号自己的 AI 连接只在后端安全保存",
         "不保存敏感凭证、网页登录状态、买家敏感信息或平台写入资料",
         "页面只显示连接状态，执行层不读取原始凭证",
@@ -211,6 +250,169 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     def scoped_body(start_marker: str, end_marker: str) -> str:
         start = app_js.index(start_marker)
         return app_js[start:app_js.index(end_marker, start)]
+
+    legacy_product_label_source = scoped_body(
+        "function isLegacySampleProductLabel",
+        "function activeMediaDraftProfileForDisplay",
+    )
+    legacy_product_label_contract = f"""
+{legacy_product_label_source}
+const legitimateProducts = [
+  "incense",
+  "香炉",
+  "倒流香",
+  "Backflow Incense",
+  "Incense Burner",
+  "Zen Incense",
+  "禅意佛手托莲花倒流香炉",
+  "Zen Buddha Hand Lotus Backflow Incense Burner",
+  "Handmade Ceramic Incense Burner for Home Decor",
+];
+for (const label of legitimateProducts) {{
+  if (isLegacySampleProductLabel(label)) {{
+    throw new Error(`legitimate merchant product was hidden: ${{label}}`);
+  }}
+}}
+const historicalSamples = [
+  "jj-backflow-incense-debug-full",
+  "listing-jj-backflow-incense-debug-min",
+  "JJ-DRAFT-PROOF-20260815-05",
+  "assets/backflow-incense-hero.webp",
+  "source-backflow-incense-burner",
+];
+for (const label of historicalSamples) {{
+  if (!isLegacySampleProductLabel(label)) {{
+    throw new Error(`known historical sample was shown: ${{label}}`);
+  }}
+}}
+"""
+    legacy_product_label_result = subprocess.run(
+        ["node", "-e", legacy_product_label_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if legacy_product_label_result.returncode != 0:
+        raise AssertionError(
+            "Listing/media product labels must reject only known historical samples: "
+            f"{legacy_product_label_result.stderr.strip()}"
+        )
+
+    legacy_media_key_source = scoped_body(
+        "function isLegacySampleMediaDraftKey",
+        "function isLegacySampleProductLabel",
+    )
+    legacy_media_key_contract = f"""
+{legacy_media_key_source}
+for (const key of ["incense", "backflow-incense", "zen-incense"]) {{
+  if (!isLegacySampleMediaDraftKey(key)) {{
+    throw new Error(`exact historical media key was accepted: ${{key}}`);
+  }}
+}}
+for (const key of [
+  " Incense ",
+  "INCENSE",
+  "Backflow Incense",
+  "backflow-incense-burner",
+  "禅意佛手托莲花倒流香炉",
+]) {{
+  if (isLegacySampleMediaDraftKey(key)) {{
+    throw new Error(`non-exact media key was hidden: ${{key}}`);
+  }}
+}}
+"""
+    legacy_media_key_result = subprocess.run(
+        ["node", "-e", legacy_media_key_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if legacy_media_key_result.returncode != 0:
+        raise AssertionError(
+            "Legacy media draft keys must retain their raw exact-match boundary: "
+            f"{legacy_media_key_result.stderr.strip()}"
+        )
+
+    confirmation_execution_source = scoped_body(
+        "function saasLatestExecutionResult",
+        "function saasLatestPublishConfirmation",
+    )
+    confirmation_execution_contract = f"""
+const state = {{
+  saasExecutionResults: [
+    {{
+      execution_id: "exec-old-confirmation",
+      confirmation_id: "confirm-old",
+      action_type: "publish_listing",
+      result: {{ action_type: "publish_listing" }},
+    }},
+    {{
+      execution_id: "exec-result-confirmation",
+      action_type: "publish_listing",
+      result: {{
+        action_type: "publish_listing",
+        confirmation_id: "confirm-result",
+      }},
+    }},
+    {{
+      execution_id: "exec-audit-confirmation",
+      action_type: "publish_listing",
+      result: {{
+        action_type: "publish_listing",
+        audit: {{ confirmation_id: "confirm-audit" }},
+      }},
+    }},
+    {{
+      execution_id: "exec-intent-confirmation",
+      action_type: "publish_listing",
+      result: {{
+        action_type: "publish_listing",
+        audit: {{ execution_intent: {{ confirmation_id: "confirm-intent" }} }},
+      }},
+    }},
+  ],
+}};
+{confirmation_execution_source}
+const missingNew = saasExecutionResultForConfirmation("confirm-new", "publish_listing");
+if (missingNew !== null) {{
+  throw new Error("new confirmation borrowed an older confirmation execution");
+}}
+const matchedOld = saasExecutionResultForConfirmation("confirm-old", "publish_listing");
+if (!matchedOld || matchedOld.execution_id !== "exec-old-confirmation") {{
+  throw new Error("old confirmation did not resolve its own execution");
+}}
+for (const [confirmationId, executionId] of [
+  ["confirm-result", "exec-result-confirmation"],
+  ["confirm-audit", "exec-audit-confirmation"],
+  ["confirm-intent", "exec-intent-confirmation"],
+]) {{
+  const matched = saasExecutionResultForConfirmation(confirmationId, "publish_listing");
+  if (!matched || matched.execution_id !== executionId) {{
+    throw new Error(`confirmation binding was missed: ${{confirmationId}}`);
+  }}
+}}
+const latestFallback = saasExecutionResultForConfirmation("", "publish_listing");
+if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") {{
+  throw new Error("empty confirmation id lost latest execution fallback");
+}}
+"""
+    confirmation_execution_result = subprocess.run(
+        ["node", "-e", confirmation_execution_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if confirmation_execution_result.returncode != 0:
+        raise AssertionError(
+            "Confirmation execution receipts must fail closed for a non-empty unmatched id: "
+            f"{confirmation_execution_result.stderr.strip()}"
+        )
 
     credential_copy_surfaces = [
         ("eBay sync status", scoped_body("function renderSaasEbaySyncStatusPanel", "function renderSaasLiveSnapshotPanel")),
@@ -284,26 +486,28 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_html, "等待生成三类候选", "bulk result preview empty heading")
     require(app_html, "先分组，再决定", "bulk static first-run copy")
 
-    require(app_html, "把商品图变成可用素材包", "media simple headline")
-    require(app_html, "选来源、选素材包、看预览、回写 Listing 草稿", "media simple workflow copy")
+    require(app_html, "商品图片与素材", "media simple headline")
+    require(app_html, "查看生成结果，审核后用于 Listing 草稿", "media result-first workflow copy")
+    require(app_html, '<details class="saas-media-usage-guide">', "media help collapsed by default")
+    require(app_js, "placeSaasMediaResultPanels();", "media results remain outside optional help")
     require(app_html, "商品草稿 / 上传图片", "media source choice")
     require(app_html, "选择要做图的商品", "media draft selector copy")
     require(app_html, "先选要做什么图", "media package selection copy")
     require(app_html, "素材任务记录", "media asset job placeholder title")
-    require(app_html, "素材清单（AssetManifest）", "media asset manifest placeholder copy")
+    require(app_html, "素材清单后再审核", "media asset list placeholder copy")
     require(app_html, "不会把旧测试图当成真实生成结果", "media no fake generated proof placeholder")
     require(app_js, "function saasMediaTaskLabel", "media merchant-facing task labels")
     require(app_js, "等待商品草稿", "media waiting state copy")
     require(app_js, "saas-media-first-run-strip", "media first-run assurance strip")
-    require(app_js, "没有商品或来源图时，不展示旧样例", "media no fake sample copy")
+    require(app_js, "没有真实输入时不展示旧样例图", "media no fake sample copy")
     require(app_js, "素材工坊只接商品草稿、图片需求或商家上传图", "media source boundary copy")
     require(app_js, "商家只需要看三件事：这张图用在哪里、能不能用、还缺什么", "media result readability copy")
     require(app_js, "先看草稿，再决定是否回写 Listing", "media quality board simple copy")
     require(app_js, "aria-label=\"素材进度\"", "media progress aria label")
     require(app_js, "saasMediaAssetJobsForDisplay", "media asset job display helper")
     require(app_js, "/media-asset-jobs?limit=8", "media asset jobs protected fetch")
-    require(app_js, "素材清单（AssetManifest）", "media AssetManifest merchant copy")
-    require(app_js, "没有清单就不能说已经可用于 Listing", "media manifest gate copy")
+    require(app_js, "素材清单后再审核", "media asset list merchant copy")
+    require(app_js, "没有完整清单就不能用于 Listing", "media asset list gate copy")
     require(app_js, "不会把旧测试图当成真实生成结果", "media no fake generated proof copy")
     require(app_js, "function saasCurrentListingProjectIdentity", "stable Listing project identity")
     require(app_js, "function saasMediaAssetJobMatchesListingProject", "media job current Listing match gate")
@@ -315,6 +519,8 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "function saasSafeListingAssetUrl", "safe same-origin media URL restore")
     require(app_js, "new URL(raw, window.location.origin)", "relative media URL canonicalization")
     require(app_js, "saveSaasProtectedStateSnapshot();", "media task updates persist account-scoped refresh state")
+    require(app_js, "function scheduleSaasListingDraftSnapshotSave", "edited Listing drafts schedule account-scoped snapshot persistence")
+    require(app_js, "可以导入为待补资料草稿", "fact-blocked AI CEO reports remain importable as blocked Listing drafts")
     require(app_js, "function resetSaasBulkWorkspaceForListingProject", "Listing product switch resets stale bulk state")
     require(app_js, "listing_project_key:", "media job snapshot keeps Listing project identity")
 
@@ -343,18 +549,11 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "点按钮后只打开对应工作台继续整理", "AI CEO route card clear next-step boundary")
     require(app_js, "function saasCeoRoutingWhyRows", "AI CEO routing why rows helper")
     require(app_js, "function saasCeoRoutingNextLine", "AI CEO routing next line helper")
-    require(app_js, "AI CEO 路由确认", "AI CEO route card plain explanation aria label")
+    require(app_js, 'aria-label="AI CEO 下一步任务卡"', "AI CEO route card plain explanation aria label")
     require(app_js, "我理解", "AI CEO route card understood row")
     require(app_js, "推荐去", "AI CEO route card recommended module row")
     require(app_js, "安全边界", "AI CEO route card safety row")
     require(styles, ".saas-ceo-routing-why", "AI CEO route card three-row styling")
-    require(app_js, "function saasCeoFirstDayClosureRows", "AI CEO first-day closure helper")
-    require(app_js, "first_day_ai_ceo_closure_v1", "AI CEO first-day closure marker")
-    require(app_js, "首日闭环", "AI CEO first-day closure copy")
-    require(app_js, "先说目标", "AI CEO first-day starts with one goal")
-    require(app_js, "去推荐模块", "AI CEO first-day route handoff")
-    require(app_js, "回设置补连接", "AI CEO first-day settings continuation")
-    require(styles, ".saas-ceo-route-closure", "AI CEO first-day closure styling")
     require(app_js, "继续小批量实验台", "AI CEO compact task card bulk next button")
     require(app_js, "一句话交给 AI CEO", "AI CEO low-learning-cost empty title")
     require(app_js, "first_day_ai_ceo_path_v2", "AI CEO first-day path marker")
@@ -370,6 +569,49 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "function saasListingComposerDraftFromText", "Listing Composer local draft builder")
     require(app_js, 'String(priceMatch[1] || priceMatch[0] || "").trim()', "Listing price parser fallback without capture group")
     require(app_js, "function saasListingDraftFromReport", "AI CEO report import into Listing")
+    require(
+        app_js,
+        "function saasAiCeoMarketReportCanStartBlockedListingDraft",
+        "AI CEO candidate reports can enter Listing as blocked drafts before supplier facts are complete",
+    )
+    require(
+        app_js,
+        "ai_ceo_candidate_report_to_blocked_listing_draft_v1",
+        "AI CEO candidate-to-blocked-Listing contract marker",
+    )
+    if 'if (handoff.ready_for_listing_draft !== true) return null;' in app_js:
+        raise AssertionError(
+            "AI CEO candidate reports must not be rejected from Listing only because publish facts are incomplete"
+        )
+    require(
+        app_js,
+        "候选商品已导入为待补资料草稿",
+        "merchant sees that candidate import succeeded while publish facts remain blocked",
+    )
+    app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
+    index_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", index_html)
+    if len(app_versions) != 1 or index_versions != [app_versions[0], app_versions[0]]:
+        raise AssertionError("public and workspace entries must share one current versioned Listing bundle")
+    require(
+        app_js,
+        "function saasAccountScopedEbayPublishPrefillFromPacket",
+        "new Listing reuses account-scoped eBay policies and location from the official packet",
+    )
+    require(
+        app_js,
+        "account_scoped_ebay_publish_prefill_v1",
+        "account-scoped publish prefill contract marker",
+    )
+    require(
+        app_js,
+        "publishPrefill.merchant_location_key || accountPrefill.merchant_location_key",
+        "official account inventory location prefills the new Listing form",
+    )
+    require(
+        app_js,
+        "publishPrefill.fulfillment_policy_id || accountPrefill.fulfillment_policy_id",
+        "official fulfillment policy prefills the new Listing form",
+    )
     require(app_js, "function selectSaasListingMarketCandidate", "merchant can select one AI CEO candidate")
     require(app_js, 'data-saas-listing-candidate-id="${escapeHtml(candidate.candidate_id)}"', "candidate selection control")
     require(app_js, 'aria-pressed="${candidate.name === opportunity.product ? "true" : "false"}"', "candidate selected state")
@@ -379,7 +621,9 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "saas_report_import_prefers_concrete_product_v1", "concrete report selection contract")
     require(app_js, 'latestSaasActionableProductReportByTypes(["listing.package", "product.listing"])', "actionable Listing report selection")
     require(app_js, 'latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"])', "actionable market report selection")
-    require(app_js, "sourceReport && saasProductLabelForRecord(sourceReport)", "legacy report must have a concrete structured product")
+    require(app_js, "function saasAuthoritativeAiCeoMarketReportForTurn", "backend-authoritative AI CEO report resolver")
+    require(app_js, 'const reportId = String(latest?.market_report_id || "").trim();', "exact backend report id authority")
+    require(app_js, 'item?.report_id === reportId && item?.report_type === "ai_ceo.market_research"', "AI CEO authority forbids cross-report fallback")
     require(app_js, "我帮你选的品|产品名称", "legacy AI answer named product recovery")
     require(app_js, "text.match(/市场调研报告", "legacy AI report title product recovery")
     require(app_js, "saasIsConcreteProductLabel(draft.product)", "generic draft title cannot become a product")
@@ -391,13 +635,16 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "function renderSaasListingDraftEditor", "Listing editable draft editor")
     require(app_js, "function renderSaasListingWorkflowProofPanel", "Listing workflow loop result panel")
     require(app_js, "function handleSaasListingComposeDraft", "Listing Composer action handler")
+    require(app_js, "function generateSaasListingDraftFromCurrentProject", "project-scoped Listing AI action handler")
     require(app_js, "function startSaasListingBackendWorkflow", "Listing backend workflow action handler")
     require(app_js, "function buildSaasListingBackendWorkflowPayload", "Listing backend workflow payload builder")
     require(app_js, "function handleSaasListingSourceAiReport", "Listing AI report source action")
     require(app_js, 'if (action === "listing-compose-draft")', "Listing Composer event wiring")
     require(app_js, 'if (action === "listing-start-backend-workflow")', "Listing backend workflow event wiring")
+    require(app_js, 'if (action === "listing-generate-ai-draft")', "Listing AI generation event wiring")
     require(app_js, 'if (action === "listing-source-ai-report")', "Listing AI report source event wiring")
-    require(app_js, 'data-saas-action="listing-start-backend-workflow"', "Listing backend workflow primary action")
+    require(app_js, 'data-saas-action="listing-generate-ai-draft"', "Listing AI generation primary action")
+    require(app_js, "/listing-drafts/generate", "Listing AI generation backend endpoint")
     require(app_js, 'saasFetch("/tasks/product-workflow"', "Listing workflow calls product workflow backend")
     require(app_js, 'run_mode: "inline"', "Listing workflow runs inline safe backend loop")
     require(app_js, 'source_mode: "listing_composer"', "Listing workflow source mode")
@@ -411,7 +658,9 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, 'data-listing-source-details="listing_source_collapsed_after_draft_v1"', "Listing source intake collapses after draft")
     require(app_js, "更换或补充商品资料", "Listing collapsed source intake merchant label")
     require(app_js, "当前草稿已生成；只有换商品或补链接、图片、成本、规格时再展开", "Listing collapsed source intake guidance")
-    require(app_js, "draft ? renderSaasListingSourceIntake", "Listing source intake switches to collapsed mode after draft")
+    require(app_js, "draft ? renderSaasListingWizard", "Existing product uses the single-current-step wizard")
+    require(app_js, "function navigateSaasListingWizard", "Wizard has scoped previous and save-and-continue navigation")
+    require(app_js, 'data-listing-wizard-step="${step}"', "Only the current wizard step is rendered")
     require(app_js, "data-saas-listing-input-chip", "Listing input quick chips")
     require(app_js, "function renderSaasFirstRunAssuranceStrip", "shared first-run assurance strip")
     require(app_js, "不用完整", "Listing simple first-run copy")
@@ -439,6 +688,19 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "saas-listing-v2-draft-side-grid", "Listing draft side field grid")
     require(app_js, "options.compact ? \"is-compact\" : \"\"", "Listing compact field styling hook")
     require(app_js, "data-saas-listing-draft-field", "Listing draft field persistence")
+    require(app_js, "merchant_product_fact_packet_v1", "merchant product fact packet contract")
+    require(app_js, "function saasMerchantProductFactPacket", "merchant product fact packet builder")
+    require(app_js, "function renderSaasMerchantProductFactsModule", "merchant product facts module")
+    require(app_js, "function saveSaasMerchantProductFacts", "merchant product facts save behavior")
+    require(app_js, 'saasFetch(`/stores/${encodeURIComponent(store.store_id)}/product-facts`', "product facts persist to account work records")
+    require(app_js, "data-saas-product-fact-field", "merchant product fact editable fields")
+    require(app_js, 'data-saas-action="save-merchant-product-facts"', "merchant product fact save action")
+    require(app_js, "来源资料", "product fact source-confirmed label")
+    require(app_js, "商家确认", "product fact merchant-confirmed label")
+    require(app_js, "AI 建议", "product fact AI suggestion label")
+    require(app_js, "待补资料", "product fact unknown label")
+    require(app_js, "图片商业使用权", "product image rights field")
+    require(app_js, "不用去 eBay 手工填写", "Jiejing-first Listing editing copy")
     require(app_js, "function localQaForcesSaasPublicMvpMode", "local-only public SaaS QA switch")
     require(app_js, 'qaMode === "public-saas" || qaMode === "listing-v2-workbench" || qaMode === "ai-ceo-market-report-handoff"', "local QA listing route")
     require(app_js, 'params.get("onboarded") === "1"', "app direct route respects explicit onboarded query")
@@ -469,15 +731,49 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "价格利润", "publish form finance group")
     require(app_js, "物流履约", "publish form fulfillment group")
     require(app_js, "素材描述", "publish form asset group")
-    require(app_js, "fields.title || draft?.title", "draft title prefill source")
+    require(app_js, 'fields.title ?? draft?.title ?? ""', "draft title prefill preserves explicit clears")
+    prefill_source = scoped_body("function saasPublishIntakePrefillValues", "function renderSaasPublishInputField")
+    title_expression = re.search(r"^\s+title: (.+),$", prefill_source, re.MULTILINE).group(1)
+    logistics_expression = re.search(r"^\s+const evidenceText = (.+);$", prefill_source, re.MULTILINE).group(1)
+    title_clear_contract = f"""
+const assert = require("node:assert/strict");
+const expression = {title_expression!r};
+const evaluate = (source) => new Function("fields", "draft", "buyerCopyRequiresValidatedGeneration", `return (${{source}});`);
+function verifyTitlePrefill(title) {{
+  assert.equal(title({{ title: "" }}, {{ title: "Previous title" }}, false), "", "explicit clear cannot resurrect the old title");
+  assert.equal(title({{}}, {{ title: "Previous title" }}, false), "Previous title", "missing legacy field still has a fallback");
+  assert.equal(title({{ title: "Merchant title" }}, {{ title: "Previous title" }}, false), "Merchant title");
+  assert.equal(title({{ title: "Merchant title" }}, {{ title: "Previous title" }}, true), "", "generation guard stays closed");
+}}
+verifyTitlePrefill(evaluate(expression));
+const legacyFallback = expression.replace('fields.title ?? draft?.title ??', 'fields.title || draft?.title ||');
+assert.notEqual(legacyFallback, expression, "negative mutation must change the actual source expression");
+assert.throws(() => verifyTitlePrefill(evaluate(legacyFallback)), /explicit clear cannot resurrect/);
+const logisticsExpression = {logistics_expression!r};
+const logistics = (source) => new Function("logisticsText", "logisticsEdited", "clean", `return (${{source}});`);
+function verifyLogistics(evidence) {{
+  assert.equal(evidence("", true, "Previous logistics"), "", "explicit logistics clear cannot borrow old prompt text");
+  assert.equal(evidence("Merchant logistics", true, "Previous logistics"), "Merchant logistics");
+  assert.equal(evidence("", false, "Previous logistics"), "Previous logistics", "unedited legacy prompt remains usable");
+}}
+verifyLogistics(logistics(logisticsExpression));
+const legacyLogistics = logisticsExpression.replace('logisticsEdited ? "" : clean', 'clean');
+assert.notEqual(legacyLogistics, logisticsExpression, "negative mutation must change the actual logistics expression");
+assert.throws(() => verifyLogistics(logistics(legacyLogistics)), /explicit logistics clear cannot borrow/);
+"""
+    title_clear_result = subprocess.run(
+        ["node", "-e", title_clear_contract], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False
+    )
+    if title_clear_result.returncode != 0:
+        raise AssertionError(f"Listing prefill clear/fallback/guard contract failed: {title_clear_result.stderr.strip()}")
     require(app_js, "parseSaasKeyValueLines(itemSpecifics)", "item specifics prefill parser")
-    require(app_js, "const evidenceText = [logisticsText, clean].filter(Boolean).join", "full merchant input logistics prefill source")
+    require(app_js, 'const evidenceText = [logisticsText, logisticsEdited ? "" : clean].filter(Boolean).join', "manual logistics prefill preserves edits and clears")
     require(app_js, 'clean.match(/https?:\\/\\/[^\\s,，；;]+/gi)', "image URL prefill from merchant input")
     require(app_js, "上架资料补全", "Listing publish data completion step")
     require(app_js, "按基础、价格利润、素材描述、平台参数和物流履约往下补", "Listing ordered publish flow copy")
     require(app_js, "function saasListingMerchantSourceLabel", "Listing merchant-facing source label helper")
     require(app_js, "已有 AI CEO 市场结论或上架草稿，可以作为上架依据", "Listing report import uses merchant-facing copy")
-    require(app_js, "店铺连接和授权配置在设置里", "Listing settings boundary copy")
+    require(app_js, "保存资料不代表当前账号可发布；账号状态以单列检查为准", "Listing distinguishes saved data from account eligibility")
     require(app_js, '<span class="pill green">草稿</span>', "Listing draft pill uses merchant-facing label")
     require(app_js, "const productLabel = saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel", "model value product label is defined before request")
     require(app_js, "function saasModelValueFailureMessage", "precise model value failure toast")
@@ -488,8 +784,9 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_html, "全部待办", "decision center non-technical secondary filter")
     require(app_html, "saas-confirm-action-model", "decision center light action model")
     require(app_html, "你没点头前不会执行", "decision center no-action-without-approval promise")
-    require(app_js, "只让你处理真正要拍板的事", "rendered decision center low-learning-cost headline")
-    require(app_js, "这里只做三种选择：同意、稍后、回去补资料。", "rendered decision center simple action copy")
+    require(app_js, "saasDecisionCenterHeadline(headlineProduct, allPendingCount)", "rendered decision center current pending headline")
+    require(app_js, "核对本次操作的对象、内容与影响", "rendered decision center action guidance")
+    require(app_js, "批准不代表已执行", "approval must not be presented as execution")
     require(app_js, "刷新待办", "rendered decision center non-technical refresh copy")
     require(app_js, "saas-confirm-card-decision", "rendered decision card frontloads merchant choice")
     require(app_js, "saas-confirm-safety-detail", "rendered decision card folds backend evidence")
@@ -502,20 +799,31 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     if "/preflight" in revision_block or "/execute" in revision_block:
         return fail("decision center revise action must never enter preflight or execution")
     require(app_js, "为什么停住", "rendered decision card keeps evidence behind plain-language disclosure")
-    require(app_js, "普通商家只看 5 个入口", "settings map merchant entrance boundary")
-    require(app_js, "这里处理账号、店铺数据、AI、权限、套餐付款与安全", "settings home low-learning-cost copy")
-    require(app_js, "不展示技术排查和部署细节", "settings home hides technical diagnostics")
+    require(app_js, "5 项设置，集中管理", "settings map merchant entrance boundary")
+    require(app_js, "在这里管理账号、店铺数据、AI、团队权限、套餐与付款", "settings home low-learning-cost copy")
+    require(app_js, "商品和订单工作回到对应工作台继续", "settings home keeps business work in its workbench")
     require(app_js, "商品、订单、政策、费用等来源可追溯", "settings status merchant-facing data copy")
-    require(app_js, "店铺数据、来源记录和同步缺口", "settings data panel merchant-facing title")
+    require(app_js, "店铺资料与账号状态", "settings data panel separates cached data from account status")
     require(app_js, "什么时候需要打开设置", "settings usage-rule section")
-    require(app_js, "主理人高级区", "settings workflow compact boundary")
-    require(app_js, "登录、eBay 店铺连接和安全边界", "account settings uses merchant-facing connection copy")
-    require(app_js, "官方连接返回地址", "account settings avoids callback wording")
-    require(app_js, "权限围绕捷境确认中心设计", "governance settings uses Jiejing-owned permission copy")
+    if "主理人高级区" in app_js:
+        return fail("merchant app must not contain the owner-only advanced settings surface")
+    for account_connection_copy in ["连接与权限", "读取店铺数据", "保存未发布草稿", "验证当前连接"]:
+        require(app_js, account_connection_copy, "account settings distinguishes existing connection capabilities in merchant language")
+    require(app_js, "角色权限不替代单次操作确认", "governance settings preserves per-action confirmation")
     require(app_js, "AI 与素材", "merchant-friendly model settings title")
     require(app_js, "账号 AI 已连接", "model settings uses merchant-facing AI connection copy")
-    require(app_js, "AI CEO 当前可使用捷境试用额度", "platform trial stays distinct from merchant account AI")
+    require(app_js, "文字分析", "model settings exposes text analysis capability")
+    require(app_js, "图片识别", "model settings exposes image recognition capability")
+    require(app_js, "联网搜索", "model settings exposes public search capability")
+    require(app_js, "图片生成", "model settings exposes image generation capability")
+    require(app_js, "不支持图片的模型不会被要求猜图", "model settings explains the text and vision boundary")
     require(app_js, ': !configured\n      ? "暂未开放"', "unavailable platform trial never shows a usable quota")
+    require(
+        app_js,
+        "quota.unlimited_when_limit_zero === true",
+        "platform trial UI honors the backend unlimited-zero-limit contract",
+    )
+    require(app_js, 'unlimited ? "不限次数"', "unlimited trial is never rendered as a finite allowance")
     require(app_js, "账号 AI 或捷境试用 AI", "merchant setup guide accepts account AI or platform trial AI")
     require(app_js, "优先用账号自己的 AI；没有账号 AI 时使用捷境试用 AI 的有限额度", "model value proof request uses BYOK first then trial AI")
     require(app_js, "图片和视频仍由素材工坊生成并审核", "model settings explains media review before listing use")
@@ -549,18 +857,24 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     source_cards_index = source_intake_body.index("renderSaasListingSourceCards")
     if not input_panel_index < source_cards_index:
         raise AssertionError("Listing source alternatives must stay below the primary product input")
-    source_intake_call_index = composer_body.index("renderSaasListingSourceIntake")
-    draft_editor_index = composer_body.index("renderSaasListingDraftEditor")
-    media_index = composer_body.index("renderSaasListingMediaWritebackPanel")
-    next_action_index = composer_body.index("renderSaasListingNextActionPanel")
-    advanced_index = composer_body.index("renderSaasListingAdvancedWorkDetails")
-    if not (source_intake_call_index < draft_editor_index < media_index < next_action_index < advanced_index):
-        raise AssertionError("Listing daily surface must flow from source selection to draft, media, one next action, then collapsed advanced checks")
+    require(composer_body, "draft ? renderSaasListingWizard", "Existing product renders the step wizard rather than stacked editors")
+    wizard_start = app_js.index("function renderSaasListingWizard({")
+    wizard_body = app_js[wizard_start:composer_start]
+    for marker in ('step === 1 ? renderSaasMerchantProductFactsModule', 'step === 2 ?',
+                   'step === 3 ? renderSaasListingWizardImages', 'renderSaasListingDraftEditor',
+                   'renderSaasListingVisiblePublishBridge', 'renderSaasListingUnpublishedDraftReceipt',
+                   'renderSaasListingAdvancedWorkDetails', 'listing-wizard-previous', 'listing-wizard-next'):
+        require(wizard_body, marker, "Four-step wizard keeps all existing business capabilities")
+    for direct_editor in ('renderSaasMerchantProductFactsModule', 'renderSaasListingDraftEditor',
+                          'renderSaasListingMediaWritebackPanel', 'renderSaasListingNextActionPanel'):
+        if direct_editor in composer_body:
+            raise AssertionError(f"Listing composer must not stack wizard editors: {direct_editor}")
+    require(listing_body, 'saasListingWizardRecord()?.step === 4', "Publish intake is shown only at the final step")
     next_action_start = app_js.index("function renderSaasListingNextActionPanel")
     next_action_end = app_js.index("function renderSaasListingWorkflowProofPanel", next_action_start)
     next_action_body = app_js[next_action_start:next_action_end]
     for receipt_marker in (
-        "saasLatestPublishConfirmation()",
+        "saasListingConfirmationsForCurrentProject()",
         "saasExecutionResultForConfirmation",
         "查看发布回执",
         "已记录安全交接",
@@ -618,7 +932,7 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         if internal_marker in rendered_confirm_body:
             raise AssertionError(f"Rendered decision center should remain a simple confirmation surface: {internal_marker}")
     settings_map_start = app_js.index("function renderSaasSettingsReadableMap")
-    settings_map_end = app_js.index("function renderSaasBillingProviderPanel", settings_map_start)
+    settings_map_end = app_js.index("function saasSettingsTabDefinitions", settings_map_start)
     settings_map_body = app_js[settings_map_start:settings_map_end]
     for internal_marker in [
         "packet",
@@ -673,7 +987,7 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         if internal_marker in permission_panel_body:
             raise AssertionError(f"Permission settings panel should stay Jiejing-owned: {internal_marker}")
     one_glance_start = app_js.index("function saasSettingsOneGlanceRows")
-    one_glance_end = app_js.index("function renderSaasBillingProviderPanel", one_glance_start)
+    one_glance_end = app_js.index("function saasSettingsTabDefinitions", one_glance_start)
     one_glance_body = app_js[one_glance_start:one_glance_end]
     for required_marker in [
         "function renderSaasSettingsOneGlanceStrip",
@@ -681,41 +995,67 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         "本页重点",
         "先看状态，再处理需要补齐的项目",
         "普通聊天不进长期经营记忆",
-        "只给主理人管理员",
+        "不让所有人共用老板权限",
     ]:
         require(one_glance_body, required_marker, "settings child pages have one-glance merchant summary")
     settings_def_start = app_js.index("function saasSettingsTabDefinitions")
     settings_def_end = app_js.index("function renderSaasSettingsCleanLayout", settings_def_start)
     settings_def_body = app_js[settings_def_start:settings_def_end]
+    tab_labels = re.findall(r'\n\s*label:\s*"([^"]+)"', settings_def_body)
+    expected_tab_labels = ["账号与店铺", "AI 与素材", "店铺数据", "团队权限", "套餐与付款"]
+    if tab_labels != expected_tab_labels:
+        raise AssertionError(f"Merchant Settings must expose exactly five merchant tabs: {tab_labels}")
     for required_marker in [
-        "renderSaasSettingsAccountAccessPanel()",
-        "renderSaasSettingsPlatformPanel(ctx)",
-        "renderSaasSettingsAccountPanel(ctx, options)",
+        "renderSaasSettingsAccountWorkspace(ctx, options)",
         "renderSaasMerchantModelProviderPanel(ctx)",
         "renderSaasSettingsDataPanel(ctx)",
         "renderSaasMerchantPermissionPanel()",
         "renderSaasMerchantBillingPlainSummaryPanel(ctx)",
-        "renderSaasBillingTransitionPathPanel(ctx)",
-        "renderSaasBillingDomainCutoverReviewPanel(ctx)",
-        "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
         "renderSaasMerchantBillingCustomerTrustPanel(ctx)",
-        "renderSaasManualBetaPaymentOrderPanel()",
         "renderSaasMerchantPricingModelPanel(ctx)",
         "renderSaasMerchantBillingContinuityPanel(ctx)",
+        "renderSaasMerchantSecurityBoundaryPanel()",
+    ]:
+        require(settings_def_body, required_marker, "settings five merchant tabs keep their merchant controls")
+    account_workspace_start = app_js.index("function renderSaasSettingsAccountWorkspace")
+    account_workspace_end = app_js.index("\nfunction ", account_workspace_start + 1)
+    account_workspace_body = app_js[account_workspace_start:account_workspace_end]
+    for required_marker in [
+        "renderSaasSettingsAccountAccessPanel()",
+        "renderSaasSettingsAccountPanel(ctx, options)",
+        "renderSaasAccountHealthPanel()",
+        "renderSaasBrowserSessionsPanel()",
+        "renderSaasMerchantOnboardingPanel({ compact: true, accountWorkspace: true })",
+    ]:
+        require(account_workspace_body, required_marker, "account workspace keeps existing merchant controls")
+    for forbidden_marker in [
+        'id: "general"',
+        'id: "owner_ops"',
+        "saasOwnerLaunchCanView()",
+        "renderSaasOwnerLaunchControlPanel()",
+        "renderSaasOwnerOperationsOverviewPanel()",
+        "renderSaasBillingTransitionPathPanel(ctx)",
+        "renderSaasManualBetaPaymentOrderPanel()",
+        "renderSaasBillingDomainCutoverReviewPanel(ctx)",
+        "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
         "renderSaasMerchantBillingIncidentRunbookPanel(ctx)",
+        "renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx)",
+        "renderSaasPublicSecurityStatusPanel()",
+        "renderSaasEdgeCutoverReadinessPanel()",
+        "renderSaasQueueHealthPanel()",
+        "renderSaasCommercialLaunchGatePanel()",
         "主理人高级区",
         "正式收费和公网安全",
         "运行可靠性",
         "主理人上线排查",
-        "renderSaasMerchantSecurityBoundaryPanel()",
     ]:
-        require(settings_def_body, required_marker, "settings ordinary tabs stay focused while owner area keeps advanced controls")
+        if forbidden_marker in settings_def_body:
+            raise AssertionError(f"Merchant Settings must not contain internal owner control: {forbidden_marker}")
     billing_tab_start = settings_def_body.index('id: "billing"')
-    owner_tab_start = settings_def_body.index('id: "owner_ops"', billing_tab_start)
-    billing_tab_body = settings_def_body[billing_tab_start:owner_tab_start]
-    owner_ops_body = settings_def_body[owner_tab_start:]
+    billing_tab_body = settings_def_body[billing_tab_start:]
     for required_marker in [
-        'title: "计费与安全说明"',
+        'title: "费用与额度说明"',
+        'title: "退款、停用与安全说明"',
         'badge: "按需查看"',
     ]:
         require(billing_tab_body, required_marker, "merchant billing keeps secondary explanations collapsed")
@@ -727,15 +1067,6 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     ]:
         if forbidden_marker in billing_tab_body:
             raise AssertionError(f"Ordinary merchant billing tab must not render internal payment operation panel: {forbidden_marker}")
-    for required_marker in [
-        "renderSaasBillingTransitionPathPanel(ctx)",
-        "renderSaasManualBetaPaymentOrderPanel()",
-        "renderSaasBillingDomainCutoverReviewPanel(ctx)",
-        "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
-        "renderSaasMerchantBillingIncidentRunbookPanel(ctx)",
-        "renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx)",
-    ]:
-        require(owner_ops_body, required_marker, "internal owner ops keeps launch and billing operation controls")
     for forbidden_marker in [
         "renderSaasMainlandPaymentStrategyPanel()",
         "renderSaasBillingProviderPanel()",
@@ -743,86 +1074,6 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     ]:
         if forbidden_marker in settings_def_body:
             raise AssertionError(f"Merchant settings must not render internal payment strategy: {forbidden_marker}")
-    for required_marker in [
-        "mainland_payment_strategy_v1",
-        "manual_confirmation_not_paid_launch_ready",
-        "domestic_wallets_primary_for_mainland_users",
-        "stripe_paypal_cross_border_fallback",
-        "worldfirst_payoneer_settlement_not_checkout",
-        "formal_payment_collection_architecture_v1",
-        "mainland_domain_icp_plan_v1",
-        "merchant_entity_payment_readiness_v1",
-        "merchant_payment_application_packet_v1",
-        "formal_payment_application_requires_service_privacy_refund_support",
-        "payment_review_documents_no_identity_files_in_frontend",
-        "payment_callback_url_review_ready_marker",
-        "payment_review_customer_brief_v1",
-        "payment_review_terms_privacy_refund_links_visible",
-        "payment_review_refund_support_public_pages_visible",
-        "payment_review_support_contact_pending_until_owner_configures",
-        "base_subscription_usage_platform_fee_boundary_visible",
-        "individual_business_first_then_company_if_scale_requires",
-        "formal_payment_requires_merchant_entity_and_subject_alignment",
-        "invited_beta_manual_confirmation_only",
-        "invited_beta_payment_reference_not_public_checkout",
-        "formal_payment_requires_merchant_order_signed_callback_and_quota_audit",
-        "manual_beta_payment_order_v1",
-        "manual_beta_payment_artifact_not_in_repo",
-        "manual_beta_owner_confirm_required",
-        "manual_beta_confirmation_grants_30d_starter",
-        "manual_beta_to_merchant_payment_transition_v1",
-        "manual_beta_owner_confirmation_before_entitlement",
-        "formal_payment_signed_webhook_or_order_query_before_auto_entitlement",
-        "quota_grant_not_frontend_driven",
-        "static_qr_never_paid_launch_provider",
-        "billing_provider_rehearsal_control_room_v1",
-        "billing/provider-rehearsal",
-        "backend_order_query_or_signed_webhook_before_entitlement",
-        "browser_cannot_grant_quota",
-        "no_real_checkout_no_external_api_no_charge",
-        "mainland_payment_cutover_v2",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "payment_provider_secret_boundary=backend_env_or_vault_only",
-        "signed_wechat_callback_or_authenticated_query_before_entitlement",
-        "rollback_secret_scan_readiness_browser_smoke_required",
-        "ready_for_paid_launch=false",
-        "public_charging_allowed=false",
-        "paid_launch_cutover_blockers_control_room_v1",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "signed_wechat_callback_or_authenticated_query_before_entitlement",
-        "owner_live_cutover_required_before_public_charge",
-        "invited_beta_manual_confirmation_not_paid_launch_provider",
-    ]:
-        require(app_js, required_marker, "mainland payment public safety markers")
-    for required_style_marker in [
-        ".saas-billing-transition-path",
-        ".saas-billing-transition-flow",
-        ".saas-billing-transition-grants",
-        ".saas-billing-transition-status",
-        ".saas-billing-provider-rehearsal",
-        ".saas-billing-provider-rehearsal-grid",
-        ".saas-billing-provider-rehearsal-result",
-        ".saas-billing-provider-rehearsal-actions",
-        ".saas-billing-domain-review",
-        ".saas-billing-domain-url-grid",
-        ".saas-billing-domain-stage-list",
-        ".saas-billing-domain-evidence",
-        ".saas-billing-domain-actions",
-        ".saas-paid-cutover-blockers",
-        ".saas-paid-cutover-phase-grid",
-        ".saas-paid-cutover-matrix",
-        ".saas-paid-cutover-blocker-list",
-        ".saas-mainland-payment-entity",
-        "grid-template-columns: minmax(230px, 1.45fr) repeat(5, minmax(0, 1fr))",
-        ".saas-mainland-payment-application",
-        "grid-template-columns: minmax(230px, 1.35fr) repeat(3, minmax(0, 1fr))",
-        ".saas-mainland-payment-review-brief",
-        "grid-template-columns: minmax(230px, 1.45fr) repeat(4, minmax(0, 1fr))",
-        ".saas-mainland-payment-review-links",
-    ]:
-        require(styles, required_style_marker, "mainland payment entity readiness layout")
     for removed_marker in [
         "/auth/qr-login/status",
         "qr-login-placeholder",
@@ -832,7 +1083,7 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     ]:
         if removed_marker in app_js or removed_marker in index_html:
             raise AssertionError(f"QR login should not be exposed in the current login path: {removed_marker}")
-    ordinary_settings_body = settings_def_body[: settings_def_body.index("if (saasOwnerLaunchCanView())")]
+    ordinary_settings_body = settings_def_body
     for redundant_marker in [
         "renderSaasSettingsAccountFocusPanel(ctx)",
         "renderSaasSettingsModelFocusPanel(ctx)",
@@ -854,9 +1105,13 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     settings_layout_start = app_js.index("function renderSaasSettingsCleanLayout")
     settings_layout_end = app_js.index("function renderSaasConnectCenter", settings_layout_start)
     settings_layout_body = app_js[settings_layout_start:settings_layout_end]
-    require(settings_layout_body, 'activeTab.id === "general"', "settings overview-only map guard")
-    require(settings_layout_body, 'isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""', "settings child pages skip redundant map")
-    require(settings_layout_body, 'isOverview ? renderSaasSettingsOneGlanceStrip(activeTab.id) : ""', "settings one-glance summary stays overview-only")
+    require(settings_layout_body, "|| tabs[0]", "settings defaults to the first real merchant tab")
+    require(settings_layout_body, "state.saasSettingsTab = activeTab.id", "settings keeps the selected five-tab destination")
+    # Account now owns a compact workspace; requiring its retired introductory
+    # maps here would enforce the stacked layout instead of retained capabilities.
+    require(settings_def_body, "renderSaasSettingsAccountWorkspace(ctx, options)", "account landing retains its actionable workspace")
+    if 'activeTab.id === "general"' in settings_layout_body or 'id: "general"' in settings_layout_body:
+        raise AssertionError("Settings must not restore a sixth general tab")
     settings_connect_start = app_js.index("function renderSaasConnectCenter")
     settings_connect_end = app_js.index("function renderConnect", settings_connect_start)
     settings_connect_body = app_js[settings_connect_start:settings_connect_end]
@@ -869,149 +1124,80 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     render_connect_start = app_js.index("function renderConnect")
     render_connect_end = app_js.index("function riskText", render_connect_start)
     render_connect_body = app_js[render_connect_start:render_connect_end]
-    require(render_connect_body, '"settings.legacy_connect_status"', "settings legacy status trusted label")
-    if "connectStatusEl.innerHTML" in render_connect_body:
-        raise AssertionError("Settings legacy connection status must not use raw innerHTML")
-    require(app_js, 'canViewPlatformInternal\n        ? optionalSaasFetchFast("/owner/launch-control"', "owner launch control should not be fetched for ordinary merchants")
-    require(app_js, 'Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" })', "owner launch control public-page quiet skip")
-    require(app_js, 'canViewPlatformInternal\n        ? optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`', "staging security gate should not be fetched for ordinary merchants")
-    require(app_js, 'Promise.resolve({ staging_security_gate: null, skipped: "platform_internal_admin_only" })', "staging security gate public-page quiet skip")
-    require(app_js, 'canViewPlatformInternal\n        ? optionalSaasFetchFast("/billing/payment-options"', "payment strategy should not be fetched for ordinary merchants")
-    require(app_js, 'Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" })', "payment strategy public-page quiet skip")
-    require(app_js, "function saasCanViewPlatformInternalFromPermissions", "platform-internal fetch gate should use current permissions")
-    require(app_js, "const canViewPlatformInternal = saasCanViewPlatformInternalFromPermissions(corePermissions);", "platform-internal fetches should use current permissions gate")
-    require(app_js, "state.saasOwnerLaunchControl = canViewPlatformInternal ? ownerLaunchControl.owner_launch_control || state.saasOwnerLaunchControl || null : null;", "ordinary merchant refresh should clear stale owner launch control")
-    for protected_fetch in [
-        'canViewPlatformInternal ? optionalSaasFetchFast("/vault/status"',
-        'canViewPlatformInternal ? optionalSaasFetchFast("/database/plan"',
-        'canViewPlatformInternal ? optionalSaasFetchFast("/queue/plan"',
-        '? optionalSaasFetchFast("/provider-job-contracts"',
+    if '"settings.legacy_connect_status"' in render_connect_body or "connectStatusEl.innerHTML" in render_connect_body:
+        raise AssertionError("Settings must not retain the legacy connection-status renderer")
+    for internal_fetch_marker in [
+        "function saasCanViewPlatformInternalFromPermissions",
+        "const canViewPlatformInternal = saasCanViewPlatformInternalFromPermissions(corePermissions);",
+        "/owner/launch-control",
+        "/security/staging-gate",
+        "/billing/payment-options",
+        "/vault/status",
+        "/database/plan",
+        "/backup/plan",
+        "/queue/plan",
+        "/provider-job-contracts",
     ]:
-        require(app_js, protected_fetch, f"ordinary merchants should not fetch {protected_fetch}")
+        if internal_fetch_marker in app_js:
+            raise AssertionError(f"Merchant app must not contain role-hidden internal fetch code: {internal_fetch_marker}")
     require(app_js, "function merchantSafeSaasBillingPlan", "ordinary merchant billing state sanitizer")
     require(app_js, "delete safePlan.payment_strategy;", "ordinary merchant billing plan must drop internal payment strategy")
     require(app_js, "delete safePlan.billing_live_cutover_matrix;", "ordinary merchant billing plan must drop internal live cutover matrix")
     require(app_js, "delete safePlan.billing_live_cutover_summary;", "ordinary merchant billing plan must drop internal live cutover summary")
     require(app_js, "state.saasBillingPlan = merchantSafeSaasBillingPlan(rawBillingPlan);", "billing plan must be sanitized before ordinary UI state")
+    merchant_billing_source = app_js + index_html + app_html + styles
     for billing_model_marker in [
-        "基础订阅保留工作台",
-        "AI 用量和素材生成单独核算",
-        "subscription_ai_media_platform_v1",
-        "saas-merchant-pricing-split",
-        "用量计费路线",
+        "function renderSaasMerchantBillingPlainSummaryPanel",
         "套餐权益、商家模型、素材点和平台成本清楚可查",
-        "eBay 费用、广告费、物流和退款不是捷境代扣",
-        "高成本联网任务",
-        "付款前显示套餐、金额、30 天期限和用量边界",
-        "订阅和用量总览",
-        "付费套餐包含当期生图素材点",
-        "当前是否扣费",
-        "套餐决定店铺数、席位数、经营任务和批量上限",
-        "DeepSeek、OpenAI 等文本模型由商家账号连接并直接承担模型费用",
-        "merchant_billing_plain_summary_v1",
-        "subscription_metering_clarity_v2",
-        "billing_now_no_real_charge",
-        "base_subscription_is_feature_fee=true",
+        "¥0 / ¥99 / ¥199",
+        "套餐已包含素材点；用完后才需要加购",
+        "套餐点用完后再购买",
+        "function renderSaasMerchantMediaCreditsPanel",
         "merchant_media_points_v2",
-        "platform_cost_not_collected_by_jiejing=true",
-        "订阅开通路径",
-        "试用先提交申请，正式付款开放后走安全支付页",
-        "merchant_subscription_request_path_v1",
-        "merchant_beta_request_no_real_charge",
-        "merchant_request_requires_service_confirmation",
-        "formal_checkout_uses_hosted_payment_page",
-        "entitlement_grant_requires_billing_state",
-        "试用订阅申请已生成",
-        "订阅开通说明",
-        "微信扫码、到账确认、权益开通和自主续购",
-        "微信扫码付款可用",
-        "商家主动微信扫码",
-        "后端验签确认后开通",
-        "到期后由商家自主续购",
-        "浏览器不保存支付资料",
-        "merchant_subscription_activation_path_v2",
-        "quota_grant_not_frontend_driven",
-        "static_qr_never_paid_launch_provider",
-        "订阅和额度生效方式",
-        "主动扫码付款，系统确认后开通",
-        "每次购买 30 天",
+        "素材点余额",
+        "失败、超时或生成前检查未通过时解除占用",
+        "function renderSaasMerchantDomesticPaymentPanel",
+        "微信扫码付款",
+        "付款、取消和退款状态会保留在当前账号",
+        "申请退款",
+        'refund_review_requested: "退款审核中"',
+        "function renderSaasMerchantBillingEntitlementPathPanel",
         "系统确认到账后开通",
-        "到期后由商家自主续购",
+        "只以微信支付签名回调或安全查单结果为准，浏览器不能自行开通权益",
         "支付资料不进入浏览器",
-        "账单恢复不重连店铺或 AI",
-        "只停高成本任务",
-        "merchant_billing_launch_path_v1",
-        "payment_page_mode=",
-        "backend_confirmation_required_before_entitlement=true",
         "frontend_cannot_grant_entitlement_or_quota",
-        "billing_recovery_does_not_require_reconnecting_store_or_ai=true",
-        "试用订阅申请",
-        "申请开通基础套餐，确认后显示可用期限",
-        "merchant_beta_subscription_request_v2",
-        "当前阶段",
-        "试用模式，不真实扣费",
-        "高成本用量",
-        "操作记录和账号设置继续保留",
-        "不需要重复连接店铺，也不需要重填 AI 连接",
-        "当前计费状态",
-        "先看能不能继续用，再看哪些费用另算",
-        "费用四分法",
-        "平台经营成本",
-        "eBay、物流、广告和退款由商家平台账户结算",
-        "试用模式，不真实扣费",
-        "merchant_visible_billing_status_v1",
-        "merchant_subscription_shutdown_closure_v2",
-        "billing_never_deletes_audit_records",
-        "billing_blocks_metered_work_only",
-        "no_repeat_oauth_for_billing_recovery",
-        "no_model_key_reentry_for_billing_recovery",
-        "merchant_billing_incident_runbook_v1",
-        "wechat_order_expired",
-        "wechat_callback_delayed",
-        "payment_mode=",
-        "refund_dispute_webhook_sets_payment_attention",
-        "refund_or_dispute_cannot_be_frontend_executed",
-        "payment_failed_cancel_blocks_metered_work",
-        "quota_shutdown_keeps_history_visible",
-        "browser_cannot_grant_or_restore_entitlement",
-        "merchant_billing_customer_trust_packet_v2",
-        "wechat_native_qr_payment_boundary",
-        "merchant_confirmed_one_time_30_day_renewal",
-        "payment_record_is_not_tax_invoice",
-        "invoice_request_requires_paid_order_and_service_review",
+        "function renderSaasMerchantBillingCustomerTrustPanel",
+        "付款前看清价格、期限、记录、发票和退款方式",
+        "订单记录不等同税务发票",
+        "退款申请进入审核",
         "billing_support_refund_links_visible",
         "entitlement_recovery_does_not_repeat_ebay_oauth",
-        "正式支付接入前演练",
-        "先证明后端查单 / 签名回调，再允许订阅和额度生效",
-        "data-saas-action=\"billing-provider-rehearsal\"",
-        "data-billing-provider-action=\"payment_failed\"",
-        "backend_order_query_or_signed_webhook_before_entitlement",
-        "browser_cannot_grant_quota",
-        "no_real_checkout_no_external_api_no_charge",
-        "mainland_payment_cutover_v2",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "payment_provider_secret_boundary=backend_env_or_vault_only",
-        "signed_wechat_callback_or_authenticated_query_before_entitlement",
-        "rollback_secret_scan_readiness_browser_smoke_required",
-        "public_paid_launch_allowed=false",
-        "creates_checkout_session=false",
-        "calls_stripe_api=false",
-        "triggers_real_charge=false",
-        "paid_launch_cutover_blockers_control_room_v1",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "signed_wechat_callback_or_authenticated_query_before_entitlement",
-        "owner_live_cutover_required_before_public_charge",
-        "repeat_ebay_oauth_allowed=false",
+        "function renderSaasMerchantBillingContinuityPanel",
+        "只停高成本任务",
+        "历史报告、确认记录、操作记录和账号设置继续保留",
+        "function renderSaasMerchantSecurityBoundaryPanel",
+        "敏感凭证不进入浏览器",
         "frontend_gets_payment_secret=false",
-        "openCurrentPublicHomepage",
+        "secret_exposed=false",
     ]:
-        require(app_js + index_html + app_html + styles, billing_model_marker, "settings billing model and homepage return copy")
+        require(merchant_billing_source, billing_model_marker, "merchant billing, order, refund, media-credit, and safety contract")
+    merchant_runtime_source = app_js + index_html + app_html
+    for internal_billing_marker in [
+        'data-saas-action="billing-provider-rehearsal"',
+        "/billing/provider-rehearsal",
+        "正式支付接入前演练",
+        "mainland_payment_cutover_v2",
+        "no_charge_launch_rehearsal",
+        "paid_launch_cutover_blockers_control_room_v1",
+        "owner_live_cutover_required_before_public_charge",
+        "public_paid_launch_allowed=",
+    ]:
+        if internal_billing_marker in merchant_runtime_source:
+            raise AssertionError(f"Merchant billing surface must not contain internal acceptance/launch control: {internal_billing_marker}")
     ordinary_billing_checks = [
-        ("function renderSaasMerchantBillingPlainSummaryPanel", "function renderSaasBillingTransitionPathPanel"),
-        ("function renderSaasMerchantBillingContinuityPanel", "function renderSaasMerchantBillingIncidentRunbookPanel"),
-        ("function renderSaasMerchantSecurityBoundaryPanel", "function renderSaasBillingProviderPanel"),
+        ("function renderSaasMerchantBillingPlainSummaryPanel", "function renderSaasMerchantSubscriptionActivationPanel"),
+        ("function renderSaasMerchantBillingContinuityPanel", "function renderLegacySaasMerchantBillingCustomerTrustPanel"),
+        ("function renderSaasMerchantSecurityBoundaryPanel", "function safeSaasBrowserSessionsForDisplay"),
     ]
     for start_marker, end_marker in ordinary_billing_checks:
         start = app_js.index(start_marker)
@@ -1030,8 +1216,8 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         ]:
             if forbidden_marker in ordinary_billing_body:
                 raise AssertionError(f"Ordinary merchant billing copy should not expose internal wording: {forbidden_marker}")
-    transition_start = app_js.index("function renderSaasBillingTransitionPathPanel")
-    transition_body = app_js[transition_start:app_js.index("function renderSaasBillingProviderRehearsalPanel", transition_start)]
+    transition_start = app_js.index("function renderSaasMerchantBillingEntitlementPathPanel")
+    transition_body = app_js[transition_start:app_js.index("function renderSaasMerchantBillingContinuityPanel", transition_start)]
     for forbidden_marker in [
         "quota 只停",
         "不重复授权 / 不重填模型 key",
@@ -1044,7 +1230,7 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     draft_body = app_js[draft_start:draft_end]
     primary_index = draft_body.index("saas-listing-v2-draft-primary")
     title_index = draft_body.index('"eBay 标题"')
-    points_index = draft_body.index('"五点卖点"')
+    points_index = draft_body.index('"核心卖点（3–5 条）"')
     description_index = draft_body.index('"商品描述"')
     side_index = draft_body.index("saas-listing-v2-draft-side")
     price_index = draft_body.index('"价格 / 成本线索"')
@@ -1195,16 +1381,23 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     service_html_start = app_html.index('<section class="view" id="view-service"')
     service_html_end = app_html.index('<section class="view" id="view-connect"', service_html_start)
     service_html = app_html[service_html_start:service_html_end]
-    service_dynamic_start = app_js.index("function renderSaasServiceCenter")
+    service_dynamic_start = app_js.index("function saasServiceTraceStateLabel")
     service_dynamic_end = app_js.index("function renderConversations", service_dynamic_start)
     service_dynamic_body = app_js[service_dynamic_start:service_dynamic_end]
     for expected in [
         "service_order_plain_workbench_v2",
+        "customer_service_trace_v1",
         "今日客服与订单",
-        "客服、物流和售后放在一页",
-        "没有真实订单时不显示虚构买家",
-        "当前没有待处理订单",
-        "当前没有待处理内容",
+        "依据商品资料和订单状态准备回复",
+        "订单以最近一次同步为准，不代表当前待回复数量。",
+        "买家原消息",
+        "AI 建议",
+        "商家已修改",
+        "已发送",
+        "演练记录",
+        "买家消息暂未接入",
+        "最近同步没有订单",
+        "尚无订单数据",
     ]:
         require(service_html + service_dynamic_body, expected, f"Service simple daily copy: {expected}")
     for internal_marker in [

@@ -79,7 +79,8 @@ def main() -> None:
     assert fields["selected_product_candidate"]["name"] == expected, fields
     assert fields["recommendation_score"] == 65, fields
     assert fields["price_band"] == "$9.99-$13.99", fields
-    assert fields["logistics_requirements"]["package_weight_g"] == "220", fields
+    assert fields["logistics_requirements"]["package_weight_g"] == "", fields
+    assert any("重量、尺寸或发货地待补" in gap for gap in fields["publish_preflight_gaps"]), fields
     assert fields["description_seed"] == "", fields
     assert fields["market_rationale"], fields
     assert "冰箱食品收纳整理架" not in fields["title"], fields
@@ -122,6 +123,38 @@ def main() -> None:
     assert followup_fields["description_seed"] == "", followup_fields
     assert "冰箱食品收纳整理架" not in " ".join(followup_fields["market_rationale"]), followup_fields
     assert followup_fields["triggers_real_platform_write"] is False, followup_fields
+
+    report_followup_task = repository.create_task(
+        company_id="company_candidate_selection",
+        store_id="store_candidate_selection",
+        user_id="user_candidate_selection",
+        task_type="ai_ceo.chat",
+        title="AI CEO 报告供应商补证",
+        input_data={"message": "继续 report_5eaf36a405de7331，只做赢家的供应商事实核验。"},
+    )
+    report_followup = repository.save_ai_ceo_market_research_report(
+        task=report_followup_task,
+        message="继续 report_5eaf36a405de7331，只做赢家的供应商事实核验。",
+        chat={
+            "answer": "已保存供应商公开事实和缺口；库存、最终采购价、发货地和图片商用许可仍待确认。",
+            "route": "ebay_workflow",
+            "status": "model_answered",
+            "source_records": [{"title": "Supplier page", "url": "https://example.com/supplier"}],
+        },
+        conversation_history=[
+            {
+                "user_text": "请给出三个候选并选出最值得测试的商品。",
+                "assistant_text": answer,
+                "route": "ebay_workflow",
+            }
+        ],
+    )
+    assert report_followup is not None, "report-id follow-up should inherit the selected product"
+    report_followup_body = report_followup["report"]
+    assert report_followup_body["product"] == expected, report_followup_body
+    assert report_followup_body["conversation_context"]["selection_mode"] == "history_selected_candidate", report_followup_body
+    assert report_followup_body["listing_handoff"]["ready_for_listing_draft"] is False, report_followup_body
+    assert "supplier_facts_incomplete" in report_followup_body["blocked_by"], report_followup_body
 
     reset_task = repository.create_task(
         company_id="company_candidate_selection",

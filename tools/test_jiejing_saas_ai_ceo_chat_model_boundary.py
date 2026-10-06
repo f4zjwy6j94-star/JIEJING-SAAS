@@ -10,7 +10,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,8 @@ from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.ai_ceo_chat import AI_CEO_ROUTE_EBAY_WORKFLOW, build_ai_ceo_chat_prompts  # noqa: E402
 from jiejing_saas.repository import SaaSRepository, _ai_ceo_market_product_candidates, _infer_ai_ceo_market_product  # noqa: E402
 from jiejing_saas.vault_secret_resolver import VaultSecretResolver  # noqa: E402
+from tools.ai_ceo_semantic_test_fixture import PLANNER_PROMPT_PREFIX, semantic_decision_json
+from tools.test_jiejing_ai_ceo_routing_supplier_http_red import SAFE_CHILD_ENV_NAMES
 
 OUT = ROOT / "output" / "jiejing-saas-ai-ceo-chat" / "test"
 SAAS_DB = OUT / "saas-ai-ceo-chat.sqlite"
@@ -48,7 +52,40 @@ class FakeModelHandler(BaseHTTPRequestHandler):
         )
         messages = body.get("messages") if isinstance(body.get("messages"), list) else []
         user_prompt = str(messages[-1].get("content") if messages and isinstance(messages[-1], dict) else "")
-        if "travel mosquito repeller" in user_prompt.lower():
+        system_prompt = str(messages[0].get("content") if messages and isinstance(messages[0], dict) else "")
+        if system_prompt.startswith(PLANNER_PROMPT_PREFIX):
+            message = json.loads(user_prompt)["merchant_message"]
+            decisions = {
+                "Introduce Jiejing in one sentence.": {"intent": "chat"},
+                "今天几号": {"intent": "chat"},
+                "你现在有连接网络吗，连接 DeepSeek 吗？": {"intent": "chat"},
+                "帮我为 eBay Listing 生成刊登资料和确认中心缺口": {"intent": "listing"},
+                "第三个为什么显示一半？": {"intent": "chat"},
+                "英伟达现在股价是多少": {"intent": "realtime", "search": "stock_quote", "query": "NVDA stock price"},
+                "美股为什么大跌": {"intent": "realtime", "search": "news_search", "query": "美股为什么大跌"},
+                "把这个 Listing 现在发布到 eBay": {"intent": "live_action"},
+                "记住这个规则：利润低于 20% 不要发布": {"intent": "remember_rule"},
+            }
+            for research_message in (
+                "Please make an eBay market research report and recommend one product for Listing: travel mosquito repeller",
+                "请做一个 eBay 市场调研并推荐一个可做 Listing 的商品：travel mosquito repeller，不要执行真实发布。",
+            ):
+                decisions[research_message] = {"intent": "research", "product_name": "travel mosquito repeller",
+                    "research_delivery": "single_product_analysis", "save_artifact": True}
+            if message not in decisions:
+                raise AssertionError("missing explicit semantic decision fixture")
+            content = semantic_decision_json(**decisions[message])
+        elif "timely_evidence_review_v1" in system_prompt:
+            evidence = json.loads(user_prompt)
+            source = evidence["source_records"][0]
+            content = json.dumps({"all_claims_supported": True, "answers_question": True, "date_scope_matches": True,
+                "conflicts": [], "claims": [{"text": evidence["candidate_answer"], "source_id": source["citation_id"],
+                                               "excerpt": source["snippet"]}]}, ensure_ascii=False)
+        elif "realtime_search" in user_prompt and '"realtime_kind": "news_search"' in user_prompt:
+            evidence = json.loads(user_prompt)
+            source = evidence["realtime_search"]["source_records"][0]
+            content = source["snippet"].rstrip("。") + "[" + source["citation_id"] + "]。"
+        elif "travel mosquito repeller" in user_prompt.lower():
             content = (
                 "### Product market research report\n"
                 "**Suggested product:** Travel mosquito repeller product\n"
@@ -113,6 +150,10 @@ class FakeSearchHandler(BaseHTTPRequestHandler):
                 },
             ],
         }
+        if "美股为什么大跌" in str(body.get("query") or ""):
+            today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            payload["results"] = [{"title": "Offline dated market-news fixture", "url": "https://www.reuters.com/markets/fixture",
+                "content": f"截至{today}，该公开报道把这次美股回落与风险偏好下降联系起来。", "published_at": today}]
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("content-type", "application/json")
@@ -149,11 +190,37 @@ def fetch_json(url: str, *, token: str | None = None) -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def post_json(url: str, payload: dict[str, Any], *, token: str | None = None) -> dict[str, Any]:
+def post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    token: str | None = None,
+    expected_status: int | tuple[int, ...] | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    if "/merchant-ceo/chat" in url:
+        payload = {**payload, "semantic_dispatch_contract": "ai_ceo_semantic_dispatch_v1"}
     body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=body, headers=_headers(token=token), method="POST")
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    headers = _headers(token=token)
+    headers.update(extra_headers or {})
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+            parsed["_http_status"] = int(response.status)
+            allowed = (expected_status,) if isinstance(expected_status, int) else expected_status
+            if allowed is not None and int(response.status) not in allowed:
+                raise AssertionError(f"expected HTTP {allowed}, got {response.status}: {parsed}")
+            if allowed is None and not 200 <= int(response.status) < 300:
+                raise AssertionError(f"expected HTTP 2xx, got {response.status}: {parsed}")
+            return parsed
+    except urllib.error.HTTPError as exc:
+        parsed = json.loads(exc.read().decode("utf-8"))
+        parsed["_http_status"] = int(exc.code)
+        allowed = (expected_status,) if isinstance(expected_status, int) else expected_status
+        if allowed is not None and int(exc.code) in allowed:
+            return parsed
+        raise AssertionError(f"expected HTTP {allowed or '2xx'}, got {exc.code}: {parsed}") from exc
 
 
 def _headers(*, token: str | None = None) -> dict[str, str]:
@@ -322,11 +389,17 @@ def main() -> int:
     search_thread = threading.Thread(target=search_server.serve_forever, daemon=True)
     search_thread.start()
     saas_port = free_port()
-    env = os.environ.copy()
+    env = {key: value for key, value in os.environ.items() if key.upper() in SAFE_CHILD_ENV_NAMES}
+    env.update({"JIEJING_SAAS_ENV": "test", "JIEJING_DATABASE_ENGINE": "sqlite",
+                "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false", "JIEJING_PUBLIC_CHARGING_ALLOWED": "false",
+                "JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED": "0"})
     env["JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED"] = "1"
     env["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(OUT / "local-model-secrets.json")
     env["JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP"] = "0"
     env["JIEJING_BILLING_PROVIDER"] = "stripe_test_mock"
+    env["JIEJING_INTERNAL_ADMIN_EMAILS"] = (
+        "ai-ceo-chat@example.com,ai-ceo-legacy-account-model@example.com"
+    )
     env["JIEJING_QUOTA_ENFORCEMENT_ENABLED"] = "1"
     env["JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED"] = "1"
     env["JIEJING_AI_CEO_REALTIME_MODEL_SYNTHESIS_ENABLED"] = "1"
@@ -390,9 +463,10 @@ def main() -> int:
         if billing_trial.get("triggers_real_charge") is not False or billing_trial.get("calls_stripe_api") is not False:
             return fail(f"registration trial must not call Stripe or trigger a real charge: {billing_trial}")
         billing_activation = post_json(
-            f"{base_url}/billing/test-event",
+            f"{base_url}/owner/billing/test-event",
             {"plan_key": "operator", "action": "activate"},
             token=token,
+            extra_headers={"Host": "ops.jiejing.shop"},
         ).get("billing_test_event", {})
         if billing_activation.get("ok") is not True:
             return fail(f"test billing activation should unlock multi-store test quota without real charge: {billing_activation}")
@@ -430,15 +504,13 @@ def main() -> int:
                 },
             },
             token=token,
+            expected_status=503,
         )
         pre_model_capability_chat = pre_model_capability_response.get("ai_ceo_chat", {})
-        if pre_model_capability_chat.get("status") != "capability_status_answered":
-            return fail(f"pre-model capability question should answer from current store status: {pre_model_capability_chat}")
-        pre_model_capability_answer = str(pre_model_capability_chat.get("answer") or "")
-        if "当前账号还没有可用的 AI 连接" not in pre_model_capability_answer:
-            return fail("pre-model capability answer should explain the current account is not connected")
-        if "不会跨商家、跨账号使用别人的模型连接" not in pre_model_capability_answer:
-            return fail("pre-model capability answer should preserve merchant/account isolation")
+        if pre_model_capability_chat.get("status") != "blocked_before_model_chat" or pre_model_capability_response.get("usage_consumed") is not False:
+            return fail("without an account model, semantic consultation must fail before provider use")
+        if pre_model_capability_response.get("ai_ceo_market_report") is not None:
+            return fail("a blocked capability consultation cannot save a product report")
         if FakeModelHandler.calls:
             return fail("pre-model capability question should not call the text model provider")
 
@@ -460,24 +532,17 @@ def main() -> int:
                 },
             },
             token=token,
+            expected_status=503,
         )
         pre_model_chat = pre_model_realtime_response.get("ai_ceo_chat", {})
-        if pre_model_chat.get("status") != "realtime_search_answered_without_model":
-            return fail(f"pre-model realtime search should not be blocked by model setup: {pre_model_chat}")
-        if pre_model_chat.get("route") != "external_realtime":
-            return fail(f"pre-model realtime search should route as external_realtime, got {pre_model_chat.get('route')}")
-        if not pre_model_chat.get("source_records"):
-            return fail("pre-model realtime search should return source records")
-        if not pre_model_chat.get("work_records"):
-            return fail("pre-model realtime search should return AI CEO work records")
-        if not pre_model_chat.get("confirmation_items"):
-            return fail("pre-model realtime search should return confirmation guidance")
-        if pre_model_chat.get("source_policy", {}).get("no_source_no_latest_claim") is not True:
-            return fail("pre-model realtime search should carry no-source-no-latest-claim policy")
+        if pre_model_chat.get("status") != "blocked_before_model_chat" or pre_model_realtime_response.get("usage_consumed") is not False:
+            return fail("search requests without a semantic model must remain uncharged and blocked")
+        if pre_model_chat.get("source_records") or FakeSearchHandler.calls:
+            return fail("missing semantic planning must not fall back to keyword-triggered search")
         if FakeModelHandler.calls:
             return fail("pre-model realtime search should not call the text model provider")
-        if pre_model_realtime_response.get("model_secret_resolution", {}).get("status") != "not_required_for_fast_route":
-            return fail("pre-model realtime search should report model secret is not required for fast route")
+        if pre_model_realtime_response.get("listing_created") is not False:
+            return fail("blocked semantic search must not create a Listing")
         if pre_model_realtime_response.get("ai_ceo_market_report") is not None:
             return fail("generic eBay realtime search should not be saved as a Listing market-research handoff")
 
@@ -491,7 +556,7 @@ def main() -> int:
                     "id": "ceo-chat-pre-model-market-report-test",
                     "text": "web search eBay market research and recommend one product for Listing: travel mosquito repeller",
                     "title": "Realtime market research before model setup",
-                    "summary": "AI CEO fast realtime market research should become a Listing handoff report",
+                    "summary": "Product selection needs candidate analysis, not a raw search handoff",
                     "intent": "listing_workflow",
                     "status": "ready",
                     "status_label": "realtime_search",
@@ -499,28 +564,19 @@ def main() -> int:
                 },
             },
             token=token,
+            expected_status=503,
         )
         pre_model_market_chat = pre_model_market_report_response.get("ai_ceo_chat", {})
-        if pre_model_market_chat.get("status") != "realtime_search_answered_without_model":
-            return fail(f"pre-model realtime market research should use the fast search route: {pre_model_market_chat}")
-        pre_model_ai_market_report = pre_model_market_report_response.get("ai_ceo_market_report", {})
-        if pre_model_ai_market_report.get("report_type") != "ai_ceo.market_research":
-            return fail(f"pre-model realtime market research should be saved as a structured Listing report: {pre_model_ai_market_report}")
-        pre_model_report_body = pre_model_ai_market_report.get("report") if isinstance(pre_model_ai_market_report.get("report"), dict) else {}
-        pre_model_handoff = pre_model_report_body.get("listing_handoff") if isinstance(pre_model_report_body.get("listing_handoff"), dict) else {}
-        if pre_model_handoff.get("ready_for_listing_draft") is not True or pre_model_handoff.get("triggers_real_platform_write") is not False:
-            return fail(f"pre-model realtime market report should be importable but never execute eBay writes: {pre_model_handoff}")
-        pre_model_delivery = pre_model_market_report_response.get("ai_ceo_market_report_delivery", {})
-        if pre_model_delivery.get("contract_version") != "2026-07-04-ai-ceo-market-report-delivery-v1":
-            return fail(f"pre-model realtime market report should return the Listing delivery contract: {pre_model_delivery}")
-        if pre_model_delivery.get("structured_report_saved") is not True or pre_model_delivery.get("listing_import_ready") is not True:
-            return fail(f"pre-model realtime market report should be saved and import-ready: {pre_model_delivery}")
-        for forbidden_key in ("frontend_gets_model_api_key", "runtime_gets_raw_ebay_token", "secret_exposed", "triggers_real_platform_write"):
-            if pre_model_delivery.get(forbidden_key) is not False:
-                return fail(f"pre-model report delivery should keep {forbidden_key}=False: {pre_model_delivery}")
-        reports_after_pre_model_market = fetch_json(f"{base_url}/reports?limit=30", token=token).get("reports", [])
-        if not any(item.get("report_id") == pre_model_ai_market_report.get("report_id") for item in reports_after_pre_model_market):
-            return fail("pre-model realtime market report should be queryable from /reports before model setup")
+        if pre_model_market_chat.get("status") != "blocked_before_model_chat":
+            return fail("Product selection without an available model must not impersonate candidate analysis")
+        if pre_model_market_report_response.get("ai_ceo_market_report") is not None:
+            return fail("Raw search without candidate analysis must not create a market report")
+        if pre_model_market_report_response.get("ai_ceo_market_report_delivery") is not None:
+            return fail("Blocked selection must not produce a Listing handoff")
+        if pre_model_market_report_response.get("usage_consumed") is not False or FakeModelHandler.calls:
+            return fail("Missing model must not consume a trial turn or call a provider")
+        if pre_model_market_report_response.get("listing_created") is not False:
+            return fail("Blocked selection must not create a Listing")
         if "unit-test-search-credential-placeholder" in json.dumps(pre_model_market_report_response, ensure_ascii=False):
             return fail("pre-model realtime market report response must not expose the search credential")
 
@@ -577,12 +633,12 @@ def main() -> int:
         company_default_chat = company_default_response.get("ai_ceo_chat", {})
         if company_default_chat.get("status") != "model_answered":
             return fail(f"second store should inherit the same-account model default: {company_default_chat}")
-        if not FakeSearchHandler.calls:
-            return fail("default account model chat should attach backend web context before model synthesis")
-        if company_default_chat.get("default_web_search", {}).get("used_for_model_prompt") is not True:
-            return fail(f"default account model chat should mark web context as used: {company_default_chat}")
-        if not company_default_chat.get("source_records"):
-            return fail("default account model chat should return sanitized source_records")
+        if FakeSearchHandler.calls:
+            return fail("a timeless direct-answer turn should not spend a live-search request")
+        if company_default_chat.get("default_web_search", {}).get("status") != "not_requested":
+            return fail(f"a timeless direct-answer turn should mark web search not requested: {company_default_chat}")
+        if company_default_chat.get("source_records"):
+            return fail("a timeless direct-answer turn should not fabricate source_records")
         company_default_model_messages = json.dumps(FakeModelHandler.calls[-1]["body"].get("messages", []), ensure_ascii=False)
         if "web_context" not in company_default_model_messages:
             return fail("default account model prompt should include web_context")
@@ -594,14 +650,10 @@ def main() -> int:
             return fail(f"default account model chat should expose latency budget evidence: {company_default_chat}")
         if company_default_performance.get("model_timeout_seconds") != 16 or company_default_performance.get("model_max_output_tokens") != 1200:
             return fail(f"default account model chat should expose the general-chat model budget: {company_default_performance}")
-        if (
-            company_default_performance.get("search_budget_seconds") != 1
-            or company_default_performance.get("search_max_results") != 3
-            or company_default_performance.get("source_record_count", -1) < 1
-        ):
-            return fail(f"default account model chat should expose sanitized web-search budget and source count: {company_default_performance}")
-        if company_default_performance.get("search_used_for_model_prompt") is not True:
-            return fail(f"default account model chat should tell frontend that source context was used: {company_default_performance}")
+        if company_default_performance.get("source_record_count") != 0:
+            return fail(f"a timeless direct-answer turn should expose zero source records: {company_default_performance}")
+        if company_default_performance.get("search_used_for_model_prompt") is not False:
+            return fail(f"a timeless direct-answer turn should expose search_used_for_model_prompt=false: {company_default_performance}")
         if not isinstance(company_default_chat.get("latency_ms"), int) or company_default_chat.get("latency_ms", -1) < 0:
             return fail(f"default account model chat should expose sanitized total latency: {company_default_chat}")
         recovered_subscription = legacy_missing_entitlement_repo.get_billing_subscription(company_id=company_id)
@@ -639,8 +691,11 @@ def main() -> int:
                 "client_timezone": "Asia/Shanghai",
             },
             token=other_token,
+            expected_status=503,
         )
         other_chat = other_response.get("ai_ceo_chat", {})
+        if other_response.get("_http_status") != 503:
+            return fail(f"missing model dependency must return HTTP 503: {other_response}")
         if other_chat.get("status") != "blocked_before_model_chat":
             return fail(f"other company must not inherit another company's model connection: {other_chat}")
         if set(other_chat.get("blocked_by") or []) != {"merchant_model_api_key_not_saved", "platform_model_default_not_configured"}:
@@ -669,9 +724,10 @@ def main() -> int:
         if not legacy_token or not legacy_company_id or not legacy_user_id:
             return fail("legacy registration should return token, company id and user id")
         legacy_activation = post_json(
-            f"{base_url}/billing/test-event",
+            f"{base_url}/owner/billing/test-event",
             {"plan_key": "operator", "action": "activate"},
             token=legacy_token,
+            extra_headers={"Host": "ops.jiejing.shop"},
         ).get("billing_test_event", {})
         if legacy_activation.get("ok") is not True:
             return fail(f"legacy test billing activation should unlock multi-store test quota: {legacy_activation}")
@@ -775,8 +831,8 @@ def main() -> int:
         if raw_secret in serialized:
             return fail("AI CEO chat response must not expose model API key")
         chat = response.get("ai_ceo_chat", {})
-        if chat.get("status") != "local_clock_answered":
-            return fail(f"AI CEO clock question should be answered without waiting for provider text generation, got {chat.get('status')}: {chat}")
+        if chat.get("status") != "model_answered":
+            return fail("date consultation must use the configured semantic planner and answer model")
         if chat.get("route") != "general_chat":
             return fail(f"normal date question should route as general_chat, got {chat.get('route')}")
         if chat.get("route_label") != "直接回答":
@@ -784,12 +840,12 @@ def main() -> int:
         if chat.get("memory_policy") != "transient_no_long_term_memory" or chat.get("long_term_memory") is not False:
             return fail(f"normal date question must not enter long-term merchant memory: {chat}")
         model_client = chat.get("model_client", {})
-        if model_client.get("provider_key") != "fast_route" or model_client.get("secret_exposed") is not False:
-            return fail(f"local clock answer should use the no-secret fast route, got {model_client}")
+        if model_client.get("secret_exposed") is not False or response.get("model_secret_resolution", {}).get("mode") != "account_byok":
+            return fail("date consultation must preserve the account BYOK and secret boundary")
         if "2026年5月25日" not in str(chat.get("answer") or ""):
             return fail("AI CEO clock answer should use the supplied client date context")
-        if FakeModelHandler.calls:
-            return fail("local clock question should not wait on the text model provider")
+        if len(FakeModelHandler.calls) != 2:
+            return fail("date consultation must include one planner and one answer call")
 
         capability_response = post_json(
             f"{base_url}/stores/{store_id}/merchant-ceo/chat",
@@ -811,13 +867,10 @@ def main() -> int:
             token=token,
         )
         capability_chat = capability_response.get("ai_ceo_chat", {})
-        if capability_chat.get("status") != "capability_status_answered":
-            return fail(f"AI CEO capability question should return a fast capability status: {capability_chat}")
-        capability_answer = str(capability_chat.get("answer") or "")
-        if "当前捷境账号 AI 已接通" not in capability_answer or "DeepSeek" not in capability_answer or "实时搜索" not in capability_answer:
-            return fail("AI CEO capability answer should explain AI and realtime search status")
-        if FakeModelHandler.calls:
-            return fail("AI CEO capability question should not wait on the text model provider")
+        if capability_chat.get("status") != "model_answered" or capability_response.get("model_secret_resolution", {}).get("mode") != "account_byok":
+            return fail("capability consultation must use the same authenticated account connection")
+        if len(FakeModelHandler.calls) != 4:
+            return fail("date and capability consultations must each call the planner and answer model")
 
         ebay_response = post_json(
             f"{base_url}/stores/{store_id}/merchant-ceo/chat",
@@ -873,8 +926,8 @@ def main() -> int:
             token=token,
         )
         followup_chat = followup_response.get("ai_ceo_chat", {})
-        if followup_chat.get("status") != "model_answered" or followup_chat.get("route") != "ebay_workflow":
-            return fail(f"short follow-up should inherit the previous eBay conversation route: {followup_chat}")
+        if followup_chat.get("status") != "model_answered" or followup_chat.get("route") != "general_chat":
+            return fail("a display clarification must follow the model's consultation plan while retaining prior conversation")
         followup_prompt = json.loads(str(FakeModelHandler.calls[-1]["body"]["messages"][-1]["content"]))
         recent_conversation = followup_prompt.get("recent_conversation") or []
         if not recent_conversation or "旅行收纳挂钩" not in str(recent_conversation[-1].get("assistant_text") or ""):
@@ -909,17 +962,17 @@ def main() -> int:
         if report_body.get("contract_version") != "2026-07-04-ai-ceo-market-report-frontstage-v2":
             return fail(f"AI CEO market report should carry the current contract version: {report_body}")
         handoff = report_body.get("listing_handoff") if isinstance(report_body.get("listing_handoff"), dict) else {}
-        if handoff.get("ready_for_listing_draft") is not True or handoff.get("real_platform_writes_enabled") is not False:
-            return fail(f"AI CEO market report should be ready for Listing draft but keep real writes disabled: {handoff}")
-        if handoff.get("source_mode") != "ai_ceo_chat_structured_handoff":
-            return fail(f"AI CEO market report should use the shared chat-to-Listing handoff source mode: {handoff}")
+        if handoff.get("ready_for_listing_draft") is not False or handoff.get("real_platform_writes_enabled") is not False:
+            return fail(f"AI CEO market report must remain non-importable until supplier facts are verified: {handoff}")
+        if handoff.get("source_mode") != "unknown" or handoff.get("source_mode") != market_report_chat.get("turn_plan", {}).get("source_mode"):
+            return fail("market report must preserve the semantic plan's unknown supplier-source status")
         listing_fields = handoff.get("listing_fields") if isinstance(handoff.get("listing_fields"), dict) else {}
         if listing_fields.get("contract_version") != "2026-07-04-ai-ceo-market-to-listing-handoff-v2":
             return fail(f"AI CEO market report should expose structured Listing handoff fields: {listing_fields}")
         if listing_fields.get("ebay_listing_field_map_contract") != "ai_ceo_market_research_to_ebay_inventory_offer_v1":
             return fail(f"AI CEO market report should expose eBay Inventory/Offer field mapping: {listing_fields}")
-        if listing_fields.get("ready_for_listing_draft") is not True or listing_fields.get("triggers_real_platform_write") is not False:
-            return fail(f"AI CEO listing fields should remain draft-only and confirmation-gated: {listing_fields}")
+        if listing_fields.get("ready_for_listing_draft") is not False or listing_fields.get("triggers_real_platform_write") is not False:
+            return fail(f"AI CEO listing fields should remain non-importable and confirmation-gated: {listing_fields}")
         if not listing_fields.get("market_rationale") or listing_fields.get("selling_points") or listing_fields.get("description_seed"):
             return fail(f"AI CEO market rationale must stay separate from buyer-facing Listing copy: {listing_fields}")
         if listing_fields.get("buyer_copy_status") != "waiting_for_merchant_product_facts":
@@ -944,8 +997,8 @@ def main() -> int:
             return fail(f"AI CEO market report should return the frontend delivery contract: {market_delivery}")
         if market_delivery.get("report_id") != ai_ceo_market_report.get("report_id"):
             return fail(f"AI CEO market delivery should point to the saved report: {market_delivery}")
-        if market_delivery.get("structured_report_saved") is not True or market_delivery.get("listing_import_ready") is not True:
-            return fail(f"AI CEO market delivery should make Listing import explicit: {market_delivery}")
+        if market_delivery.get("structured_report_saved") is not True or market_delivery.get("listing_import_ready") is not False:
+            return fail(f"AI CEO market delivery should expose saved-but-not-importable truth: {market_delivery}")
         for forbidden_key in ("frontend_gets_model_api_key", "runtime_gets_raw_ebay_token", "secret_exposed", "triggers_real_platform_write"):
             if market_delivery.get(forbidden_key) is not False:
                 return fail(f"AI CEO market delivery should keep {forbidden_key}=False: {market_delivery}")
@@ -997,8 +1050,8 @@ def main() -> int:
             return fail(f"safe no-publish market research should still be saved as a structured report: {safe_non_publish_report}")
         safe_non_publish_body = safe_non_publish_report.get("report") if isinstance(safe_non_publish_report.get("report"), dict) else {}
         safe_non_publish_handoff = safe_non_publish_body.get("listing_handoff") if isinstance(safe_non_publish_body.get("listing_handoff"), dict) else {}
-        if safe_non_publish_handoff.get("ready_for_listing_draft") is not True or safe_non_publish_handoff.get("triggers_real_platform_write") is not False:
-            return fail(f"safe no-publish market report should remain a draft-only handoff: {safe_non_publish_handoff}")
+        if safe_non_publish_handoff.get("ready_for_listing_draft") is not False or safe_non_publish_handoff.get("triggers_real_platform_write") is not False:
+            return fail(f"safe no-publish market report should remain saved but non-importable until facts are verified: {safe_non_publish_handoff}")
         reports_after_safe_non_publish = fetch_json(f"{base_url}/reports?limit=30", token=token).get("reports", [])
         if not any(item.get("report_id") == safe_non_publish_report.get("report_id") for item in reports_after_safe_non_publish):
             return fail("safe no-publish market report should be queryable from /reports")
@@ -1034,8 +1087,8 @@ def main() -> int:
         realtime_answer = str(realtime_chat.get("answer") or "")
         if "NASDAQ" not in realtime_answer or "来源" not in realtime_answer:
             return fail("realtime stock answer should cite live search sources")
-        if len(FakeModelHandler.calls) != call_count + 1:
-            return fail("realtime stock question should synthesize live source records through the account model")
+        if len(FakeModelHandler.calls) != call_count + 2:
+            return fail("realtime stock question must meter planning and source synthesis through the account model")
         realtime_model_body = FakeModelHandler.calls[-1]["body"]
         if realtime_model_body.get("max_tokens") != 1000:
             return fail(f"realtime stock question should use the realtime token budget: {realtime_model_body}")
@@ -1063,6 +1116,7 @@ def main() -> int:
             return fail("AI CEO realtime search response must not expose search provider credential")
 
         search_call_count = len(FakeSearchHandler.calls)
+        market_model_call_count = len(FakeModelHandler.calls)
         market_news_response = post_json(
             f"{base_url}/stores/{store_id}/merchant-ceo/chat",
             {
@@ -1089,8 +1143,10 @@ def main() -> int:
             return fail(f"market move question should route as realtime news_search: {market_news_chat}")
         if len(FakeSearchHandler.calls) <= search_call_count:
             return fail("market move question should call the backend search provider")
-        if len(FakeModelHandler.calls) <= call_count + 1:
-            return fail("market move question should synthesize source records through the account model")
+        if len(FakeModelHandler.calls) != market_model_call_count + 3:
+            return fail("dated market news must meter planning, synthesis, and evidence review through the account model")
+        if market_news_chat.get("answer_stream_buffered") is not True or not market_news_chat.get("temporal_evidence_quality", {}).get("accepted"):
+            return fail("dated market news should pass the temporal review before returning its answer")
         if realtime_response.get("ai_ceo_market_report") is not None:
             return fail("realtime stock question must not be saved as an AI CEO Listing handoff report")
         if realtime_response.get("ai_ceo_market_report_delivery") is not None:
@@ -1107,7 +1163,7 @@ def main() -> int:
         latest_command = latest.get("command", {})
         if latest_command.get("ai_reply_status") != "realtime_search_answered":
             return fail("latest AI CEO command should keep realtime model-synthesis status")
-        if "NASDAQ" not in str(latest_command.get("ai_reply") or ""):
+        if str(latest_command.get("ai_reply") or "") != market_news_chat.get("answer"):
             return fail("latest AI CEO command should keep realtime source-backed reply")
 
         high_risk_response = post_json(

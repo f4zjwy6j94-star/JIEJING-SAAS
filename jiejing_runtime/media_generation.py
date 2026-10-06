@@ -398,6 +398,7 @@ class MediaGenerationAdapter:
                     "dimensions": _openai_image_size(os.environ.get("JIEJING_OPENAI_IMAGE_SIZE") or ""),
                     "source": "openai_image_generation",
                     "provider": "openai",
+                    "mime_type": _normalized_mime_type(item),
                     "commercial_use_status": "needs_rights_review",
                     "status": "generated",
                 }
@@ -408,7 +409,13 @@ class MediaGenerationAdapter:
         if not isinstance(item, dict):
             return None
         url_or_path = item.get("url") or item.get("path") or item.get("file_path")
-        asset_type = item.get("asset_type") or item.get("type") or fallback_type
+        mime_type = _normalized_mime_type(item)
+        asset_type = item.get("asset_type") or item.get("type")
+        if not asset_type and mime_type.startswith("video/"):
+            asset_type = "product_video"
+        elif not asset_type and mime_type.startswith("image/"):
+            asset_type = "product_image"
+        asset_type = asset_type or fallback_type
         if not url_or_path or not asset_type:
             return None
         dimensions = item.get("dimensions") or item.get("size") or ""
@@ -417,6 +424,7 @@ class MediaGenerationAdapter:
         normalized = {
             "asset_id": item.get("asset_id") or item.get("id") or _asset_id_from_url(str(asset_type), str(url_or_path)),
             "asset_type": str(asset_type),
+            "mime_type": mime_type,
             "url": url_or_path,
             "file_path": item.get("file_path") or item.get("path") or "",
             "dimensions": dimensions,
@@ -718,6 +726,16 @@ elif values.get('FAL_KEY_ID') and values.get('FAL_KEY_SECRET'):
         if raw is None:
             return default
         return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalized_mime_type(asset: dict[str, Any]) -> str:
+    value = str(
+        asset.get("mime_type")
+        or asset.get("content_type")
+        or asset.get("content-type")
+        or ""
+    ).strip().lower()
+    return value.split(";", 1)[0].strip()
 
 
 def _mp4_duration_seconds(data: bytes) -> float | None:

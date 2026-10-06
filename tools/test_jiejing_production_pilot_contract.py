@@ -117,6 +117,22 @@ def main() -> int:
         return fail("production pilot must not retain the obsolete Stripe launch lane")
 
     compose = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    controlled_draft_overrides = {
+        "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED": "false",
+        "JIEJING_PRODUCTION_CONTROLLED_DRAFT_BOOT_ALLOWED": "true",
+        "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
+        "JIEJING_EBAY_WRITE_LIVE": "false",
+        "JIEJING_EBAY_DRAFT_SAVE_LIVE": "true",
+        "JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE": "true",
+        "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": "controlled_existing_draft_publish",
+    }
+    for key, expected_value in controlled_draft_overrides.items():
+        marker = f'{key}: "{expected_value}"'
+        if compose.count(marker) != 2:
+            return fail(
+                "production API and worker must share the exact controlled unpublished-draft override: "
+                f"{key}={expected_value}"
+            )
     if not PRODUCTION_REQUIREMENTS_LOCK.exists():
         return fail("production Python dependencies must have an exact hash lock")
     if not PRODUCTION_BUILD_REQUIREMENTS_LOCK.exists():
@@ -185,7 +201,7 @@ def main() -> int:
         return fail("every production Python stage must use the reviewed immutable image digest")
     expected_compose_refs = {
         "jiejing-vault": 2,
-        "jiejing-frontend": 1,
+        "jiejing-frontend": 2,
         "jiejing-edge": 1,
     }
     for name, expected_count in expected_compose_refs.items():
@@ -232,8 +248,10 @@ def main() -> int:
             return fail(f"CI/deploy workflow must execute the paper ceremony contract: {workflow.name}")
     if "provision_managed_postgres_and_redis" in precloud_gate:
         return fail("precloud next steps must not recommend paid Redis after the production queue moved to Postgres durable")
-    if "provision_managed_postgres_and_postgres_durable_queue" not in precloud_gate:
-        return fail("precloud next steps must name the selected Postgres durable production queue")
+    if "provision_managed_postgres" in precloud_gate or "vault_kms" in precloud_gate:
+        return fail("precloud must not recommend reprovisioning the existing database or paid KMS by default")
+    if "JIEJING_CURRENT_EXECUTION_STATE" not in precloud_gate or "manual_github_dry_run" not in precloud_gate:
+        return fail("precloud next steps must use current state and the approved deployment channel")
     private_env = "${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-saas.production.env"
     if compose.count(private_env) != 2 or "./jiejing-saas.production.env" in compose.replace(private_env, ""):
         return fail("production credentials must be injected from the server-private env boundary")
@@ -414,12 +432,14 @@ def main() -> int:
         "/health/deep",
         "/schema/chain",
         "/platforms",
-        "/infrastructure/drivers",
+        "/readiness/product-saas",
+        "/billing/plans",
+        "/billing/media-credits",
+        "/monitoring/cls/callback",
         "/product-feedback",
         "/analytics/*",
         "/companies*",
         "/permissions/*",
-        "/security/*",
         "/data-packets",
         "/data-packets/*",
         "/ip-risk-screening",
@@ -438,13 +458,43 @@ def main() -> int:
     api_matcher_line = next((line.strip() for line in caddy.splitlines() if line.strip().startswith("@api path ")), "")
     api_patterns = api_matcher_line.split()[2:]
     backend_routes = _backend_route_samples(API_SERVER.read_text(encoding="utf-8"))
+    merchant_blocked_prefixes = (
+        "/owner",
+        "/vault",
+        "/database",
+        "/backup",
+        "/queue",
+        "/infrastructure",
+        "/readiness",
+        "/domain",
+        "/monitoring",
+        "/billing",
+        "/commercial",
+        "/security",
+    )
+    merchant_internal_exact_routes = {"/operational-health", "/provider-job-contracts"}
+    merchant_blocked_routes = {
+        route
+        for route in backend_routes
+        if route in merchant_internal_exact_routes
+        or (
+            any(route == prefix or route.startswith(f"{prefix}/") for prefix in merchant_blocked_prefixes)
+            and not any(fnmatch.fnmatchcase(route, pattern) for pattern in api_patterns)
+        )
+    }
+    for prefix in merchant_blocked_prefixes:
+        if prefix in api_patterns or f"{prefix}/*" in api_patterns:
+            return fail(f"production merchant API matcher must not proxy internal prefix: {prefix}")
+    if not merchant_blocked_routes:
+        return fail("production proxy contract did not discover any internal backend routes to keep blocked")
     uncovered_routes = sorted(
         route
         for route in backend_routes
+        if route not in merchant_blocked_routes
         if not any(fnmatch.fnmatchcase(route, pattern) for pattern in api_patterns)
     )
     if uncovered_routes:
-        return fail(f"production edge must route every backend HTTP surface to the API: {uncovered_routes}")
+        return fail(f"production edge must route every merchant-safe backend HTTP surface to the API: {uncovered_routes}")
     if "/health/startup" in api_patterns:
         return fail("internal dependency startup probe must not be exposed by the public edge")
     if "./robots.production.txt:/usr/share/nginx/html/robots.txt:ro" not in compose:
@@ -466,6 +516,8 @@ def main() -> int:
     for marker in (
         "server_name _;",
         "location = /app.html",
+        "location = /app.js",
+        "location = /styles.css",
         "location = /sitemap.xml",
         "return 302 https://$host/index.html?source=direct_app_entry&start=site",
         "location = /ops.html { return 404; }",
@@ -474,6 +526,14 @@ def main() -> int:
     ):
         if marker not in nginx:
             return fail(f"production static server is missing safety marker: {marker}")
+    for main_asset in ("app.js", "styles.css"):
+        asset_location = re.search(
+            rf"location = /{re.escape(main_asset)}\s*\{{(?P<body>.*?)\n\s*\}}",
+            nginx,
+            flags=re.DOTALL,
+        )
+        if not asset_location or 'Cache-Control "no-cache, max-age=0, must-revalidate" always' not in asset_location.group("body"):
+            return fail(f"production main asset must revalidate after every release: {main_asset}")
     for security_header in (
         'X-Frame-Options "DENY" always',
         'X-Content-Type-Options "nosniff" always',

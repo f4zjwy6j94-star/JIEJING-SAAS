@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +19,7 @@ import urllib.request
 from contextlib import redirect_stderr
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -43,9 +45,66 @@ def find_free_port() -> int:
         return int(probe.getsockname()[1])
 
 
+def test_http_refresh_burst_accept_queue() -> str:
+    """Keep one refresh's HTTP requests queued until the accept loop can resume."""
+    from jiejing_saas.api_server import JiejingSafeThreadingHTTPServer, SaaSBackendHandler
+
+    class RefreshBurstHandler(SaaSBackendHandler):
+        settings = SimpleNamespace(is_production_like=False, cors_origin="")
+
+        def _handle_get(self) -> None:
+            self._write_json({"burst_request": self.path.rsplit("/", 1)[-1]})
+
+    server = JiejingSafeThreadingHTTPServer(("127.0.0.1", 0), RefreshBurstHandler)
+    clients: list[socket.socket] = []
+    server_thread: threading.Thread | None = None
+    burst_size = 16
+    try:
+        # Listening without starting serve_forever is the accept gate. No handler
+        # can drain the real kernel queue while this refresh burst is admitted.
+        # The timeout only bounds an unadmitted connection; elapsed time is not
+        # a performance assertion and accept scheduling cannot change the count.
+        for index in range(burst_size):
+            try:
+                client = socket.create_connection(server.server_address, timeout=2)
+                clients.append(client)
+                client.settimeout(5)
+                client.sendall(
+                    f"GET /refresh-burst/{index} HTTP/1.1\r\n"
+                    "Host: localhost\r\nConnection: close\r\n\r\n".encode("ascii")
+                )
+            except OSError as exc:
+                return (
+                    "HTTP accept queue must retain all 16 refresh requests before handlers resume: "
+                    f"admitted={len(clients)}/16, error={type(exc).__name__}"
+                )
+
+        server_thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
+        server_thread.start()
+        for index, client in enumerate(clients):
+            with http.client.HTTPResponse(client) as response:
+                response.begin()
+                body = json.loads(response.read().decode("utf-8"))
+                if response.status != 200 or body != {"burst_request": str(index)}:
+                    return "queued refresh requests must each receive their own complete JSON response"
+        return ""
+    finally:
+        for client in clients:
+            client.close()
+        if server_thread is not None:
+            server.shutdown()
+            server_thread.join(timeout=5)
+        server.server_close()
+
+
 def main() -> int:
     from jiejing_saas.api_server import SaaSBackendHandler
     from jiejing_saas.repository import SaaSRepository
+
+    if burst_error := test_http_refresh_burst_accept_queue():
+        return fail(burst_error)
 
     access_log_sentinel = "OAUTH_CONFIRMATION_LOG_SENTINEL"
     access_log_handler = object.__new__(SaaSBackendHandler)
@@ -213,25 +272,17 @@ def main() -> int:
             return fail(f"merchant billing-plan sanitizer exposes internal launch key {internal_launch_key}")
     if merchant_safe_plan.get("customer_visible") is not True:
         return fail("merchant billing-plan sanitizer must preserve customer_visible=true")
-    if merchant_safe_plan.get("internal_launch_evidence_visible") is not False:
-        return fail("merchant billing-plan sanitizer must preserve internal_launch_evidence_visible=false")
+    if "internal_launch_evidence_visible" in merchant_safe_plan:
+        return fail("merchant billing-plan sanitizer must omit internal launch evidence fields")
     if merchant_safe_plan.get("secret_exposed") is not False:
         return fail("merchant billing-plan sanitizer must preserve secret_exposed=false")
     expected_top_level = {
         "contract_version",
-        "billing_ready_for_private_beta",
-        "billing_ready_for_paid_launch",
         "provider",
         "plan_catalog",
         "add_on_catalog",
         "quota_contract",
         "mainland_payment",
-        "merchant_launch_path",
-        "paid_launch_blockers",
-        "billing_test_rehearsal_summary",
-        "subscription_quota_shutdown_closure",
-        "billing_incident_runbook",
-        "customer_billing_trust_packet",
         "confirmation_boundary",
         "public_charging_allowed",
         "charge_now_allowed",
@@ -243,7 +294,6 @@ def main() -> int:
         "frontend_can_grant_entitlement",
         "frontend_can_grant_quota",
         "customer_visible",
-        "internal_launch_evidence_visible",
         "secret_exposed",
     }
     if set(merchant_safe_plan) != expected_top_level:
@@ -490,57 +540,35 @@ def main() -> int:
             return fail("local MVP readiness must not claim production ready")
         if readiness_body.get("real_platform_writes_enabled") is not False:
             return fail("readiness must not enable real writes")
+        if readiness_body.get("detail_scope") != "public_summary" or readiness_body.get("internal_detail_required") is not True:
+            return fail(f"merchant readiness must stay a public summary: {readiness_body}")
         readiness_keys = {item.get("key") for item in readiness_body.get("items", [])}
         for required_key in {
-            "team_permission_boundary",
             "database",
-            "database_adapter_contract",
-            "database_migration_plan",
             "queue",
-            "queue_adapter_contract",
-            "queue_worker_plan",
             "infrastructure_drivers",
             "monitoring_alerting",
             "backup_restore",
             "billing_quota",
-            "model_value_proof",
-            "vault",
-            "vault_adapter_contract",
-            "platform_registry",
-            "ebay_account_deletion_notifications",
-            "ebay_token_refresh",
-            "ebay_read_only_adapter",
-            "ebay_live_read_adapter",
-            "platform_data_packets",
-            "provider_job_runner",
-            "independent_runtime",
-            "controlled_bridges",
-            "execution_service",
         }:
             if required_key not in readiness_keys:
-                return fail(f"readiness missing product-grade gate: {required_key}")
-        controlled_bridge_status = readiness_body.get("provider_status", {}).get("controlled_bridges", {})
-        if controlled_bridge_status.get("formal_bridge_count") != 5:
-            return fail("controlled bridge readiness should expose five formal bridges")
-        if controlled_bridge_status.get("hermes_legacy_bridge_can_be_production_dependency") is not False:
-            return fail("Hermes legacy bridge must not be a production dependency")
-        platform_status = readiness_body.get("provider_status", {}).get("platform_registry", {})
-        if "ebay" not in platform_status.get("platform_keys", []) or "1688" not in platform_status.get("platform_keys", []):
-            return fail("platform registry readiness should expose eBay and 1688")
-        independence = fetch_json(f"{base_url}/independence/status").get("independence", {})
-        if independence.get("runtime_independent_from_hermes") is not True:
-            return fail("Jiejing SaaS should default to independent Runtime, not Hermes")
-        if independence.get("hermes_adapters_allowed") is not False:
-            return fail("Hermes adapters must be disabled by default")
-        if independence.get("issue_count") != 7:
-            return fail("independence status should track the seven productization gaps")
-        issue_by_key = {item.get("key"): item for item in independence.get("issue_cards", [])}
-        if issue_by_key.get("owned_agents", {}).get("status") != "independent_runtime_ready":
-            return fail("owned agents should be marked independent when Hermes adapters are disabled")
-        if not all(item.get("exists") for item in independence.get("deployment_files", [])):
-            return fail("independent deployment skeleton files should exist")
-        if independence.get("secret_exposed") is not False or "TOKEN" in json.dumps(independence, ensure_ascii=False):
-            return fail("independence status must not expose raw secrets")
+                return fail(
+                    f"readiness missing product-grade gate: {required_key}; "
+                    f"status={readiness_body.get('status')} degraded={readiness_body.get('degraded')} "
+                    f"reason={readiness_body.get('degraded_reason')} error={readiness_body.get('database_error_type')} "
+                    f"keys={sorted(readiness_keys)}"
+                )
+        if len(readiness_body.get("items", [])) > 8 or any(
+            item.get("severity") not in {"warning", "blocker"} for item in readiness_body.get("items", [])
+        ):
+            return fail("merchant readiness must expose only a bounded blocker/warning summary")
+        if any(
+            key in readiness_body.get("provider_status", {}) for key in {"controlled_bridges", "platform_registry", "backup"}
+        ):
+            return fail("merchant readiness must keep internal operational packets on the ops surface")
+        independence_status, _ = fetch_json_expect_error(f"{base_url}/independence/status")
+        if independence_status != 401:
+            return fail("internal independence status must require authentication")
 
         platforms = fetch_json(f"{base_url}/platforms")
         registry = platforms.get("platform_registry", {})
@@ -627,6 +655,35 @@ def main() -> int:
             return fail("registered user should be owner of default company")
         if "manage_team" not in owner_permissions.get("permissions", []) or "approve_high_risk" not in owner_permissions.get("permissions", []):
             return fail("owner permissions should include team management and high-risk approval")
+        media_capabilities = fetch_json(f"{base_url}/media/capabilities", token=token).get("media_capabilities", {})
+        image_recognition = media_capabilities.get("product_image_recognition", {})
+        search_capability = media_capabilities.get("public_search", {})
+        if search_capability.get("status") not in {"disabled", "configured", "fallback_only", "not_configured"}:
+            return fail("merchant search capability must expose a bounded configuration status")
+        if not isinstance(search_capability.get("available"), bool) or search_capability.get("live_probe_performed") is not False:
+            return fail("search configuration must not masquerade as a live health probe")
+        if not isinstance(image_recognition.get("configured"), bool):
+            return fail("merchant media capabilities must expose a boolean image-recognition state")
+        if image_recognition.get("status") not in {"ready", "not_configured"}:
+            return fail("merchant media capabilities must expose a bounded status")
+        image_generation = media_capabilities.get("image_generation", {})
+        for key in ("configured", "live_generation_enabled", "live_image_generation_enabled", "live_provider_calls_allowed"):
+            if not isinstance(image_generation.get(key), bool):
+                return fail(f"merchant media capabilities must expose boolean image-generation state: {key}")
+        if image_generation.get("status") not in {
+            "live_generation_ready_waiting_asset_review",
+            "dry_run_review_chain_ready_live_generation_disabled",
+            "dry_run_review_chain_ready_missing_media_driver",
+        }:
+            return fail("merchant media capabilities must expose a bounded image-generation status")
+        if image_recognition.get("secret_exposed") is not False or "credential" in json.dumps(media_capabilities).lower():
+            return fail("merchant media capabilities must not expose provider credentials")
+        independence_status, independence_error = fetch_json_expect_error(
+            f"{base_url}/independence/status",
+            token=token,
+        )
+        if independence_status != 403:
+            return fail(f"merchant app host must not expose internal independence status: {independence_error}")
         owner_members = fetch_json(f"{base_url}/team/members", token=token).get("team_members", [])
         if len(owner_members) != 1 or owner_members[0].get("role") != "owner":
             return fail("new company should start with one owner team member")
@@ -681,6 +738,50 @@ def main() -> int:
         if not store_id:
             return fail("store creation should return store_id")
 
+        missing_project_status, _ = fetch_json_expect_error(
+            f"{base_url}/stores/{store_id}/merchant-project-status",
+            token=token,
+        )
+        if missing_project_status != 400:
+            return fail("merchant project status must require an opaque project_id")
+        project_snapshot = fetch_json(
+            f"{base_url}/stores/{store_id}/merchant-project-status?project_id=project-empty-contract",
+            token=token,
+        ).get("merchant_project_status", {})
+        if project_snapshot.get("snapshot_version") != "merchant_project_status_v1":
+            return fail("merchant project status endpoint must return the versioned merchant snapshot")
+        if project_snapshot.get("blocker", {}).get("key") != "project_evidence_missing":
+            return fail("unknown project must stay honestly blocked instead of borrowing global evidence")
+        if sum(1 for item in project_snapshot.get("stages", []) if item.get("is_current")) != 1:
+            return fail("merchant project status must expose exactly one current stage")
+        if project_snapshot.get("secret_exposed") is not False:
+            return fail("merchant project status must keep secrets behind the backend boundary")
+
+        isolation_owner = post_json(
+            f"{base_url}/auth/register",
+            {
+                "email": "merchant-project-isolation@example.com",
+                "password": "local-test-password",
+                "company_name": "Merchant Project Isolation Company",
+            },
+        )
+        other_company_store = post_json(
+            f"{base_url}/stores",
+            {
+                "platform": "ebay",
+                "store_name": "operator-private-store",
+                "marketplace": "EBAY_US",
+                "stage": "store_opened",
+            },
+            token=isolation_owner["token"],
+        ).get("store", {})
+        cross_tenant_status, _ = fetch_json_expect_error(
+            f"{base_url}/stores/{other_company_store.get('store_id')}/merchant-project-status?project_id=project-cross-tenant",
+            token=token,
+        )
+        if cross_tenant_status != 404:
+            return fail("merchant project status must reject stores from another company")
+
         source_plan = post_json(
             f"{base_url}/stores/{store_id}/platforms/1688/connection-plan",
             {"connection_mode": "link_import"},
@@ -724,14 +825,15 @@ def main() -> int:
             if protected_status != 403:
                 return fail(f"ordinary merchant must not access platform-internal endpoint {protected_endpoint}: {protected_body}")
         billing_plan = fetch_json(f"{base_url}/billing/plans", token=token).get("billing_plan", {})
-        if billing_plan.get("billing_ready_for_paid_launch") is not False:
+        if billing_plan.get("public_charging_allowed") is not False:
             return fail("billing plan must not claim paid-launch readiness in local MVP")
-        plan_keys = {item.get("key") for item in billing_plan.get("plan_catalog", [])}
-        if not {"starter", "operator", "team"}.issubset(plan_keys):
-            return fail("billing plan should expose starter/operator/team plans")
+        plan_catalog = billing_plan.get("plan_catalog", [])
+        plan_keys = [item.get("key") for item in plan_catalog]
+        if plan_keys != ["free", "starter", "operator"]:
+            return fail(f"billing plan should expose only the approved merchant catalog: {plan_catalog}")
         if billing_plan.get("quota_contract", {}).get("merchant_visible_usage_required") is not True:
             return fail("billing plan should require merchant-visible usage")
-        if billing_plan.get("customer_visible") is not True or billing_plan.get("internal_launch_evidence_visible") is not False:
+        if billing_plan.get("customer_visible") is not True or "internal_launch_evidence_visible" in billing_plan:
             return fail("ordinary merchant billing plan should be the customer-visible safe payload")
         if "payment_strategy" in billing_plan or "billing_live_cutover_matrix" in billing_plan or "billing_live_cutover_summary" in billing_plan:
             return fail("ordinary merchant billing plan must not expose internal payment strategy or live cutover evidence")
@@ -2495,16 +2597,83 @@ def main() -> int:
         if len(steps_payload.get("steps", [])) != 11:
             return fail("task steps endpoint should return 11 persisted steps")
 
+        publish_listing_project_identity = {
+            "key": "listing-project-backend-mvp-publish",
+            "source_report_id": "source-backend-mvp-publish",
+            "candidate_id": "candidate-backend-mvp-publish",
+        }
+        publish_product_image_url = "https://example.test/backend-mvp-coffee-scoop.jpg"
+        product_facts = post_json(
+            f"{base_url}/stores/{store_id}/product-facts",
+            {
+                "listing_project_identity": publish_listing_project_identity,
+                "merchant_product_fact_packet": {
+                    "merchant_confirmed_facts": {
+                        "product_name": "Stainless steel coffee scoop",
+                        "source_url": "https://supplier.example.test/backend-mvp-coffee-scoop",
+                        "sku": "JJ-BACKEND-MVP-COFFEE-SCOOP-001",
+                        "condition": "NEW",
+                        "material": "Stainless steel",
+                        "package_weight_g": "120",
+                        "package_length_cm": "18",
+                        "package_width_cm": "5",
+                        "package_height_cm": "3",
+                        "unit_cost": "2.50",
+                        "selling_price": "14.99",
+                        "currency": "USD",
+                        "quantity": "1",
+                        "item_location": "US",
+                        "image_urls": publish_product_image_url,
+                        "image_rights_confirmed": True,
+                    }
+                },
+            },
+            token=token,
+        )
+        product_fact_report_id = str((product_facts.get("report") or {}).get("report_id") or "")
+        if not product_fact_report_id:
+            return fail(f"publish fixture should create an authoritative product-fact report: {product_facts}")
+        publish_intake = post_json(
+            f"{base_url}/stores/{store_id}/publish-confirmation",
+            {
+                "product": "Stainless steel coffee scoop",
+                "listing_project_identity": publish_listing_project_identity,
+                "listing": {
+                    "sku": "JJ-BACKEND-MVP-COFFEE-SCOOP-001",
+                    "title": "Stainless Steel Coffee Scoop Measuring Spoon",
+                },
+                "asset_manifest": {"assets": [{"url": publish_product_image_url}]},
+                "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
+            },
+            token=token,
+        )
+        authoritative_publish_confirmation = publish_intake.get("confirmation") or {}
+        authoritative_publish_evidence = (
+            (authoritative_publish_confirmation.get("item") or {}).get("publish_payload") or {}
+        ).get("publish_evidence") or {}
+        if not (
+            authoritative_publish_confirmation.get("action_type") == "publish_listing"
+            and authoritative_publish_confirmation.get("status") == "pending"
+            and authoritative_publish_evidence.get("server_resolved") is True
+            and (authoritative_publish_evidence.get("refs") or {}).get("product_fact_report_id")
+            == product_fact_report_id
+        ):
+            return fail(f"publish fixture must cross the backend source/rights evidence gate: {publish_intake}")
+
         confirmations = fetch_json(f"{base_url}/confirmations", token=token)
         pending = confirmations.get("confirmations", [])
         if not pending:
             return fail("confirmations endpoint should return pending items")
         high_risk_confirmation = next(
-            (item for item in pending if item.get("action_type") == "publish_listing"),
+            (
+                item
+                for item in pending
+                if item.get("confirmation_id") == authoritative_publish_confirmation.get("confirmation_id")
+            ),
             None,
         )
         if not high_risk_confirmation:
-            return fail("workflow should create at least one high-risk confirmation item")
+            return fail("authoritative publish intake should appear as one high-risk confirmation item")
         confirmation_id = high_risk_confirmation["confirmation_id"]
         encoded_confirmation_id = urllib.parse.quote(confirmation_id, safe="")
         operator_approve_status, _ = post_json_expect_error(

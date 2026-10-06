@@ -16,6 +16,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tools.test_jiejing_ai_ceo_routing_supplier_http_red import SAFE_CHILD_ENV_NAMES
 RUN_ID = f"{os.getpid()}-{int(time.time() * 1000)}"
 OUT = ROOT / "output" / "jiejing-first-day-account-smoke" / RUN_ID
 SAAS_DB = OUT / "saas-first-day.sqlite"
@@ -34,6 +36,8 @@ def free_port() -> int:
 
 
 def request_json(url: str, *, method: str = "GET", body: dict[str, Any] | None = None, token: str = "") -> dict[str, Any]:
+    if body is not None and "/merchant-ceo/chat" in url:
+        body = {**body, "semantic_dispatch_contract": "ai_ceo_semantic_dispatch_v1"}
     payload = json.dumps(body or {}, ensure_ascii=False).encode("utf-8") if body is not None else None
     request = urllib.request.Request(url, data=payload, method=method)
     request.add_header("content-type", "application/json")
@@ -142,7 +146,14 @@ def main() -> int:
 
     port = free_port()
     env = {
-        **os.environ,
+        **{key: value for key, value in os.environ.items() if key.upper() in SAFE_CHILD_ENV_NAMES},
+        "JIEJING_SAAS_ENV": "test", "JIEJING_DATABASE_ENGINE": "sqlite",
+        "JIEJING_AI_CEO_PLATFORM_MODEL_ENABLED": "0",
+        "JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED": "0",
+        "JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED": "0",
+        "JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED": "0",
+        "JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP": "0",
+        "JIEJING_PUBLIC_CHARGING_ALLOWED": "false",
         "JIEJING_BILLING_PROVIDER": "stripe_test_mock",
         "JIEJING_QUOTA_ENFORCEMENT_ENABLED": "1",
         "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "0",
@@ -199,8 +210,8 @@ def main() -> int:
                 },
             },
         ).get("ai_ceo_chat", {})
-        if first_chat.get("status") != "local_clock_answered":
-            return fail(f"first account AI CEO basic chat should answer locally: {first_chat}")
+        if first_chat.get("status") != "blocked_before_model_chat":
+            return fail("a new account without a model must not bypass semantic planning for clock text")
         if first_chat.get("long_term_memory") is True:
             return fail("ordinary AI CEO clock chat must not become long-term operating memory")
 

@@ -3,12 +3,19 @@
 
 from __future__ import annotations
 
+import ast
+import hashlib
+import importlib.util
+import io
 import json
 import re
 import subprocess
 import sys
+import zipfile
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from html.parser import HTMLParser
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +26,301 @@ def fail(message: str) -> int:
     return 1
 
 
+def validate_public_support_contact() -> None:
+    """Check the public contact and no-login route through HTML link semantics."""
+    class Links(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.hrefs: list[str] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag == "a":
+                self.hrefs.append(dict(attrs).get("href") or "")
+
+    email = "zongshuding4@gmail.com"
+    for name in ("support.html", "refund-policy.html"):
+        source = (ROOT / name).read_text(encoding="utf-8")
+        links = Links()
+        links.feed(source)
+        assert f"mailto:{email}" in links.hrefs, f"{name} must offer the approved direct email address"
+        assert email in source and "密码" in source and "无法登录" in source
+        assert "当前尚未提供匿名客服入口" not in source
+    support = (ROOT / "support.html").read_text(encoding="utf-8")
+    assert 'id="email"' in support
+    assert "不会自动转发到客服邮箱" in support
+    assert "点击不会自动发送" in support
+    entry = (ROOT / "index.html").read_text(encoding="utf-8")
+    login = entry[entry.index('id="entryLoginForm"'):entry.index('id="entryModeArea"')]
+    assert 'href="./support.html#email"' in login, "help must be reachable before login succeeds"
+    app_html = (ROOT / "app.html").read_text(encoding="utf-8")
+    assert 'href="./support.html#email"' in app_html, "workbench auth fallback must retain no-login help"
+    app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+    assert app_js.count('href="./support.html#email"') >= 2, "both rendered login variants must retain no-login help"
+    terms = (ROOT / "terms.html").read_text(encoding="utf-8")
+    assert "通过 eBay API 正式发布" in terms
+    assert "eBay 真实公开发布、自动扣费和自动续费仍未开放" not in terms
+
+
+def validate_prepare_bundle_contract() -> str:
+    with TemporaryDirectory(prefix="jiejing-clean-bundle-fixture-") as temp_dir:
+        fixture = Path(temp_dir)
+        (fixture / "tools").mkdir()
+        (fixture / "deploy").mkdir()
+        prepare_source = (ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py").read_text(
+            encoding="utf-8"
+        )
+        (fixture / "tools" / "jiejing_prepare_public_staging_bundle.py").write_text(
+            prepare_source,
+            encoding="utf-8",
+        )
+        (fixture / "tools" / "jiejing_release_gate_evidence.py").write_text(
+            (ROOT / "tools" / "jiejing_release_gate_evidence.py").read_text(encoding="utf-8"), encoding="utf-8",
+        )
+        gate_source = (ROOT / "tools" / "jiejing_precloud_deployment_gate.py").read_text(encoding="utf-8")
+        catalog_node = next(node for node in ast.parse(gate_source).body
+                            if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "CHECKS")
+        gate_lines = gate_source.splitlines(keepends=True)
+        gate_lines[catalog_node.lineno - 1:catalog_node.end_lineno] = [
+            'CHECKS = [("fixture_pass", [sys.executable, "-c", "raise SystemExit(0)"])]\n'
+        ]
+        (fixture / "tools" / "jiejing_precloud_deployment_gate.py").write_text("".join(gate_lines), encoding="utf-8")
+        app_js = "console.log('clean fixture');\n"
+        styles_css = "body { color: #123; }\n"
+        app_digest = hashlib.sha256(app_js.encode("utf-8")).hexdigest()[:12]
+        style_digest = hashlib.sha256(styles_css.encode("utf-8")).hexdigest()[:12]
+        family = "fixture-atomic-release"
+        fixture_files = {
+            "app.js": app_js,
+            "styles.css": styles_css,
+            "index.html": (
+                f'<link rel="preload" href="./app.js?v={family}-{app_digest}" as="script">\n'
+                f'<link rel="preload" href="./styles.css?v={family}-{style_digest}" as="style">\n'
+            ),
+            "app.html": (
+                f'<link rel="stylesheet" href="./styles.css?v={family}-{style_digest}">\n'
+                f'<script src="./app.js?v={family}-{app_digest}"></script>\n'
+            ),
+        }
+        ops_fixture_files = {
+            "ops.js": "console.log('public operations fixture');\n",
+            "ops.css": "body { color: #234; }\n",
+            "assets/jiejing-ops-panels.js": "window.publicOpsFixture = true;\n",
+            "assets/jiejing-logo-mark.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>\n',
+            "assets/jiejing-app-icon.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>\n',
+        }
+        ops_hashes = {
+            name: hashlib.sha256(ops_fixture_files[name].encode("utf-8")).hexdigest()
+            for name in ("assets/jiejing-ops-panels.js", "ops.css", "ops.js")
+        }
+        ops_version = "ops-v1-" + hashlib.sha256(
+            json.dumps(ops_hashes, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:12]
+        ops_fixture_files["ops.html"] = (
+            f'<link rel="stylesheet" href="ops.css?v={ops_version}">\n'
+            f'<script src="assets/jiejing-ops-panels.js?v={ops_version}"></script>\n'
+            f'<script src="ops.js?v={ops_version}"></script>\n'
+        )
+        fixture_files.update(ops_fixture_files)
+        for name, contents in fixture_files.items():
+            (fixture / name).parent.mkdir(parents=True, exist_ok=True)
+            (fixture / name).write_text(contents, encoding="utf-8")
+        whitelist = [
+            "deploy/apply-staging-patch.sh",
+            "index.html",
+            "app.html",
+            "app.js",
+            "styles.css",
+            *ops_fixture_files,
+        ]
+        apply_text = "FILES=(\n" + "".join(f'  "{name}"\n' for name in whitelist) + ")\n"
+        (fixture / "deploy" / "apply-staging-patch.sh").write_text(apply_text, encoding="utf-8")
+        (fixture / ".gitignore").write_text("output/\n__pycache__/\n", encoding="utf-8")
+        for command in (
+            ["git", "init", "-q"],
+            ["git", "config", "user.email", "fixture@jiejing.invalid"],
+            ["git", "config", "user.name", "Jiejing Fixture"],
+            ["git", "add", "."],
+            ["git", "commit", "-q", "-m", "fixture"],
+        ):
+            completed = subprocess.run(
+                command,
+                cwd=fixture,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+            if completed.returncode != 0:
+                return "clean fixture git setup failed"
+        source_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=fixture,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+            timeout=30,
+        ).stdout.strip()
+        prepare = fixture / "tools" / "jiejing_prepare_public_staging_bundle.py"
+        unverified = subprocess.run([sys.executable, str(prepare), "--dry-run"], cwd=fixture,
+                                    capture_output=True, text=True, encoding="utf-8", timeout=120)
+        if unverified.returncode == 0 or "gate_evidence" not in unverified.stdout + unverified.stderr:
+            return "new bundle without source-bound gate evidence was accepted"
+        fixture_gate = subprocess.run([sys.executable, str(fixture / "tools" / "jiejing_precloud_deployment_gate.py")],
+                                      cwd=fixture, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        if fixture_gate.returncode != 0:
+            return "isolated one-check fixture gate failed"
+        bundle_dry_run = subprocess.run(
+            [sys.executable, str(prepare), "--dry-run"],
+            cwd=fixture,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if bundle_dry_run.returncode != 0:
+            return "clean public staging bundle dry-run was rejected"
+        try:
+            bundle_manifest = json.loads(bundle_dry_run.stdout)
+        except json.JSONDecodeError:
+            return "public staging bundle dry-run did not emit readable JSON"
+        if bundle_manifest.get("source_commit") != source_commit:
+            return "bundle manifest is not bound to the clean source commit"
+        proof = bundle_manifest.get("release_gate_proof", {})
+        gate_path = fixture / "output" / "jiejing-precloud-deployment-gate" / "latest.json"
+        if proof.get("report_sha256") != hashlib.sha256(gate_path.read_bytes()).hexdigest():
+            return "bundle did not bind its exact gate report bytes"
+        if proof.get("evidence", {}).get("source_commit") != source_commit or "stdout_tail" in json.dumps(proof):
+            return "bundle gate proof is unbound or contains raw check output"
+        original_gate_bytes = gate_path.read_bytes()
+        stale_gate = json.loads(original_gate_bytes)
+        stale_gate["release_gate_evidence"]["check_catalog_sha256"] = "0" * 64
+        gate_path.write_text(json.dumps(stale_gate), encoding="utf-8")
+        stale_prepare = subprocess.run([sys.executable, str(prepare), "--dry-run"], cwd=fixture,
+                                       capture_output=True, text=True, encoding="utf-8", timeout=120)
+        gate_path.write_bytes(original_gate_bytes)
+        if stale_prepare.returncode == 0 or "gate_evidence_check_catalog_mismatch" not in stale_prepare.stdout + stale_prepare.stderr:
+            return "bundle accepted a stale gate catalog"
+        files_sha256 = bundle_manifest.get("files_sha256")
+        if not isinstance(files_sha256, dict) or set(files_sha256) != set(whitelist):
+            return "bundle manifest does not hash the complete whitelist"
+        for name in whitelist:
+            committed = subprocess.run(
+                ["git", "show", f"{source_commit}:{name}"],
+                cwd=fixture,
+                capture_output=True,
+                check=True,
+                timeout=30,
+            ).stdout
+            expected = hashlib.sha256(committed).hexdigest()
+            if files_sha256.get(name) != expected:
+                return f"bundle whitelist hash does not match fixed commit blob: {name}"
+        frontend_hashes = bundle_manifest.get("frontend_files_sha256")
+        atomic_frontend_files = {"index.html", "app.html", "app.js", "styles.css"}
+        if not isinstance(frontend_hashes, dict) or set(frontend_hashes) != atomic_frontend_files:
+            return "bundle manifest does not expose the four frontend hashes"
+        ops_manifest_hashes = bundle_manifest.get("ops_files_sha256")
+        if not isinstance(ops_manifest_hashes, dict) or set(ops_manifest_hashes) != set(ops_fixture_files):
+            return "bundle manifest does not expose exactly the six operations hashes"
+        if ops_manifest_hashes != {name: files_sha256[name] for name in ops_fixture_files}:
+            return "operations hashes do not match the source-bound whitelist"
+        bundle_build = subprocess.run(
+            [sys.executable, str(prepare)],
+            cwd=fixture,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if bundle_build.returncode != 0:
+            return "clean public staging bundle build was rejected"
+        bundle_match = re.search(r"^BUNDLE_PATH=(.+)$", bundle_build.stdout, flags=re.MULTILINE)
+        manifest_match = re.search(r"^MANIFEST_PATH=(.+)$", bundle_build.stdout, flags=re.MULTILINE)
+        if not bundle_match or not manifest_match:
+            return "bundle build did not return exact artifact paths"
+        bundle_path = Path(bundle_match.group(1).strip())
+        manifest_path = Path(manifest_match.group(1).strip())
+        built_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if built_manifest.get("release_gate_proof") != proof:
+            return "built bundle lost or changed the reviewed gate proof"
+        if built_manifest.get("ops_files_sha256") != ops_manifest_hashes:
+            return "built bundle lost or changed the operations asset hashes"
+        with zipfile.ZipFile(bundle_path, "r") as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)) or set(names) != set(whitelist):
+                return "built bundle entries do not exactly match the whitelist"
+            for name in whitelist:
+                observed = hashlib.sha256(archive.read(name)).hexdigest()
+                if observed != built_manifest.get("files_sha256", {}).get(name):
+                    return f"built bundle hash mismatch: {name}"
+        spec = importlib.util.spec_from_file_location("jiejing_prepare_fixture", prepare)
+        if spec is None or spec.loader is None:
+            return "unable to load bundle prepare race fixture"
+        prepare_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(prepare_module)
+        original_committed_files = prepare_module._committed_bundle_files
+
+        def swap_and_restore(source: str, files: list[Path]) -> dict[str, bytes]:
+            committed = original_committed_files(source, files)
+            target = fixture / "app.js"
+            original = target.read_bytes()
+            target.write_bytes(original + b"// transient race\n")
+            target.write_bytes(original)
+            return committed
+
+        prepare_module._committed_bundle_files = swap_and_restore
+        whitelist_path = fixture / "deploy" / "apply-staging-patch.sh"
+        original_whitelist_bytes = whitelist_path.read_bytes()
+        expanded_whitelist = original_whitelist_bytes.decode("utf-8").replace(
+            ")\n",
+            '  "worktree-only-forged.txt"\n)\n',
+            1,
+        )
+        whitelist_path.write_text(expanded_whitelist, encoding="utf-8")
+        try:
+            pinned_whitelist = prepare_module._apply_patch_file_list(source_commit)
+        finally:
+            whitelist_path.write_bytes(original_whitelist_bytes)
+        if pinned_whitelist != whitelist or "worktree-only-forged.txt" in pinned_whitelist:
+            return "bundle whitelist followed a transient worktree expansion"
+        original_argv = sys.argv
+        sys.argv = [str(prepare), "--dry-run"]
+        try:
+            with redirect_stdout(io.StringIO()):
+                prepare_module.main()
+        except RuntimeError as exc:
+            if "whitelist file changed during bundle preparation" not in str(exc):
+                return f"bundle race produced imprecise rejection: {exc}"
+        else:
+            return "transient whitelist swap-and-restore race was accepted"
+        finally:
+            sys.argv = original_argv
+        (fixture / "app.js").write_text(app_js + "// dirty\n", encoding="utf-8")
+        dirty_prepare = subprocess.run(
+            [sys.executable, str(prepare), "--dry-run"],
+            cwd=fixture,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if dirty_prepare.returncode == 0 or "dirty git worktree" not in (
+            dirty_prepare.stdout + dirty_prepare.stderr
+        ):
+            return "bundle prepare must fail closed on a dirty worktree"
+    return ""
+
+
 def main() -> int:
+    validate_public_support_contact()
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
     index_html = (ROOT / "index.html").read_text(encoding="utf-8")
     app_html = (ROOT / "app.html").read_text(encoding="utf-8")
@@ -34,8 +335,36 @@ def main() -> int:
         return fail("frontend must not use document.write for report export or public rendering")
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
-    frontend_asset_version = "20260822-merchant-trial-pricing-v2"
-    app_js_asset_version = "20260822-merchant-trial-pricing-v18"
+    app_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
+    app_html_style_versions = re.findall(r"\./styles\.css\?v=([A-Za-z0-9._-]+)", app_html)
+    if len(app_html_app_versions) != 1:
+        return fail("workbench entry must contain exactly one current app.js cache version")
+    if len(app_html_style_versions) != 1:
+        return fail("workbench entry must contain exactly one current styles.css cache version")
+    app_js_asset_version = app_html_app_versions[0]
+    frontend_asset_version = app_html_style_versions[0]
+    app_js_digest = hashlib.sha256(app_js.encode("utf-8")).hexdigest()[:12]
+    styles_digest = hashlib.sha256(styles_css.encode("utf-8")).hexdigest()[:12]
+    if not app_js_asset_version.endswith(app_js_digest):
+        return fail(
+            "workbench app.js cache version must end with the current app.js sha256 prefix "
+            f"{app_js_digest}; update both entry files whenever app.js changes"
+        )
+    if not frontend_asset_version.endswith(styles_digest):
+        return fail(
+            "workbench styles.css cache version must end with the current styles.css sha256 prefix "
+            f"{styles_digest}; update both entry files whenever styles.css changes"
+        )
+    app_release_family = app_js_asset_version[: -len(app_js_digest)].rstrip("-._")
+    style_release_family = frontend_asset_version[: -len(styles_digest)].rstrip("-._")
+    if app_release_family != style_release_family:
+        return fail(
+            "app.js and styles.css must share one atomic frontend release family: "
+            f"{app_release_family!r} != {style_release_family!r}"
+        )
+    prepare_contract_failure = validate_prepare_bundle_contract()
+    if prepare_contract_failure:
+        return fail(prepare_contract_failure)
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -44,10 +373,15 @@ def main() -> int:
             return fail(f"frontend entry files must bust owner publish cache with {expected_asset}")
     if f"./app.js?v={app_js_asset_version}" not in app_html or f"./app.js?v={app_js_asset_version}" not in index_html:
         return fail("both public and workbench entry files must reference the current app.js cache version")
-    app_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
+    if "./app.js?v=20260825-owner-media-testing-v3" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-vision-report-recovery app.js cache version")
+    if "./app.js?v=20260826-controlled-existing-draft-publish-v5" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-cross-view publish-recovery cache version")
+    if "./app.js?v=20260826-controlled-publish-recovery-v6" in index_html + app_html:
+        return fail("frontend entry files must not retain the execution-cache-dependent recovery version")
+    if "./app.js?v=20260826-readonly-publish-recovery-v7" in index_html + app_html:
+        return fail("frontend entry files must not retain the pending-only decision-center recovery version")
     index_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", index_html)
-    if app_html_app_versions != [app_js_asset_version]:
-        return fail("workbench entry must contain exactly one current app.js cache version")
     if index_html_app_versions != [app_js_asset_version, app_js_asset_version]:
         return fail("public entry prefetch and lazy preload must both use the current app.js cache version")
     if "./app.js?v=20260810-safe-revise-confirmation-v1" in index_html + app_html:
@@ -180,94 +514,36 @@ def main() -> int:
             return fail(f"app start must hide legacy entry shell before JS boot completes: {app_boot_guard}")
     if f'const JIEJING_SITE_VERSION = "{frontend_asset_version}"' not in index_html:
         return fail("public homepage must expose the current JIEJING site version marker")
-    for logo_marker in [
-        "width: 56px;",
-        "height: 56px;",
-        "width: 46px;",
-        "height: 46px;",
-        'center / 118% no-repeat',
-    ]:
-        if logo_marker not in index_html:
-            return fail(f"public homepage logo must stay enlarged and centered: {logo_marker}")
-    if "width: 50px;" not in styles_css or "height: 50px;" not in styles_css or 'center / 118% no-repeat' not in styles_css:
-        return fail("SaaS brand mark must stay enlarged and centered with the JIEJING app icon")
-    for homepage_intent_marker in [
-        'data-home-intent-strip="homepage_ai_ceo_intents_v1"',
-        'data-home-intent="listing"',
-        'data-home-intent="bulk"',
-        'data-home-intent="service"',
-        'data-home-proof="goal"',
-        "function setHomeIntent",
-        "function setupHomeIntentStrip",
-        "setupHomeIntentStrip();",
-    ]:
-        if homepage_intent_marker not in index_html:
-            return fail(f"public homepage AI CEO intent entry missing marker: {homepage_intent_marker}")
-    deploy_script = (ROOT / "tools" / "jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
-    if "Unable to derive frontend asset version from app.html" not in deploy_script or "DEPLOY_FRONTEND_VERSION=$frontendVersion" not in deploy_script:
-        return fail("frontend deploy script must derive DEPLOY_FRONTEND_VERSION from app.html")
-    for deploy_asset in [
-        "favicon.ico",
-        "assets/jiejing-app-icon.svg",
-        "assets/jiejing-logo-lockup.svg",
-        "assets/jiejing-logo-mark.svg",
-    ]:
-        if deploy_asset not in deploy_script:
-            return fail(f"frontend deploy script must ship brand asset: {deploy_asset}")
-    if 'background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;' not in styles_css:
-        return fail("public SaaS brand mark must use the JIEJING app icon instead of a black fallback block")
-    for forbidden_brand in [
-        "捷境 Jiejing",
-        "Jiejing / 捷境",
-        "Jiejing AI CEO",
-        "Jiejing Merchant",
-    ]:
-        if forbidden_brand in index_html + app_html + privacy_html:
-            return fail(f"public static pages must use uppercase JIEJING brand: {forbidden_brand}")
-    for expected_brand in [
-        "捷境 JIEJING",
-        "JIEJING / 捷境",
-        "JIEJING AI CEO",
-    ]:
-        if expected_brand not in index_html + app_html + privacy_html:
-            return fail(f"public static pages missing uppercase JIEJING brand marker: {expected_brand}")
-    for expected_runtime_brand in [
-        r'[/\bJingjing\b/g, "JIEJING"]',
-        r'[/\bJiejing\b/g, "JIEJING"]',
-        "JIEJING AI CEO eBay SaaS",
-        "JIEJING SaaS status",
-    ]:
-        if expected_runtime_brand not in app_js:
-            return fail(f"runtime UI missing uppercase JIEJING brand guard: {expected_runtime_brand}")
+    # Accepted v12 is a new public visual surface; keep business/session checks below.
+    from test_jiejing_homepage_maturity import main as homepage_visual_contract
+    homepage_visual_contract()
     for first_day_marker in [
-        "login_onboarding_ai_ceo_v3",
-        "saas-first-day-path-strip",
-        'data-first-day-path="login_onboarding_ai_ceo_v3"',
-        "刷新不会跳过向导",
+        "login_onboarding_ai_ceo_v3", "saas-first-day-path-strip",
+        'data-first-day-path="login_onboarding_ai_ceo_v3"', "刷新不会跳过向导",
         "一句话交给 AI CEO",
     ]:
         if first_day_marker not in app_js + app_html + styles_css:
-            return fail(f"first-day login/onboarding/AI CEO path marker missing: {first_day_marker}")
-    for ai_ceo_pending_marker in [
-        "merchant_clear_pending_v4",
-        "function scheduleSaasAiCeoPendingWatchdog",
-        "function updateCeoAssistantPendingMessage",
-        "model_response_delayed",
+            return fail(f"first-day path marker missing: {first_day_marker}")
+    for pending_marker in [
+        "merchant_clear_pending_v4", "function scheduleSaasAiCeoPendingWatchdog",
+        "function updateCeoAssistantPendingMessage", "model_response_delayed",
         "真实发布、付款、退款、广告、授权和敏感客服承诺不会自动执行",
         ".saas-ai-ceo-pending-status",
     ]:
-        if ai_ceo_pending_marker not in app_js + styles_css:
-            return fail(f"AI CEO merchant-safe pending marker missing: {ai_ceo_pending_marker}")
-    for expected_interaction_marker in [
-        "--tilt-x",
-        "--core-drift-x",
-        ".hero-ops-board article:hover",
-        ".hero-ops-board article",
-        ".flow-line",
-        "border-radius: 50%",
-    ]:
-        if expected_interaction_marker not in index_html:
-            return fail(f"homepage AI CEO command-room interaction marker missing: {expected_interaction_marker}")
+        if pending_marker not in app_js + styles_css:
+            return fail(f"merchant-safe pending marker missing: {pending_marker}")
+    deploy_script = (ROOT / "tools/jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
+    if "Unable to derive frontend asset version from app.html" not in deploy_script or "DEPLOY_FRONTEND_VERSION=$frontendVersion" not in deploy_script:
+        return fail("frontend deploy must derive the app version")
+    for brand in ["favicon.ico", "assets/jiejing-app-icon.svg", "assets/jiejing-logo-lockup.svg", "assets/jiejing-logo-mark.svg"]:
+        if brand not in deploy_script:
+            return fail(f"frontend deploy missing brand: {brand}")
+    for forbidden_brand in ["捷境 Jiejing", "Jiejing / 捷境", "Jiejing AI CEO", "Jiejing Merchant"]:
+        if forbidden_brand in index_html + app_html + privacy_html:
+            return fail(f"public brand casing: {forbidden_brand}")
+    for expected in [r'[/\bJingjing\b/g, "JIEJING"]', r'[/\bJiejing\b/g, "JIEJING"]', "JIEJING Listing"]:
+        if expected not in app_js:
+            return fail(f"runtime brand guard missing: {expected}")
     if 'localStorage.getItem("jiejing_saas_backend_token")' in app_html:
         return fail("public app entry must not accept legacy localStorage bearer tokens")
     for forbidden_frontend_secret in [
@@ -435,7 +711,7 @@ def main() -> int:
         "试用数据默认只标记和报告，不自动删除",
         "基础订阅是软件功能费",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
-        "更新日期：2026-08-22",
+        "更新日期：2026-10-05",
     ]:
         if marker not in terms_html:
             return fail(f"terms page missing launch-boundary marker: {marker}")
@@ -444,8 +720,9 @@ def main() -> int:
         "在线付款已经开放，不会自动续费或自动扣款",
         "退款必须由人工审核并在后端执行",
         "eBay 成交费、广告费、店铺订阅费、物流费、采购款、买家退款",
-        "当前尚未提供匿名客服入口",
-        "更新日期：2026-08-22",
+        "无法登录",
+        "mailto:zongshuding4@gmail.com",
+        "更新日期：2026-10-05",
     ]:
         if marker not in refund_html:
             return fail(f"refund policy page missing payment-review marker: {marker}")
@@ -455,7 +732,7 @@ def main() -> int:
         "意见箱只记录流程意见和上下文编号，不保存密钥、平台凭证或身份资料",
         "不会替商家直接发布商品、改价、改库存、退款、投广告",
         "提交前请准备",
-        "更新日期：2026-08-22",
+        "更新日期：2026-10-05",
     ]:
         if marker not in support_html:
             return fail(f"support page missing payment-review marker: {marker}")
@@ -514,10 +791,9 @@ def main() -> int:
         "defaultJiejingDemoBootstrapEnabled",
         "saasDemoBootstrapEnabled",
         "当前公网页面需要已有捷境账号会话",
-        "Public auth gate",
         "/secret-refs?store_id=",
-        "OAuth Status",
-        "托管凭证",
+        "eBay 官方授权",
+        "敏感凭证不进入浏览器",
         'optionalSaasFetchFast(`/data-packets?platform=ebay&limit=5`',
         "function getLatestSaasDataPacketRecord",
         "function saasKnownStoreCandidates",
@@ -532,7 +808,7 @@ def main() -> int:
         "小批量实验目标已带入",
         "高风险动作已拦住",
         "saasRealBackendBindingStatus",
-        "真实 API 来源",
+        "数据连接",
         "saasWorkbenchReportDetailMarkup",
         "saasWorkbenchConfirmationDetailMarkup",
         "saas-ai-report-detail",
@@ -560,10 +836,6 @@ def main() -> int:
         "saas-publish-command-summary",
         "confirmation_required_no_direct_write",
         "register-session",
-        "product_evidence",
-        "latest_ebay_packet_id",
-        "refreshSaasPublicReadiness",
-        "refreshSaasPublicReadiness({ render: true })",
         "hasSaasProtectedSessionCandidate",
         "shouldAttachSaasBearerToken",
         "purgeLegacySaasStoredBearerToken",
@@ -582,7 +854,7 @@ def main() -> int:
         "route_health",
         "currentSaasEbayCallbackUrl",
         "copy-ebay-return-url",
-        "官方连接返回地址应保持一致",
+        "官方连接返回地址",
         'productFeedbackOutbox: "jiejing_saas_product_feedback_outbox_v1"',
         'productFeedbackReceipts: "jiejing_saas_product_feedback_receipts_v1"',
         'productFeedbackMigration: "jiejing_saas_product_feedback_migration_v1"',
@@ -593,7 +865,7 @@ def main() -> int:
     ]:
         if marker not in app_js + app_html:
             return fail(f"missing frontend staging config marker: {marker}")
-    for endpoint in ["/model/value-gate", "/commercial/launch-gate", "/backup/plan"]:
+    for endpoint in ["/model/value-gate"]:
         if (
             f'saasFetch("{endpoint}")' not in app_js + app_html
             and f'optionalSaasFetch("{endpoint}"' not in app_js + app_html
@@ -601,27 +873,22 @@ def main() -> int:
             and f'optionalSaasFetchFast(`{endpoint}?' not in app_js + app_html
         ):
             return fail(f"missing frontend staging config marker: {endpoint} fetch")
-    if 'if (!hasSaasProtectedSessionCandidate()) {\n    refreshSaasPublicReadiness({ render: true });' in app_js:
-        return fail("logged-in merchants must also receive current public provider readiness")
     for marker in [
         "cursorGlow",
-        "signalCanvas",
         "merchant-guide",
         "entryModeGrid",
-        "pointermove",
         "openLoggedInExperience",
         "./app.html",
     ]:
         if marker not in index_html:
             return fail(f"missing interactive homepage/onboarding marker: {marker}")
-    for marker in [
-        ".price {",
-        "font-size: 38px;",
-        "line-height: 1.08;",
-        "white-space: nowrap;",
-    ]:
-        if marker not in index_html:
-            return fail(f"public pricing cards must keep the full price on one stable line: {marker}")
+    homepage_motion_js = (ROOT / "assets/homepage-finish.js").read_text(encoding="utf-8")
+    if "pointermove" not in homepage_motion_js:
+        return fail("homepage motion module must retain pointer interaction")
+    homepage_css = (ROOT / "assets/homepage-finish.css").read_text(encoding="utf-8")
+    price_rule = re.search(r"\.price\s*\{([^}]+)\}", homepage_css)
+    if not price_rule or not re.search(r"white-space\s*:\s*nowrap", price_rule.group(1)):
+        return fail("public pricing cards must keep prices on one stable line")
     if "体验流程会用倒流香炉跑一遍" in index_html:
         return fail("homepage onboarding copy must not route real testing through a fixed sample product")
     for stale_public_copy in [
@@ -631,14 +898,14 @@ def main() -> int:
         if stale_public_copy in index_html + app_html:
             return fail(f"public product copy should avoid abstract internal positioning: {stale_public_copy}")
     for merchant_outcome_copy in [
-        "把商品资料，变成商家可以核对的 eBay 草稿。",
-        "商品资料不足时，捷境会明确标出缺口",
-        "侵权风险初筛，仍需商家核对。",
+        "把重复工作交给 AI，把时间留给经营。",
+        "资料不足不编造",
+        "侵权风险初筛，仍需商家核对",
     ]:
-        if merchant_outcome_copy not in index_html + app_html:
+        if merchant_outcome_copy not in re.sub(r"<[^>]+>", "", index_html + app_html):
             return fail(f"public product copy should explain the merchant outcome: {merchant_outcome_copy}")
-    if "免费体验先帮商家验证一条商品资料是否能整理成可用草稿" not in index_html:
-        return fail("homepage onboarding copy should explain the blank first-draft trial")
+    if "免费体验不绑卡、不自动续费" not in index_html:
+        return fail("homepage onboarding copy should explain the bounded free trial")
     for onboarding_control_marker in [
         "onboardingDeferredSettingsFields",
         "onboarding-lite-path",
@@ -668,10 +935,9 @@ def main() -> int:
     for billing_guardrail_marker in [
         "function renderSaasMerchantPricingModelPanel",
         "saas-merchant-pricing-model",
-        "免费体验不含生图点数；单店版含 1,000 素材点，多店铺版含 3,000 素材点",
+        "免费体验不含生图点数；有店铺含 1,000 素材点，多店铺含 3,000 素材点",
         "subscription_ai_media_platform_v1",
         "saas-merchant-pricing-split",
-        "用量计费路线",
         "¥99 / 30 天",
         "¥0 / ¥99 / ¥199",
         "商家自带模型",
@@ -682,107 +948,26 @@ def main() -> int:
         "merchant_billing_plain_summary_v1",
         "订阅和用量总览",
         "套餐权益、商家模型、素材点和平台成本清楚可查",
-        "单店版含 1,000 素材点，多店铺版含 3,000 素材点",
+        "套餐已包含素材点；用完后才需要加购",
+        "有店铺含 1,000 素材点，多店铺含 3,000 素材点",
         "不消耗素材点",
         "生成前显示预计点数",
-        "billing_now_no_real_charge",
-        "base_subscription_is_feature_fee=true",
-        "ai_media_usage_has_plan_allowance=true",
-        "purchased_media_points_separate=true",
-        "platform_cost_not_collected_by_jiejing=true",
-        "saas-merchant-billing-current",
-        "当前计费状态",
-        "先看能不能继续用，再看哪些费用另算",
-        "不真实扣费",
-        "merchant_visible_billing_status_v1",
-        "subscription_metering_clarity_v2",
-        "renderSaasMerchantBillingGuardrailPanel",
-        "saasMerchantBillingGuardrailState",
-        "saasMerchantBillingStatusPill",
-        "saas-merchant-billing-guardrail",
-        "subscription_quota_shutdown_state",
-        "billing_subscription_not_active",
-        "blocks_metered_work_when_inactive",
-        "creates_checkout_session=false",
-        "charge_now_allowed=false",
-        "frontend_gets_payment_secret=false",
         "高成本任务暂停",
-        "查看历史和确认中心",
-        "no_real_charge_rehearsal_ui_v2",
-        "latest_no_charge_billing_event",
-        "saas-merchant-billing-rehearsal",
-        "saas-merchant-billing-rehearsal-actions",
-        'data-billing-test-action="${escapeHtml(action)}"',
-        '["activate",',
-        '["invoice_paid",',
-        '["payment_failed",',
-        '["cancel",',
-        "creates_real_checkout_session=false",
-        "calls_stripe_api=false",
-        "triggers_real_charge=false",
-        "function renderSaasBillingDomainCutoverReviewPanel",
-        "mainland_payment_cutover_v2",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "微信 Native 二维码",
-        "签名支付 / 退款回调",
-        "后端鉴权查单",
-        "零扣款演练与回滚证据",
-        "payment_provider_secret_boundary=backend_env_or_vault_only",
-        "rollback_secret_scan_readiness_browser_smoke_required",
-        "public_paid_launch_allowed=false",
-        "owner_approval_required_for_reenable=true",
-        'version: "2026-07-12-listing-media-restore-v3"',
-        "statusPills.push(saasMerchantBillingStatusPill())",
+        "仍可看历史和确认中心",
+        "微信扫码付款",
+        "敏感凭证不进入浏览器",
     ]:
         if billing_guardrail_marker not in app_js + app_html + styles_css:
             return fail(f"missing merchant billing guardrail marker: {billing_guardrail_marker}")
-    cutover_start = app_js.index("function saasBillingDomainCutoverReviewState")
-    cutover_end = app_js.index("function saasMainlandPaymentStrategyState", cutover_start)
-    cutover_body = app_js[cutover_start:cutover_end]
-    for legacy_mainland_marker in (
-        "Stripe",
-        "Checkout",
-        "Customer Portal",
-        "Price ID",
-        "stripe_",
-        "subscription_records",
-        "webhook_event_records",
+    for internal_billing_marker in (
+        "no_charge_launch_rehearsal",
+        "saas-merchant-billing-rehearsal-actions",
+        "renderSaasBillingDomainCutoverReviewPanel",
+        "saasBillingDomainCutoverReviewState",
+        "saasPaidLaunchBlockerCopy",
     ):
-        if legacy_mainland_marker in cutover_body:
-            return fail(f"mainland payment cutover card still exposes retired Stripe truth: {legacy_mainland_marker}")
-    blocker_start = app_js.index("function saasPaidLaunchBlockerCopy")
-    blocker_end = app_js.index("function saasBillingDomainCutoverReviewState", blocker_start)
-    blocker_body = app_js[blocker_start:blocker_end]
-    for required_mainland_marker in (
-        "微信 Native 正式通道",
-        "零扣款上线演练",
-        "签名回调或后端鉴权查单",
-        "mainland_payment_cutover_v2",
-    ):
-        if required_mainland_marker not in blocker_body:
-            return fail(f"paid launch blocker card missing canonical mainland marker: {required_mainland_marker}")
-    for legacy_mainland_marker in (
-        "Stripe",
-        "Checkout",
-        "Customer Portal",
-        "Price ID",
-        "stripe_",
-        "subscription Checkout",
-    ):
-        if legacy_mainland_marker in blocker_body:
-            return fail(f"paid launch blocker card still exposes retired Stripe truth: {legacy_mainland_marker}")
-    settings_tabs_start = app_js.index("function saasSettingsTabDefinitions")
-    owner_tabs_start = app_js.index('if (saasOwnerLaunchCanView())', settings_tabs_start)
-    owner_tabs_end = app_js.index("return tabs;", owner_tabs_start)
-    owner_tabs_body = app_js[owner_tabs_start:owner_tabs_end]
-    for retired_panel in (
-        "renderSaasBillingProviderPanel()",
-        "renderSaasBillingProviderRehearsalPanel(ctx)",
-        "Stripe live、WAF",
-    ):
-        if retired_panel in owner_tabs_body:
-            return fail(f"owner control room still renders retired Stripe launch truth: {retired_panel}")
+        if internal_billing_marker in app_js + app_html:
+            return fail(f"merchant runtime still contains an internal billing control: {internal_billing_marker}")
     snapshot_start = app_js.index("function buildSaasProtectedStateSnapshot")
     snapshot_end = app_js.index("function saveSaasProtectedStateSnapshot", snapshot_start)
     snapshot_body = app_js[snapshot_start:snapshot_end]
@@ -823,7 +1008,7 @@ def main() -> int:
         if app_entry_marker not in app_html:
             return fail(f"legacy app.html marketing entry must redirect to current public homepage: {app_entry_marker}")
     refresh_start = app_js.index("async function refreshSaasState")
-    refresh_end = app_js.index("async function refreshSaasPublicReadiness", refresh_start)
+    refresh_end = app_js.index("function clearSaasProductFeedbackLiveIdentity", refresh_start)
     refresh_body = app_js[refresh_start:refresh_end]
     if "const canFetchProtectedState = hasSaasProtectedSessionCandidate();" not in refresh_body:
         return fail("refreshSaasState must check for a real session or explicit operator bootstrap before protected reads")
@@ -831,15 +1016,12 @@ def main() -> int:
     store_fetch_index = refresh_body.find("const store = await ensureSaasDemoStoreAndConnection();")
     if guard_index < 0 or store_fetch_index < 0 or guard_index > store_fetch_index:
         return fail("refreshSaasState must skip protected store/report reads before ensuring a store")
-    cached_restore_start = refresh_body.index("if (restoredCachedState)")
-    cached_restore_end = refresh_body.index("\n  try", cached_restore_start)
-    cached_restore_body = refresh_body[cached_restore_start:cached_restore_end]
-    for cached_restore_marker in (
-        'document.documentElement.classList.remove("app-auth-pending")',
-        'openApp(activeSaasRefreshView("cockpit"))',
-    ):
-        if cached_restore_marker not in cached_restore_body:
-            return fail(f"account-scoped fast restore must reveal the cached workbench immediately: {cached_restore_marker}")
+    cached_restore_index = refresh_body.index("hydrateSaasProtectedStateFromCache({ me: coreMe,")
+    live_stores_index = refresh_body.index("state.saasStores = coreStores.stores || [];")
+    if cached_restore_index < live_stores_index:
+        return fail("business cache must only hydrate after live identity and store membership are applied")
+    if "hydrateSaasProtectedStateFromCache()" in refresh_body:
+        return fail("refresh must not hydrate a protected snapshot without live scope evidence")
     for endpoint in [
         "live-read-plan",
         "http-client-dry-run",
@@ -858,8 +1040,6 @@ def main() -> int:
         return fail("frontend eBay OAuth scopes must include sell.finances for the first read-only packet")
     if "saasLatestOAuthUrl" not in app_js or "打开 eBay 官方授权页" not in app_js or 'target="_blank"' not in app_js:
         return fail("frontend should retain a clickable eBay authorization URL")
-    if "API Base" not in app_js:
-        return fail("frontend should surface configured API bases in the SaaS backend panel")
     if '["blocked", "pending", "published"].includes(state.publishFlow.status) &&\n    shouldShowLegacyDemoControls()' not in app_js:
         return fail("legacy publish confirmation card must be hidden from real SaaS merchant mode")
     if "if (blockLegacyDemoPublishAction()) return;" not in app_js:
@@ -889,19 +1069,19 @@ def main() -> int:
     ]:
         if advanced_panel in workbench_body or advanced_panel in public_mvp_body:
             return fail(f"merchant workbench should keep advanced/settings panel out of the daily MVP path: {advanced_panel}")
-    settings_start = app_js.index("function renderSaasConnectCenter")
-    settings_end = app_js.index("function renderConnect", settings_start)
+    settings_start = app_js.index("function saasSettingsTabDefinitions")
+    settings_end = app_js.index("function renderSaasSettingsCleanLayout", settings_start)
     settings_body = app_js[settings_start:settings_end]
     for settings_panel in [
         "renderSaasMerchantModelProviderPanel(ctx)",
-        "renderSaasCostAndRunLedgerPanel()",
         "renderSaasMerchantPermissionPanel()",
-        "renderSaasMerchantIpRiskPanel()",
-        "renderSaasMerchantMemoryPanel()",
-        "renderSaasMerchantProviderHubPanel(ctx)",
+        "renderSaasSettingsDataPanel(ctx)",
+        "renderSaasMerchantBillingPlainSummaryPanel(ctx)",
+        "renderSaasMerchantMediaCreditsPanel()",
+        "renderSaasMerchantDomesticPaymentPanel(ctx)",
     ]:
         if settings_panel not in settings_body:
-            return fail(f"settings center must retain advanced SaaS configuration panel: {settings_panel}")
+            return fail(f"settings center must retain the merchant configuration panel: {settings_panel}")
     runtime_start = app_js.index("async function refreshRuntimeState")
     runtime_end = app_js.index("async function createRuntimeRunFromSaas", runtime_start)
     runtime_body = app_js[runtime_start:runtime_end]

@@ -14,7 +14,7 @@ from .billing_webhook import TEST_BILLING_PROVIDERS, billing_plan_ids, selected_
 from .repository import SaaSRepository
 
 
-PLAN_KEYS = {"starter", "operator", "team"}
+PLAN_KEYS = {"starter", "operator"}
 TEST_EVENT_ACTIONS = {
     "activate": {
         "event_type": "test.customer.subscription.updated",

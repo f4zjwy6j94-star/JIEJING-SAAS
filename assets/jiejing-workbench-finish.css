@@ -1,0 +1,337 @@
+/* Approved v12 workbench finish, 2026-09-29.
+   Presentation only. Startup visibility, active views, fixed chat viewport,
+   adaptive project context and responsive navigation remain owned by styles.css. */
+@font-face {
+  font-family: "Jiejing Sans";
+  src: url("./jiejing-sans-20260928.woff2") format("woff2");
+  font-weight: 400 600;
+  font-display: swap;
+}
+
+body.saas-public-mvp {
+  --jiejing-shell-canvas: #f2f4ee;
+  --jiejing-shell-rail-surface: #fafbf8;
+  --jiejing-surface: #ffffff;
+  --jiejing-surface-muted: #fafbf8;
+  --jiejing-surface-accent: #eaf0e9;
+  --jiejing-ink: #25312b;
+  --jiejing-ink-soft: #25312b;
+  --jiejing-muted: #4c5a52;
+  --jiejing-line: #d5ddd2;
+  --jiejing-line-strong: #bdcabe;
+  --jiejing-accent: #315f51;
+  --jiejing-accent-hover: #234b40;
+  --jiejing-accent-soft: #e6eee4;
+  --jiejing-risk: #806023;
+  --jiejing-focus-ring: 0 0 0 3px #315f5120;
+  --jiejing-shadow-rest: 0 1px 2px #263b3208;
+  --jiejing-shadow-float: 0 1px 2px #263b3208, 0 8px 18px -14px #263b3238, 0 28px 42px -32px #263b3270;
+  --jiejing-radius-small: 7px;
+  --jiejing-radius: 8px;
+  --jiejing-radius-large: 12px;
+  color-scheme: light;
+  color: var(--jiejing-ink);
+  background: var(--jiejing-shell-canvas);
+  font: 14px/1.65 "Jiejing Sans", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] {
+  background: var(--jiejing-shell-canvas);
+  color: var(--jiejing-ink);
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(button, input, textarea, select) {
+  font-family: inherit;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] ::selection {
+  background: #dce8dc;
+  color: var(--jiejing-accent-hover);
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(input, textarea) {
+  caret-color: var(--jiejing-accent);
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(input, textarea)::placeholder {
+  color: #5e6b63;
+  opacity: 1;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :focus-visible {
+  outline: 2px solid var(--jiejing-accent);
+  outline-offset: 4px;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .sidebar {
+  background: var(--jiejing-shell-rail-surface);
+  border-color: var(--jiejing-line);
+  backdrop-filter: none;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .sidebar .brand strong {
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .sidebar .brand span:not(.brand-mark) {
+  color: var(--jiejing-muted);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: .02em;
+  line-height: 1.65;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .nav-item {
+  color: var(--jiejing-ink);
+  font-weight: 500;
+  letter-spacing: 0;
+  border-color: transparent;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .nav-item:hover {
+  background: #eef2ec;
+  border-color: transparent;
+  transform: none;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .nav-item.is-active {
+  background: var(--jiejing-accent-soft);
+  border-color: transparent;
+  color: var(--jiejing-accent-hover);
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .nav-icon {
+  background: transparent;
+  font-weight: 500;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .sidebar-subscription-entry {
+  background: var(--jiejing-surface);
+  box-shadow: none;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .sidebar-subscription-entry strong {
+  font-weight: 500;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .main > .topbar {
+  border-color: var(--jiejing-line);
+  background: var(--jiejing-shell-rail-surface);
+  backdrop-filter: none;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .topbar h1 {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -.025em;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .topbar .eyebrow {
+  color: var(--jiejing-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.65;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.saas-readable-page-head, .product-manager-header, .section-heading) h2 {
+  color: var(--jiejing-ink);
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: -.025em;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.saas-readable-page-head, .product-manager-header, .section-heading) p {
+  max-width: 75ch;
+  color: var(--jiejing-muted);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.primary-action, .secondary-action) {
+  min-height: 44px;
+  border-radius: var(--jiejing-radius);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.65;
+  box-shadow: none;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .primary-action {
+  color: #ffffff;
+  border-color: var(--jiejing-accent);
+  background: var(--jiejing-accent);
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .primary-action:hover:not(:disabled) {
+  border-color: var(--jiejing-accent-hover);
+  background: var(--jiejing-accent-hover);
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .secondary-action {
+  color: var(--jiejing-accent);
+  border-color: var(--jiejing-line-strong);
+  background: transparent;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .secondary-action:hover:not(:disabled) {
+  color: var(--jiejing-accent-hover);
+  background: var(--jiejing-surface-accent);
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.primary-action, .secondary-action):disabled {
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.saas-listing-input-panel, .saas-listing-stage, .media-workbench, .saas-service-empty-state, .saas-settings-control-room) {
+  background: var(--jiejing-surface);
+  border-color: var(--jiejing-line);
+  border-radius: var(--jiejing-radius-large);
+  box-shadow: var(--jiejing-shadow-float);
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-settings-section-group {
+  border-color: var(--jiejing-line);
+  background: var(--jiejing-surface);
+  box-shadow: none;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-settings-section-group > summary {
+  color: var(--jiejing-ink);
+  background: var(--jiejing-surface-muted);
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-settings-section-group > summary strong {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.65;
+}
+
+body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-listing-mode-tab.is-active {
+  color: var(--jiejing-accent-hover);
+  border-color: var(--jiejing-accent);
+  background: var(--jiejing-surface-accent);
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread {
+  background: var(--jiejing-surface);
+  border-color: var(--jiejing-line);
+  box-shadow: var(--jiejing-shadow-float);
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread-intro {
+  padding-top: clamp(24px, 4vh, 42px);
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread-intro h2 {
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: -.025em;
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread-intro .eyebrow {
+  font-weight: 500;
+  letter-spacing: .02em;
+  color: var(--jiejing-muted);
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread.has-chat-messages .saas-ai-ceo-thread-intro h2 {
+  font-size: 22px;
+  line-height: 1.4;
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread .message p {
+  color: var(--jiejing-ink);
+  line-height: 1.85;
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread .message.user > p {
+  background: #edf2e9;
+  border-radius: 12px 12px 2px 12px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread .message.ai > span {
+  border-color: var(--jiejing-accent);
+  background: var(--jiejing-accent);
+  color: #ffffff;
+  padding: 0;
+  white-space: nowrap;
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chat-stream {
+  scrollbar-color: #a8b6a9 transparent;
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-composer-dock {
+  border-color: var(--jiejing-line);
+  background: linear-gradient(#fafbf8, #f4f7f1);
+  box-shadow: 0 -8px 16px -16px #263b3240;
+  backdrop-filter: none;
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-task-context,
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-task-context-summary {
+  color: var(--jiejing-ink);
+  border-color: var(--jiejing-line);
+  background: var(--jiejing-surface-muted);
+  box-shadow: none;
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-task-context-summary:hover {
+  background: var(--jiejing-surface-accent);
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-task-context-detail strong {
+  color: var(--jiejing-ink);
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.saas-ai-ceo-task-context-summary small, .saas-ai-ceo-task-context-detail p, .saas-ai-ceo-task-context-detail li) {
+  color: var(--jiejing-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+@media (max-width: 700px) {
+  /* The fixed three-line task summary needs more room than the legacy 72px
+     reserve. Keep both the composer and its send target above that summary. */
+  body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chatgpt-layout.has-task-context .saas-ai-ceo-thread {
+    padding-bottom: calc(6.5rem + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  /* Let the empty conversation spacer yield before clipping composer controls. */
+  body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-chat-stream:empty {
+    min-height: 0 !important;
+  }
+
+  body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.topbar h1, .saas-readable-page-head h2, .product-manager-header h2, .section-heading h2) {
+    font-size: 25px;
+  }
+
+  body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(input:not([type="checkbox"]):not([type="radio"]), textarea, select),
+  body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-composer #ceoInput {
+    font-size: 16px;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] #appShell[data-ui-generation="premium-merchant-workbench-v1"] .saas-ai-ceo-thread-intro h2 {
+    font-size: 25px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.saas-public-mvp #appShell[data-ui-generation="premium-merchant-workbench-v1"] :is(.nav-item, .primary-action, .secondary-action) {
+    transition: none;
+  }
+}

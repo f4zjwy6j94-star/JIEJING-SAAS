@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 import sys
 from pathlib import Path
 
@@ -24,11 +26,20 @@ def main() -> int:
     app_js = APP_JS.read_text(encoding="utf-8")
     index_html = INDEX_HTML.read_text(encoding="utf-8")
     module_js = MODULE.read_text(encoding="utf-8")
-    module_marker = "./assets/jiejing-settings-panels.js?v=20260822-public-commercial-release-v105"
+    module_references = re.findall(r'const JIEJING_SETTINGS_PANELS_SRC = "([^"]+)";', app_js)
+    if len(module_references) != 1:
+        return fail("settings module must have exactly one lazy asset source")
+    module_marker = module_references[0]
+    module_version = re.fullmatch(
+        r"\./assets/jiejing-settings-panels\.js\?v=([A-Za-z0-9._-]+)", module_marker
+    )
+    module_digest = hashlib.sha256(module_js.encode("utf-8")).hexdigest()[:12]
+    if not module_version or not module_version[1].endswith(module_digest):
+        return fail("settings module lazy cache version must match its current content fingerprint")
     billing_panel_start = module_js.index("function renderBillingProviderPanel")
-    billing_panel_end = module_js.index("function _renderBillingTestRehearsal")
+    billing_panel_end = module_js.index("\n  function ", billing_panel_start + 1)
     merchant_billing_panel = module_js[billing_panel_start:billing_panel_end]
-    if module_marker in app_html:
+    if "jiejing-settings-panels.js" in app_html:
         return fail("app.html must not eagerly load the settings-only module")
     if "jiejing-settings-panels.js" in index_html:
         return fail("public homepage must not prefetch the settings-only module")
@@ -65,11 +76,10 @@ def main() -> int:
         "页面不展示任何支付密钥",
         "当前仅展示试用和订阅说明",
         "merchant_billing_copy_public_safe_v1",
-        "_renderBillingTestRehearsal",
-        "_renderSubscriptionQuotaShutdownClosure",
-        "_renderBillingDomainCutoverRehearsal",
-        "_renderBillingDomainCutoverStage",
-        "_renderBillingLiveCutoverStep",
+    ]:
+        if marker not in module_js:
+            return fail(f"merchant settings module missing marker: {marker}")
+    for marker in [
         "renderCommercialLaunchActionPlanPanel",
         "renderEdgeCutoverReadinessPanel",
         "saas-edge-cutover-readiness",
@@ -127,11 +137,10 @@ def main() -> int:
         "charge_now_allowed",
         "platform_write_now_allowed",
         "生产队列与深度健康",
-        "订阅与付款",
         "正式上线行动清单",
     ]:
-        if marker not in module_js:
-            return fail(f"settings module missing marker: {marker}")
+        if marker in module_js:
+            return fail(f"merchant settings module contains internal marker: {marker}")
     for marker in [
         "billing live cutover",
         "stripe_billing_live_cutover_matrix",
@@ -160,9 +169,17 @@ def main() -> int:
     ]:
         if marker in merchant_billing_panel:
             return fail(f"merchant billing panel exposes internal marker: {marker}")
+    if "window.JiejingSettingsPanels?.renderBillingProviderPanel" in app_js:
+        return fail("merchant app must not retain the retired provider/readiness billing fallback")
+    for marker in (
+        "renderSaasMerchantBillingPlainSummaryPanel(ctx)",
+        "renderSaasMerchantMediaCreditsPanel()",
+        "renderSaasMerchantDomesticPaymentPanel(ctx)",
+    ):
+        if marker not in app_js:
+            return fail(f"merchant Settings lost its normal billing surface: {marker}")
     for marker in [
         "window.JiejingSettingsPanels?.renderQueueHealthPanel",
-        "window.JiejingSettingsPanels?.renderBillingProviderPanel",
         "window.JiejingSettingsPanels?.renderCommercialLaunchActionPlanPanel",
         "window.JiejingSettingsPanels?.renderEdgeCutoverReadinessPanel",
         "saasEdgeCutoverPreflight",
@@ -176,8 +193,8 @@ def main() -> int:
         "paid_launch_approval_packet: state.saasPaidLaunchApprovalPacket || null",
         "refreshLaunchGate = true",
     ]:
-        if marker not in app_js:
-            return fail(f"app.js wrapper should delegate to settings module: {marker}")
+        if marker in app_js:
+            return fail(f"merchant app must not delegate to internal settings control: {marker}")
     for retired in (
         "/owner/billing-domain-cutover-rehearsal",
         "/commercial/billing-domain-cutover-rehearsal",

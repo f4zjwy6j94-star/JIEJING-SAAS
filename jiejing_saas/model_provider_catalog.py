@@ -179,6 +179,22 @@ def model_secret_provider(provider_key: str) -> str:
     return f"{MODEL_PROVIDER_PREFIX}{normalize_model_provider_key(provider_key)}"
 
 
+def model_secret_storage_recovery_required(secret_ref: dict[str, Any] | None) -> bool:
+    """Distinguish known unreadable saved storage from a failed first write."""
+    if not secret_ref or str(secret_ref.get("status") or "") != "store_blocked":
+        return False
+    metadata = secret_ref.get("metadata") if isinstance(secret_ref.get("metadata"), dict) else {}
+    if metadata.get("managed_vault_write_performed") is not True:
+        return False
+    blocked_by = metadata.get("blocked_by") if isinstance(metadata.get("blocked_by"), list) else []
+    return bool(
+        metadata.get("legacy_storage_unavailable") is True
+        or metadata.get("secret_resolution_blocked") is True
+        or "legacy_tencent_ssm_kms_unavailable" in blocked_by
+        or metadata.get("verification_error_code") == "model_secret_resolve_blocked"
+    )
+
+
 def public_model_settings_from_secret_refs(secret_refs: list[dict[str, Any]]) -> dict[str, Any]:
     model_refs = [item for item in secret_refs if str(item.get("purpose") or "") == MODEL_SECRET_PURPOSE]
     active_refs = [item for item in model_refs if str(item.get("status") or "") in READY_MODEL_SECRET_STATUSES]
@@ -192,6 +208,8 @@ def public_model_settings_from_secret_refs(secret_refs: list[dict[str, Any]]) ->
             connection_state = "ready_with_failed_update"
     elif latest_status == "stored_unverified":
         connection_state = "saved_needs_verification"
+    elif model_secret_storage_recovery_required(latest):
+        connection_state = "storage_recovery_required"
     elif latest:
         connection_state = "save_failed"
     else:
@@ -201,7 +219,7 @@ def public_model_settings_from_secret_refs(secret_refs: list[dict[str, Any]]) ->
         scope = _public_model_ref_scope(item)
         scope_counts[scope] = scope_counts.get(scope, 0) + 1
     return {
-        "contract_version": "2026-07-03-account-model-settings",
+        "contract_version": "2026-09-08-account-model-storage-recovery",
         "mode": "merchant_byok_account_default",
         "configured": bool(active_refs),
         "active_secret_ref": active.get("secret_ref") if active else None,
@@ -331,6 +349,7 @@ def _public_secret_ref(secret_ref: dict[str, Any]) -> dict[str, Any]:
     status = str(secret_ref.get("status") or "")
     blocked_by = metadata.get("blocked_by") if isinstance(metadata.get("blocked_by"), list) else []
     storage_succeeded = status in READY_MODEL_SECRET_STATUSES or status == "stored_unverified"
+    storage_recovery_required = model_secret_storage_recovery_required(secret_ref)
     return {
         "secret_ref": secret_ref.get("secret_ref"),
         "store_id": secret_ref.get("store_id"),
@@ -353,7 +372,8 @@ def _public_secret_ref(secret_ref: dict[str, Any]) -> dict[str, Any]:
         "verified_at": metadata.get("verified_at") or "",
         "verification_error_code": metadata.get("verification_error_code") or "",
         "blocked_by": blocked_by,
-        "requires_api_key_reentry": not storage_succeeded,
+        "storage_recovery_required": storage_recovery_required,
+        "requires_api_key_reentry": not storage_succeeded and not storage_recovery_required,
         "can_retry_verification": status == "stored_unverified",
         "merchant_pays_provider_directly": True,
         "secret_exposed": False,

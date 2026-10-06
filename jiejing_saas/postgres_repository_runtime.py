@@ -35,6 +35,7 @@ JSON_COLUMNS = {
     "order_json",
     "packet_json",
     "report_json",
+    "receipt_json",
     "request_json",
     "result_json",
     "scopes_json",

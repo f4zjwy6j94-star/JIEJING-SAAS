@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import types
 from datetime import datetime, timezone
@@ -115,6 +116,10 @@ def main() -> int:
     repository_text = (ROOT / "jiejing_saas" / "repository.py").read_text(encoding="utf-8")
     if "rowid desc" in repository_text.lower():
         return fail("repository queries used by the Postgres adapter must not depend on SQLite rowid ordering")
+    if repository_text.count("cast(expires_at as text) = ''") < 2:
+        return fail("media credit expiry ordering must compare text safely across SQLite and Postgres timestamptz columns")
+    if re.search(r"expires_at\s*=\s*''", repository_text):
+        return fail("Postgres timestamptz columns must never be compared directly with an empty string")
     for analytics_marker in (
         "to_char(occurred_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')",
         'analytics_period_parameter: datetime | str = analytics_period_started_utc',
@@ -125,6 +130,77 @@ def main() -> int:
     repo = SaaSRepository(OUT / "saas.sqlite", database_engine="postgres", database_url="postgresql://jiejing:secret@db:5432/jiejing")
     if repo.database_engine != "postgres" or repo.database_url.endswith("@db:5432/jiejing") is False:
         return fail("SaaSRepository must preserve selected Postgres runtime configuration")
+
+    class FakeCursor:
+        def fetchone(self) -> dict[str, bool]:
+            return {"locked": True}
+
+    class FakePostgresConnection:
+        def __init__(self) -> None:
+            self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+            self.enter_count = 0
+            self.exit_count = 0
+
+        def __enter__(self) -> "FakePostgresConnection":
+            self.enter_count += 1
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            self.exit_count += 1
+
+        def execute(self, sql: str, params: tuple[object, ...] = ()) -> FakeCursor:
+            self.execute_calls.append((sql, params))
+            return FakeCursor()
+
+    fake_credit_connection = FakePostgresConnection()
+    credit_connection_acquisitions = 0
+
+    def fake_credit_connect() -> FakePostgresConnection:
+        nonlocal credit_connection_acquisitions
+        credit_connection_acquisitions += 1
+        if credit_connection_acquisitions > 1:
+            raise RuntimeError("pool max size 1 exhausted")
+        return fake_credit_connection
+
+    repo._connect = fake_credit_connect  # type: ignore[method-assign]
+    with repo.media_credit_company_lock(company_id="company_pool_one") as credit_conn:
+        if credit_conn is not fake_credit_connection:
+            return fail("Postgres media credit lock must yield its locked transaction connection")
+        credit_conn.execute("select 1")
+    if credit_connection_acquisitions != 1 or fake_credit_connection.enter_count != 1 or fake_credit_connection.exit_count != 1:
+        return fail("Postgres media credit lock must remain usable with a pool max size of one")
+    credit_lock_sql = [sql.lower() for sql, _params in fake_credit_connection.execute_calls]
+    if not credit_lock_sql or "pg_advisory_xact_lock" not in credit_lock_sql[0]:
+        return fail("Postgres media credit mutations must use a transaction-scoped advisory lock")
+    if any("pg_advisory_unlock" in sql for sql in credit_lock_sql):
+        return fail("transaction-scoped media credit locks must not require a second explicit unlock query")
+    if re.search(
+        r"with self\.media_credit_company_lock\(company_id=company_id\):\s+with self\._connect\(\) as conn:",
+        repository_text,
+    ):
+        return fail("media credit callers must not acquire a second pooled connection while holding the company lock")
+
+    class FakeSQLiteConnection:
+        def __init__(self) -> None:
+            self.commit_count = 0
+            self.rollback_count = 0
+
+        def commit(self) -> None:
+            self.commit_count += 1
+
+        def rollback(self) -> None:
+            self.rollback_count += 1
+
+    sqlite_credit_connection = FakeSQLiteConnection()
+    sqlite_repo = SaaSRepository(OUT / "sqlite-lock-contract.sqlite", database_engine="sqlite")
+    with sqlite_repo.media_credit_company_lock(
+        company_id="company_sqlite_lock",
+        conn=sqlite_credit_connection,
+    ) as locked_sqlite_conn:
+        if locked_sqlite_conn is not sqlite_credit_connection:
+            return fail("SQLite media credit lock must preserve the caller transaction connection")
+    if sqlite_credit_connection.commit_count != 1 or sqlite_credit_connection.rollback_count != 0:
+        return fail("SQLite media credit lock must commit before releasing the in-process company lock")
 
     pool_env_keys = (
         "JIEJING_DATABASE_POOL_ENABLED",
@@ -165,6 +241,17 @@ def main() -> int:
             return fail(f"merchant onboarding JSON must be adapted for Postgres JSONB: {onboarding_json_column}")
     if "feedback_json" not in JSON_COLUMNS:
         return fail("merchant product feedback JSON must be adapted for the Postgres JSONB column")
+    if "receipt_json" not in JSON_COLUMNS:
+        return fail("Listing checkpoint receipts must be adapted for the Postgres JSONB column")
+    checkpoint_sql, checkpoint_params = translate_sqlite_query_to_postgres(
+        "insert into listing_draft_edit_heads (company_id, store_id, project_key, revision) "
+        "values (?, ?, ?, ?) on conflict (company_id, store_id, project_key) do nothing returning revision",
+        ("company", "store", "project", 0),
+    )
+    if checkpoint_sql.count("%s") != 4 or not checkpoint_sql.endswith("do nothing returning revision"):
+        return fail("checkpoint first-writer SQL must preserve explicit conflict/returning order")
+    if checkpoint_params != ("company", "store", "project", 0):
+        return fail("checkpoint composite scope parameters changed during translation")
     feedback_insert_sql, feedback_insert_params = translate_sqlite_query_to_postgres(
         """
         insert into merchant_product_feedback (
@@ -282,6 +369,7 @@ def main() -> int:
         "sqlite_upsert_translation": True,
         "inventory_translation": True,
         "bounded_connection_pool": True,
+        "media_credit_pool_size_one_safe": True,
         "concurrent_migration_guard": True,
         "domestic_billing_company_lock": True,
         "provider_transaction_uniqueness": True,

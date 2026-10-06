@@ -20,6 +20,7 @@ import re
 import stat
 import sys
 import time
+import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from jiejing_saas.cos_backup_probe import (  # noqa: E402
+    CONTRACT_VERSION as COS_BACKUP_PROBE_CONTRACT_VERSION,
+    execute_cos_backup_probe,
+)
 from jiejing_saas.operations_metering import (  # noqa: E402
     PROVIDER_MONITOR_AGGREGATE_KEYS,
     PROVIDER_MONITOR_CONTRACT_VERSION,
@@ -137,10 +142,12 @@ def main(argv: list[str] | None = None) -> int:
     existing, lines = _read_env_file(env_file)
 
     provider_control_modes = (
+        args.verify_cos_backup_probe,
         args.provider_index_status,
         args.dry_run_provider_index,
         args.apply_provider_index,
         args.provider_alarm_status,
+        args.verify_provider_alarms,
         args.dry_run_provider_alarms,
         args.apply_provider_alarms,
         args.verify_provider_cls_probe,
@@ -149,13 +156,21 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "blocked", "blockers": ["select_one_provider_control_mode"], "secret_exposed": False}))
         return 2
 
+    if args.verify_cos_backup_probe:
+        return _run_cos_backup_probe_cli(args=args, env_file=env_file, existing=existing, lines=lines)
+
     if args.verify_provider_cls_probe:
         return _run_provider_probe_cli(args=args, env_file=env_file, existing=existing, lines=lines)
 
     if args.provider_index_status or args.dry_run_provider_index or args.apply_provider_index:
         return _run_provider_index_cli(args=args, existing=existing)
 
-    if args.provider_alarm_status or args.dry_run_provider_alarms or args.apply_provider_alarms:
+    if (
+        args.provider_alarm_status
+        or args.verify_provider_alarms
+        or args.dry_run_provider_alarms
+        or args.apply_provider_alarms
+    ):
         return _run_provider_alarm_cli(args=args, env_file=env_file, existing=existing, lines=lines)
 
     if args.record_cls_ingestion_probe_now and not (
@@ -257,6 +272,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Read the provider alarm/index contract without changing cloud or env state.",
     )
     parser.add_argument(
+        "--verify-provider-alarms",
+        action="store_true",
+        help=(
+            "Read back the exact provider alarm/index contract without cloud writes and, with --apply, "
+            "record only the two verification timestamps."
+        ),
+    )
+    parser.add_argument(
         "--dry-run-provider-alarms",
         action="store_true",
         help="Plan provider alarm create/modify/noop actions using read-only CLS calls.",
@@ -269,6 +292,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--provider-alarm-notice-id-env",
         help="Read an existing CLS notice-route identifier from a process env var without printing it.",
+    )
+    parser.add_argument(
+        "--verify-cos-backup-probe",
+        action="store_true",
+        help="Explicitly upload, read back, hash-check and delete one synthetic COS object before recording evidence.",
     )
     parser.add_argument(
         "--verify-provider-cls-probe",
@@ -1287,12 +1315,28 @@ def _run_provider_alarm_cli(
     existing: dict[str, str],
     lines: list[str],
 ) -> int:
-    selected = [args.provider_alarm_status, args.dry_run_provider_alarms, args.apply_provider_alarms]
+    selected = [
+        args.provider_alarm_status,
+        args.verify_provider_alarms,
+        args.dry_run_provider_alarms,
+        args.apply_provider_alarms,
+    ]
     if sum(bool(value) for value in selected) != 1:
         print(json.dumps({"status": "blocked", "blockers": ["select_one_provider_alarm_mode"], "secret_exposed": False}))
         return 2
     if args.apply_provider_alarms and not args.apply:
         print(json.dumps({"status": "blocked", "blockers": ["provider_alarm_apply_confirmation_missing"], "secret_exposed": False}))
+        return 2
+    if args.verify_provider_alarms and not args.apply:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "blockers": ["provider_alarm_verification_apply_confirmation_missing"],
+                    "secret_exposed": False,
+                }
+            )
+        )
         return 2
     mode = "apply" if args.apply_provider_alarms else ("dry_run" if args.dry_run_provider_alarms else "status")
     control = _provider_control_values(existing)
@@ -1321,7 +1365,9 @@ def _run_provider_alarm_cli(
     except Exception:
         print(json.dumps({"status": "blocked", "mode": mode, "blockers": ["provider_alarm_operator_failed"], "secret_exposed": False}))
         return 2
-    updates = provider_alarm_verification_updates(result) if mode == "apply" else {}
+    if args.verify_provider_alarms:
+        result["mode"] = "verify"
+    updates = provider_alarm_verification_updates(result) if (mode == "apply" or args.verify_provider_alarms) else {}
     if updates:
         _write_env_file(env_file, lines, updates)
         result["verification_evidence_recorded"] = True
@@ -1387,8 +1433,9 @@ def verify_provider_cls_probe(
     topic_id: str,
     environment: str,
     now_epoch_ms: int | None = None,
-    search_attempts: int = 3,
+    search_attempts: int = 13,
     waiter: Any = time.sleep,
+    monotonic: Any = time.monotonic,
 ) -> dict[str, Any]:
     """Upload one safe probe and prove it is searchable without matching either alarm."""
 
@@ -1407,35 +1454,41 @@ def verify_provider_cls_probe(
         'probe:"false"' in spec["AlarmTargets"][0]["Query"]
         for spec in provider_alarm_specs(logset_id="private", topic_id="private").values()
     )
-    uploaded = bool(alarm_queries_exclude_probe and uploader(event))
+    current_ms = int(now_epoch_ms if now_epoch_ms is not None else time.time() * 1000)
+    probe_marker = "jiejing-provider-probe-" + uuid.uuid4().hex
+    uploaded = bool(alarm_queries_exclude_probe and uploader(event, probe_marker=probe_marker))
     searchable = False
     if uploaded:
-        current_ms = int(now_epoch_ms if now_epoch_ms is not None else time.time() * 1000)
+        deadline = monotonic() + 75
+        attempts = max(1, min(13, int(search_attempts)))
         query = (
             f'event_type:"{PROVIDER_MONITOR_EVENT_TYPE}" AND '
             f'contract_version:"{PROVIDER_MONITOR_CONTRACT_VERSION}" AND probe:"true"'
         )
-        for attempt in range(max(1, min(5, int(search_attempts)))):
+        for attempt in range(attempts):
+            if monotonic() >= deadline:
+                break
             request = request_factory(
                 "SearchLogRequest",
                 {
                     "TopicId": topic_id,
-                    "From": current_ms - 600_000,
+                    "From": current_ms,
                     "To": current_ms + 60_000,
                     "QueryString": query,
                     "QuerySyntax": 1,
-                    "Limit": 1,
+                    "Limit": 20,
                     "Sort": "desc",
                     "HighLight": False,
                 },
             )
             response = _plain_response(client.SearchLog(request))
             results = response.get("Results") if isinstance(response.get("Results"), list) else []
-            if results:
+            if any(_provider_probe_result_matches(row, event, probe_marker, topic_id, current_ms) for row in results):
                 searchable = True
                 break
-            if attempt + 1 < max(1, min(5, int(search_attempts))):
-                waiter(2)
+            remaining = deadline - monotonic()
+            if attempt + 1 < attempts and remaining > 0:
+                waiter(min(5, remaining))
     return {
         "status": "verified" if uploaded and searchable and alarm_queries_exclude_probe else "blocked",
         "probe_uploaded": uploaded,
@@ -1449,7 +1502,31 @@ def verify_provider_cls_probe(
     }
 
 
-def _upload_provider_probe_to_cls(event: dict[str, Any], values: dict[str, str]) -> bool:
+def _provider_probe_result_matches(
+    row: Any, event: dict[str, Any], probe_marker: str, topic_id: str, started_ms: int,
+) -> bool:
+    """Inspect bounded readback in memory; never return raw log/resource data."""
+    if not isinstance(row, dict) or row.get("FileName") != probe_marker or row.get("TopicId") != topic_id:
+        return False
+    timestamp = row.get("Time")
+    if type(timestamp) not in (int, str) or not re.fullmatch(r"[0-9]{1,16}", str(timestamp)):
+        return False
+    if not started_ms <= int(timestamp) <= started_ms + 60_000:
+        return False
+    raw = row.get("LogJson")
+    if not isinstance(raw, str) or len(raw) > 8192:
+        return False
+    try:
+        content = json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(content, dict):
+        return False
+    serialized = lambda value: str(value).lower() if isinstance(value, bool) else str(value)
+    return all(key in content and serialized(content[key]) == serialized(value) for key, value in event.items())
+
+
+def _upload_provider_probe_to_cls(event: dict[str, Any], values: dict[str, str], *, probe_marker: str) -> bool:
     try:
         from jiejing_saas.monitoring import upload_provider_monitoring_aggregate_to_cls
 
@@ -1467,6 +1544,7 @@ def _upload_provider_probe_to_cls(event: dict[str, Any], values: dict[str, str])
             topic_id=topic_id,
             access_id=secret_id,
             access_key=secret_key,
+            probe_marker=probe_marker,
         )
     except Exception:
         return False
@@ -1494,7 +1572,7 @@ def _run_provider_probe_cli(
         result = verify_provider_cls_probe(
             client=_build_cls_control_client(control),
             request_factory=_cls_request_factory,
-            uploader=lambda event: _upload_provider_probe_to_cls(event, control),
+            uploader=lambda event, **metadata: _upload_provider_probe_to_cls(event, control, **metadata),
             topic_id=control["JIEJING_CLS_TOPIC_ID"],
             environment=control.get("JIEJING_SAAS_ENV") or "staging",
         )
@@ -1514,6 +1592,109 @@ def _run_provider_probe_cli(
         result["verification_evidence_recorded"] = False
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("status") == "verified" else 2
+
+
+def _run_cos_backup_probe_cli(
+    *,
+    args: argparse.Namespace,
+    env_file: Path,
+    existing: dict[str, str],
+    lines: list[str],
+) -> int:
+    if not args.apply:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "blockers": ["cos_backup_probe_apply_confirmation_missing"],
+                    "probe_verified": False,
+                    "verification_evidence_recorded": False,
+                    "secret_exposed": False,
+                }
+            )
+        )
+        return 2
+    try:
+        result = execute_cos_backup_probe(env=existing)
+    except Exception:
+        result = {}
+    success_at = str(result.get("success_at") or "").strip()
+    try:
+        parsed_success_at = datetime.fromisoformat(success_at.replace("Z", "+00:00"))
+    except ValueError:
+        parsed_success_at = None
+    expected_keys = {
+        "status",
+        "contract_version",
+        "probe",
+        "synthetic_data_only",
+        "server_side_encryption_requested",
+        "payload_bytes",
+        "sha256_match",
+        "object_deleted",
+        "success_at",
+        "blockers",
+        "error_type",
+        "secret_exposed",
+    }
+    verified = bool(
+        set(result) == expected_keys
+        and result.get("status") == "verified"
+        and result.get("contract_version") == COS_BACKUP_PROBE_CONTRACT_VERSION
+        and result.get("probe") is True
+        and result.get("synthetic_data_only") is True
+        and result.get("server_side_encryption_requested") is True
+        and type(result.get("payload_bytes")) is int
+        and result.get("payload_bytes", 0) > 0
+        and result.get("sha256_match") is True
+        and result.get("object_deleted") is True
+        and parsed_success_at is not None
+        and parsed_success_at.tzinfo is not None
+        and parsed_success_at.utcoffset() is not None
+        and result.get("blockers") == []
+        and result.get("error_type") is None
+        and result.get("secret_exposed") is False
+    )
+    if not verified:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "blockers": ["cos_backup_probe_contract_rejected"],
+                    "probe_verified": False,
+                    "verification_evidence_recorded": False,
+                    "secret_exposed": False,
+                }
+            )
+        )
+        return 2
+    try:
+        _write_env_file(env_file, lines, {"JIEJING_COS_BACKUP_LAST_SUCCESS_AT": success_at})
+    except Exception:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "blockers": ["cos_backup_probe_evidence_write_failed"],
+                    "probe_verified": True,
+                    "verification_evidence_recorded": False,
+                    "secret_exposed": False,
+                }
+            )
+        )
+        return 2
+    print(
+        json.dumps(
+            {
+                "status": "verified",
+                "contract_version": COS_BACKUP_PROBE_CONTRACT_VERSION,
+                "probe_verified": True,
+                "verification_evidence_recorded": True,
+                "secret_exposed": False,
+            }
+        )
+    )
+    return 0
 
 
 def _now_iso() -> str:

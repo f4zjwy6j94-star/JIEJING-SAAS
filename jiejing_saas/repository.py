@@ -6,13 +6,14 @@ import base64
 import hmac
 import json
 import hashlib
+import math
 import os
 import re
 import secrets
 import sqlite3
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -44,6 +45,8 @@ from .product_feedback import (
     product_feedback_payload_hash,
 )
 from .security import hash_password, verify_password
+from .publish_source_rights import build_merchant_fact_save_attestation, valid_merchant_fact_save_attestation
+from .sensitive_text import contains_secret_like_data, contains_secret_like_text
 
 
 # Fixed PBKDF2 record used only to equalize unknown-account login work. It is
@@ -80,6 +83,7 @@ EXTERNAL_EXECUTION_PROCESSING_STATUS = "external_execution_processing_manual_rec
 CONFIRMATION_MANAGED_TASK_TYPES = frozenset(
     {
         "ebay_draft_save_intake",
+        "existing_ebay_draft_publish_intake",
         "publish_confirmation_intake",
         "ebay_inventory_location_setup",
     }
@@ -117,8 +121,83 @@ AI_CEO_RULE_MEMORY_POLICY = "merchant_rule"
 AI_CEO_MARKET_REPORT_CONTRACT_VERSION = "2026-07-04-ai-ceo-market-report-frontstage-v2"
 AI_CEO_MARKET_LISTING_HANDOFF_CONTRACT_VERSION = "2026-07-04-ai-ceo-market-to-listing-handoff-v2"
 AI_CEO_MARKET_EBAY_FIELD_MAP_CONTRACT = "ai_ceo_market_research_to_ebay_inventory_offer_v1"
+AI_CEO_SUPPLIER_FACT_ATTESTATION_CONTRACT_VERSION = "jiejing_ai_ceo_supplier_fact_attestation_v1"
+AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE = "authenticated_merchant_request"
+AI_CEO_CHAT_REQUEST_LEASE_SECONDS = 15 * 60
+AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS = (
+    "material",
+    "package_weight_g",
+    "package_dimensions_cm",
+    "item_location",
+    "unit_cost",
+)
+MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION = "merchant_product_fact_packet_v1"
+MERCHANT_PRODUCT_FACT_KEYS = (
+    "product_name",
+    "source_url",
+    "sku",
+    "brand",
+    "mpn",
+    "condition",
+    "supplier_item_number",
+    "supplier_brand",
+    "material",
+    "product_dimensions_cm",
+    "net_weight_g",
+    "product_origin",
+    "craft",
+    "style",
+    "packaging_type",
+    "included_items",
+    "package_weight_g",
+    "package_length_cm",
+    "package_width_cm",
+    "package_height_cm",
+    "unit_cost",
+    "selling_price",
+    "unit_cost_currency",
+    "currency",
+    "quantity",
+    "item_location",
+    "handling_time_days",
+    "image_urls",
+    "image_rights_confirmed",
+    "merchant_owned_product_confirmed",
+)
+MERCHANT_PRODUCT_FACT_REQUIRED_KEYS = tuple(
+    key
+    for key in MERCHANT_PRODUCT_FACT_KEYS
+    if key not in {
+        "source_url",
+        "brand",
+        "mpn",
+        "supplier_item_number",
+        "supplier_brand",
+        "product_dimensions_cm",
+        "net_weight_g",
+        "product_origin",
+        "craft",
+        "style",
+        "packaging_type",
+        "included_items",
+        "unit_cost_currency",
+        "handling_time_days",
+        "merchant_owned_product_confirmed",
+    }
+)
 _DOMESTIC_BILLING_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 _MEDIA_CREDIT_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
+CONTROLLED_MEDIA_CREDIT_SOURCE = "controlled_acceptance"
+OWNER_MEDIA_TESTING_SOURCE = "internal_owner_testing"
+MEDIA_CREDIT_SOURCE_ALLOWLIST = frozenset(
+    {
+        "plan_included",
+        "purchased",
+        "legacy",
+        CONTROLLED_MEDIA_CREDIT_SOURCE,
+        OWNER_MEDIA_TESTING_SOURCE,
+    }
+)
 _PLATFORM_RELIABILITY_ALERT_LOCK = threading.Lock()
 _OPERATIONS_ANALYTICS_TIMEZONE = timezone(timedelta(hours=8))
 ACCOUNT_CLASSIFICATION_MERCHANT = "merchant"
@@ -219,6 +298,19 @@ def _account_classification_for_email(email: str) -> str:
     )
 
 
+_PRODUCT_FACT_CONTEXT_ABSENT = object()
+
+
+class ProductFactSaveValidationError(ValueError):
+    pass
+
+
+class ProductFactSaveConflict(Exception):
+    def __init__(self, payload: dict[str, Any]) -> None:
+        super().__init__(payload["error_code"])
+        self.payload = payload
+
+
 class SaaSRepository:
     def __init__(self, db_path: Path, *, database_engine: str | None = None, database_url: str | None = None) -> None:
         self.db_path = db_path
@@ -255,6 +347,19 @@ class SaaSRepository:
                   activation_json text not null
                 );
 
+                create table if not exists platform_model_trial_reservations (
+                  reservation_id text primary key,
+                  company_id text not null,
+                  period_key text not null,
+                  slot_number integer not null check (slot_number > 0),
+                  route_scope text not null,
+                  baseline_used integer not null default 0 check (baseline_used >= 0),
+                  status text not null default 'consumed' check (status in ('reserved', 'consumed', 'released')),
+                  created_at text not null,
+                  released_at text,
+                  unique (company_id, period_key, slot_number)
+                );
+
                 create table if not exists merchant_onboarding_states (
                   company_id text not null,
                   onboarding_key text not null,
@@ -287,6 +392,36 @@ class SaaSRepository:
                   resolved_at text,
                   feedback_json text not null,
                   unique (company_id, idempotency_key_hash)
+                );
+
+                create table if not exists listing_draft_edit_heads (
+                  company_id text not null,
+                  store_id text not null,
+                  project_key text not null,
+                  source_report_id text not null,
+                  candidate_id text not null,
+                  revision integer not null check (revision >= 0),
+                  checkpoint_id text not null,
+                  updated_at text not null,
+                  primary key (company_id, store_id, project_key)
+                );
+
+                create table if not exists listing_draft_edit_revisions (
+                  checkpoint_id text not null primary key,
+                  company_id text not null,
+                  store_id text not null,
+                  project_key text not null,
+                  source_report_id text not null,
+                  candidate_id text not null,
+                  revision integer not null check (revision > 0),
+                  mutation_id text not null,
+                  payload_fingerprint text not null,
+                  base_report_id text not null,
+                  actor_user_id text not null,
+                  created_at text not null,
+                  receipt_json text not null,
+                  unique (company_id, store_id, project_key, revision),
+                  unique (company_id, store_id, project_key, mutation_id)
                 );
 
                 create table if not exists user_sessions (
@@ -847,6 +982,7 @@ class SaaSRepository:
             self._ensure_ai_ceo_chat_merge_score_column(conn)
             self._ensure_account_scoped_confirmations(conn)
             self._ensure_user_session_refresh_column(conn)
+            self._ensure_platform_model_trial_reservation_lifecycle(conn)
             self._ensure_indexes(conn)
             self._record_schema_migration(
                 conn,
@@ -952,6 +1088,12 @@ class SaaSRepository:
             )
             self._record_schema_migration(
                 conn,
+                migration_id="20260901_platform_model_trial_reservations",
+                checksum="jiejing-platform-model-trial-reservations-v20260901",
+                summary="Adds durable tenant-period slots so concurrent platform-funded model calls cannot overspend trial quota.",
+            )
+            self._record_schema_migration(
+                conn,
                 migration_id="20260802_merchant_onboarding_states",
                 checksum="jiejing-merchant-onboarding-states-v20260802",
                 summary="Adds tenant-scoped enum-only merchant onboarding progress with optimistic concurrency.",
@@ -967,6 +1109,12 @@ class SaaSRepository:
                 migration_id="20260820_rotating_browser_sessions",
                 checksum="jiejing-rotating-browser-sessions-v20260820",
                 summary="Adds short access-session binding, rotating refresh generations and device-level revocation.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260906_listing_draft_edit_checkpoints",
+                checksum="jiejing-listing-draft-edit-checkpoints-v20260906",
+                summary="Adds project-scoped Listing edit heads and immutable, mutation-idempotent revisions without creating AI reports.",
             )
 
     def _initialize_postgres(self) -> None:
@@ -1733,43 +1881,93 @@ class SaaSRepository:
             raise ValueError("email is invalid")
         if not valid_role(role) or role == "owner":
             raise ValueError("role must be admin, operator, or viewer")
-        created_at = now_iso()
-        invitation_id = _id("invite")
-        existing_user = self.get_user_by_email(email)
-        accepted_at = created_at if existing_user else None
-        status = "accepted_existing_user_added" if existing_user else "pending"
-        record = {
-            "invitation_id": invitation_id,
-            "company_id": company_id,
-            "email": email,
-            "role": role,
-            "status": status,
-            "invited_by": invited_by,
-            "created_at": created_at,
-            "accepted_at": accepted_at,
-            "permissions": permissions_for_role(role),
-            "metadata": _redact_secret_like(metadata or {}),
-            "secret_exposed": False,
-        }
         with self._connect() as conn:
-            conn.execute(
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            company = conn.execute(
+                f"select company_id from companies where company_id = ?{lock_suffix}",
+                (company_id,),
+            ).fetchone()
+            if not company:
+                raise ValueError("company not found")
+            existing_user = conn.execute(
+                "select user_id from users where lower(email) = ?",
+                (email,),
+            ).fetchone()
+            existing_member = conn.execute(
                 """
-                insert into team_invitations (
-                  invitation_id, company_id, email, role, status, invited_by, created_at, accepted_at, invite_json
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                select tm.role, tm.created_at from team_members tm
+                join users u on u.user_id = tm.user_id
+                where tm.company_id = ? and lower(u.email) = ?
                 """,
-                (
-                    invitation_id,
-                    company_id,
-                    email,
-                    role,
-                    status,
-                    invited_by,
-                    created_at,
-                    accepted_at,
-                    json.dumps(record, ensure_ascii=False),
-                ),
+                (company_id, email),
+            ).fetchone()
+            invitation = conn.execute(
+                """
+                select invitation_id, status, role, created_at, invite_json
+                from team_invitations where company_id = ? and lower(email) = ?
+                  and status in ('pending', 'accepted_existing_user_added')
+                order by case status when 'pending' then 0 else 1 end, created_at asc
+                limit 1
+                """,
+                (company_id, email),
+            ).fetchone()
+            if existing_member:
+                # Re-inviting a member is not a role-change operation and must
+                # neither reserve another seat nor silently grant more access.
+                record = _load_json_field(invitation["invite_json"]) if invitation else {
+                    "invitation_id": "", "company_id": company_id, "email": email,
+                    "status": "already_member", "created_at": existing_member["created_at"],
+                }
+                return {
+                    **record, "role": existing_member["role"],
+                    "permissions": permissions_for_role(existing_member["role"]),
+                    "reused_existing": True, "secret_exposed": False,
+                }
+            pending = invitation if invitation and invitation["status"] == "pending" else None
+            if pending and not existing_user:
+                # The pending invitation already owns this email's seat.
+                # A retry cannot create another reservation or change its role.
+                return {**_load_json_field(pending["invite_json"]), "reused_existing": True}
+
+            quota = self._team_seat_quota_in_transaction(
+                conn, company_id=company_id,
             )
+            additional_seats = 0 if pending else 1
+            if quota["quota_enforcement_enabled"] and quota["used"] + additional_seats > quota["limit"]:
+                raise TeamSeatQuotaExceeded(quota)
+            created_at = str(pending["created_at"]) if pending else now_iso()
+            invitation_id = str(pending["invitation_id"]) if pending else _id("invite")
+            # An accepted pending invitation keeps the originally invited role.
+            role = str(pending["role"]) if pending else role
+            accepted_at = now_iso() if existing_user else None
+            status = "accepted_existing_user_added" if existing_user else "pending"
+            record = {
+                "invitation_id": invitation_id, "company_id": company_id,
+                "email": email, "role": role, "status": status,
+                "invited_by": invited_by, "created_at": created_at,
+                "accepted_at": accepted_at, "permissions": permissions_for_role(role),
+                "metadata": _redact_secret_like(metadata or {}), "secret_exposed": False,
+            }
+            if pending:
+                conn.execute(
+                    """
+                    update team_invitations set status = ?, accepted_at = ?, invite_json = ?
+                    where invitation_id = ? and company_id = ? and status = 'pending'
+                    """,
+                    (status, accepted_at, json.dumps(record, ensure_ascii=False), invitation_id, company_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    insert into team_invitations (
+                      invitation_id, company_id, email, role, status, invited_by, created_at, accepted_at, invite_json
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (invitation_id, company_id, email, role, status, invited_by, created_at, accepted_at,
+                     json.dumps(record, ensure_ascii=False)),
+                )
             if existing_user:
                 conn.execute(
                     """
@@ -2708,14 +2906,27 @@ class SaaSRepository:
         refreshed = self.get_oauth_authorization_request_by_state(state_nonce=existing["state_nonce"])
         return refreshed or {}
 
-    def create_task(self, *, company_id: str, store_id: str, user_id: str, task_type: str, title: str, input_data: dict[str, Any]) -> dict[str, Any]:
+    def create_task(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        task_type: str,
+        title: str,
+        input_data: dict[str, Any],
+        task_id: str | None = None,
+    ) -> dict[str, Any]:
         self.initialize()
-        task_id = _id("task")
+        requested_task_id = str(task_id or "").strip()
+        if requested_task_id and not re.fullmatch(r"task_[A-Za-z0-9_-]{8,96}", requested_task_id):
+            raise ValueError("invalid task id")
+        task_id = requested_task_id or _id("task")
         created_at = now_iso()
         with self._connect() as conn:
-            conn.execute(
+            inserted = conn.execute(
                 """
-                insert into tasks (
+                insert or ignore into tasks (
                   task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
                   status, created_at, updated_at, input_json, output_json
                 ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -2731,26 +2942,381 @@ class SaaSRepository:
                     "queued",
                     created_at,
                     created_at,
-                    json.dumps(input_data, ensure_ascii=False),
+                    json.dumps(input_data, ensure_ascii=False, default=json_default),
                     "{}",
                 ),
             )
-            self._insert_audit(
-                conn,
-                company_id=company_id,
-                store_id=store_id,
-                user_id=user_id,
-                actor_type="user",
-                action_type="task.create",
-                target_type="task",
-                target_id=task_id,
-                summary="SaaS task created.",
-                details={"task_type": task_type, "title": title},
-            )
-        return self.get_task(company_id=company_id, task_id=task_id) or {}
+            if int(inserted.rowcount or 0) == 1:
+                self._insert_audit(
+                    conn,
+                    company_id=company_id,
+                    store_id=store_id,
+                    user_id=user_id,
+                    actor_type="user",
+                    action_type="task.create",
+                    target_type="task",
+                    target_id=task_id,
+                    summary="SaaS task created.",
+                    details={"task_type": task_type, "title": title},
+                )
+        task = self.get_task(company_id=company_id, task_id=task_id)
+        if not task:
+            raise KeyError("task id collision")
+        return task
 
-    def create_queue_job(self, *, company_id: str, task_id: str, job_data: dict[str, Any], max_attempts: int = 2) -> dict[str, Any]:
+    def claim_listing_generation_operation_task(self, *, task_id: str, company_id: str, store_id: str,
+        user_id: str, input_data: dict[str, Any]) -> dict[str, Any]:
+        """Only the unique insert winner may start this Listing operation."""
         self.initialize()
+        created_at = now_iso()
+        output = {"phase": "before_model", "report_save_attempted": False, "model_called": False,
+                  "usage_consumed": False, "real_platform_writes_enabled": False, "secret_exposed": False}
+        with self._connect() as conn:
+            inserted = conn.execute("""insert or ignore into tasks
+                (task_id,company_id,store_id,user_id,runtime_run_id,task_type,title,status,created_at,updated_at,input_json,output_json)
+                values (?,?,?,?,?,?,?,?,?,?,?,?)""", (task_id, company_id, store_id, user_id, None,
+                "listing_draft_generation", "AI Listing 文案生成", "queued", created_at, created_at,
+                json.dumps(input_data, ensure_ascii=False), json.dumps(output, ensure_ascii=False)))
+            claimed = int(inserted.rowcount or 0) == 1
+            if claimed:
+                self._insert_audit(conn, company_id=company_id, store_id=store_id, user_id=user_id,
+                    actor_type="user", action_type="listing.generation.operation.claimed", target_type="task",
+                    target_id=task_id, summary="One Listing generation operation claimed without a model request.",
+                    details={"real_platform_writes_enabled": False, "secret_exposed": False})
+        task = self.get_task(company_id=company_id, task_id=task_id)
+        if not task:
+            raise KeyError("listing_generation_operation_not_found")
+        return {"claimed": claimed, "task": task}
+
+    def transition_listing_generation_operation_task(self, *, task_id: str, company_id: str, store_id: str,
+        user_id: str, expected_phases: tuple[str, ...], phase: str, status: str,
+        output: dict[str, Any], model_metadata: dict[str, str] | None = None) -> dict[str, Any] | None:
+        """Persist a phase exactly once; an uncertain write never licenses retry."""
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute("""select * from tasks where task_id=? and company_id=? and store_id=? and user_id=?
+                and task_type='listing_draft_generation'""", (task_id, company_id, store_id, user_id)).fetchone()
+            if not row:
+                return None
+            current = self._task_row_to_dict(row)
+            if ((current.get("input") or {}).get("contract_version") != "listing_generation_operation_v1"
+                or (current.get("output") or {}).get("phase") not in expected_phases):
+                return None
+            input_data = current["input"]
+            if model_metadata is not None:
+                if (phase != "model_running" or set(model_metadata) != {"model_usage_owner", "provider_key"}
+                    or model_metadata["model_usage_owner"] not in ("merchant_account_byok", "jiejing_platform_trial")
+                    or not isinstance(model_metadata["provider_key"], str) or len(model_metadata["provider_key"]) > 80):
+                    raise ValueError("listing_generation_operation_metadata_invalid")
+                input_data = {**input_data, **model_metadata}
+            updated = conn.execute("""update tasks set status=?,updated_at=?,output_json=?,input_json=?
+                where task_id=? and company_id=? and store_id=? and user_id=? and status=? and updated_at=?""",
+                (status, now_iso(), json.dumps({**output, "phase": phase}, ensure_ascii=False),
+                 json.dumps(input_data, ensure_ascii=False), task_id, company_id,
+                 store_id, user_id, current["status"], current["updated_at"]))
+            if int(updated.rowcount or 0) != 1:
+                return None
+        return self.get_task(company_id=company_id, task_id=task_id)
+
+    def list_listing_generation_operation_reports(self, *, company_id: str, store_id: str,
+        user_id: str, task_id: str) -> list[dict[str, Any]]:
+        """Read exact-operation reports, not the latest report for a product."""
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute("""select r.*, t.company_id, t.store_id, t.user_id from reports r
+                join tasks t on t.task_id=r.task_id
+                where r.task_id=? and t.company_id=? and t.store_id=? and t.user_id=?
+                order by r.created_at, r.report_id""", (task_id, company_id, store_id, user_id)).fetchall()
+        return [{**self._report_row_to_dict(row), "user_id": row["user_id"]} for row in rows]
+
+    def claim_ai_ceo_chat_request(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        idempotency_key: str,
+        payload_fingerprint: str,
+        archive_context: dict[str, Any] | None = None,
+        compatible_payload_fingerprints: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """Atomically claim one tenant-scoped AI CEO chat request."""
+        self.initialize()
+        normalized_key = str(idempotency_key or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", normalized_key):
+            raise ValueError("invalid idempotency key")
+        normalized_fingerprint = str(payload_fingerprint or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized_fingerprint):
+            raise ValueError("invalid payload fingerprint")
+        scope_material = f"ai-ceo-chat-request-v1\0{company_id}\0{store_id}\0{normalized_key}"
+        scope_hash = hashlib.sha256(scope_material.encode("utf-8")).hexdigest()
+        task_id = f"task_ai_ceo_request_{scope_hash[:40]}"
+        created_at = now_iso()
+        input_data = {
+            "contract_version": "ai_ceo_chat_request_idempotency_v1",
+            "idempotency_key_hash": scope_hash,
+            "payload_fingerprint": normalized_fingerprint,
+            "secret_exposed": False,
+            "real_platform_writes_enabled": False,
+        }
+        if isinstance(archive_context, dict) and archive_context.get("contract_version") == "server_finalized_chat_archive_v1":
+            input_data["chat_archive_context"] = {
+                "contract_version": "server_finalized_chat_archive_v1",
+                "user_text": _sanitize_merchant_ceo_text(archive_context.get("user_text"), limit=900),
+            }
+        with self._connect() as conn:
+            inserted = conn.execute(
+                """
+                insert or ignore into tasks (
+                  task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
+                  status, created_at, updated_at, input_json, output_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    company_id,
+                    store_id,
+                    user_id,
+                    None,
+                    "ai_ceo_chat_request",
+                    "AI CEO chat request",
+                    "running",
+                    created_at,
+                    created_at,
+                    json.dumps(input_data, ensure_ascii=False, default=json_default),
+                    "{}",
+                ),
+            )
+            row = conn.execute("select * from tasks where task_id = ?", (task_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("AI CEO chat request claim could not be read")
+        request_task = self._task_row_to_dict(row)
+        existing_input = request_task.get("input") if isinstance(request_task.get("input"), dict) else {}
+        if (
+            request_task.get("company_id") != company_id
+            or request_task.get("store_id") != store_id
+            or request_task.get("user_id") != user_id
+            or request_task.get("task_type") != "ai_ceo_chat_request"
+            or existing_input.get("idempotency_key_hash") != scope_hash
+        ):
+            # A key collision from another authenticated user must not expose
+            # even the original request's identifier.
+            return {"claim_state": "conflict", "request_task": {}}
+        compatible_fingerprints = {value for value in compatible_payload_fingerprints
+                                  if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)}
+        if (existing_input.get("payload_fingerprint") != normalized_fingerprint
+                and existing_input.get("payload_fingerprint") not in compatible_fingerprints):
+            return {"claim_state": "conflict", "request_task": {}}
+        if int(inserted.rowcount or 0) == 1:
+            return {"claim_state": "claimed", "request_task": request_task}
+        output = request_task.get("output") if isinstance(request_task.get("output"), dict) else {}
+        if request_task.get("status") in {"completed", "failed", "blocked"} and output.get("idempotent_replay_ready") is True:
+            return {"claim_state": "replay", "request_task": request_task, "replay": output}
+        request_updated_at = _parse_iso_datetime(str(request_task.get("updated_at") or ""))
+        lease_expired = bool(
+            request_task.get("status") == "running"
+            and request_updated_at is not None
+            and (datetime.now(timezone.utc) - request_updated_at).total_seconds()
+            > AI_CEO_CHAT_REQUEST_LEASE_SECONDS
+        )
+        if lease_expired:
+            reconciled_at = now_iso()
+            reconciliation_payload = {
+                "ai_ceo_chat_request": {
+                    "status": "reconciliation_required",
+                    "request_task_id": task_id,
+                    "execution_result_known": False,
+                    "automatic_model_retry_performed": False,
+                },
+                "ai_ceo_chat": {
+                    "status": "request_reconciliation_required",
+                    "answer": (
+                        "上一次请求超过安全处理时间，执行结果暂时无法确认。"
+                        "为避免重复调用模型，捷境没有自动重试。请先查看本次工作记录和调研报告；"
+                        "确认没有已有结果后，再重新发起任务。"
+                    ),
+                    "route": "ebay_workflow",
+                    "route_label": "执行结果对账",
+                    "source_records": [],
+                    "work_records": [],
+                    "confirmation_items": [],
+                    "blocked_by": ["ai_ceo_request_execution_unknown"],
+                },
+                "execution_result_known": False,
+                "automatic_model_retry_performed": False,
+                "usage_consumed": None,
+                "usage_consumed_known": False,
+                "listing_created": False,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            reconciliation_output = {
+                "contract_version": "ai_ceo_chat_request_idempotency_v1",
+                "response_status": 409,
+                "response_payload": reconciliation_payload,
+                "idempotent_replay_ready": True,
+                "reconciliation_required": True,
+                "execution_result_known": False,
+                "automatic_model_retry_performed": False,
+                "secret_exposed": False,
+                "real_platform_writes_enabled": False,
+            }
+            previous_updated_at = request_task.get("updated_at")
+            with self._connect() as conn:
+                reconciled = conn.execute(
+                    """
+                    update tasks set status = ?, updated_at = ?, output_json = ?
+                    where task_id = ? and company_id = ? and store_id = ? and task_type = ?
+                      and status = ? and updated_at = ?
+                    """,
+                    (
+                        "blocked",
+                        reconciled_at,
+                        json.dumps(reconciliation_output, ensure_ascii=False, default=json_default),
+                        task_id,
+                        company_id,
+                        store_id,
+                        "ai_ceo_chat_request",
+                        "running",
+                        previous_updated_at,
+                    ),
+                )
+                if int(reconciled.rowcount or 0) == 1:
+                    reconciliation_output["response_payload"] = self._archive_ai_ceo_terminal_response(
+                        conn, request_row=row, response_payload=reconciliation_payload,
+                    )
+                    conn.execute(
+                        "update tasks set output_json = ? where task_id = ? and company_id = ? and store_id = ?",
+                        (json.dumps(reconciliation_output, ensure_ascii=False, default=json_default), task_id, company_id, store_id),
+                    )
+                refreshed_row = conn.execute(
+                    "select * from tasks where task_id = ? and company_id = ? and store_id = ?",
+                    (task_id, company_id, store_id),
+                ).fetchone()
+            if refreshed_row is None:
+                raise RuntimeError("AI CEO chat request reconciliation could not be read")
+            request_task = self._task_row_to_dict(refreshed_row)
+            output = request_task.get("output") if isinstance(request_task.get("output"), dict) else {}
+            if request_task.get("status") in {"completed", "failed", "blocked"} and output.get("idempotent_replay_ready") is True:
+                return {"claim_state": "replay", "request_task": request_task, "replay": output}
+        return {"claim_state": "in_progress", "request_task": request_task}
+
+    def finalize_ai_ceo_chat_request(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        request_task_id: str,
+        terminal_status: str,
+        response_status: int,
+        response_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist a safe terminal response before it is returned to the caller."""
+        normalized_status = str(terminal_status or "").strip().lower()
+        if normalized_status not in {"completed", "failed", "blocked"}:
+            raise ValueError("invalid AI CEO chat request terminal status")
+        normalized_response_status = int(response_status)
+        if normalized_response_status < 200 or normalized_response_status > 599:
+            raise ValueError("invalid AI CEO chat response status")
+        safe_payload = _redact_secret_like(response_payload if isinstance(response_payload, dict) else {})
+        if not isinstance(safe_payload, dict):
+            safe_payload = {}
+        safe_payload["secret_exposed"] = False
+        safe_payload["real_platform_writes_enabled"] = False
+        output = {
+            "contract_version": "ai_ceo_chat_request_idempotency_v1",
+            "response_status": normalized_response_status,
+            "response_payload": safe_payload,
+            "idempotent_replay_ready": True,
+            "secret_exposed": False,
+            "real_platform_writes_enabled": False,
+        }
+        updated_at = now_iso()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                "select * from tasks where task_id = ? and company_id = ? and store_id = ?" + lock_suffix,
+                (request_task_id, company_id, store_id),
+            ).fetchone()
+            if row is None or row["task_type"] != "ai_ceo_chat_request":
+                raise KeyError("AI CEO chat request task not found")
+            if row["status"] == "running":
+                safe_payload = self._archive_ai_ceo_terminal_response(conn, request_row=row, response_payload=safe_payload)
+                output["response_payload"] = safe_payload
+            finalized = conn.execute(
+                """
+                update tasks set status = ?, updated_at = ?, output_json = ?
+                where task_id = ? and company_id = ? and store_id = ? and task_type = ?
+                  and status = ?
+                """,
+                (
+                    normalized_status,
+                    updated_at,
+                    json.dumps(output, ensure_ascii=False, default=json_default),
+                    request_task_id,
+                    company_id,
+                    store_id,
+                    "ai_ceo_chat_request",
+                    "running",
+                ),
+            )
+        task = self.get_task(company_id=company_id, task_id=request_task_id)
+        if not task or task.get("store_id") != store_id:
+            raise RuntimeError("AI CEO chat request finalization could not be read")
+        return {**task, "_idempotent_finalize_applied": int(finalized.rowcount or 0) == 1}
+
+    def _archive_ai_ceo_terminal_response(
+        self, conn: Any, *, request_row: Any, response_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        request_input = _load_json_field(request_row["input_json"])
+        context = request_input.get("chat_archive_context") if isinstance(request_input, dict) else None
+        if not isinstance(context, dict) or context.get("contract_version") != "server_finalized_chat_archive_v1":
+            return response_payload
+        chat = response_payload.get("ai_ceo_chat")
+        if not isinstance(chat, dict):
+            return response_payload
+        assistant_id = "ceo-server-" + hashlib.sha256(str(request_row["task_id"]).encode("utf-8")).hexdigest()[:32]
+        created_at = _project_evidence_time(request_row["created_at"])
+        delivery = response_payload.get("ai_ceo_market_report_delivery") or {}
+        report = response_payload.get("ai_ceo_market_report") or {}
+        report_body = report.get("report") if isinstance(report, dict) else {}
+        turn = _normalize_ai_ceo_chat_history_turn({
+            **chat, "assistant_id": assistant_id, "user_text": context.get("user_text") or "",
+            "assistant_text": chat.get("answer") or "", "created_at": created_at,
+            "store_id": request_row["store_id"],
+            "listing_project_identity": chat.get("listing_project_identity") or (
+                report_body.get("listing_project_identity") if isinstance(report_body, dict) else None),
+            "market_report_id": report.get("report_id") if isinstance(report, dict) else "",
+            "market_report_delivery": delivery if isinstance(delivery, dict) else {},
+        }, company_id=str(request_row["company_id"]), user_id=str(request_row["user_id"]))
+        if not turn:
+            raise ValueError("AI CEO terminal archive is empty")
+        turn["archive_contract"] = "server_finalized_chat_archive_v1"
+        if isinstance(response_payload.get("semantic_dispatch"), dict):
+            turn["semantic_dispatch"] = response_payload["semantic_dispatch"]
+        self._merge_ai_ceo_chat_turn(conn, company_id=str(request_row["company_id"]),
+                                    user_id=str(request_row["user_id"]), turn=turn, server_finalized=True)
+        return {**response_payload, "ai_ceo_chat_history_turn": {
+            "contract_version": "server_finalized_chat_archive_v1", "request_task_id": request_row["task_id"],
+            "assistant_id": assistant_id, "created_at": created_at, "archived": True,
+        }}
+
+    def create_queue_job(
+        self,
+        *,
+        company_id: str,
+        task_id: str,
+        job_data: dict[str, Any],
+        max_attempts: int = 2,
+        initial_status: str = "queued",
+        publish: bool = True,
+    ) -> dict[str, Any]:
+        self.initialize()
+        normalized_initial_status = str(initial_status or "queued").strip().lower()
+        if normalized_initial_status not in {"queued", "preparing"}:
+            raise ValueError("invalid initial queue status")
         job_id = _id("job")
         created_at = now_iso()
         queue_provider = os.environ.get("JIEJING_QUEUE_PROVIDER", "local_worker").strip().lower() or "local_worker"
@@ -2758,7 +3324,7 @@ class SaaSRepository:
             "job_id": job_id,
             "task_id": task_id,
             "company_id": company_id,
-            "status": "queued",
+            "status": normalized_initial_status,
             "attempts": 0,
             "max_attempts": max_attempts,
             "created_at": created_at,
@@ -2781,7 +3347,7 @@ class SaaSRepository:
                     record["max_attempts"],
                     created_at,
                     created_at,
-                    json.dumps(job_data, ensure_ascii=False),
+                    json.dumps(job_data, ensure_ascii=False, default=json_default),
                 ),
             )
             self._insert_audit(
@@ -2796,23 +3362,126 @@ class SaaSRepository:
                 summary="SaaS task was queued for worker execution.",
                 details={"task_id": task_id, "queue_provider": queue_provider, "job_kind": job_data.get("kind")},
             )
+        if not publish:
+            return record
+
         from .redis_queue_runtime import publish_redis_queue_job_if_configured
 
         dispatch = publish_redis_queue_job_if_configured(record)
         if dispatch.get("required") and dispatch.get("status") != "published":
-            self.update_queue_job(
+            self.mark_queue_dispatch_uncertain(
                 job_id=job_id,
                 company_id=company_id,
-                status="failed",
-                details={"queue_dispatch": dispatch, "error": "Redis queue dispatch failed."},
+                dispatch=dispatch,
             )
             raise RuntimeError(f"Redis queue dispatch failed: {dispatch.get('message') or dispatch.get('error') or dispatch.get('status')}")
         if dispatch.get("status") == "published":
             record["queue_dispatch"] = dispatch
-            return self.update_queue_job(
+            return self.append_queue_job_details(
                 job_id=job_id,
                 company_id=company_id,
-                status="queued",
+                details={"queue_dispatch": dispatch},
+            )
+        return record
+
+    def _team_seat_quota_in_transaction(
+        self, conn: Any, *, company_id: str,
+    ) -> dict[str, Any]:
+        """Use the existing billing catalog while holding the tenant admission lock."""
+
+        from .billing_plan import _plan_by_key, resolve_subscription_entitlement
+
+        subscription_row = conn.execute(
+            "select * from billing_subscriptions where company_id = ?", (company_id,),
+        ).fetchone()
+        subscription = self._billing_subscription_row_to_dict(subscription_row) if subscription_row else None
+        _subscription, _provider, _active, plan_key = resolve_subscription_entitlement(
+            environment=os.environ.get("JIEJING_SAAS_ENV", "local_dev").strip().lower(),
+            company_id=company_id, subscription=subscription,
+        )
+        plan = _plan_by_key(plan_key)
+        member_count = int(conn.execute(
+            "select count(*) as count from team_members where company_id = ?", (company_id,),
+        ).fetchone()["count"])
+        pending_count = int(conn.execute(
+            """
+            select count(distinct lower(inv.email)) as count from team_invitations inv
+            where inv.company_id = ? and inv.status = 'pending'
+              and not exists (
+                select 1 from team_members tm join users u on u.user_id = tm.user_id
+                where tm.company_id = inv.company_id and lower(u.email) = lower(inv.email)
+              )
+            """,
+            (company_id,),
+        ).fetchone()["count"])
+        limit = max(1, int(plan.get("team_member_quota") or 1))
+        used = member_count + pending_count
+        return {
+            "unit": "team_member", "plan_key": plan["key"], "plan_label": plan["label"],
+            "used": used, "limit": limit, "remaining": max(0, limit - used),
+            "member_count": member_count, "pending_invitation_count": pending_count,
+            "includes_owner": True,
+            "quota_enforcement_enabled": str(os.environ.get("JIEJING_QUOTA_ENFORCEMENT_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"},
+            "secret_exposed": False,
+        }
+
+    def activate_prepared_queue_job(self, *, job_id: str, company_id: str) -> dict[str, Any]:
+        """Commit a prepared queue record after all linked state is durable, then publish it."""
+
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from queue_jobs where job_id = ? and company_id = ?",
+                (job_id, company_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("queue job not found")
+            if str(row["status"] or "") != "preparing":
+                raise RuntimeError("prepared queue job is not activatable")
+            job_json = _load_json_field(row["job_json"])
+            if not isinstance(job_json, dict):
+                job_json = {}
+            job_json["setup_committed"] = True
+            job_json.setdefault("updates", []).append(
+                {"created_at": updated_at, "event": "queue_setup_committed", "provider_call_triggered": False}
+            )
+            activated = conn.execute(
+                "update queue_jobs set status = 'queued', updated_at = ?, job_json = ? where job_id = ? and company_id = ? and status = 'preparing'",
+                (updated_at, json.dumps(job_json, ensure_ascii=False), job_id, company_id),
+            )
+            if int(activated.rowcount or 0) != 1:
+                raise RuntimeError("prepared queue activation lost its compare-and-set")
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=self._task_store_id(conn, row["task_id"]),
+                user_id=self._task_user_id(conn, row["task_id"]),
+                actor_type="system",
+                action_type="queue.job.setup_committed",
+                target_type="queue_job",
+                target_id=job_id,
+                summary="Prepared queue job was activated after linked state became durable.",
+                details={"task_id": row["task_id"], "provider_call_triggered": False},
+            )
+        record = self.get_queue_job(job_id=job_id, company_id=company_id) or {}
+        from .redis_queue_runtime import publish_redis_queue_job_if_configured
+
+        dispatch = publish_redis_queue_job_if_configured(record)
+        if dispatch.get("required") and dispatch.get("status") != "published":
+            self.mark_queue_dispatch_uncertain(
+                job_id=job_id,
+                company_id=company_id,
+                dispatch=dispatch,
+            )
+            raise RuntimeError(
+                f"Redis queue dispatch failed: {dispatch.get('message') or dispatch.get('error') or dispatch.get('status')}"
+            )
+        if dispatch.get("status") == "published":
+            record["queue_dispatch"] = dispatch
+            return self.append_queue_job_details(
+                job_id=job_id,
+                company_id=company_id,
                 details={"queue_dispatch": dispatch},
             )
         return record
@@ -2837,6 +3506,135 @@ class SaaSRepository:
                 where job_id = ? and company_id = ?
                 """,
                 (status, attempts, updated_at, json.dumps(job_json, ensure_ascii=False), job_id, company_id),
+            )
+        return self.get_queue_job(job_id=job_id, company_id=company_id) or {}
+
+    def mark_queue_dispatch_uncertain(
+        self,
+        *,
+        job_id: str,
+        company_id: str,
+        dispatch: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Quarantine an uncertain Redis publish without racing a worker claim."""
+
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from queue_jobs where job_id = ? and company_id = ?",
+                (job_id, company_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("queue job not found")
+            if str(row["status"] or "") == "queued":
+                job_json = _load_json_field(row["job_json"])
+                if not isinstance(job_json, dict):
+                    job_json = {}
+                job_json.setdefault("updates", []).append(
+                    {
+                        "created_at": updated_at,
+                        "event": "queue_dispatch_result_uncertain",
+                        "queue_dispatch": dispatch,
+                        "provider_call_triggered": None,
+                        "manual_reconcile_required": True,
+                    }
+                )
+                conn.execute(
+                    """
+                    update queue_jobs set status = 'dispatch_uncertain', updated_at = ?, job_json = ?
+                    where job_id = ? and company_id = ? and status = 'queued' and updated_at = ?
+                    """,
+                    (
+                        updated_at,
+                        json.dumps(job_json, ensure_ascii=False),
+                        job_id,
+                        company_id,
+                        row["updated_at"],
+                    ),
+                )
+        return self.get_queue_job(job_id=job_id, company_id=company_id) or {}
+
+    def fail_close_queue_job_before_provider(self, *, job_id: str, company_id: str, error_code: str) -> dict[str, Any]:
+        """CAS a setup-stage queue to failed without overwriting a completed terminal state."""
+
+        self.initialize()
+        updated_at = now_iso()
+        applied = False
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from queue_jobs where job_id = ? and company_id = ?",
+                (job_id, company_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("queue job not found")
+            current_status = str(row["status"] or "")
+            if current_status in {"preparing", "queued"}:
+                job_json = _load_json_field(row["job_json"])
+                if not isinstance(job_json, dict):
+                    job_json = {}
+                job_json.setdefault("updates", []).append(
+                    {
+                        "created_at": updated_at,
+                        "event": "queue_fail_closed_before_provider",
+                        "error_code": str(error_code or "queue_setup_failed")[:120],
+                        "provider_call_triggered": False,
+                    }
+                )
+                failed = conn.execute(
+                    "update queue_jobs set status = 'failed', updated_at = ?, job_json = ? where job_id = ? and company_id = ? and status = ?",
+                    (updated_at, json.dumps(job_json, ensure_ascii=False), job_id, company_id, current_status),
+                )
+                applied = int(failed.rowcount or 0) == 1
+        record = self.get_queue_job(job_id=job_id, company_id=company_id) or {}
+        updates = record.get("job", {}).get("updates", []) if isinstance(record.get("job"), dict) else []
+        record["fail_close_applied"] = applied
+        record["fail_closed_before_provider"] = bool(
+            record.get("status") == "failed"
+            and any(
+                isinstance(item, dict)
+                and item.get("event") == "queue_fail_closed_before_provider"
+                and item.get("provider_call_triggered") is False
+                for item in updates
+            )
+        )
+        return record
+
+    def append_queue_job_details(
+        self,
+        *,
+        job_id: str,
+        company_id: str,
+        details: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Append queue evidence without changing or reviving the worker-owned status."""
+
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from queue_jobs where job_id = ? and company_id = ?",
+                (job_id, company_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("queue job not found")
+            job_json = _load_json_field(row["job_json"])
+            if not isinstance(job_json, dict):
+                job_json = {}
+            job_json.setdefault("updates", []).append({"created_at": updated_at, **details})
+            conn.execute(
+                """
+                update queue_jobs set updated_at = ?, job_json = ?
+                where job_id = ? and company_id = ? and status = ? and updated_at = ?
+                """,
+                (
+                    updated_at,
+                    json.dumps(job_json, ensure_ascii=False),
+                    job_id,
+                    company_id,
+                    str(row["status"] or ""),
+                    row["updated_at"],
+                ),
             )
         return self.get_queue_job(job_id=job_id, company_id=company_id) or {}
 
@@ -3061,6 +3859,7 @@ class SaaSRepository:
         retry_delta: int = 0,
         details: dict[str, Any] | None = None,
         review_update: dict[str, Any] | None = None,
+        expected_status: str | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         updated_at = now_iso()
@@ -3071,6 +3870,8 @@ class SaaSRepository:
             ).fetchone()
             if not row:
                 raise KeyError("media asset job not found")
+            if expected_status is not None and str(row["status"] or "") != str(expected_status):
+                return self._media_asset_job_row_to_dict(row)
             payload = _load_json_field(row["media_job_json"])
             if not isinstance(payload, dict):
                 payload = {}
@@ -3178,6 +3979,139 @@ class SaaSRepository:
                 },
             )
         return self.get_media_asset_job(company_id=company_id, media_job_id=media_job_id) or {}
+
+    def reconcile_released_media_asset_job(self, *, company_id: str, media_job_id: str) -> dict[str, Any] | None:
+        """Make a failed, released generation retryable without restoring asset approval."""
+
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                "select * from media_asset_jobs where company_id = ? and media_job_id = ?" + lock,
+                (company_id, media_job_id),
+            ).fetchone()
+            if not row:
+                return None
+            unchanged = self._media_asset_job_row_to_dict(row)
+            if row["status"] not in {"running", "provider_returned"} or not row["queue_job_id"]:
+                return unchanged
+            # On Postgres this task lock also excludes a new queue INSERT through
+            # its task_id foreign key; SQLite's immediate transaction excludes writers.
+            task = conn.execute(
+                "select * from tasks where company_id = ? and task_id = ? and store_id = ?" + lock,
+                (company_id, row["task_id"], row["store_id"]),
+            ).fetchone()
+            queue = conn.execute(
+                "select * from queue_jobs where company_id = ? and job_id = ? and task_id = ?" + lock,
+                (company_id, row["queue_job_id"], row["task_id"]),
+            ).fetchone()
+            if not task or task["status"] != "failed" or task["task_type"] != "provider_job" or not queue or queue["status"] != "failed":
+                return unchanged
+            other_active = conn.execute(
+                "select job_id from queue_jobs where company_id = ? and task_id = ? and status not in ('failed', 'cancelled', 'completed', 'dead_letter') limit 1",
+                (company_id, row["task_id"]),
+            ).fetchone()
+            if other_active:
+                return unchanged
+            payload = _load_json_field(row["media_job_json"])
+            spec = payload.get("job_spec") if isinstance(payload, dict) else None
+            queued = _load_json_field(queue["job_json"])
+            if not isinstance(spec, dict) or not isinstance(queued, dict):
+                return unchanged
+            def reservation_id(value: Any) -> str:
+                credits = value.get("media_credits") if isinstance(value, dict) else None
+                reservation = credits.get("reservation") if isinstance(credits, dict) else None
+                entry = reservation.get("ledger_entry") if isinstance(reservation, dict) else None
+                return str(entry.get("ledger_id") or "") if isinstance(entry, dict) else ""
+            reserved_id = reservation_id(spec)
+            if not (
+                reserved_id and reservation_id(queued) == reserved_id
+                and queued.get("kind") == "provider_job"
+                and queued.get("media_job_id") == media_job_id
+                and queued.get("provider_job_key") == row["provider_job_key"]
+                and queued.get("idempotency_key") == row["idempotency_key"]
+            ):
+                return unchanged
+            reservation = conn.execute(
+                "select * from media_credit_ledger where company_id = ? and ledger_id = ?" + lock,
+                (company_id, reserved_id),
+            ).fetchone()
+            terminal = conn.execute(
+                "select * from media_credit_ledger where company_id = ? and reservation_id = ? and operation_type in ('settle', 'release', 'revoke') order by created_at asc, ledger_id asc limit 1" + lock,
+                (company_id, reserved_id),
+            ).fetchone()
+            if not (
+                reservation and reservation["operation_type"] == "reserve" and reservation["status"] == "released"
+                and reservation["reference_type"] in {"media_job", "media_rework"} and reservation["reference_id"] == row["idempotency_key"]
+                and terminal and terminal["operation_type"] == "release" and terminal["status"] == "completed"
+                and terminal["reference_type"] == "media_job" and terminal["reference_id"] == media_job_id
+            ):
+                return unchanged
+            if reservation["reference_type"] == "media_rework":
+                version = payload.get("asset_version") or {}
+                if not isinstance(version, dict):
+                    return unchanged
+                parent_id = version.get("parent_media_job_id")
+                number = version.get("version")
+                credit_payload = _load_json_field(reservation["ledger_json"])
+                credit_details = credit_payload.get("details") if isinstance(credit_payload, dict) else None
+                if not (
+                    isinstance(number, int) and not isinstance(number, bool) and number >= 2 and parent_id
+                    and row["idempotency_key"] == f"media-rework:{parent_id}:v{number}"
+                    and isinstance(credit_details, dict)
+                    and credit_details.get("parent_media_job_id") == parent_id and credit_details.get("version") == number
+                ):
+                    return unchanged
+                rework = conn.execute(
+                    "select media_job_id from media_rework_reservations where company_id = ? and parent_media_job_id = ? and version = ? and status = 'created'" + lock,
+                    (company_id, parent_id, number),
+                ).fetchone()
+                parent = conn.execute(
+                    "select media_job_json from media_asset_jobs where company_id = ? and store_id = ? and media_job_id = ?" + lock,
+                    (company_id, row["store_id"], parent_id),
+                ).fetchone()
+                parent_payload = _load_json_field(parent["media_job_json"]) if parent else {}
+                parent_version = parent_payload.get("asset_version") if isinstance(parent_payload, dict) else None
+                if not rework or rework["media_job_id"] != media_job_id or not isinstance(parent_version, dict) or parent_version.get("version") != number - 1:
+                    return unchanged
+            updated_at = now_iso()
+            reason = "media_credit_released_after_queue_failure"
+            for asset in payload.get("asset_manifest") or []:
+                if isinstance(asset, dict):
+                    for field in ("fact_review_status", "commercial_use_status", "listing_use_status", "review_status"):
+                        asset[field] = "needs_rework"
+            review = payload.get("asset_review") if isinstance(payload.get("asset_review"), dict) else {}
+            review.update({"status": "needs_rework", "listing_use_status": "needs_rework"})
+            payload["asset_review"] = review
+            payload.pop("merchant_review", None)
+            payload.setdefault("state_history", []).append({
+                "status": "needs_rework", "created_at": updated_at,
+                "queue_job_id": row["queue_job_id"], "error_reason": reason,
+            })
+            changed = conn.execute(
+                """
+                update media_asset_jobs set status = 'needs_rework', error_reason = ?, updated_at = ?, media_job_json = ?
+                where company_id = ? and media_job_id = ? and status = ? and updated_at = ?
+                  and task_id = ? and queue_job_id = ?
+                  and exists (select 1 from tasks where company_id = ? and task_id = ? and status = 'failed')
+                  and exists (select 1 from queue_jobs where company_id = ? and job_id = ? and status = 'failed')
+                """,
+                (reason, updated_at, json.dumps(_redact_secret_like(payload), ensure_ascii=False, default=json_default),
+                 company_id, media_job_id, row["status"], row["updated_at"], row["task_id"], row["queue_job_id"],
+                 company_id, row["task_id"], company_id, row["queue_job_id"]),
+            )
+            if int(changed.rowcount or 0) != 1:
+                return unchanged
+            self._insert_audit(
+                conn, company_id=company_id, store_id=row["store_id"], user_id=row["created_by"], actor_type="system",
+                action_type="media.asset_job.released_read_repair", target_type="media_asset_job", target_id=media_job_id,
+                summary="Released failed media generation restored to needs rework without provider calls or credit changes.",
+                details={"task_id": row["task_id"], "queue_job_id": row["queue_job_id"], "status": "needs_rework",
+                         "provider_call_triggered": False, "real_platform_writes_enabled": False, "secret_exposed": False},
+            )
+        return self.get_media_asset_job(company_id=company_id, media_job_id=media_job_id)
 
     def get_media_asset_job(self, *, company_id: str, media_job_id: str) -> dict[str, Any] | None:
         self.initialize()
@@ -3345,6 +4279,570 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def media_credit_reservation_attempt_idempotency_key(
+        self,
+        *,
+        company_id: str,
+        reference_type: str,
+        reference_id: str,
+        base_idempotency_key: str,
+    ) -> str:
+        """Resolve a stable reserve key after a watchdog-released orphan."""
+
+        self.initialize()
+        clean_type = str(reference_type or "").strip()[:64]
+        clean_reference = str(reference_id or "").strip()[:160]
+        clean_base = str(base_idempotency_key or "").strip()
+        if clean_type not in {"media_job", "media_rework"}:
+            raise ValueError("unsupported media reservation reference type")
+        if not clean_reference or len(clean_base) < 8:
+            raise ValueError("media reservation attempt evidence is invalid")
+        with self._connect() as conn:
+            reserve_rows = conn.execute(
+                """
+                select ledger_id from media_credit_ledger
+                where company_id = ? and operation_type = 'reserve'
+                  and reference_type = ? and reference_id = ?
+                """,
+                (company_id, clean_type, clean_reference),
+            ).fetchall()
+            reservation_ids = {str(row["ledger_id"] or "") for row in reserve_rows}
+            release_rows = conn.execute(
+                """
+                select reservation_id, ledger_json from media_credit_ledger
+                where company_id = ? and operation_type = 'release'
+                  and reservation_id is not null
+                """,
+                (company_id,),
+            ).fetchall()
+        recovered_count = 0
+        for row in release_rows:
+            if str(row["reservation_id"] or "") not in reservation_ids:
+                continue
+            payload = _load_json_field(row["ledger_json"])
+            details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+            if str(details.get("reason") or "") == "stale_orphan_media_reservation_recovered":
+                recovered_count += 1
+        if recovered_count <= 0:
+            if len(clean_base) > 200:
+                raise ValueError("media credit idempotency key is invalid")
+            return clean_base
+        attempt_number = recovered_count + 1
+        candidate = f"{clean_base}:orphan-recovery:{attempt_number}"
+        if len(candidate) <= 200:
+            return candidate
+        return f"media-orphan-retry:{hashlib.sha256(clean_base.encode('utf-8')).hexdigest()}:{attempt_number}"
+
+    def recover_stale_orphan_media_credit_reservations(
+        self,
+        *,
+        company_id: str | None = None,
+        reference_id: str | None = None,
+        stale_after_seconds: int = 900,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Release stale media reserves that never reached any queue record.
+
+        Recovery and the worker's pre-provider reservation validation share the
+        existing company credit lock.  The intermediate ``recovering`` state is
+        deliberately not provider-authoritative, so a crash or race always
+        fails closed and a later watchdog pass can resume the idempotent release.
+        """
+
+        self.initialize()
+        stale_seconds = max(30, int(stale_after_seconds))
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)
+        params: list[Any] = []
+        where = (
+            "operation_type = 'reserve' and status in ('reserved', 'recovering') "
+            "and reference_type in ('media_job', 'media_rework')"
+        )
+        if company_id:
+            where += " and company_id = ?"
+            params.append(str(company_id))
+        clean_reference = str(reference_id or "").strip()[:160]
+        if clean_reference:
+            where += " and reference_id = ?"
+            params.append(clean_reference)
+        params.append(max(1, min(int(limit), 200)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select ledger_id, company_id, user_id, operation_type, points, status,
+                       reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                from media_credit_ledger
+                where {where}
+                order by updated_at asc, ledger_id asc
+                limit ?
+                """,
+                tuple(params),
+            ).fetchall()
+            candidates = [
+                {
+                    **self._media_credit_ledger_row_to_dict(row),
+                    "company_id": str(row["company_id"] or ""),
+                    "user_id": str(row["user_id"] or ""),
+                }
+                for row in rows
+            ]
+
+        recovered: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        manual_reconcile: list[dict[str, Any]] = []
+        for candidate in candidates:
+            reservation_id = str(candidate.get("ledger_id") or "")
+            candidate_company = str(candidate.get("company_id") or "")
+            reservation_for_release: dict[str, Any] | None = None
+            with self._connect() as conn:
+                with self.media_credit_company_lock(company_id=candidate_company, conn=conn):
+                    row = conn.execute(
+                        """
+                        select ledger_id, company_id, user_id, operation_type, points, status,
+                               reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                        from media_credit_ledger
+                        where company_id = ? and ledger_id = ?
+                        """,
+                        (candidate_company, reservation_id),
+                    ).fetchone()
+                    if not row or str(row["status"] or "") not in {"reserved", "recovering"}:
+                        skipped.append({"reservation_id": reservation_id, "reason": "reservation_not_active"})
+                        continue
+                    last_seen = _parse_iso_datetime(str(row["updated_at"] or row["created_at"] or ""))
+                    if not last_seen:
+                        manual_reconcile.append(
+                            {
+                                "reservation_id": reservation_id,
+                                "company_id": candidate_company,
+                                "failure_code": "stale_orphan_reservation_timestamp_invalid",
+                            }
+                        )
+                        continue
+                    if last_seen > cutoff:
+                        skipped.append({"reservation_id": reservation_id, "reason": "reservation_not_stale"})
+                        continue
+                    terminal = conn.execute(
+                        """
+                        select ledger_id from media_credit_ledger
+                        where company_id = ? and reservation_id = ?
+                          and operation_type in ('settle', 'release', 'revoke')
+                        limit 1
+                        """,
+                        (candidate_company, reservation_id),
+                    ).fetchone()
+                    if terminal:
+                        skipped.append({"reservation_id": reservation_id, "reason": "reservation_has_terminal"})
+                        continue
+
+                    reference = str(row["reference_id"] or "")
+                    linked_task_ids: set[str] = set()
+                    task_rows = conn.execute(
+                        "select task_id, input_json from tasks where company_id = ? and task_type = 'provider_job'",
+                        (candidate_company,),
+                    ).fetchall()
+                    for task_row in task_rows:
+                        task_input = _load_json_field(task_row["input_json"])
+                        if str(task_input.get("media_asset_idempotency_key") or "") == reference:
+                            linked_task_ids.add(str(task_row["task_id"] or ""))
+                    linked_media_rows = conn.execute(
+                        """
+                        select media_job_id, queue_job_id from media_asset_jobs
+                        where company_id = ? and idempotency_key = ?
+                        """,
+                        (candidate_company, reference),
+                    ).fetchall()
+                    linked_media_queue_ids = {
+                        str(asset_row["queue_job_id"] or "")
+                        for asset_row in linked_media_rows
+                        if str(asset_row["queue_job_id"] or "")
+                    }
+                    linked_queue: dict[str, str] | None = None
+                    for queue_row in conn.execute(
+                        "select job_id, task_id, status, job_json from queue_jobs where company_id = ?",
+                        (candidate_company,),
+                    ).fetchall():
+                        job_payload = _load_json_field(queue_row["job_json"])
+                        credit_state = (
+                            job_payload.get("media_credits")
+                            if isinstance(job_payload.get("media_credits"), dict)
+                            else {}
+                        )
+                        reservation_result = (
+                            credit_state.get("reservation")
+                            if isinstance(credit_state.get("reservation"), dict)
+                            else {}
+                        )
+                        reservation_entry = (
+                            reservation_result.get("ledger_entry")
+                            if isinstance(reservation_result.get("ledger_entry"), dict)
+                            else {}
+                        )
+                        if (
+                            str(reservation_entry.get("ledger_id") or "") == reservation_id
+                            or (reference and str(job_payload.get("idempotency_key") or "") == reference)
+                            or str(queue_row["task_id"] or "") in linked_task_ids
+                            or str(queue_row["job_id"] or "") in linked_media_queue_ids
+                        ):
+                            linked_queue = {
+                                "job_id": str(queue_row["job_id"] or ""),
+                                "status": str(queue_row["status"] or ""),
+                            }
+                            break
+                    if linked_queue:
+                        entry = {
+                            "reservation_id": reservation_id,
+                            "reason": "reservation_has_persisted_queue",
+                            "queue_status": linked_queue["status"],
+                        }
+                        if str(row["status"] or "") == "recovering":
+                            manual_reconcile.append(
+                                {
+                                    **entry,
+                                    "company_id": candidate_company,
+                                    "failure_code": "orphan_recovery_raced_with_queue_persistence",
+                                }
+                            )
+                        else:
+                            skipped.append(entry)
+                        continue
+                    if linked_task_ids or linked_media_rows:
+                        manual_reconcile.append(
+                            {
+                                "reservation_id": reservation_id,
+                                "company_id": candidate_company,
+                                "failure_code": "stale_media_reservation_partial_setup_requires_reconcile",
+                                "task_persisted": bool(linked_task_ids),
+                                "media_job_persisted": bool(linked_media_rows),
+                                "queue_persisted": False,
+                            }
+                        )
+                        continue
+                    if str(row["status"] or "") == "reserved":
+                        claimed = conn.execute(
+                            """
+                            update media_credit_ledger set status = 'recovering'
+                            where company_id = ? and ledger_id = ? and status = 'reserved'
+                            """,
+                            (candidate_company, reservation_id),
+                        )
+                        if int(claimed.rowcount or 0) != 1:
+                            skipped.append({"reservation_id": reservation_id, "reason": "reservation_claim_lost"})
+                            continue
+                    reservation_for_release = {
+                        **self._media_credit_ledger_row_to_dict(row),
+                        "user_id": str(row["user_id"] or ""),
+                    }
+
+            if not reservation_for_release:
+                continue
+            try:
+                self.apply_media_credit_operation(
+                    company_id=candidate_company,
+                    user_id=str(reservation_for_release.get("user_id") or "") or None,
+                    operation_type="release",
+                    points=int(reservation_for_release.get("points") or 0),
+                    idempotency_key=f"{reservation_id}:terminal:v2",
+                    reference_type=str(reservation_for_release.get("reference_type") or "media_job"),
+                    reference_id=str(reservation_for_release.get("reference_id") or ""),
+                    reservation_id=reservation_id,
+                    details={
+                        "reason": "stale_orphan_media_reservation_recovered",
+                        "stale_after_seconds": stale_seconds,
+                        "provider_call_triggered": False,
+                    },
+                )
+                terminal = self.get_media_credit_terminal_for_reservation(
+                    company_id=candidate_company,
+                    reservation_id=reservation_id,
+                )
+                if not terminal or terminal.get("operation_type") != "release":
+                    raise RuntimeError("orphan reservation release was not persisted")
+                recovered.append(
+                    {
+                        "reservation_id": reservation_id,
+                        "company_id": candidate_company,
+                        "reference_type": str(reservation_for_release.get("reference_type") or ""),
+                        "reference_id": str(reservation_for_release.get("reference_id") or ""),
+                        "status": "released",
+                        "provider_call_triggered": False,
+                    }
+                )
+            except Exception:
+                manual_reconcile.append(
+                    {
+                        "reservation_id": reservation_id,
+                        "company_id": candidate_company,
+                        "failure_code": "stale_orphan_reservation_release_failed",
+                    }
+                )
+        return {
+            "status": "attention_required" if manual_reconcile else "completed",
+            "inspected_count": len(candidates),
+            "recovered_count": len(recovered),
+            "skipped_count": len(skipped),
+            "manual_reconcile_count": len(manual_reconcile),
+            "recovered": recovered,
+            "skipped": skipped,
+            "manual_reconcile": manual_reconcile,
+            "stale_after_seconds": stale_seconds,
+            "provider_call_triggered": False,
+            "secret_exposed": False,
+        }
+
+    def recover_stale_media_queue_setups(
+        self,
+        *,
+        company_id: str | None = None,
+        stale_after_seconds: int = 900,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Release stale pre-provider reservations left by a crashed setup process.
+
+        ``preparing`` queue rows are never claimable. Moving them through a
+        dedicated ``compensating`` state makes this recovery crash-safe: a
+        later watchdog pass can finish the idempotent release without ever
+        making the provider job runnable.
+        """
+
+        self.initialize()
+        orphan_reservation_recovery = self.recover_stale_orphan_media_credit_reservations(
+            company_id=company_id,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        )
+        recovered_at = now_iso()
+        stale_seconds = max(30, int(stale_after_seconds))
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)
+        params: list[Any] = []
+        where = "status in ('preparing', 'compensating')"
+        if company_id:
+            where += " and company_id = ?"
+            params.append(company_id)
+        params.append(max(1, min(int(limit), 200)))
+        candidates: list[dict[str, Any]] = []
+        inspected = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select * from queue_jobs
+                where {where}
+                order by updated_at asc
+                limit ?
+                """,
+                tuple(params),
+            ).fetchall()
+            for row in rows:
+                job_json = _load_json_field(row["job_json"])
+                if not isinstance(job_json, dict):
+                    job_json = {}
+                if str(job_json.get("queue_setup_protocol") or "") != "media_queue_saga_v1":
+                    continue
+                inspected += 1
+                last_seen = _parse_iso_datetime(str(row["updated_at"] or row["created_at"] or ""))
+                if last_seen and last_seen > cutoff:
+                    continue
+                if str(row["status"] or "") == "preparing":
+                    job_json.setdefault("updates", []).append(
+                        {
+                            "created_at": recovered_at,
+                            "event": "stale_media_queue_setup_compensation_started",
+                            "stale_after_seconds": stale_seconds,
+                            "provider_call_triggered": False,
+                        }
+                    )
+                    changed = conn.execute(
+                        """
+                        update queue_jobs set status = 'compensating', updated_at = ?, job_json = ?
+                        where job_id = ? and company_id = ? and status = 'preparing'
+                        """,
+                        (
+                            recovered_at,
+                            json.dumps(job_json, ensure_ascii=False, default=json_default),
+                            row["job_id"],
+                            row["company_id"],
+                        ),
+                    )
+                    if int(changed.rowcount or 0) != 1:
+                        continue
+                candidates.append(
+                    {
+                        "job_id": str(row["job_id"]),
+                        "task_id": str(row["task_id"]),
+                        "company_id": str(row["company_id"]),
+                        "job": job_json,
+                    }
+                )
+
+        recovered: list[dict[str, Any]] = []
+        manual_reconcile: list[dict[str, Any]] = []
+        for candidate in candidates:
+            candidate_company_id = candidate["company_id"]
+            job_json = candidate["job"]
+            credit_state = job_json.get("media_credits") if isinstance(job_json.get("media_credits"), dict) else {}
+            reservation_result = (
+                credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+            )
+            reservation = (
+                reservation_result.get("ledger_entry")
+                if isinstance(reservation_result.get("ledger_entry"), dict)
+                else {}
+            )
+            reservation_id = str(reservation.get("ledger_id") or "").strip()
+            release_required = bool(credit_state.get("enforcement_enabled"))
+            release_complete = not release_required
+            failure_code = ""
+            if release_required and not reservation_id:
+                failure_code = "stale_setup_reservation_missing"
+            elif reservation_id:
+                try:
+                    terminal = self.get_media_credit_terminal_for_reservation(
+                        company_id=candidate_company_id,
+                        reservation_id=reservation_id,
+                    )
+                    if terminal is None:
+                        self.apply_media_credit_operation(
+                            company_id=candidate_company_id,
+                            user_id=str(reservation.get("user_id") or "") or None,
+                            operation_type="release",
+                            points=int(reservation.get("points") or 0),
+                            idempotency_key=f"{reservation_id}:terminal:v2",
+                            reference_type="media_job",
+                            reference_id=str(job_json.get("idempotency_key") or reservation.get("reference_id") or ""),
+                            reservation_id=reservation_id,
+                            details={
+                                "reason": "stale_media_queue_setup_recovered_before_provider",
+                                "provider_call_triggered": False,
+                            },
+                        )
+                        terminal = self.get_media_credit_terminal_for_reservation(
+                            company_id=candidate_company_id,
+                            reservation_id=reservation_id,
+                        )
+                    release_complete = bool(
+                        isinstance(terminal, dict) and terminal.get("operation_type") == "release"
+                    )
+                    if not release_complete:
+                        failure_code = "stale_setup_reservation_terminal_conflict"
+                except Exception:
+                    failure_code = "stale_setup_reservation_release_failed"
+
+            if not release_complete:
+                manual_reconcile.append(
+                    {
+                        "job_id": candidate["job_id"],
+                        "task_id": candidate["task_id"],
+                        "company_id": candidate_company_id,
+                        "failure_code": failure_code or "stale_setup_compensation_incomplete",
+                    }
+                )
+                continue
+
+            metadata_complete = True
+            media_job_id = str(job_json.get("media_job_id") or "")
+            if media_job_id:
+                try:
+                    media_job = self.get_media_asset_job(
+                        company_id=candidate_company_id,
+                        media_job_id=media_job_id,
+                    )
+                    if media_job:
+                        self.update_media_asset_job(
+                            company_id=candidate_company_id,
+                            media_job_id=media_job_id,
+                            status="needs_rework",
+                            error_reason="stale_media_queue_setup_recovered",
+                            details={
+                                "event": "stale_queue_setup_recovered_before_provider",
+                                "provider_call_triggered": False,
+                                "secret_exposed": False,
+                            },
+                        )
+                except Exception:
+                    metadata_complete = False
+            try:
+                task = self.get_task(company_id=candidate_company_id, task_id=candidate["task_id"])
+                if task:
+                    self.update_task_status(
+                        task_id=candidate["task_id"],
+                        company_id=candidate_company_id,
+                        status="failed",
+                        output={
+                            "error_code": "stale_media_queue_setup_recovered",
+                            "provider_call_triggered": False,
+                            "secret_exposed": False,
+                        },
+                        audit_summary="Stale media queue setup was compensated before any provider call.",
+                    )
+            except Exception:
+                metadata_complete = False
+            if not metadata_complete:
+                manual_reconcile.append(
+                    {
+                        "job_id": candidate["job_id"],
+                        "task_id": candidate["task_id"],
+                        "company_id": candidate_company_id,
+                        "failure_code": "stale_setup_metadata_reconcile_failed",
+                    }
+                )
+                continue
+
+            with self._connect() as conn:
+                row = conn.execute(
+                    "select * from queue_jobs where job_id = ? and company_id = ?",
+                    (candidate["job_id"], candidate_company_id),
+                ).fetchone()
+                if not row or str(row["status"] or "") != "compensating":
+                    continue
+                persisted_job = _load_json_field(row["job_json"])
+                if not isinstance(persisted_job, dict):
+                    persisted_job = {}
+                persisted_job.setdefault("updates", []).append(
+                    {
+                        "created_at": now_iso(),
+                        "event": "stale_media_queue_setup_compensated",
+                        "reservation_released": bool(reservation_id),
+                        "provider_call_triggered": False,
+                    }
+                )
+                finalized_at = now_iso()
+                finalized = conn.execute(
+                    """
+                    update queue_jobs set status = 'failed', updated_at = ?, job_json = ?
+                    where job_id = ? and company_id = ? and status = 'compensating'
+                    """,
+                    (
+                        finalized_at,
+                        json.dumps(persisted_job, ensure_ascii=False, default=json_default),
+                        candidate["job_id"],
+                        candidate_company_id,
+                    ),
+                )
+                if int(finalized.rowcount or 0) == 1:
+                    recovered.append(
+                        {
+                            "job_id": candidate["job_id"],
+                            "task_id": candidate["task_id"],
+                            "company_id": candidate_company_id,
+                            "status": "failed",
+                            "reservation_released": bool(reservation_id),
+                        }
+                    )
+        return {
+            "status": (
+                "attention_required"
+                if manual_reconcile or orphan_reservation_recovery.get("status") == "attention_required"
+                else "completed"
+            ),
+            "orphan_reservation_recovery": orphan_reservation_recovery,
+            "inspected_preparing_jobs": inspected,
+            "recovered_count": len(recovered),
+            "manual_reconcile_count": len(manual_reconcile),
+            "recovered": recovered,
+            "manual_reconcile": manual_reconcile,
+            "stale_after_seconds": stale_seconds,
+            "provider_call_triggered": False,
+            "secret_exposed": False,
+        }
+
     def recover_stale_queue_jobs(
         self,
         *,
@@ -3353,6 +4851,11 @@ class SaaSRepository:
         limit: int = 50,
     ) -> dict[str, Any]:
         self.initialize()
+        setup_recovery = self.recover_stale_media_queue_setups(
+            company_id=company_id,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        )
         recovered_at = now_iso()
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(30, int(stale_after_seconds)))
         params: list[Any] = []
@@ -3424,7 +4927,8 @@ class SaaSRepository:
                     )
                     dead_lettered.append({"job_id": row["job_id"], "task_id": row["task_id"], "status": "dead_letter"})
         return {
-            "status": "completed",
+            "status": "attention_required" if setup_recovery.get("status") == "attention_required" else "completed",
+            "stale_setup_recovery": setup_recovery,
             "inspected_running_jobs": inspected,
             "recovered_count": len(recovered),
             "dead_letter_count": len(dead_lettered),
@@ -3456,6 +4960,15 @@ class SaaSRepository:
                 """,
                 (company_id,),
             ).fetchall()
+            setup_rows = conn.execute(
+                """
+                select * from queue_jobs
+                where company_id = ? and status in ('preparing', 'compensating')
+                order by updated_at asc
+                limit 100
+                """,
+                (company_id,),
+            ).fetchall()
         counts = {str(row["status"]): int(row["count"]) for row in rows}
         stale_running: list[dict[str, Any]] = []
         for row in running:
@@ -3471,15 +4984,37 @@ class SaaSRepository:
                         "heartbeat_at": heartbeat.get("heartbeat_at"),
                     }
                 )
+        stale_setup: list[dict[str, Any]] = []
+        for row in setup_rows:
+            job_json = _load_json_field(row["job_json"])
+            if str(job_json.get("queue_setup_protocol") or "") != "media_queue_saga_v1":
+                continue
+            last_seen = _parse_iso_datetime(str(row["updated_at"] or row["created_at"] or ""))
+            if last_seen and last_seen <= cutoff:
+                stale_setup.append(
+                    {
+                        "job_id": row["job_id"],
+                        "task_id": row["task_id"],
+                        "status": row["status"],
+                        "updated_at": row["updated_at"],
+                    }
+                )
         return {
-            "status": "attention_required" if stale_running or counts.get("dead_letter", 0) else "ready",
+            "status": (
+                "attention_required"
+                if stale_running or stale_setup or counts.get("dead_letter", 0) or counts.get("dispatch_uncertain", 0)
+                else "ready"
+            ),
             "queue_provider": os.environ.get("JIEJING_QUEUE_PROVIDER", "local_worker").strip().lower() or "local_worker",
             "counts": counts,
             "stale_running_count": len(stale_running),
             "stale_running_jobs": stale_running,
+            "stale_setup_count": len(stale_setup),
+            "stale_setup_jobs": stale_setup,
             "stale_after_seconds": max(30, int(stale_after_seconds)),
             "worker_heartbeat_required": True,
             "dead_letter_visible": True,
+            "dispatch_uncertain_requires_manual_reconcile": bool(counts.get("dispatch_uncertain", 0)),
             "secret_exposed": False,
         }
 
@@ -3498,6 +5033,14 @@ class SaaSRepository:
                 """
                 select * from queue_jobs
                 where status = 'running'
+                order by updated_at asc
+                limit 100
+                """
+            ).fetchall()
+            setup_rows = conn.execute(
+                """
+                select * from queue_jobs
+                where status in ('preparing', 'compensating')
                 order by updated_at asc
                 limit 100
                 """
@@ -3542,18 +5085,41 @@ class SaaSRepository:
             latest_job_json = _load_json_field(latest_running["job_json"])
             latest_heartbeat = latest_job_json.get("worker_heartbeat") if isinstance(latest_job_json.get("worker_heartbeat"), dict) else {}
             latest_heartbeat_at = str(latest_heartbeat.get("heartbeat_at") or latest_running["updated_at"] or "")
+        stale_setup: list[dict[str, Any]] = []
+        for row in setup_rows:
+            job_json = _load_json_field(row["job_json"])
+            if str(job_json.get("queue_setup_protocol") or "") != "media_queue_saga_v1":
+                continue
+            last_seen = _parse_iso_datetime(str(row["updated_at"] or row["created_at"] or ""))
+            if last_seen and last_seen <= cutoff:
+                stale_setup.append(
+                    {
+                        "job_id": row["job_id"],
+                        "task_id": row["task_id"],
+                        "company_id": row["company_id"],
+                        "status": row["status"],
+                        "updated_at": row["updated_at"],
+                    }
+                )
         return {
-            "status": "attention_required" if stale_running or counts.get("dead_letter", 0) else "ready",
+            "status": (
+                "attention_required"
+                if stale_running or stale_setup or counts.get("dead_letter", 0) or counts.get("dispatch_uncertain", 0)
+                else "ready"
+            ),
             "queue_provider": os.environ.get("JIEJING_QUEUE_PROVIDER", "local_worker").strip().lower() or "local_worker",
             "counts": counts,
             "stale_running_count": len(stale_running),
             "stale_running_jobs": stale_running,
+            "stale_setup_count": len(stale_setup),
+            "stale_setup_jobs": stale_setup,
             "stale_after_seconds": max(30, int(stale_after_seconds)),
             "latest_worker_heartbeat_at": latest_heartbeat_at,
             "oldest_queued_at": oldest_queued["created_at"] if oldest_queued else "",
             "timeout_recovery_available": True,
             "worker_heartbeat_required": True,
             "dead_letter_visible": True,
+            "dispatch_uncertain_requires_manual_reconcile": bool(counts.get("dispatch_uncertain", 0)),
             "scope": "all_companies",
             "secret_exposed": False,
         }
@@ -3888,6 +5454,11 @@ class SaaSRepository:
                 (status, updated_at, output_json, task_id, company_id),
             )
             if audit_summary:
+                audit_details = {"status": status}
+                if isinstance(output, dict):
+                    for key in ("attempt_state", "failure_code", "actual_task_id", "artifact_outcome", "artifact_report_id"):
+                        if output.get(key) not in (None, ""):
+                            audit_details[key] = output.get(key)
                 self._insert_audit(
                     conn,
                     company_id=company_id,
@@ -3898,7 +5469,7 @@ class SaaSRepository:
                     target_type="task",
                     target_id=task_id,
                     summary=audit_summary,
-                    details={"status": status},
+                    details=audit_details,
                 )
         return self.get_task(company_id=company_id, task_id=task_id) or {}
 
@@ -4075,15 +5646,29 @@ class SaaSRepository:
         chat: dict[str, Any],
         command_id: str | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
+        listing_project_identity: dict[str, Any] | None = None,
+        active_listing_product_name: str = "",
+        product_fact_report: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Persist a merchant-facing AI CEO market research chat turn as a report."""
 
         self.initialize()
-        if not _looks_like_ai_ceo_market_research_turn(message=message, chat=chat):
+        safe_listing_project_identity = normalize_listing_project_identity(listing_project_identity)
+        from .ai_ceo_semantic_plan import is_semantic_plan
+        semantic_plan = chat.get("turn_plan") if isinstance(chat.get("turn_plan"), dict) else {}
+        semantic = is_semantic_plan(semantic_plan)
+        if semantic and (semantic_plan.get("status") != "ready" or semantic_plan.get("save_artifact") is not True):
+            return None
+        if not semantic and not _looks_like_ai_ceo_market_research_turn(message=message, chat=chat) and not safe_listing_project_identity:
             return None
         answer = _sanitize_merchant_ceo_text(chat.get("answer"), limit=5000)
         if not answer:
             return None
+        active_listing_product = (
+            _clean_ai_ceo_market_candidate_name(active_listing_product_name)
+            if safe_listing_project_identity
+            else ""
+        )
         created_at = now_iso()
         report_id = _id("report")
         runtime_run_id = str(task.get("runtime_run_id") or "ai_ceo_chat")
@@ -4103,11 +5688,21 @@ class SaaSRepository:
             else str(chat.get("status") or "") not in rejected_statuses
         )
         product_candidates = _ai_ceo_market_product_candidates(message=message, answer=answer) if answer_accepted else []
-        if answer_accepted and not product_candidates and _ai_ceo_market_context_reset_requested(message):
+        if semantic and semantic_plan.get("project_action") == "none":
+            # Research suggestions are unselected options. Their server-issued
+            # identities become active only after an explicit merchant choice.
+            for candidate in product_candidates:
+                candidate_id = str(candidate.get("candidate_id") or "")
+                candidate["listing_project_identity"] = {
+                    "key": "listing-project-" + hashlib.sha256(f"{report_id}|{candidate_id}".encode()).hexdigest()[:32],
+                    "source_report_id": report_id, "candidate_id": candidate_id,
+                }
+        has_current_turn_product_candidates = bool(product_candidates)
+        if not semantic and answer_accepted and not product_candidates and _ai_ceo_market_context_reset_requested(message):
             return None
         selection_mode = "current_turn" if product_candidates else "none"
         selected_candidate = _select_ai_ceo_market_candidate(answer=answer, candidates=product_candidates)
-        if answer_accepted and not product_candidates:
+        if not semantic and answer_accepted and not product_candidates:
             history_candidates, history_selected = _ai_ceo_market_context_from_history(conversation_history)
             requested_index = _ai_ceo_followup_candidate_index(message)
             if history_candidates and (requested_index is not None or _ai_ceo_should_inherit_market_context(message)):
@@ -4121,6 +5716,30 @@ class SaaSRepository:
                 selected_id = str(selected_candidate.get("candidate_id") or "")
                 for candidate in product_candidates:
                     candidate["selected"] = str(candidate.get("candidate_id") or "") == selected_id
+        if (
+            answer_accepted
+            and safe_listing_project_identity
+            and active_listing_product
+            and (semantic or not has_current_turn_product_candidates)
+        ):
+            candidate_id = (
+                str(safe_listing_project_identity.get("candidate_id") or "").strip()
+                or str(selected_candidate.get("candidate_id") or "").strip()
+                or "current_project_candidate"
+            )
+            selected_candidate = {
+                "candidate_id": candidate_id,
+                "name": active_listing_product,
+                "score": int(selected_candidate.get("score") or 88),
+                "reasons": ["继续当前商品项目；不得按本轮回复标题新建重复项目。"],
+                "price_band": str(selected_candidate.get("price_band") or ""),
+                "source": "server_semantic_project_binding" if semantic else "authenticated_active_listing_context",
+                "selected": True,
+                "missing_facts": ["SKU", "图片 URL", "采购成本", "重量尺寸", "eBay 类目", "店铺政策"],
+                "ready_for_listing_draft": True,
+            }
+            product_candidates = [selected_candidate]
+            selection_mode = "active_listing_context"
         product = ""
         if answer_accepted:
             product = _clean_ai_ceo_market_candidate_name(selected_candidate.get("name")) or _infer_ai_ceo_market_product(
@@ -4128,22 +5747,173 @@ class SaaSRepository:
                 answer=answer,
                 candidates=product_candidates,
             )
-        listing_import_ready = bool(product and answer_accepted)
         question = _sanitize_merchant_ceo_text(message, limit=900)
-        source_count = len(source_records) if isinstance(source_records, list) else 0
-        title = f"AI CEO 市场调研：{product}"[:180] if product else "AI CEO 市场调研"
-        summary = (
-            f"AI CEO 已把“{product}”整理成可导入 Listing 的市场调研。"
-            if product
-            else "AI CEO 已把本次选品/市场调研整理成可导入 Listing 的工作记录。"
+        listing_fields = (
+            _ai_ceo_listing_handoff_fields(
+                product=product,
+                message=message,
+                answer=answer,
+                source_records=source_records if isinstance(source_records, list) else [],
+                selected_candidate=selected_candidate,
+                product_candidates=product_candidates,
+            )
+            if product and answer_accepted
+            else {}
         )
+        merchant_product_fact_packet = (
+            listing_fields.get("merchant_product_fact_packet")
+            if isinstance(listing_fields.get("merchant_product_fact_packet"), dict)
+            else {}
+        )
+        if semantic and safe_listing_project_identity:
+            authoritative = self.resolve_ai_ceo_listing_context(company_id=task["company_id"],
+                store_id=task["store_id"], identity=safe_listing_project_identity)
+            if authoritative.get("merchant_product_fact_packet"):
+                merchant_product_fact_packet = authoritative["merchant_product_fact_packet"]
+                listing_fields["merchant_product_fact_packet"] = merchant_product_fact_packet
+        for record in merchant_product_fact_packet.get("source_records", []):
+            if not isinstance(record, dict) or not record.get("url"):
+                continue
+            if any(existing.get("url") == record.get("url") for existing in source_records if isinstance(existing, dict)):
+                continue
+            source_records.append(_redact_secret_like(record))
+        source_count = len(source_records) if isinstance(source_records, list) else 0
+        if listing_fields:
+            listing_fields["source_record_count"] = source_count
+        selected_candidate_id = str(selected_candidate.get("candidate_id") or "")
+        candidate_count = len(product_candidates)
+        report_listing_project_identity = safe_listing_project_identity
+        if not semantic and not report_listing_project_identity and product and selected_candidate_id:
+            project_seed = f"{report_id}|{selected_candidate_id}"
+            report_listing_project_identity = normalize_listing_project_identity(
+                {
+                    "key": f"listing-project-{hashlib.sha256(project_seed.encode('utf-8')).hexdigest()[:20]}",
+                    "source_report_id": report_id,
+                    "candidate_id": selected_candidate_id,
+                }
+            )
+        merchant_intent = "ebay_product_research"
+        source_intake_failed = _ai_ceo_supplier_source_intake_failed(message=message, answer=answer)
+        evidence_status = "supplier_source_unavailable" if source_intake_failed else "source_backed" if source_count else "missing_sources"
+        turn_plan = chat.get("turn_plan") if isinstance(chat.get("turn_plan"), dict) else {}
+        source_mode = str(turn_plan.get("source_mode") or "").strip()
+        merchant_product_source_required = source_mode == "merchant_has_no_source"
+        submitted_attestation = (
+            chat.get("supplier_fact_attestation")
+            if isinstance(chat.get("supplier_fact_attestation"), dict)
+            else {}
+        )
+        attestation_is_server_issued = bool(
+            submitted_attestation.get("contract_version") == AI_CEO_SUPPLIER_FACT_ATTESTATION_CONTRACT_VERSION
+            and submitted_attestation.get("source") == AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE
+        )
+        supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
+            supplier_facts=(
+                submitted_attestation.get("supplier_facts")
+                if attestation_is_server_issued
+                else chat.get("supplier_facts")
+            ),
+            supplier_facts_verified=(
+                submitted_attestation.get("merchant_confirmation_received") is True
+                if attestation_is_server_issued
+                else False
+            ),
+            source=(
+                AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE
+                if attestation_is_server_issued
+                else "untrusted_chat_output"
+            ),
+        )
+        supplier_facts = supplier_fact_attestation["supplier_facts"]
+        missing_supplier_fact_keys = supplier_fact_attestation["missing_supplier_fact_keys"]
+        supplier_facts_verified = supplier_fact_attestation["supplier_facts_verified"] is True
+        supplier_fact_status = (
+            "verified"
+            if supplier_facts_verified and not missing_supplier_fact_keys
+            else "unverified"
+            if not missing_supplier_fact_keys
+            else "incomplete"
+        )
+        selected_candidate_count = sum(1 for candidate in product_candidates if candidate.get("selected") is True)
+        blocked_by: list[str] = []
+        if not answer_accepted:
+            blocked_by.append("answer_quality_not_ready_for_listing")
+        if source_intake_failed:
+            blocked_by.append("supplier_source_unavailable")
+        if not product_candidates:
+            blocked_by.append("concrete_candidate_required")
+        if not selected_candidate_id or selected_candidate_count != 1:
+            blocked_by.append("selected_candidate_required")
+        if not source_count:
+            blocked_by.append("source_evidence_required")
+        if merchant_product_source_required:
+            blocked_by.append("merchant_product_source_required")
+        if missing_supplier_fact_keys:
+            blocked_by.append("supplier_facts_incomplete")
+        elif not supplier_facts_verified:
+            blocked_by.append("supplier_facts_unverified")
+        listing_import_ready = bool(
+            answer_accepted
+            and product
+            and candidate_count >= 1
+            and selected_candidate_id
+            and selected_candidate_count == 1
+            and source_count >= 1
+            and supplier_fact_status == "verified"
+            and bool(report_id)
+            and not blocked_by
+        )
+        fact_receipt = product_fact_report if isinstance(product_fact_report, dict) else {}
+        facts_saved = bool(semantic and fact_receipt.get("report_id")
+            and fact_receipt.get("report_type") == "merchant.product_facts"
+            and fact_receipt.get("task_id") == task["task_id"]
+            and normalize_listing_project_identity((fact_receipt.get("report") or {}).get("listing_project_identity")) == safe_listing_project_identity
+            and safe_listing_project_identity)
+        artifact_kind = "product_facts" if facts_saved else "market_research" if not semantic or semantic_plan.get("intent") == "research" else "advice"
+        artifact_label = {"product_facts": "商品资料", "market_research": "市场调研", "advice": "咨询记录"}[artifact_kind]
+        title = f"AI CEO {artifact_label}：{product}"[:180] if product else f"AI CEO {artifact_label}"
+        if source_intake_failed:
+            summary = "未能读取商品来源页面；本次未提取到可导入的商品参数，原商品资料保持不变。"
+        elif listing_import_ready:
+            summary = f"AI CEO 已把“{product}”整理成可导入 Listing 的市场调研。"
+        elif product:
+            summary = f"AI CEO 已把“{product}”整理成市场调研工作记录；完成来源与供应商事实核验后再进入 Listing 草稿。"
+        else:
+            summary = "AI CEO 已保存本次选品/市场调研工作记录；形成唯一候选并完成事实核验后再进入 Listing 草稿。"
+        if artifact_kind == "product_facts":
+            summary = "商品资料更新已保存；建议和冲突仍待核对，已确认资料与手改文案保持独立，未发布。"
+        elif artifact_kind == "advice":
+            summary = "本次咨询记录已保存；不代表商品资料已更新或平台动作已执行。"
         report_payload = {
             "contract_version": AI_CEO_MARKET_REPORT_CONTRACT_VERSION,
+            "artifact_type": "ai_ceo.market_research",
+            "artifact_kind": artifact_kind,
+            "product_fact_report_id": str(fact_receipt["report_id"]) if facts_saved else "",
+            "artifact_version": AI_CEO_MARKET_REPORT_CONTRACT_VERSION,
+            "merchant_intent": merchant_intent,
+            "source_mode": source_mode,
+            "merchant_product_source_required": merchant_product_source_required,
             "source_type": "ai_ceo_chat",
             "source_command_id": command_id or "",
+            **({"semantic_dispatch": _redact_secret_like(chat.get("semantic_dispatch") or {}),
+                "turn_plan": _redact_secret_like(semantic_plan)} if semantic else {}),
+            "listing_project_identity": report_listing_project_identity or None,
             "product": product,
             "product_candidates": product_candidates,
+            "candidate_products": product_candidates,
+            "candidate_count": candidate_count,
             "selected_product_candidate": selected_candidate,
+            "selected_candidate_id": selected_candidate_id,
+            "evidence_status": evidence_status,
+            "supplier_fact_status": supplier_fact_status,
+            "supplier_facts": supplier_facts,
+            "supplier_facts_verified": supplier_facts_verified,
+            "supplier_fact_attestation": supplier_fact_attestation,
+            "supplier_fact_source": supplier_fact_attestation["source"],
+            "missing_supplier_fact_keys": missing_supplier_fact_keys,
+            "merchant_product_fact_packet": merchant_product_fact_packet,
+            "listing_import_ready": listing_import_ready,
+            "blocked_by": blocked_by,
             "conversation_context": {
                 "contract_version": "2026-07-11-ai-ceo-product-context-v1",
                 "selection_mode": selection_mode,
@@ -4166,20 +5936,10 @@ class SaaSRepository:
             "confirmation_items": confirmation_items,
             "listing_handoff": {
                 "ready_for_listing_draft": listing_import_ready,
-                "source_mode": "ai_ceo_chat_structured_handoff",
+                "source_mode": source_mode or "ai_ceo_chat_structured_handoff",
                 "target_report_type": "ai_ceo.market_research",
-                "listing_fields": (
-                    _ai_ceo_listing_handoff_fields(
-                        product=product,
-                        answer=answer,
-                        source_records=source_records if isinstance(source_records, list) else [],
-                        selected_candidate=selected_candidate,
-                        product_candidates=product_candidates,
-                    )
-                    if listing_import_ready
-                    else {}
-                ),
-                "blocked_by": [] if listing_import_ready else ["answer_quality_not_ready_for_listing"],
+                "listing_fields": listing_fields,
+                "blocked_by": list(blocked_by),
                 "requires_human_review_before_publish": True,
                 "real_platform_writes_enabled": False,
                 "triggers_real_platform_write": False,
@@ -4190,6 +5950,10 @@ class SaaSRepository:
             "real_platform_writes_enabled": False,
             "secret_exposed": False,
         }
+        listing_fields_payload = report_payload["listing_handoff"].get("listing_fields")
+        if isinstance(listing_fields_payload, dict) and listing_fields_payload:
+            listing_fields_payload["ready_for_listing_draft"] = listing_import_ready
+            listing_fields_payload["artifact_blocked_by"] = list(blocked_by)
         with self._connect() as conn:
             conn.execute(
                 """
@@ -4247,7 +6011,7 @@ class SaaSRepository:
                     "task_id": task["task_id"],
                     "command_id": command_id or "",
                     "source_record_count": source_count,
-                    "ready_for_listing_draft": True,
+                    "ready_for_listing_draft": listing_import_ready,
                     "frontend_gets_model_api_key": False,
                     "runtime_gets_raw_ebay_token": False,
                     "real_platform_writes_enabled": False,
@@ -4259,6 +6023,611 @@ class SaaSRepository:
             "task_id": task["task_id"],
             "runtime_run_id": runtime_run_id,
             "report_type": "ai_ceo.market_research",
+            "title": title,
+            "status": "saved",
+            "created_at": created_at,
+            "report": report_payload,
+            "secret_exposed": False,
+        }
+
+    def save_merchant_product_fact_checkpoint(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        packet: dict[str, Any],
+        listing_project_identity: dict[str, Any] | None = None,
+        save_context: Any = _PRODUCT_FACT_CONTEXT_ABSENT,
+    ) -> dict[str, Any]:
+        """Save one merchant action; replay its receipt without reviving old facts."""
+        safe_packet = normalize_merchant_product_fact_packet(packet, source="authenticated_merchant_request")
+        if safe_packet.get("sensitive_text_detected") is True or not safe_packet.get("product_name"):
+            raise ValueError("invalid merchant product facts")
+        project = normalize_listing_project_identity(listing_project_identity)
+        versioned = save_context is not _PRODUCT_FACT_CONTEXT_ABSENT
+        if versioned and not (
+            isinstance(save_context, dict)
+            and set(save_context) == {"contract_version", "mutation_id", "expected_fact_report_id"}
+            and save_context.get("contract_version") == "merchant_product_fact_save_v1"
+            and isinstance(save_context.get("mutation_id"), str)
+            and re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", save_context["mutation_id"])
+            and isinstance(save_context.get("expected_fact_report_id"), str)
+            and re.fullmatch(r"[A-Za-z0-9._:-]{0,160}", save_context["expected_fact_report_id"])
+            and project
+        ):
+            raise ProductFactSaveValidationError("product_fact_invalid_save_context")
+        self.initialize()
+        content = json.dumps(
+            {"company_id": company_id, "store_id": store_id, "listing_project_identity": project,
+             **({"mutation_id": save_context["mutation_id"]} if versioned else {"packet": safe_packet})},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=json_default,
+        )
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        task_id = f"task_product_facts_{digest[:40]}"
+        report_id = f"report_product_facts_{digest[:40]}"
+        created_at = now_iso()
+        title = f"商品资料：{str(safe_packet.get('product_name') or '')[:120]}"
+        task_input = {"merchant_product_fact_packet": safe_packet, "model_usage_required": False,
+                      "real_platform_writes_enabled": False, "secret_exposed": False}
+        if project:
+            task_input["listing_project_identity"] = project
+            # This evidence is minted here, not by the browser or the generic
+            # report writer. Packet.source remains the original provenance.
+            task_input["merchant_save_attestation"] = build_merchant_fact_save_attestation(
+                report_id=report_id, task_id=task_id, company_id=company_id, store_id=store_id,
+                user_id=user_id, listing_project_identity=project, packet=safe_packet,
+            )
+        if versioned:
+            task_input["merchant_product_fact_save"] = {
+                **save_context,
+                "payload_fingerprint": hashlib.sha256(json.dumps(
+                    {"user_id": user_id, "listing_project_identity": project, "packet": safe_packet, "save_context": save_context},
+                    ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=json_default,
+                ).encode("utf-8")).hexdigest(),
+            }
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock = " for update" if self.database_engine == "postgres" else ""
+            if not conn.execute("select store_id from stores where company_id = ? and store_id = ?" + lock, (company_id, store_id)).fetchone():
+                raise KeyError("store not found or not accessible")
+            current = self._merchant_product_fact_scope_report(conn, company_id, store_id, project, facts_only=True)
+            current_id = str(current["report_id"]) if current else ""
+            previous = conn.execute("select * from tasks where task_id = ? and company_id = ? and store_id = ?", (task_id, company_id, store_id)).fetchone()
+            if not versioned:
+                if self._merchant_product_fact_versioned_scope_exists(conn, company_id, store_id, project):
+                    raise ProductFactSaveConflict({"error_code": "product_fact_client_upgrade_required", "current_fact_report_id": current_id,
+                        "current_fact_report": self._report_row_to_dict(current) if current else None, "secret_exposed": False})
+                # Compatibility lookup for pre-action releases whose digest used
+                # only project_key. Never replay that receipt across full anchors.
+                if not previous:
+                    old_content = json.dumps({"company_id": company_id, "store_id": store_id,
+                        "project_key": project.get("key", ""), "packet": safe_packet},
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=json_default)
+                    old_digest = hashlib.sha256(old_content.encode("utf-8")).hexdigest()[:40]
+                    old_task = conn.execute("select * from tasks where task_id = ? and company_id = ? and store_id = ?",
+                                            (f"task_product_facts_{old_digest}", company_id, store_id)).fetchone()
+                    if old_task and normalize_listing_project_identity(_load_json_field(old_task["input_json"]).get("listing_project_identity")) == project:
+                        previous = old_task
+                        task_id, report_id = f"task_product_facts_{old_digest}", f"report_product_facts_{old_digest}"
+                if previous and current_id != report_id:
+                    raise ProductFactSaveConflict({"error_code": "product_fact_client_upgrade_required", "current_fact_report_id": current_id,
+                        "current_fact_report": self._report_row_to_dict(current) if current else None, "secret_exposed": False})
+            if versioned and previous:
+                prior_input = _load_json_field(previous["input_json"])
+                if prior_input.get("merchant_product_fact_save") != task_input["merchant_product_fact_save"]:
+                    raise ProductFactSaveConflict({"error_code": "product_fact_mutation_conflict", "current_fact_report_id": current_id,
+                        "current_fact_report": self._report_row_to_dict(current) if current else None, "secret_exposed": False})
+            elif versioned and save_context["expected_fact_report_id"] != current_id:
+                raise ProductFactSaveConflict({"error_code": "product_fact_version_conflict", "current_fact_report_id": current_id,
+                    "current_fact_report": self._report_row_to_dict(current) if current else None, "secret_exposed": False})
+            unchanged = False
+            if versioned and previous:
+                # An unchanged action has its own replay receipt but points at
+                # the existing fact version. A later replay never revives it.
+                prior_output = _load_json_field(previous["output_json"])
+                report_id = str(prior_output.get("report_id") or report_id)
+                unchanged = prior_output.get("unchanged") is True
+            elif versioned and current:
+                current_report = self._report_row_to_dict(current)
+                current_task_row = conn.execute("select * from tasks where task_id = ? and company_id = ? and store_id = ?",
+                    (current_report["task_id"], company_id, store_id)).fetchone()
+                current_packet = current_report["report"].get("merchant_product_fact_packet") or {}
+                unchanged = bool(current_task_row and valid_merchant_fact_save_attestation(
+                    current_report, self._task_row_to_dict(current_task_row)) and
+                    normalize_merchant_product_fact_packet(current_packet, source="authenticated_merchant_request") == safe_packet)
+                if unchanged:
+                    # Equality is considered only AFTER the full identity and
+                    # CAS checks. Never deduplicate against an older A version.
+                    report_id = current_id
+                    task_input.pop("merchant_save_attestation", None)
+            created_at = self._merchant_product_fact_next_time(conn, company_id, store_id, project)
+            inserted = conn.execute(
+                """insert or ignore into tasks (
+                    task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
+                    status, created_at, updated_at, input_json, output_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (task_id, company_id, store_id, user_id, None, "merchant_product_facts", title,
+                 "queued", created_at, created_at, json.dumps(task_input, ensure_ascii=False, default=json_default), "{}"),
+            )
+            created = int(inserted.rowcount or 0) == 1
+            row = conn.execute("select * from tasks where task_id = ? and company_id = ? and store_id = ?", (task_id, company_id, store_id)).fetchone()
+            if row is None:
+                raise RuntimeError("product fact checkpoint identity collision")
+            task = self._task_row_to_dict(row)
+            if created:
+                self._insert_audit(conn, company_id=company_id, store_id=store_id, user_id=user_id,
+                                   actor_type="user", action_type="task.create", target_type="task", target_id=task_id,
+                                    summary="SaaS product fact save reused current checkpoint." if unchanged else "SaaS product fact checkpoint created.",
+                                    details={"task_type": "merchant_product_facts", "title": title})
+                if not unchanged:
+                    self.save_merchant_product_fact_report(task=task, packet=safe_packet,
+                        listing_project_identity=project, _connection=conn, _report_id=report_id, _created_at=created_at,
+                        _merchant_save_attestation=task_input.get("merchant_save_attestation"))
+                output = {"report_id": report_id, "unknown_fact_count": len(safe_packet.get("unknown_facts") or []),
+                          "ready_for_listing_generation": bool(safe_packet.get("listing_readiness", {}).get("ready_for_listing_generation")),
+                          "unchanged": unchanged, "real_platform_writes_enabled": False, "secret_exposed": False}
+                conn.execute("update tasks set status = ?, updated_at = ?, output_json = ? where task_id = ? and company_id = ?",
+                             ("completed", created_at, json.dumps(output, ensure_ascii=False), task_id, company_id))
+            report_row = conn.execute(
+                """select r.*, t.company_id as company_id, t.store_id as store_id from reports r
+                join tasks t on t.task_id = r.task_id
+                where r.report_id = ? and t.company_id = ? and t.store_id = ?""", (report_id, company_id, store_id),
+            ).fetchone()
+            if report_row is None:
+                raise RuntimeError("product fact checkpoint report missing")
+            task_row = conn.execute("select * from tasks where task_id = ? and company_id = ?", (task_id, company_id)).fetchone()
+            report = self._report_row_to_dict(report_row)
+            current_id = report_id if created else current_id
+            return {"task": self._task_row_to_dict(task_row), "report": report,
+                    "merchant_product_fact_packet": report["report"]["merchant_product_fact_packet"],
+                    **({"listing_project_identity": report["report"]["listing_project_identity"]}
+                       if report["report"].get("listing_project_identity") else {}),
+                    "idempotent_replay": not created, "model_called": False,
+                    "unchanged": unchanged,
+                    "current_fact_report_id": current_id, "is_current": current_id == report_id,
+                    **({"current_fact_report": self._report_row_to_dict(current) if current else None} if current_id != report_id else {}),
+                    "real_platform_writes_enabled": False, "secret_exposed": False}
+
+    def _merchant_product_fact_scope_report(self, conn: Any, company_id: str, store_id: str,
+                                            project: dict[str, str], *, facts_only: bool = False) -> Any:
+        def field(key: str) -> str:
+            if self.database_engine == "postgres":
+                return f"r.report_json -> 'listing_project_identity' ->> '{key}'"
+            return f"json_extract(r.report_json, '$.listing_project_identity.{key}')"
+        keys = ("key", "source_report_id", "candidate_id")
+        columns = [field(key) for key in keys]
+        predicates = " and ".join(f"{column} = ?" if project else f"coalesce({column}, '') = ?" for column in columns)
+        types = "('merchant.product_facts')" if facts_only else "('merchant.product_facts','listing.package','product.listing')"
+        order_time = "r.created_at"
+        if self.database_engine != "postgres":
+            conn.create_function("jiejing_fact_time", 1, _project_evidence_time, deterministic=True)
+            order_time = "jiejing_fact_time(r.created_at)"
+        return conn.execute(f"""select r.*, t.company_id, t.store_id from reports r join tasks t on t.task_id = r.task_id
+            where t.company_id = ? and t.store_id = ? and r.status = 'saved' and r.report_type in {types}
+              and {predicates} order by {order_time} desc, r.report_id desc limit 1""",
+            (company_id, store_id, *(project.get(key, "") for key in keys))).fetchone()
+
+    def _merchant_product_fact_next_time(self, conn: Any, company_id: str, store_id: str, project: dict[str, str]) -> str:
+        latest = self._merchant_product_fact_scope_report(conn, company_id, store_id, project)
+        instant = datetime.fromisoformat(_project_evidence_time(now_iso()))
+        if latest:
+            instant = max(instant, datetime.fromisoformat(_project_evidence_time(latest["created_at"])) + timedelta(milliseconds=1))
+        return instant.isoformat(timespec="microseconds")
+
+    def _merchant_product_fact_versioned_scope_exists(self, conn: Any, company_id: str, store_id: str, project: dict[str, str]) -> bool:
+        def field(path: str) -> str:
+            if self.database_engine == "postgres":
+                return f"input_json #>> '{{{path.replace('.', ',')}}}'"
+            return f"json_extract(input_json, '$.{path}')"
+        keys = ("key", "source_report_id", "candidate_id")
+        columns = [field("listing_project_identity." + key) for key in keys]
+        predicates = " and ".join(f"{column} = ?" if project else f"coalesce({column}, '') = ?" for column in columns)
+        return conn.execute(f"""select task_id from tasks where company_id = ? and store_id = ?
+            and task_type = 'merchant_product_facts' and {predicates}
+            and {field('merchant_product_fact_save.contract_version')} = 'merchant_product_fact_save_v1' limit 1""",
+            (company_id, store_id, *(project.get(key, "") for key in keys))).fetchone() is not None
+
+    def resolve_ai_ceo_listing_context(
+        self, *, company_id: str, store_id: str, identity: dict[str, str],
+    ) -> dict[str, Any]:
+        """Resolve a full project anchor from scoped durable evidence, never browser facts."""
+        project = normalize_listing_project_identity(identity)
+        if not project or not all(project.values()):
+            return {}
+        self.initialize()
+        with self._connect() as conn:
+            fact = self._merchant_product_fact_scope_report(conn, company_id, store_id, project, facts_only=True)
+            evidence = fact or self._merchant_product_fact_scope_report(conn, company_id, store_id, project)
+            selected_research_candidate = None
+            if evidence is None:
+                row = conn.execute("""select r.*, t.company_id, t.store_id from reports r
+                    join tasks t on t.task_id = r.task_id
+                    where t.company_id = ? and t.store_id = ? and r.report_id = ? and r.status = 'saved'""",
+                    (company_id, store_id, project["source_report_id"])).fetchone()
+                if row is None:
+                    return {}
+                source_body = _load_json_field(row["report_json"])
+                if normalize_listing_project_identity(source_body.get("listing_project_identity")) != project:
+                    if row["report_type"] != "ai_ceo.market_research":
+                        return {}
+                    selected_research_candidate = next((item for item in source_body.get("product_candidates", [])
+                        if isinstance(item, dict) and item.get("candidate_id") == project["candidate_id"]
+                        and normalize_listing_project_identity(item.get("listing_project_identity")) == project), None)
+                    if selected_research_candidate is None:
+                        return {}
+                evidence = row
+            payload = _load_json_field(evidence["report_json"])
+            packet = payload.get("merchant_product_fact_packet") or {}
+            if selected_research_candidate is not None:
+                name = str(selected_research_candidate.get("name") or "")[:120]
+                packet = normalize_merchant_product_fact_packet({"product_name": name,
+                    "derived_listing_suggestions": {"product_name": name}}, source="backend_semantic_research_candidate")
+            confirmed = {**(packet.get("source_confirmed_facts") or {}), **(packet.get("merchant_confirmed_facts") or {})}
+            return {"contract_version": "active_listing_context_v1", "source": "server_verified_project_evidence",
+                    "listing_project_identity": project,
+                    "product_name": str(packet.get("product_name") or payload.get("product") or "")[:120],
+                    "listing": {"known_facts": confirmed, "missing_fact_keys": packet.get("unknown_facts") or []},
+                    "fact_report_id": str(fact["report_id"]) if fact is not None else "",
+                    "merchant_product_fact_packet": packet}
+
+    def save_ai_ceo_semantic_product_facts(
+        self, *, task: dict[str, Any], packet: dict[str, Any], listing_project_identity: dict[str, str],
+        expected_fact_report_id: str, new_project: bool = False, semantic_dispatch: dict[str, Any] | None = None,
+        simulation_request: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Append suggestions, or return no artifact for a locked, version-checked audit-only turn."""
+        project = normalize_listing_project_identity(listing_project_identity)
+        if not project or not all(project.values()):
+            raise ProductFactSaveValidationError("product_fact_invalid_project")
+        if simulation_request is not None:
+            task_input = task.get("input") or {}
+            plan = task_input.get("turn_plan") or {}
+            if (not isinstance(simulation_request, dict) or set(simulation_request) != {"enabled", "source_quote"}
+                    or simulation_request.get("enabled") is not True
+                    or not isinstance(simulation_request.get("source_quote"), str)
+                    or not simulation_request["source_quote"].strip() or len(simulation_request["source_quote"]) > 160
+                    or simulation_request["source_quote"] not in str(task_input.get("message") or "")
+                    or contains_secret_like_data(simulation_request)
+                    or plan.get("planner_policy") != "backend_model_semantic_planner_v1"
+                    or plan.get("status") != "ready" or plan.get("project_action") not in {"new", "current"}
+                    or plan.get("save_artifact") is not True or plan.get("simulation_request") != simulation_request):
+                raise ProductFactSaveValidationError("product_fact_invalid_simulation_request")
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock = " for update" if self.database_engine == "postgres" else ""
+            if not conn.execute("select store_id from stores where company_id = ? and store_id = ?" + lock,
+                                (task["company_id"], task["store_id"])).fetchone():
+                raise KeyError("store not found or not accessible")
+            current = self._merchant_product_fact_scope_report(conn, task["company_id"], task["store_id"], project, facts_only=True)
+            current_id = str(current["report_id"]) if current is not None else ""
+            if current_id != expected_fact_report_id:
+                raise ProductFactSaveConflict({"error_code": "product_fact_version_conflict", "current_fact_report_id": current_id,
+                    "current_fact_report": self._report_row_to_dict(current) if current is not None else None, "secret_exposed": False})
+            previous = (_load_json_field(current["report_json"]).get("merchant_product_fact_packet") or {}) if current is not None else {}
+            if (simulation_request is not None and not new_project and current is not None
+                    and previous.get("simulation_only") is True and plan.get("project_action") == "current"
+                    and plan.get("product_fact_proposals") == [] and plan.get("read_images") is False
+                    and (semantic_dispatch or {}).get("consumed_source_asset_ids") == []):
+                # The validated request remains in this turn's task/plan/archive.
+                # Repeating an already active restriction cannot replace the
+                # current packet, its attestation, or the Listing's fact base.
+                return None
+            merged = {**packet,
+                      "merchant_confirmed_facts": dict(previous.get("merchant_confirmed_facts") or {}),
+                      "source_confirmed_facts": dict(previous.get("source_confirmed_facts") or {}),
+                      "derived_listing_suggestions": {**(previous.get("derived_listing_suggestions") or {}), **(packet.get("derived_listing_suggestions") or {})},
+                      "source_records": [*(previous.get("source_records") or []), *(packet.get("source_records") or [])]}
+            if previous:
+                merged["product_name"] = previous.get("product_name") or packet.get("product_name")
+                known = set(merged["merchant_confirmed_facts"]) | set(merged["source_confirmed_facts"])
+                # A confirmed supplier URL and owned-product attestation are
+                # alternatives. An empty text-intake packet must not revoke
+                # the source path already saved in this exact product scope.
+                source_facts = {**merged["source_confirmed_facts"], **merged["merchant_confirmed_facts"]}
+                resolved_missing = known | ({"merchant_owned_product_confirmed"} if source_facts.get("source_url") else set())
+                merged["unknown_facts"] = [key for key in dict.fromkeys([*(previous.get("unknown_facts") or []), *(packet.get("unknown_facts") or [])]) if key not in resolved_missing]
+                merged["listing_copy"] = previous.get("listing_copy") or {}
+                merged["field_evidence"] = {**(previous.get("field_evidence") or {}),
+                    **{key: value for key, value in (packet.get("field_evidence") or {}).items() if key not in known}}
+                merged["pending_field_evidence"] = {**(previous.get("pending_field_evidence") or {}),
+                    **{key: value for key, value in (packet.get("field_evidence") or {}).items() if key in known}}
+                conflicts = [*(previous.get("fact_conflicts") or []), *(packet.get("fact_conflicts") or [])]
+                confirmed = {**merged["source_confirmed_facts"], **merged["merchant_confirmed_facts"]}
+                for key, value in (packet.get("derived_listing_suggestions") or {}).items():
+                    if key in confirmed and str(confirmed[key]) != str(value):
+                        conflicts.append({"field": key, "values": [str(confirmed[key]), str(value)],
+                            "reason": "本轮资料建议与已确认资料不同；保留已确认值，等待商家核对。"})
+                merged["fact_conflicts"] = conflicts
+                merged["blocked_by"] = list(dict.fromkeys([
+                    *(item for item in [*(previous.get("blocked_by") or []), *(packet.get("blocked_by") or [])]
+                      if not str(item).startswith("merchant_product_fact_missing:") or str(item).split(":", 1)[1] not in resolved_missing),
+                    *("merchant_product_fact_conflict:" + str(item["field"]) for item in conflicts),
+                ]))
+                merged["listing_readiness"] = {**(previous.get("listing_readiness") or {}),
+                    "ready_for_real_publish": False,
+                    **({"ready_for_listing_generation": False} if conflicts else {})}
+            # Simulation is a one-way restriction, never a fact confirmation.
+            merged["simulation_only"] = previous.get("simulation_only") is True or simulation_request is not None
+            merged["fact_scope"] = "simulation_rehearsal" if merged["simulation_only"] else "merchant_product"
+            if merged["simulation_only"]:
+                merged["blocked_by"] = list(dict.fromkeys([*(merged.get("blocked_by") or []), "simulation_only_product_facts"]))
+                merged["listing_readiness"] = {**(merged.get("listing_readiness") or {}),
+                    "ready_for_real_publish": False, "reason": "模拟演练资料仅供内部 Listing 与素材流程，不可写入 eBay"}
+                if simulation_request is not None or previous.get("simulation_request"):
+                    merged["simulation_request"] = dict(simulation_request or previous["simulation_request"])
+            return self.save_merchant_product_fact_report(task=task, packet=merged,
+                listing_project_identity=project, _connection=conn,
+                _report_id=project["source_report_id"] if new_project else None,
+                _semantic_dispatch=semantic_dispatch)
+
+    def save_merchant_product_fact_report(
+        self,
+        *,
+        task: dict[str, Any],
+        packet: dict[str, Any],
+        listing_project_identity: dict[str, Any] | None = None,
+        _connection: Any = None,
+        _report_id: str | None = None,
+        _created_at: str | None = None,
+        _semantic_dispatch: dict[str, Any] | None = None,
+        _merchant_save_attestation: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist one authenticated merchant product-fact checkpoint."""
+
+        if _connection is None:
+            self.initialize()
+        safe_packet = _redact_secret_like(packet if isinstance(packet, dict) else {})
+        safe_listing_project_identity = normalize_listing_project_identity(listing_project_identity)
+        product = _sanitize_merchant_ceo_text(safe_packet.get("product_name"), limit=120) or "待确认商品"
+        created_at = now_iso()
+        report_id = _report_id or _id("report")
+        title = f"商品资料：{product}"[:180]
+        unknown = safe_packet.get("unknown_facts") if isinstance(safe_packet.get("unknown_facts"), list) else []
+        vision_extracted = str(safe_packet.get("source") or "") == "backend_product_vision_extraction"
+        if vision_extracted:
+            summary = (
+                f"AI CEO 已从商家提交的图片和链接提取“{product}”的来源事实；"
+                f"仍有 {len(unknown)} 项待商家核对，未触发 eBay 写入。"
+            )
+        else:
+            summary = (
+                f"“{product}”的商品事实已由商家确认，仍需 eBay 体检和发布确认。"
+                if not unknown
+                else f"“{product}”的商品资料已保存，仍有 {len(unknown)} 项待补。"
+            )
+        report_payload = {
+            "contract_version": MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION,
+            "artifact_type": "merchant.product_facts",
+            "product": product,
+            "merchant_readable_summary": summary,
+            "merchant_product_fact_packet": safe_packet,
+            "listing_import_ready": not unknown,
+            "blocked_by": safe_packet.get("blocked_by") if isinstance(safe_packet.get("blocked_by"), list) else [],
+            "requires_human_review_before_publish": True,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        if safe_listing_project_identity:
+            report_payload["listing_project_identity"] = safe_listing_project_identity
+        if isinstance(_semantic_dispatch, dict):
+            report_payload["semantic_dispatch"] = _redact_secret_like(_semantic_dispatch)
+        if isinstance(_merchant_save_attestation, dict):
+            report_payload["merchant_save_attestation"] = _merchant_save_attestation
+        with nullcontext(_connection) if _connection is not None else self._connect() as conn:
+            if _connection is None:
+                if self.database_engine != "postgres":
+                    conn.execute("begin immediate")
+                lock = " for update" if self.database_engine == "postgres" else ""
+                if not conn.execute("select store_id from stores where company_id = ? and store_id = ?" + lock,
+                                    (task["company_id"], task["store_id"])).fetchone():
+                    raise KeyError("store not found or not accessible")
+            created_at = _created_at or self._merchant_product_fact_next_time(conn, task["company_id"], task["store_id"], safe_listing_project_identity)
+            conn.execute(
+                """
+                insert into reports (
+                  report_id, task_id, runtime_run_id, report_type, title, status, created_at, report_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    task["task_id"],
+                    "merchant_product_facts",
+                    "merchant.product_facts",
+                    title,
+                    "saved",
+                    created_at,
+                    json.dumps(report_payload, ensure_ascii=False, default=json_default),
+                ),
+            )
+            self._insert_merchant_memory(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                memory_type="merchant_product_facts",
+                source_type="report",
+                source_id=report_id,
+                title=title,
+                summary=summary,
+                importance=85,
+                tags=[
+                    "merchant.product_facts",
+                    "listing_handoff",
+                    "ai_extracted_from_merchant_image" if vision_extracted else
+                    "ai_proposed_product_facts" if isinstance(_semantic_dispatch, dict) else "merchant_confirmed",
+                ],
+                memory={
+                    "report_id": report_id,
+                    "task_id": task["task_id"],
+                    "report_type": "merchant.product_facts",
+                    "product": product,
+                    "unknown_fact_count": len(unknown),
+                    "ready_for_listing_generation": not unknown,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+                created_by=task.get("user_id"),
+            )
+            self._insert_audit(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                user_id=task.get("user_id"),
+                actor_type="merchant",
+                action_type="merchant.product_facts.saved",
+                target_type="report",
+                target_id=report_id,
+                summary="Authenticated merchant product facts saved for the Listing workflow.",
+                details={
+                    "task_id": task["task_id"],
+                    "unknown_fact_count": len(unknown),
+                    "ready_for_listing_generation": not unknown,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            "report_id": report_id,
+            "task_id": task["task_id"],
+            "runtime_run_id": "merchant_product_facts",
+            "company_id": task["company_id"],
+            "store_id": task["store_id"],
+            "report_type": "merchant.product_facts",
+            "title": title,
+            "status": "saved",
+            "created_at": created_at,
+            "report": report_payload,
+            "secret_exposed": False,
+        }
+
+    def save_listing_draft_report(
+        self,
+        *,
+        task: dict[str, Any],
+        listing_project_identity: dict[str, Any],
+        listing_handoff: dict[str, Any],
+        merchant_product_fact_packet: dict[str, Any],
+        missing_fields: list[str],
+        model_metadata: dict[str, Any],
+        version: int,
+    ) -> dict[str, Any]:
+        """Persist one immutable Listing draft version in the existing report store."""
+
+        self.initialize()
+        identity = normalize_listing_project_identity(listing_project_identity)
+        safe_handoff = _redact_secret_like(listing_handoff if isinstance(listing_handoff, dict) else {})
+        safe_packet = _redact_secret_like(
+            merchant_product_fact_packet if isinstance(merchant_product_fact_packet, dict) else {}
+        )
+        safe_model = {
+            "provider_key": str((model_metadata or {}).get("provider_key") or "provider_neutral")[:80],
+            "model": str((model_metadata or {}).get("model") or "")[:160],
+            "mode": str((model_metadata or {}).get("mode") or "")[:80],
+            "model_tier": str((model_metadata or {}).get("model_tier") or "fast")[:40],
+            "secret_exposed": False,
+        }
+        product = _sanitize_merchant_ceo_text(safe_packet.get("product_name"), limit=120) or "待确认商品"
+        created_at = now_iso()
+        report_id = _id("report")
+        title = f"Listing 草稿 v{max(1, int(version))}：{product}"[:180]
+        safe_missing = [str(item)[:120] for item in missing_fields[:80] if str(item).strip()]
+        report_payload = {
+            "contract_version": "listing_ai_draft_generation_v1",
+            "artifact_type": "listing.package",
+            "version": max(1, int(version)),
+            "product": product,
+            "merchant_readable_summary": (
+                f"“{product}”的 AI Listing 草稿已保存；发布前仍有 {len(safe_missing)} 项需要补充或复核。"
+                if safe_missing
+                else f"“{product}”的 AI Listing 草稿已保存；仍需 eBay 体检和发布确认。"
+            ),
+            "listing_project_identity": identity,
+            "merchant_product_fact_packet": safe_packet,
+            "listing_handoff": {
+                "ready_for_listing_draft": True,
+                "source_mode": "project_scoped_live_model",
+                "target_report_type": "listing.package",
+                "listing_fields": safe_handoff,
+                "blocked_by": [f"listing_field_missing:{item}" for item in safe_missing],
+                "requires_human_review_before_publish": True,
+                "triggers_real_platform_write": False,
+                "real_platform_writes_enabled": False,
+            },
+            "missing_fields": safe_missing,
+            "model": safe_model,
+            "requires_human_review_before_publish": True,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into reports (
+                  report_id, task_id, runtime_run_id, report_type, title, status, created_at, report_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    task["task_id"],
+                    "listing_draft_generation",
+                    "listing.package",
+                    title,
+                    "saved",
+                    created_at,
+                    json.dumps(report_payload, ensure_ascii=False, default=json_default),
+                ),
+            )
+            self._insert_merchant_memory(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                memory_type="listing_package",
+                source_type="report",
+                source_id=report_id,
+                title=title,
+                summary=report_payload["merchant_readable_summary"],
+                importance=85,
+                tags=["listing.package", "listing_draft", f"version:{max(1, int(version))}"],
+                memory={
+                    "report_id": report_id,
+                    "task_id": task["task_id"],
+                    "report_type": "listing.package",
+                    "version": max(1, int(version)),
+                    "listing_project_identity": identity,
+                    "missing_field_count": len(safe_missing),
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+                created_by=task.get("user_id"),
+            )
+            self._insert_audit(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                user_id=task.get("user_id"),
+                actor_type="system",
+                action_type="listing.draft.generated",
+                target_type="report",
+                target_id=report_id,
+                summary="Project-scoped AI Listing draft saved without an eBay write.",
+                details={
+                    "task_id": task["task_id"],
+                    "report_type": "listing.package",
+                    "listing_project_key": identity.get("key"),
+                    "version": max(1, int(version)),
+                    "missing_field_count": len(safe_missing),
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            "report_id": report_id,
+            "task_id": task["task_id"],
+            "runtime_run_id": "listing_draft_generation",
+            "report_type": "listing.package",
             "title": title,
             "status": "saved",
             "created_at": created_at,
@@ -4285,6 +6654,151 @@ class SaaSRepository:
             row = conn.execute("select * from tasks where company_id = ? and task_id = ?", (company_id, task_id)).fetchone()
         return self._task_row_to_dict(row) if row else None
 
+    def list_merchant_project_evidence(
+        self, *, company_id: str, store_id: str, project_id: str,
+        user_id: str = "", evidence_cutoff: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Bound each evidence window to the project before applying its limit.
+
+        JSON predicates select candidates only. The status reducer retains the
+        authoritative full-identity, legacy compatibility and success checks.
+        Related tasks/confirmations are recovered by primary key, not by widening
+        the company timeline or trusting an unrelated artifact's newest row.
+        """
+        self.initialize()
+        project = str(project_id or "").strip()
+        empty = {key: [] for key in ("tasks", "reports", "confirmations", "executions", "media_jobs", "chat_turns")}
+        if not company_id or not store_id or not project:
+            return empty
+        cutoff = _project_evidence_time(evidence_cutoff)
+
+        def json_value(column: str, path: str) -> str:
+            if self.database_engine == "postgres":
+                return f"{column} #>> '{{{path.replace('.', ',')}}}'"
+            return f"case when json_valid({column}) then json_extract({column}, '$.{path}') end"
+
+        def identity(columns: tuple[tuple[str, tuple[str, ...]], ...]) -> tuple[str, list[str]]:
+            full_keys, legacy_keys, compatibility = [], [], []
+
+            def valid_key(value: str) -> str:
+                if self.database_engine != "postgres":
+                    return f"jiejing_evidence_key({value})"
+                normalized = f"substr(trim(coalesce({value}, '')), 1, 160)"
+                return f"case when {normalized} ~ '^[[:alnum:]_.:-]+$' then {normalized} end"
+
+            for column, prefixes in columns:
+                for prefix in prefixes:
+                    for suffix, destination in (("listing_project_identity.key", full_keys), ("listing_project_key", legacy_keys)):
+                        path = f"{prefix}.{suffix}" if prefix else suffix
+                        destination.append(valid_key(json_value(column, path)))
+                compatibility.append(
+                    f"({column} #> '{{legacy_project_identity_compatible}}') = 'true'::jsonb"
+                    if self.database_engine == "postgres" else
+                    f"case when json_valid({column}) then json_type({column}, '$.legacy_project_identity_compatible') = 'true' else 0 end"
+                )
+            # Match the reducer's first-valid full identity. A stale secondary
+            # key or an unapproved legacy key must not consume this window.
+            legacy = f"case when ({' or '.join(compatibility)}) then coalesce({', '.join(legacy_keys)}, null) end"
+            return f"coalesce({', '.join(full_keys)}, {legacy}) = ?", [project]
+
+        def before(column: str) -> str:
+            return f"{column} <= ?" if self.database_engine == "postgres" else f"jiejing_evidence_time({column}) <= ?"
+
+        task_match, task_params = identity((("t.input_json", ("",)), ("t.output_json", ("",))))
+        report_match, report_params = identity((("r.report_json", ("",)),))
+        confirmation_match, confirmation_params = identity((("c.item_json", ("",)),))
+        media_match, media_params = identity((("m.media_job_json", ("", "job_spec", "job_spec.inputs.product_facts")),))
+        chat_match, chat_params = identity((("h.turn_json", ("",)),))
+        source_report_match = "(" + " or ".join(
+            f"r.report_id = {json_value(column, 'listing_project_identity.' + field)}"
+            for column in ("t.input_json", "t.output_json")
+            for field in ("source_report_id", "source_id")
+        ) + ")"
+
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                # SQLite stores ISO text; normalise offsets without losing
+                # microseconds as julianday()/strftime('%f') would do.
+                conn.create_function("jiejing_evidence_time", 1, _project_evidence_time, deterministic=True)
+                conn.create_function("jiejing_evidence_key", 1, _project_evidence_key, deterministic=True)
+            task_rows = conn.execute(
+                f"""select t.* from tasks t
+                where t.company_id = ? and t.store_id = ? and {before('t.updated_at')}
+                  and ({task_match} or exists (
+                    select 1 from reports r where r.task_id = t.task_id
+                    and {before('r.created_at')} and {report_match}))
+                order by t.created_at desc, t.task_id desc limit 500""",
+                (company_id, store_id, cutoff, *task_params, cutoff, *report_params),
+            ).fetchall()
+            report_rows = conn.execute(
+                f"""select r.*, t.company_id, t.store_id from reports r
+                join tasks t on t.task_id = r.task_id
+                where t.company_id = ? and t.store_id = ?
+                  and {before('t.updated_at')} and {before('r.created_at')}
+                  and ({report_match} or ({task_match} and {source_report_match}))
+                order by r.created_at desc, r.report_id desc limit 500""",
+                (company_id, store_id, cutoff, cutoff, *report_params, *task_params),
+            ).fetchall()
+            confirmation_rows = conn.execute(
+                f"""select c.* from confirmations c
+                where c.company_id = ? and c.store_id = ?
+                  and {before('c.created_at')} and {confirmation_match}
+                order by c.created_at desc, c.confirmation_id desc limit 500""",
+                (company_id, store_id, cutoff, *confirmation_params),
+            ).fetchall()
+            execution_rows = conn.execute(
+                f"""select e.* from execution_results e
+                join confirmations c on c.confirmation_id = e.confirmation_id
+                where c.company_id = ? and c.store_id = ?
+                  and {before('c.created_at')} and {before('e.created_at')}
+                  and {confirmation_match}
+                order by e.created_at desc, e.execution_id desc limit 500""",
+                (company_id, store_id, cutoff, cutoff, *confirmation_params),
+            ).fetchall()
+            media_rows = conn.execute(
+                f"""select m.* from media_asset_jobs m
+                where m.company_id = ? and m.store_id = ?
+                  and {before('m.updated_at')} and {media_match}
+                order by m.updated_at desc, m.media_job_id desc limit 200""",
+                (company_id, store_id, cutoff, *media_params),
+            ).fetchall()
+            chat_rows = conn.execute(
+                f"""select h.* from ai_ceo_chat_turns h
+                where h.company_id = ? and h.user_id = ?
+                  and (h.store_id = ? or h.store_id is null or h.store_id = '')
+                  and {before('h.updated_at')} and {chat_match}
+                order by h.created_at desc, h.chat_turn_id desc limit 50""",
+                (company_id, user_id, store_id, cutoff, *chat_params),
+            ).fetchall() if user_id else []
+
+            # At most 500 parent keys per query; do not let a separate task or
+            # confirmation window erase otherwise selected authoritative proof.
+            task_ids = {str(row["task_id"]) for row in task_rows}
+            missing_tasks = sorted({str(row["task_id"]) for row in report_rows} - task_ids)
+            if missing_tasks:
+                task_rows.extend(conn.execute(
+                    f"select * from tasks where company_id = ? and store_id = ? "
+                    f"and {before('updated_at')} and task_id in ({','.join('?' for _ in missing_tasks)})",
+                    (company_id, store_id, cutoff, *missing_tasks),
+                ).fetchall())
+            confirmation_ids = {str(row["confirmation_id"]) for row in confirmation_rows}
+            missing_confirmations = sorted({str(row["confirmation_id"]) for row in execution_rows} - confirmation_ids)
+            if missing_confirmations:
+                confirmation_rows.extend(conn.execute(
+                    f"select * from confirmations where company_id = ? and store_id = ? "
+                    f"and {before('created_at')} and confirmation_id in ({','.join('?' for _ in missing_confirmations)})",
+                    (company_id, store_id, cutoff, *missing_confirmations),
+                ).fetchall())
+
+        return {
+            "tasks": [self._task_row_to_dict(row) for row in task_rows],
+            "reports": [self._report_row_to_dict(row) for row in report_rows],
+            "confirmations": [self._confirmation_row_to_dict(row) for row in confirmation_rows],
+            "executions": [self._execution_row_to_dict(row) for row in execution_rows],
+            "media_jobs": [self._media_asset_job_row_to_dict(row) for row in media_rows],
+            "chat_turns": [self._ai_ceo_chat_turn_row_to_dict(row) for row in reversed(chat_rows)],
+        }
+
     def list_tasks(self, *, company_id: str, store_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         self.initialize()
         params: list[Any] = [company_id]
@@ -4300,13 +6814,24 @@ class SaaSRepository:
             rows = conn.execute(f"select * from tasks where {where} order by created_at desc {limit_clause}", tuple(params)).fetchall()
         return [self._task_row_to_dict(row) for row in rows]
 
-    def list_reports(self, *, company_id: str, task_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    def list_reports(
+        self,
+        *,
+        company_id: str,
+        task_id: str | None = None,
+        limit: int | None = None,
+        exclude_report_types: set[str] | frozenset[str] | None = None,
+    ) -> list[dict[str, Any]]:
         self.initialize()
         params: list[Any] = [company_id]
         where = "t.company_id = ?"
         if task_id:
             where += " and r.task_id = ?"
             params.append(task_id)
+        excluded = sorted({str(item).strip() for item in (exclude_report_types or set()) if str(item).strip()})
+        if excluded:
+            where += f" and r.report_type not in ({','.join('?' for _ in excluded)})"
+            params.extend(excluded)
         order_direction = "desc" if limit and limit > 0 else "asc"
         limit_clause = ""
         if limit and limit > 0:
@@ -4315,7 +6840,7 @@ class SaaSRepository:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                select r.* from reports r
+                select r.*, t.company_id as company_id, t.store_id as store_id from reports r
                 join tasks t on t.task_id = r.task_id
                 where {where}
                 order by r.created_at {order_direction}
@@ -4324,6 +6849,31 @@ class SaaSRepository:
                 tuple(params),
             ).fetchall()
         return [self._report_row_to_dict(row) for row in rows]
+
+    def get_listing_draft_checkpoint(self, *, company_id: str, store_id: str, identity: dict[str, str]) -> dict[str, Any]:
+        from .listing_draft_checkpoint import read_checkpoint
+        return read_checkpoint(self, company_id=company_id, store_id=store_id, identity=identity)
+
+    def save_listing_draft_checkpoint(self, *, company_id: str, store_id: str, user_id: str,
+                                     project_key: str, body: dict[str, Any]) -> dict[str, Any]:
+        from .listing_draft_checkpoint import save_checkpoint
+        return save_checkpoint(self, company_id=company_id, store_id=store_id, user_id=user_id,
+                               project_key=project_key, body=body)
+
+    def get_report_for_company(self, *, company_id: str, report_id: str) -> dict[str, Any] | None:
+        """Return one report only when its owning task belongs to the company."""
+
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select r.*, t.company_id as company_id, t.store_id as store_id from reports r
+                join tasks t on t.task_id = r.task_id
+                where t.company_id = ? and r.report_id = ?
+                """,
+                (company_id, report_id),
+            ).fetchone()
+        return self._report_row_to_dict(row) if row else None
 
     def list_confirmations(self, *, company_id: str, status: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         self.initialize()
@@ -4682,7 +7232,8 @@ class SaaSRepository:
         user_id: str,
         turns: list[dict[str, Any]],
         limit: int = 30,
-    ) -> list[dict[str, Any]]:
+        return_page: bool = False,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
         """Merge a user's sanitized device history into the account timeline."""
 
         self.initialize()
@@ -4698,67 +7249,9 @@ class SaaSRepository:
             prepared_turns.append(turn)
         with self._connect() as conn:
             for turn in prepared_turns:
-                store_id = str(turn.get("store_id") or "") or None
-                assistant_id = str(turn["assistant_id"])
-                chat_turn_id = _scoped_ai_ceo_chat_turn_id(
-                    company_id=company_id,
-                    user_id=user_id,
-                    assistant_id=assistant_id,
-                )
-                updated_at = now_iso()
-                existing_row = conn.execute(
-                    "select * from ai_ceo_chat_turns where company_id = ? and user_id = ? and assistant_id = ?",
-                    (company_id, user_id, assistant_id),
-                ).fetchone()
-                if existing_row:
-                    existing_turn = self._ai_ceo_chat_turn_row_to_dict(existing_row)
-                    if _ai_ceo_chat_turn_merge_score(existing_turn) >= _ai_ceo_chat_turn_merge_score(turn):
-                        continue
-                payload = json.dumps(turn, ensure_ascii=False, default=json_default)
-                merge_score = _ai_ceo_chat_turn_merge_score(turn)
-                conn.execute(
-                    """
-                    insert into ai_ceo_chat_turns (
-                      chat_turn_id, company_id, user_id, store_id, assistant_id, status, route,
-                      merge_score, created_at, updated_at, turn_json
-                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    on conflict (company_id, user_id, assistant_id) do update set
-                      store_id = excluded.store_id,
-                      status = excluded.status,
-                      route = excluded.route,
-                      merge_score = excluded.merge_score,
-                      created_at = excluded.created_at,
-                      updated_at = excluded.updated_at,
-                      turn_json = excluded.turn_json
-                    where excluded.merge_score > ai_ceo_chat_turns.merge_score
-                    """,
-                    (
-                        chat_turn_id,
-                        company_id,
-                        user_id,
-                        store_id,
-                        assistant_id,
-                        str(turn.get("status") or "completed")[:80],
-                        str(turn.get("route") or "general_chat")[:80],
-                        merge_score,
-                        str(turn.get("created_at") or updated_at)[:80],
-                        updated_at,
-                        payload,
-                    ),
-                )
-            retained_rows = conn.execute(
-                """
-                select chat_turn_id from ai_ceo_chat_turns
-                where company_id = ? and user_id = ?
-                order by created_at desc, updated_at desc, chat_turn_id desc
-                """,
-                (company_id, user_id),
-            ).fetchall()
-            for stale_row in retained_rows[50:]:
-                conn.execute(
-                    "delete from ai_ceo_chat_turns where company_id = ? and user_id = ? and chat_turn_id = ?",
-                    (company_id, user_id, stale_row["chat_turn_id"]),
-                )
+                self._merge_ai_ceo_chat_turn(conn, company_id=company_id, user_id=user_id, turn=turn)
+            # A device submits only a recent slice. Missing turns are not a
+            # deletion request; historical account conversations stay stored.
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -4778,26 +7271,95 @@ class SaaSRepository:
                     "secret_exposed": False,
                 },
             )
-        return self.list_ai_ceo_chat_history(company_id=company_id, user_id=user_id, limit=limit)
+        page = self.page_ai_ceo_chat_history(company_id=company_id, user_id=user_id, limit=limit)
+        return page if return_page else page["turns"]
+
+    def _merge_ai_ceo_chat_turn(self, conn: Any, *, company_id: str, user_id: str, turn: dict[str, Any],
+                              server_finalized: bool = False) -> None:
+        """Shared sanitized merge, using the caller's transaction and account scope."""
+        turn = dict(turn)
+        assistant_id = str(turn["assistant_id"])
+        chat_turn_id = _scoped_ai_ceo_chat_turn_id(company_id=company_id, user_id=user_id, assistant_id=assistant_id)
+        updated_at = now_iso()
+        existing_row = conn.execute(
+            "select * from ai_ceo_chat_turns where company_id = ? and user_id = ? and assistant_id = ?",
+            (company_id, user_id, assistant_id),
+        ).fetchone()
+        if existing_row and not server_finalized:
+            existing_payload = _load_json_field(existing_row["turn_json"])
+            if isinstance(existing_payload, dict) and existing_payload.get("archive_contract") == "server_finalized_chat_archive_v1":
+                return
+            existing_turn = self._ai_ceo_chat_turn_row_to_dict(existing_row)
+            if _ai_ceo_chat_turn_content_score(existing_turn) >= _ai_ceo_chat_turn_content_score(turn):
+                enriched_identity = _merge_ai_ceo_chat_listing_identity(existing_turn, turn)
+                if not enriched_identity:
+                    return
+                turn = {**existing_turn, "listing_project_identity": enriched_identity,
+                        "updated_at": str(turn.get("updated_at") or updated_at)[:80]}
+            turn["created_at"] = str(existing_row["created_at"])
+        else:
+            try:
+                created_at = _project_evidence_time(turn.get("created_at") or updated_at)
+                datetime.fromisoformat(created_at)
+            except (TypeError, ValueError, OverflowError):
+                created_at = _project_evidence_time(updated_at)
+            turn["created_at"] = created_at
+        # The predicate also protects against a SYNC that read the row before
+        # terminal finalization committed. Only the request transaction may
+        # establish/replace its own canonical server archive.
+        archive_marker = ("ai_ceo_chat_turns.turn_json ->> 'archive_contract'" if self.database_engine == "postgres"
+                          else "json_extract(ai_ceo_chat_turns.turn_json, '$.archive_contract')")
+        update_anchor = ", created_at = excluded.created_at" if server_finalized else ""
+        merge_condition = "" if server_finalized else (
+            " where excluded.merge_score > ai_ceo_chat_turns.merge_score"
+            f" and coalesce({archive_marker}, '') <> 'server_finalized_chat_archive_v1'")
+        conn.execute(
+            f"""insert into ai_ceo_chat_turns (
+              chat_turn_id, company_id, user_id, store_id, assistant_id, status, route,
+              merge_score, created_at, updated_at, turn_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict (company_id, user_id, assistant_id) do update set
+              store_id = excluded.store_id, status = excluded.status, route = excluded.route,
+              merge_score = excluded.merge_score, updated_at = excluded.updated_at, turn_json = excluded.turn_json
+              {update_anchor} {merge_condition}""",
+            (chat_turn_id, company_id, user_id, str(turn.get("store_id") or "") or None, assistant_id,
+             str(turn.get("status") or "completed")[:80], str(turn.get("route") or "general_chat")[:80],
+             _ai_ceo_chat_turn_merge_score(turn), str(turn.get("created_at") or updated_at)[:80], updated_at,
+             json.dumps(turn, ensure_ascii=False, default=json_default)),
+        )
 
     def ai_ceo_chat_history_revision(self, *, company_id: str, user_id: str) -> str:
         self.initialize()
         with self._connect() as conn:
+            count_row = conn.execute(
+                "select count(*) as turn_count from ai_ceo_chat_turns where company_id = ? and user_id = ?",
+                (company_id, user_id),
+            ).fetchone()
+            updated = "updated_at"
+            if self.database_engine != "postgres":
+                conn.create_function("jiejing_evidence_time", 1, _project_evidence_time, deterministic=True)
+                updated = "jiejing_evidence_time(updated_at)"
             rows = conn.execute(
-                """
+                f"""
                 select assistant_id, status, updated_at, turn_json
                 from ai_ceo_chat_turns
                 where company_id = ? and user_id = ?
-                order by assistant_id
+                order by {updated} desc, chat_turn_id desc
+                limit 50
                 """,
                 (company_id, user_id),
             ).fetchall()
-        revision_payload = [
-            [str(row["assistant_id"] or ""), str(row["status"] or ""), str(row["updated_at"] or ""), str(row["turn_json"] or "")]
+        # Retention is not the model/display window. Polling must not pull every
+        # archived JSON payload into memory just to detect a new merge.
+        turn_count = int(count_row["turn_count"] or 0)
+        revision_payload = [turn_count, [
+            [str(row["assistant_id"] or ""), str(row["status"] or ""),
+             _project_evidence_time(row["updated_at"]), _load_json_field(row["turn_json"])]
             for row in rows
-        ]
-        digest = hashlib.sha256(json.dumps(revision_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
-        return f"chatrev_{len(rows)}_{digest}"
+        ]]
+        digest = hashlib.sha256(json.dumps(revision_payload, ensure_ascii=False, sort_keys=True, default=json_default,
+                                           separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+        return f"chatrev_{turn_count}_{digest}"
 
     def list_ai_ceo_chat_history(
         self,
@@ -4806,19 +7368,64 @@ class SaaSRepository:
         user_id: str,
         limit: int = 30,
     ) -> list[dict[str, Any]]:
+        return self.page_ai_ceo_chat_history(company_id=company_id, user_id=user_id, limit=limit)["turns"]
+
+    def page_ai_ceo_chat_history(
+        self, *, company_id: str, user_id: str, limit: int = 30, cursor: str = "",
+    ) -> dict[str, Any]:
+        """Return one bounded account page, with an ownership-checked keyset anchor."""
         self.initialize()
         bounded_limit = min(max(int(limit or 30), 1), 50)
+        anchor_id = ""
+        if cursor:
+            try:
+                if not isinstance(cursor, str) or len(cursor) > 300 or not cursor.startswith("chatpage_v1_"):
+                    raise ValueError("invalid chat history cursor")
+                encoded = cursor[len("chatpage_v1_"):]
+                anchor_id = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True).decode("ascii")
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", anchor_id):
+                    raise ValueError("invalid chat history cursor")
+            except (ValueError, UnicodeError):
+                raise ValueError("invalid chat history cursor") from None
         with self._connect() as conn:
+            created = "created_at"
+            if self.database_engine != "postgres":
+                conn.create_function("jiejing_evidence_time", 1, _project_evidence_time, deterministic=True)
+                created = "jiejing_evidence_time(created_at)"
+            params: list[Any] = [company_id, user_id]
+            older = ""
+            if anchor_id:
+                anchor = conn.execute(
+                    "select created_at, chat_turn_id from ai_ceo_chat_turns "
+                    "where company_id = ? and user_id = ? and chat_turn_id = ?",
+                    (company_id, user_id, anchor_id),
+                ).fetchone()
+                if not anchor:
+                    raise ValueError("invalid chat history cursor")
+                anchor_time = _project_evidence_time(anchor["created_at"])
+                older = f"and ({created} < ? or ({created} = ? and chat_turn_id < ?))"
+                params.extend((anchor_time, anchor_time, anchor_id))
+            params.append(bounded_limit + 1)
             rows = conn.execute(
-                """
+                f"""
                 select * from ai_ceo_chat_turns
                 where company_id = ? and user_id = ?
-                order by created_at desc, updated_at desc, chat_turn_id desc
+                {older}
+                order by {created} desc, chat_turn_id desc
                 limit ?
                 """,
-                (company_id, user_id, bounded_limit),
+                tuple(params),
             ).fetchall()
-        return [self._ai_ceo_chat_turn_row_to_dict(row) for row in reversed(rows)]
+        has_more = len(rows) > bounded_limit
+        selected = rows[:bounded_limit]
+        next_cursor = ""
+        if has_more and selected:
+            next_cursor = "chatpage_v1_" + base64.urlsafe_b64encode(str(selected[-1]["chat_turn_id"]).encode("ascii")).decode("ascii").rstrip("=")
+        return {
+            "turns": [self._ai_ceo_chat_turn_row_to_dict(row) for row in reversed(selected)],
+            "has_more": has_more, "next_cursor": next_cursor, "page_size": bounded_limit,
+            "pagination_contract": "2026-09-05-ai-ceo-history-keyset-v1",
+        }
 
     def refresh_merchant_memory_from_existing_records(
         self,
@@ -5356,6 +7963,122 @@ class SaaSRepository:
             )
         return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
 
+    def review_platform_refund_confirmation(
+        self, *, company_id: str, order_id: str, confirmation_id: str,
+        reviewer_company_id: str, reviewer_user_id: str, internal_admin_emails: tuple[str, ...],
+        decision: str, review_reason: str,
+    ) -> dict[str, Any]:
+        """Atomically bind a SaaS refund decision to its platform reviewer evidence."""
+        self.initialize()
+        reason = " ".join(str(review_reason or "").split())
+        if decision not in {"approve", "reject"} or not 10 <= len(reason) <= 500:
+            raise ValueError("refund_review_requires_decision_and_reason")
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            member = conn.execute(
+                "select u.email, u.status, tm.role from users u join team_members tm on tm.user_id = u.user_id where u.user_id = ? and tm.company_id = ?",
+                (reviewer_user_id, reviewer_company_id),
+            ).fetchone()
+            if not member or str(member["email"]).lower() not in internal_admin_emails or member["role"] not in {"owner", "admin"} or member["status"] != "active":
+                raise PermissionError("refund_review_requires_platform_internal_admin")
+            lock = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(f"select * from confirmations where company_id = ? and confirmation_id = ?{lock}", (company_id, confirmation_id)).fetchone()
+            order = conn.execute(f"select status, amount_minor, currency from billing_orders where company_id = ? and order_id = ?{lock}", (company_id, order_id)).fetchone()
+            if not row or not order:
+                raise KeyError("domestic_billing_order_not_found")
+            confirmation = self._confirmation_row_to_dict(row)
+            item = confirmation.get("item") or {}
+            if (confirmation.get("action_type") != "refund" or confirmation.get("store_id") is not None
+                or confirmation.get("runtime_run_id") != f"billing_refund:{order_id}"
+                or item.get("source") != "domestic_billing_refund_review" or item.get("order_id") != order_id
+                or item.get("amount_minor") != order["amount_minor"] or item.get("currency") != order["currency"]):
+                raise ValueError("domestic_refund_confirmation_invalid")
+            if order["status"] != "refund_review_requested" or confirmation["status"] not in {"pending", "approved"}:
+                raise ConfirmationDecisionConflict("domestic_refund_review_state_conflict")
+            decided_at = now_iso()
+            status = "approved" if decision == "approve" else "rejected"
+            safe_reason = str(_redact_secret_like({"reason": reason})["reason"])
+            conn.execute("update confirmations set status = ?, decided_by = ?, decided_at = ?, decision_note = ? where company_id = ? and confirmation_id = ?", (status, reviewer_user_id, decided_at, safe_reason, company_id, confirmation_id))
+            self._insert_audit(
+                conn, company_id=company_id, store_id=None, user_id=reviewer_user_id,
+                actor_type="platform_internal_admin", action_type="billing.domestic_refund.reviewed",
+                target_type="confirmation", target_id=confirmation_id,
+                summary="Platform operator reviewed a merchant SaaS refund request.",
+                details={"decision": decision, "review_reason": safe_reason, "reviewer_company_id": reviewer_company_id,
+                         "order_id": order_id, "amount_minor": int(order["amount_minor"]), "currency": str(order["currency"]),
+                         "decided_at": decided_at, "calls_external_payment_api": False, "triggers_real_refund": False},
+            )
+        return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+
+    def claim_platform_refund_execution(
+        self, *, company_id: str, order_id: str, confirmation_id: str,
+        reviewer_company_id: str, reviewer_user_id: str, reviewed_at: str | datetime,
+        operator_company_id: str, operator_user_id: str, internal_admin_emails: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Freeze the reviewed money action before any provider request, across workers."""
+        self.initialize()
+        lock = " for update" if self.database_engine == "postgres" else ""
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            # Same lock order as review: confirmation, then its account-scoped order.
+            row = conn.execute(f"select * from confirmations where company_id = ? and confirmation_id = ?{lock}", (company_id, confirmation_id)).fetchone()
+            order_row = conn.execute(f"select * from billing_orders where company_id = ? and order_id = ?{lock}", (company_id, order_id)).fetchone()
+            if not row or not order_row:
+                raise KeyError("domestic_billing_order_not_found")
+            confirmation = self._confirmation_row_to_dict(row)
+            order = self._domestic_billing_order_row_to_dict(order_row)
+            for member_company, member_user in ((reviewer_company_id, reviewer_user_id), (operator_company_id, operator_user_id)):
+                member = conn.execute("select u.email, u.status, tm.role from users u join team_members tm on tm.user_id = u.user_id where u.user_id = ? and tm.company_id = ?", (member_user, member_company)).fetchone()
+                if not member or str(member["email"]).lower() not in internal_admin_emails or member["role"] not in {"owner", "admin"} or member["status"] != "active":
+                    raise PermissionError("domestic_refund_execution_requires_platform_internal_admin")
+            confirmed_instant = _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at"))
+            requested_instant = _parse_explicit_timezone_iso_datetime(reviewed_at)
+            if (confirmation["status"] != "approved" or confirmation.get("decided_by") != reviewer_user_id
+                or confirmed_instant is None or requested_instant is None
+                or confirmed_instant != requested_instant):
+                raise ConfirmationDecisionConflict("domestic_refund_review_state_conflict")
+            # psycopg returns aware datetime values; persisted audit/order JSON
+            # always receives one canonical UTC string, never a native object.
+            reviewed_at = confirmed_instant.isoformat()
+            if order["status"] in {"refund_processing", "refunded"}:
+                return {"claimed": False, "status": order["status"]}
+            if order["status"] != "refund_review_requested":
+                raise ConfirmationDecisionConflict("domestic_refund_review_state_conflict")
+            claim_id = f"refund_claim_{secrets.token_hex(16)}"
+            payload = order.get("order") if isinstance(order.get("order"), dict) else {}
+            state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+            payload = {**payload, "state": {**state, "refund_execution_claim_id": claim_id, "refund_execution_claimed_at": now_iso(), "refund_execution_reviewed_at": reviewed_at, "provider_query_required": True}}
+            conn.execute("update billing_orders set status = 'refund_processing', updated_at = ?, order_json = ? where company_id = ? and order_id = ?", (now_iso(), json.dumps(payload, ensure_ascii=False), company_id, order_id))
+            self._insert_audit(conn, company_id=company_id, store_id=None, user_id=operator_user_id,
+                actor_type="platform_internal_admin", action_type="billing.domestic_refund.execution_claimed",
+                target_type="billing_order", target_id=order_id, summary="Refund execution reserved before the provider request.",
+                details={"confirmation_id": confirmation_id, "claim_id": claim_id, "reviewer_user_id": reviewer_user_id, "reviewed_at": reviewed_at, "amount_minor": order["amount_minor"], "currency": order["currency"], "calls_external_payment_api": False, "triggers_real_refund": False})
+        return {"claimed": True, "claim_id": claim_id, "status": "refund_processing"}
+
+    def release_platform_refund_prewrite_claim(self, *, company_id: str, order_id: str, claim_id: str, reason: str) -> bool:
+        """Only the claiming call may undo a proven pre-provider failure, never uncertainty."""
+        self.initialize()
+        lock = " for update" if self.database_engine == "postgres" else ""
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            row = conn.execute(f"select * from billing_orders where company_id = ? and order_id = ?{lock}", (company_id, order_id)).fetchone()
+            if not row:
+                return False
+            order = self._domestic_billing_order_row_to_dict(row)
+            payload = order.get("order") if isinstance(order.get("order"), dict) else {}
+            state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+            if order["status"] != "refund_processing" or state.get("refund_execution_claim_id") != claim_id or state.get("provider_refund_status"):
+                return False
+            payload = {**payload, "state": {**state, "refund_execution_claim_id": "", "provider_query_required": False, "refund_prewrite_failure": str(reason)[:100]}}
+            conn.execute("update billing_orders set status = 'refund_review_requested', updated_at = ?, order_json = ? where company_id = ? and order_id = ?", (now_iso(), json.dumps(payload, ensure_ascii=False), company_id, order_id))
+            self._insert_audit(conn, company_id=company_id, store_id=None, user_id=None, actor_type="system",
+                action_type="billing.domestic_refund.prewrite_released", target_type="billing_order", target_id=order_id,
+                summary="Refund claim released after a proven pre-provider failure.", details={"claim_id": claim_id, "reason": str(reason)[:100], "calls_external_payment_api": False, "triggers_real_refund": False})
+        return True
+
     def reconcile_confirmation_managed_tasks(
         self,
         *,
@@ -5404,17 +8127,22 @@ class SaaSRepository:
                 confirmation_status = str(row["confirmation_status"] or "")
                 if current_status not in eligible_statuses or not confirmation_status:
                     continue
-                if bool(row["has_execution"]):
+                expected_status = {
+                    "rejected": "rejected",
+                    "needs_revision": "needs_revision",
+                    "executed": "completed",
+                    EXTERNAL_EXECUTION_PROCESSING_STATUS: "manual_reconcile_required",
+                }.get(confirmation_status, "")
+                if not expected_status and bool(row["has_execution"]):
+                    # A durable execution row alone does not prove success. A
+                    # terminal confirmation such as needs_revision records the
+                    # verified provider outcome and must win over its presence.
                     expected_status = "completed"
-                else:
+                elif not expected_status:
                     expected_status = {
                         "pending": "waiting_confirmation",
                         "approved": "approved_waiting_execution",
-                        "rejected": "rejected",
-                        "needs_revision": "needs_revision",
-                        "executed": "completed",
                         "external_execution_claimed_prewrite": "approved_waiting_execution",
-                        EXTERNAL_EXECUTION_PROCESSING_STATUS: "manual_reconcile_required",
                     }.get(confirmation_status, "")
                 if not expected_status or expected_status == current_status:
                     continue
@@ -5552,6 +8280,287 @@ class SaaSRepository:
             "external_execution_claimed": True,
             **({"external_execution_claim_binding": claim_binding} if claim_binding else {}),
         }
+
+    def abort_publish_execution_claim_before_write(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+        user_id: str,
+        reason_code: str = "publish_evidence_revalidation_blocked",
+    ) -> dict[str, Any]:
+        """Restore a claimed publish confirmation when no platform call began.
+
+        This is deliberately narrower than generic claim recovery: it is only
+        valid for a ``publish_listing`` claim held by the current synchronous
+        handler, after a final authoritative pre-write check fails. The CAS on
+        the processing status prevents this zero-write recovery from changing
+        a confirmation that another state transition already handled.
+        """
+
+        safe_reason = (
+            reason_code
+            if reason_code in {
+                "publish_evidence_revalidation_blocked",
+                "publish_evidence_changed",
+            }
+            else "publish_evidence_revalidation_blocked"
+        )
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(row) if row else {}
+            if not (
+                str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
+                and str(confirmation.get("action_type") or "") == "publish_listing"
+            ):
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            transitioned = conn.execute(
+                """
+                update confirmations set status = 'needs_revision'
+                where company_id = ? and confirmation_id = ? and status = ? and action_type = 'publish_listing'
+                """,
+                (company_id, confirmation_id, EXTERNAL_EXECUTION_PROCESSING_STATUS),
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=confirmation.get("task_id"),
+                status="needs_revision",
+                expected_statuses={"manual_reconcile_required"},
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=confirmation.get("store_id"),
+                user_id=user_id,
+                actor_type="system",
+                action_type="external_execution.prewrite_aborted",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="The publish claim was restored before any platform write because authoritative evidence changed.",
+                details={
+                    "action_type": "publish_listing",
+                    "reason_code": safe_reason,
+                    "real_platform_write_attempted": False,
+                    "automatic_retry_allowed": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            **confirmation,
+            "status": "needs_revision",
+            "external_execution_claimed": False,
+            "real_platform_write_attempted": False,
+            "secret_exposed": False,
+        }
+
+    def mark_publish_confirmation_needs_revision(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+        user_id: str,
+        reason_code: str = "publish_evidence_changed",
+    ) -> dict[str, Any]:
+        """Expire an approved eBay action when its authoritative facts change."""
+
+        safe_reason = (
+            reason_code
+            if reason_code in {"publish_evidence_changed", "publish_evidence_revalidation_blocked"}
+            else "publish_evidence_changed"
+        )
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(row) if row else {}
+            if not (
+                str(confirmation.get("status") or "") == "approved"
+                and str(confirmation.get("action_type") or "")
+                in {"publish_listing", "save_ebay_listing_draft"}
+            ):
+                raise ConfirmationDecisionConflict("confirmation_evidence_revision_conflict")
+            transitioned = conn.execute(
+                """
+                update confirmations set status = 'needs_revision'
+                where company_id = ? and confirmation_id = ? and status = 'approved'
+                  and action_type in ('publish_listing', 'save_ebay_listing_draft')
+                """,
+                (company_id, confirmation_id),
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("confirmation_evidence_revision_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=confirmation.get("task_id"),
+                status="needs_revision",
+                expected_statuses={"approved_waiting_execution", "approved"},
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=confirmation.get("store_id"),
+                user_id=user_id,
+                actor_type="system",
+                action_type="confirmation.publish_evidence_changed",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="The approved eBay action now requires revision because authoritative source or image-rights evidence changed.",
+                details={
+                    "action_type": confirmation.get("action_type"),
+                    "reason_code": safe_reason,
+                    "real_platform_write_attempted": False,
+                    "requires_new_action_time_confirmation": True,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            **confirmation,
+            "status": "needs_revision",
+            "real_platform_write_attempted": False,
+            "requires_new_action_time_confirmation": True,
+            "secret_exposed": False,
+        }
+
+    def retire_external_execution_after_verified_noop(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+        user_id: str,
+        action_type: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Retire an uncertain confirmation only after a read-only no-op proof.
+
+        This never retries the provider action.  It makes the consumed
+        confirmation non-executable so a later attempt must receive a fresh
+        merchant confirmation.
+        """
+
+        if not (
+            isinstance(evidence, dict)
+            and evidence.get("provider_read_only") is True
+            and evidence.get("external_state_unchanged") is True
+            and evidence.get("automatic_retry_allowed") is False
+            and evidence.get("secret_exposed") is False
+        ):
+            raise ValueError("verified_external_noop_evidence_required")
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("confirmation not found")
+            confirmation = self._confirmation_row_to_dict(row)
+            if not (
+                str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
+                and str(confirmation.get("action_type") or "") == str(action_type or "")
+            ):
+                raise ConfirmationDecisionConflict("external_execution_reconciliation_conflict")
+            executions = conn.execute(
+                "select execution_id, action_type, status, result_json from execution_results where confirmation_id = ?",
+                (confirmation_id,),
+            ).fetchall()
+            recorded_failure_statuses: list[str] = []
+            for execution in executions:
+                try:
+                    result_value = _load_json_field(execution["result_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    result_value = {}
+                result = result_value if isinstance(result_value, dict) else {}
+                audit = result.get("audit") if isinstance(result.get("audit"), dict) else {}
+                real_execution = (
+                    audit.get("real_execution")
+                    if isinstance(audit.get("real_execution"), dict)
+                    else {}
+                )
+                platform_result = (
+                    result.get("platform_result")
+                    if isinstance(result.get("platform_result"), dict)
+                    else {}
+                )
+                steps = result.get("steps") if isinstance(result.get("steps"), list) else []
+                rejected_publish_step = any(
+                    isinstance(step, dict)
+                    and str(step.get("step") or "") == "publish_existing_offer"
+                    and str(step.get("status") or "") == "http_error"
+                    for step in steps
+                )
+                verified_recorded_failure = bool(
+                    str(execution["action_type"] or "") == str(action_type or "")
+                    and str(execution["status"] or "") == "blocked_platform_error"
+                    and str(result.get("status") or "") == "blocked_platform_error"
+                    and real_execution.get("published_to_ebay") is False
+                    and platform_result.get("published_to_ebay") is not True
+                    and platform_result.get("public_listing_created") is not True
+                    and not str(platform_result.get("listing_id") or platform_result.get("item_id") or "")
+                    and rejected_publish_step
+                )
+                if not verified_recorded_failure:
+                    raise ConfirmationDecisionConflict("external_execution_already_recorded")
+                recorded_failure_statuses.append(str(execution["status"] or ""))
+            transitioned = conn.execute(
+                """
+                update confirmations set status = 'needs_revision'
+                where company_id = ? and confirmation_id = ? and status = ?
+                """,
+                (company_id, confirmation_id, EXTERNAL_EXECUTION_PROCESSING_STATUS),
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("external_execution_reconciliation_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=confirmation.get("task_id"),
+                status="needs_revision",
+                expected_statuses={"manual_reconcile_required", "execution_blocked"},
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=confirmation.get("store_id"),
+                user_id=user_id,
+                actor_type="system",
+                action_type="external_execution.reconciled_verified_noop",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="A read-only provider check proved no external change; the consumed confirmation was retired.",
+                details={
+                    "action_type": action_type,
+                    "status": "needs_revision",
+                    "fresh_confirmation_required": True,
+                    "automatic_retry_allowed": False,
+                    "provider_read_only": True,
+                    "external_state_unchanged": True,
+                    "offer_id": str(evidence.get("offer_id") or ""),
+                    "sku": str(evidence.get("sku") or ""),
+                    "recorded_execution_count": len(executions),
+                    "recorded_failure_statuses": recorded_failure_statuses,
+                    "secret_exposed": False,
+                },
+            )
+        return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
 
     def claim_ebay_inventory_location_execution(
         self,
@@ -5967,6 +8976,7 @@ class SaaSRepository:
             "claim_consume_failed",
             "adapter_prewrite_exception",
             "prewrite_check_blocked",
+            "publish_evidence_changed",
         }
         safe_reason = reason_code if reason_code in safe_reasons else "prewrite_check_blocked"
         self.initialize()
@@ -6005,7 +9015,13 @@ class SaaSRepository:
                 )
                 == binding
             )
-            restored_status = "approved" if unchanged else "needs_revision"
+            restored_status = (
+                "needs_revision"
+                if safe_reason == "publish_evidence_changed"
+                else "approved"
+                if unchanged
+                else "needs_revision"
+            )
             aborted = conn.execute(
                 "update external_execution_claims set status = 'aborted' where claim_id = ? and status = 'claimed'",
                 (capability._claim_id,),
@@ -6334,9 +9350,21 @@ class SaaSRepository:
             )
         return {"execution_id": execution_id, **result}
 
-    def list_execution_results(self, *, company_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+    def list_execution_results(
+        self,
+        *,
+        company_id: str,
+        store_id: str | None = None,
+        limit: int | None = None,
+        include_error_ids: tuple[str, ...] = (),
+    ) -> list[dict[str, Any]]:
         self.initialize()
-        params: list[Any] = [company_id]
+        scope_params: list[Any] = [company_id]
+        scope_clause = "c.company_id = ?"
+        if store_id is not None:
+            scope_clause += " and c.store_id = ?"
+            scope_params.append(store_id)
+        params = list(scope_params)
         limit_clause = ""
         if limit and limit > 0:
             limit_clause = "limit ?"
@@ -6346,12 +9374,30 @@ class SaaSRepository:
                 f"""
                 select e.* from execution_results e
                 join confirmations c on c.confirmation_id = e.confirmation_id
-                where c.company_id = ?
+                where {scope_clause}
                 order by e.created_at desc
                 {limit_clause}
                 """,
                 tuple(params),
             ).fetchall()
+            # Keep known account restrictions even when ordinary executions
+            # fill the recent window. Exact error parsing remains in account
+            # health; this text filter only retrieves candidate historical rows
+            # and works with SQLite TEXT and PostgreSQL JSON/JSONB alike.
+            error_ids = sorted({str(value) for value in include_error_ids if str(value).isdigit()})
+            if error_ids and limit and limit > 0:
+                error_clause = " or ".join("cast(e.result_json as text) like ?" for _ in error_ids)
+                historical_rows = conn.execute(
+                    f"""
+                    select e.* from execution_results e
+                    join confirmations c on c.confirmation_id = e.confirmation_id
+                    where {scope_clause} and ({error_clause})
+                    order by e.created_at desc
+                    """,
+                    tuple([*scope_params, *(f"%{error_id}%" for error_id in error_ids)]),
+                ).fetchall()
+                by_id = {row["execution_id"]: row for row in [*rows, *historical_rows]}
+                rows = sorted(by_id.values(), key=lambda row: str(row["created_at"]), reverse=True)
         return [self._execution_row_to_dict(row) for row in rows]
 
     def write_audit(
@@ -6399,7 +9445,7 @@ class SaaSRepository:
         return self._billing_subscription_row_to_dict(row) if row else None
 
     @contextmanager
-    def media_credit_company_lock(self, *, company_id: str) -> Iterator[None]:
+    def media_credit_company_lock(self, *, company_id: str, conn: Any | None = None) -> Iterator[Any]:
         """Serialize one tenant's media-point balance mutations."""
 
         normalized_company = str(company_id or "").strip()
@@ -6408,21 +9454,30 @@ class SaaSRepository:
         digest = hashlib.sha256(f"jiejing-media-credit:{normalized_company}".encode("utf-8")).digest()
         if self.database_engine == "postgres":
             advisory_key = int.from_bytes(digest[:8], "big", signed=True)
-            with self._connect() as conn:
-                conn.execute("select pg_advisory_lock(?)", (advisory_key,)).fetchone()
-                try:
-                    yield
-                finally:
-                    conn.execute("select pg_advisory_unlock(?)", (advisory_key,)).fetchone()
+            if conn is not None:
+                conn.execute("select pg_advisory_xact_lock(?)", (advisory_key,)).fetchone()
+                yield conn
+                return
+            with self._connect() as owned_conn:
+                owned_conn.execute("select pg_advisory_xact_lock(?)", (advisory_key,)).fetchone()
+                yield owned_conn
             return
         lock = _MEDIA_CREDIT_COMPANY_LOCKS[int.from_bytes(digest[:2], "big") % len(_MEDIA_CREDIT_COMPANY_LOCKS)]
         with lock:
-            yield
+            try:
+                yield conn
+            except Exception:
+                if conn is not None:
+                    conn.rollback()
+                raise
+            else:
+                if conn is not None:
+                    conn.commit()
 
     def get_media_credit_account(self, *, company_id: str) -> dict[str, Any]:
         self.initialize()
-        with self.media_credit_company_lock(company_id=company_id):
-            with self._connect() as conn:
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
                 row = conn.execute(
                     """
                     select company_id, balance_points, reserved_points, lifetime_granted_points,
@@ -6465,6 +9520,75 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def get_media_credit_source(
+        self,
+        *,
+        company_id: str,
+        source_type: str,
+        source_reference_id: str = "",
+    ) -> dict[str, Any] | None:
+        """Return one allowlisted source bucket after applying source expiry."""
+
+        self.initialize()
+        normalized_source = str(source_type or "").strip().lower()
+        normalized_reference = str(source_reference_id or "").strip()[:160]
+        if normalized_source not in MEDIA_CREDIT_SOURCE_ALLOWLIST:
+            raise ValueError("unsupported media credit source")
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
+                account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                if expired_points:
+                    conn.execute(
+                        """
+                        update media_credit_accounts
+                        set balance_points = balance_points - ?, updated_at = ?
+                        where company_id = ?
+                        """,
+                        (expired_points, now_iso(), company_id),
+                    )
+                if normalized_reference:
+                    row = conn.execute(
+                        """
+                        select bucket_id, company_id, source_type, source_reference_id,
+                               granted_points, remaining_points, reserved_points, expires_at,
+                               status, created_at, updated_at
+                        from media_credit_buckets
+                        where company_id = ? and source_type = ? and source_reference_id = ?
+                        """,
+                        (company_id, normalized_source, normalized_reference),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        """
+                        select bucket_id, company_id, source_type, source_reference_id,
+                               granted_points, remaining_points, reserved_points, expires_at,
+                               status, created_at, updated_at
+                        from media_credit_buckets
+                        where company_id = ? and source_type = ? and status = 'active'
+                        order by case when expires_at is null or cast(expires_at as text) = '' then 1 else 0 end,
+                                 expires_at asc, created_at asc, bucket_id asc
+                        limit 1
+                        """,
+                        (company_id, normalized_source),
+                    ).fetchone()
+        if not row:
+            return None
+        return {
+            "bucket_id": str(row["bucket_id"]),
+            "company_id": str(row["company_id"]),
+            "source_type": str(row["source_type"]),
+            "source_reference_id": str(row["source_reference_id"]),
+            "granted_points": int(row["granted_points"] or 0),
+            "remaining_points": int(row["remaining_points"] or 0),
+            "reserved_points": int(row["reserved_points"] or 0),
+            "expires_at": str(row["expires_at"] or ""),
+            "status": str(row["status"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+            "secret_exposed": False,
+        }
+
     def revoke_media_credit_source(
         self,
         *,
@@ -6481,13 +9605,13 @@ class SaaSRepository:
         normalized_source = str(source_type or "").strip().lower()
         normalized_reference = str(source_reference_id or "").strip()[:160]
         raw_idempotency = str(idempotency_key or "").strip()
-        if normalized_source not in {"plan_included", "purchased", "legacy"}:
+        if normalized_source not in MEDIA_CREDIT_SOURCE_ALLOWLIST:
             raise ValueError("unsupported media credit source")
         if not normalized_reference or len(raw_idempotency) < 8 or len(raw_idempotency) > 200:
             raise ValueError("media credit source revocation evidence is invalid")
         idempotency_hash = hashlib.sha256(f"{company_id}|{raw_idempotency}".encode("utf-8")).hexdigest()
-        with self.media_credit_company_lock(company_id=company_id):
-            with self._connect() as conn:
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
                 existing = conn.execute(
                     """
                     select ledger_id, company_id, user_id, operation_type, points, status,
@@ -6509,6 +9633,17 @@ class SaaSRepository:
                         "duplicate_request": True,
                         "secret_exposed": False,
                     }
+                expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                if expired_points:
+                    conn.execute(
+                        """
+                        update media_credit_accounts
+                        set balance_points = balance_points - ?, updated_at = ?
+                        where company_id = ?
+                        """,
+                        (expired_points, now_iso(), company_id),
+                    )
+                    account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
                 bucket = conn.execute(
                     """
                     select bucket_id, remaining_points, reserved_points, status
@@ -6625,7 +9760,7 @@ class SaaSRepository:
         normalized_source_reference = str(source_reference_id or "").strip()[:160]
         safe_points = int(points)
         raw_idempotency = str(idempotency_key or "").strip()
-        if normalized_source not in {"plan_included", "purchased", "legacy"}:
+        if normalized_source not in MEDIA_CREDIT_SOURCE_ALLOWLIST:
             raise ValueError("unsupported media credit source")
         if not normalized_source_reference or safe_points <= 0:
             raise ValueError("media credit source reservation evidence is invalid")
@@ -6635,8 +9770,8 @@ class SaaSRepository:
         safe_reference_type = str(reference_type or "billing_refund").strip()[:64]
         safe_reference_id = str(reference_id or "").strip()[:160]
         safe_details = _redact_secret_like(details or {})
-        with self.media_credit_company_lock(company_id=company_id):
-            with self._connect() as conn:
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
                 existing = conn.execute(
                     """
                     select ledger_id, company_id, user_id, operation_type, points, status,
@@ -6657,6 +9792,17 @@ class SaaSRepository:
                         "duplicate_request": True,
                         "secret_exposed": False,
                     }
+                expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                if expired_points:
+                    conn.execute(
+                        """
+                        update media_credit_accounts
+                        set balance_points = balance_points - ?, updated_at = ?
+                        where company_id = ?
+                        """,
+                        (expired_points, now_iso(), company_id),
+                    )
+                    account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
                 bucket = conn.execute(
                     """
                     select bucket_id, remaining_points, reserved_points, status
@@ -7210,6 +10356,17 @@ class SaaSRepository:
                     json.dumps(record, ensure_ascii=False),
                 ),
             )
+            activation_row = conn.execute(
+                "select activated_at from platform_trial_activations where company_id = ?",
+                (company_id,),
+            ).fetchone()
+            canonical_activated_at = str(activation_row["activated_at"] or "") if activation_row else ""
+            if record["activated_at"] != canonical_activated_at:
+                record["activated_at"] = canonical_activated_at
+                conn.execute(
+                    "update platform_trial_activations set activation_json = ? where company_id = ?",
+                    (json.dumps(record, ensure_ascii=False), company_id),
+                )
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -8887,6 +12044,282 @@ class SaaSRepository:
         value = _load_json_field(row["activation_json"])
         return value if isinstance(value, dict) else None
 
+    def platform_model_trial_reservation_usage(
+        self,
+        *,
+        company_id: str,
+        period_key: str,
+    ) -> dict[str, int]:
+        """Return the durable baseline plus reservations that still consume quota."""
+
+        self.initialize()
+        normalized_company = str(company_id or "").strip()
+        normalized_period = str(period_key or "").strip().lower()
+        if not normalized_company or not re.fullmatch(r"[0-9a-f]{64}", normalized_period):
+            raise ValueError("platform model trial company and opaque period key are required")
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select
+                  coalesce(max(baseline_used), 0) as baseline_used,
+                  coalesce(sum(case when status in ('reserved', 'consumed') then 1 else 0 end), 0)
+                    as effective_reservation_count,
+                  coalesce(max(slot_number), 0) as max_slot
+                from platform_model_trial_reservations
+                where company_id = ? and period_key = ?
+                """,
+                (normalized_company, normalized_period),
+            ).fetchone()
+        baseline_used = max(0, int(row["baseline_used"] or 0)) if row else 0
+        effective_count = max(0, int(row["effective_reservation_count"] or 0)) if row else 0
+        return {
+            "baseline_used": baseline_used,
+            "effective_reservation_count": effective_count,
+            "reservation_used": baseline_used + effective_count,
+            "max_slot": max(0, int(row["max_slot"] or 0)) if row else 0,
+        }
+
+    def reserve_platform_model_trial_slot(
+        self,
+        *,
+        company_id: str,
+        period_key: str,
+        historical_used: int,
+        limit: int,
+        route_scope: str,
+    ) -> dict[str, Any]:
+        """Atomically reserve one durable platform-funded trial action.
+
+        Slots are never deleted. A request that made zero provider calls may
+        release its slot; a later request reuses that row with a fresh
+        reservation id so a delayed release cannot affect the new owner.
+        """
+
+        self.initialize()
+        normalized_company = str(company_id or "").strip()
+        normalized_period = str(period_key or "").strip().lower()
+        normalized_scope = str(route_scope or "").strip().lower()
+        if not normalized_company or not re.fullmatch(r"[0-9a-f]{64}", normalized_period):
+            raise ValueError("platform model trial company and opaque period key are required")
+        if normalized_scope not in {"listing_draft_generation", "merchant_ceo_chat"}:
+            raise ValueError("unsupported platform model trial route scope")
+        bounded_limit = max(0, int(limit or 0))
+        known_task_used = max(0, int(historical_used or 0))
+        if bounded_limit <= 0:
+            return {
+                "allowed": True,
+                "reservation_created": False,
+                "unlimited": True,
+                "slot_number": 0,
+                "used": known_task_used,
+                "limit": bounded_limit,
+                "storage": "shared_database",
+                "secret_exposed": False,
+            }
+
+        reserved_row = None
+        created_at = now_iso()
+        with self._connect() as conn:
+            # Reusing different released rows must share the same fresh quota
+            # snapshot. Unique slot numbers alone cannot serialize that case.
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            else:
+                conn.execute(
+                    "select company_id from companies where company_id = ? for update",
+                    (normalized_company,),
+                ).fetchone()
+            usage_row = conn.execute(
+                """
+                select
+                  count(*) as reservation_row_count,
+                  coalesce(max(baseline_used), 0) as baseline_used,
+                  coalesce(sum(case when status in ('reserved', 'consumed') then 1 else 0 end), 0)
+                    as effective_reservation_count,
+                  coalesce(max(slot_number), 0) as max_slot
+                from platform_model_trial_reservations
+                where company_id = ? and period_key = ?
+                """,
+                (normalized_company, normalized_period),
+            ).fetchone()
+            row_count = max(0, int(usage_row["reservation_row_count"] or 0)) if usage_row else 0
+            stored_baseline = (
+                max(0, int(usage_row["baseline_used"] or 0))
+                if row_count > 0 and usage_row
+                else known_task_used
+            )
+            effective_count = max(0, int(usage_row["effective_reservation_count"] or 0)) if usage_row else 0
+            baseline_used = max(stored_baseline, known_task_used - effective_count)
+            effective_used = max(known_task_used, baseline_used + effective_count)
+            if effective_used >= bounded_limit:
+                return {
+                    "allowed": False,
+                    "reservation_created": False,
+                    "unlimited": False,
+                    "reservation_id": "",
+                    "slot_number": 0,
+                    "used": effective_used,
+                    "limit": bounded_limit,
+                    "storage": "shared_database",
+                    "route_scope": normalized_scope,
+                    "secret_exposed": False,
+                }
+
+            # Reuse a released row first. Updating the primary reservation token
+            # prevents an old delayed release from touching the new request.
+            for _attempt in range(min(bounded_limit + 1, 1000)):
+                candidate_id = _id("trialres")
+                reserved_row = conn.execute(
+                    """
+                    update platform_model_trial_reservations
+                    set reservation_id = ?, route_scope = ?, baseline_used = ?,
+                        status = 'reserved', created_at = ?, released_at = null
+                    where reservation_id = (
+                      select reusable.reservation_id
+                      from platform_model_trial_reservations as reusable
+                      where reusable.company_id = ? and reusable.period_key = ?
+                        and reusable.status = 'released'
+                      order by reusable.slot_number
+                      limit 1
+                    )
+                      and status = 'released'
+                    returning reservation_id, slot_number, baseline_used, status
+                    """,
+                    (
+                        candidate_id,
+                        normalized_scope,
+                        baseline_used,
+                        created_at,
+                        normalized_company,
+                        normalized_period,
+                    ),
+                ).fetchone()
+                if reserved_row:
+                    break
+                # A competing transaction may have claimed the selected row.
+                # A fresh statement gets a new snapshot before we give up reuse.
+                released_row = conn.execute(
+                    """
+                    select reservation_id
+                    from platform_model_trial_reservations
+                    where company_id = ? and period_key = ? and status = 'released'
+                    limit 1
+                    """,
+                    (normalized_company, normalized_period),
+                ).fetchone()
+                if not released_row:
+                    break
+
+            if reserved_row is None:
+                for slot_number in range(effective_used + 1, bounded_limit + 1):
+                    candidate_id = _id("trialres")
+                    reserved_row = conn.execute(
+                        """
+                    insert into platform_model_trial_reservations (
+                      reservation_id, company_id, period_key, slot_number, route_scope,
+                      baseline_used, status, created_at, released_at
+                    ) values (?, ?, ?, ?, ?, ?, 'reserved', ?, null)
+                    on conflict (company_id, period_key, slot_number) do nothing
+                    returning reservation_id, slot_number, baseline_used, status
+                    """,
+                        (
+                            candidate_id,
+                            normalized_company,
+                            normalized_period,
+                            slot_number,
+                            normalized_scope,
+                            baseline_used,
+                            created_at,
+                        ),
+                    ).fetchone()
+                    if reserved_row:
+                        break
+
+            refreshed_row = conn.execute(
+                """
+                select
+                  coalesce(max(baseline_used), 0) as baseline_used,
+                  coalesce(sum(case when status in ('reserved', 'consumed') then 1 else 0 end), 0)
+                    as effective_reservation_count
+                from platform_model_trial_reservations
+                where company_id = ? and period_key = ?
+                """,
+                (normalized_company, normalized_period),
+            ).fetchone()
+
+        refreshed_baseline = max(0, int(refreshed_row["baseline_used"] or 0)) if refreshed_row else 0
+        refreshed_count = max(0, int(refreshed_row["effective_reservation_count"] or 0)) if refreshed_row else 0
+        slot_number = int(reserved_row["slot_number"] or 0) if reserved_row else 0
+        return {
+            "allowed": reserved_row is not None,
+            "reservation_created": reserved_row is not None,
+            "unlimited": False,
+            "reservation_id": str(reserved_row["reservation_id"] or "") if reserved_row else "",
+            "slot_number": slot_number,
+            "used": max(known_task_used, refreshed_baseline + refreshed_count),
+            "limit": bounded_limit,
+            "storage": "shared_database",
+            "route_scope": normalized_scope,
+            "prompt_persisted": False,
+            "credential_persisted": False,
+            "secret_exposed": False,
+        }
+
+    def settle_platform_model_trial_reservation(
+        self,
+        *,
+        company_id: str,
+        reservation_id: str,
+        request_count: int,
+    ) -> dict[str, Any]:
+        """Consume a provider-entered request or release a zero-request slot."""
+
+        self.initialize()
+        normalized_company = str(company_id or "").strip()
+        normalized_id = str(reservation_id or "").strip()[:160]
+        if not normalized_company or not normalized_id:
+            raise ValueError("platform model trial company and reservation are required")
+        provider_entered = max(0, int(request_count or 0)) > 0
+        target_status = "consumed" if provider_entered else "released"
+        released_at = None if provider_entered else now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                update platform_model_trial_reservations
+                set status = ?, released_at = ?
+                where company_id = ? and reservation_id = ? and status = 'reserved'
+                returning reservation_id, slot_number, status, released_at
+                """,
+                (target_status, released_at, normalized_company, normalized_id),
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    """
+                    select reservation_id, slot_number, status, released_at
+                    from platform_model_trial_reservations
+                    where company_id = ? and reservation_id = ?
+                    """,
+                    (normalized_company, normalized_id),
+                ).fetchone()
+        existing_status = str(row["status"] or "") if row else ""
+        return {
+            "settled": bool(row and existing_status == target_status),
+            "reservation_id": normalized_id if row else "",
+            "slot_number": int(row["slot_number"] or 0) if row else 0,
+            "status": existing_status,
+            "provider_request_count": max(0, int(request_count or 0)),
+            "released_at": str(row["released_at"] or "") if row else "",
+            "storage": "shared_database",
+            "secret_exposed": False,
+        }
+
+    def get_merchant_media_credit_usage(self, *, company_id: str, limit: int = 30) -> dict[str, Any]:
+        from .media_credit_activity import read_merchant_media_credit_usage
+
+        self.initialize()
+        with self._connect() as conn:
+            return read_merchant_media_credit_usage(conn, company_id=company_id, limit=limit)
+
     def list_media_credit_ledger(self, *, company_id: str, limit: int = 30) -> list[dict[str, Any]]:
         self.initialize()
         safe_limit = min(max(int(limit), 1), 100)
@@ -8903,6 +12336,150 @@ class SaaSRepository:
                 (company_id, safe_limit),
             ).fetchall()
         return [self._media_credit_ledger_row_to_dict(row) for row in rows]
+
+    def get_media_credit_terminal_for_reservation(
+        self,
+        *,
+        company_id: str,
+        reservation_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the authoritative settle/release outcome for one reservation."""
+
+        self.initialize()
+        clean_reservation_id = str(reservation_id or "").strip()[:80]
+        if not clean_reservation_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select ledger_id, company_id, user_id, operation_type, points, status,
+                       reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                from media_credit_ledger
+                where company_id = ? and reservation_id = ?
+                  and operation_type in ('settle', 'release', 'revoke')
+                order by created_at asc, ledger_id asc
+                limit 1
+                """,
+                (company_id, clean_reservation_id),
+            ).fetchone()
+        return self._media_credit_ledger_row_to_dict(row) if row else None
+
+    def get_media_credit_reservation_authority(
+        self,
+        *,
+        company_id: str,
+        reservation_id: str,
+        expected_points: int | None = None,
+        expected_reference_id: str = "",
+        allowed_reference_types: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """Verify the live reservation row and every backing bucket before provider spend."""
+
+        self.initialize()
+        clean_reservation_id = str(reservation_id or "").strip()[:80]
+        clean_reference_id = str(expected_reference_id or "").strip()[:160]
+        clean_reference_types = {
+            str(value or "").strip()[:64]
+            for value in allowed_reference_types
+            if str(value or "").strip()
+        }
+        blocked_by: list[str] = []
+        ledger_entry: dict[str, Any] = {}
+        allocations: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
+                account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                if expired_points:
+                    conn.execute(
+                        "update media_credit_accounts set balance_points = balance_points - ?, updated_at = ? where company_id = ?",
+                        (expired_points, now_iso(), company_id),
+                    )
+                    account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                row = (
+                    conn.execute(
+                        """
+                        select ledger_id, company_id, user_id, operation_type, points, status,
+                               reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                        from media_credit_ledger
+                        where company_id = ? and ledger_id = ?
+                        """,
+                        (company_id, clean_reservation_id),
+                    ).fetchone()
+                    if clean_reservation_id
+                    else None
+                )
+                if not row:
+                    blocked_by.append("reservation_not_found")
+                else:
+                    ledger_entry = self._media_credit_ledger_row_to_dict(row)
+                    if str(row["operation_type"] or "") != "reserve":
+                        blocked_by.append("reservation_operation_invalid")
+                    if str(row["status"] or "") != "reserved":
+                        blocked_by.append("reservation_not_active")
+                    if expected_points is not None and int(row["points"] or 0) != int(expected_points):
+                        blocked_by.append("reservation_points_mismatch")
+                    if clean_reference_id and str(row["reference_id"] or "") != clean_reference_id:
+                        blocked_by.append("reservation_reference_mismatch")
+                    if clean_reference_types and str(row["reference_type"] or "") not in clean_reference_types:
+                        blocked_by.append("reservation_reference_type_mismatch")
+                    payload = _load_json_field(row["ledger_json"])
+                    details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+                    raw_allocations = details.get("allocations") if isinstance(details.get("allocations"), list) else []
+                    allocation_total = 0
+                    now = datetime.now(timezone.utc)
+                    for raw_allocation in raw_allocations:
+                        if not isinstance(raw_allocation, dict):
+                            blocked_by.append("reservation_bucket_allocation_invalid")
+                            continue
+                        bucket_id = str(raw_allocation.get("bucket_id") or "")
+                        points = max(0, _safe_int(raw_allocation.get("points"), default=0))
+                        if not bucket_id or points <= 0:
+                            blocked_by.append("reservation_bucket_allocation_invalid")
+                            continue
+                        allocation_total += points
+                        bucket = conn.execute(
+                            """
+                            select bucket_id, source_type, source_reference_id, reserved_points, status, expires_at
+                            from media_credit_buckets
+                            where company_id = ? and bucket_id = ?
+                            """,
+                            (company_id, bucket_id),
+                        ).fetchone()
+                        if not bucket:
+                            blocked_by.append("reservation_bucket_not_found")
+                            continue
+                        expires_at = _parse_iso_datetime(str(bucket["expires_at"] or ""))
+                        if str(bucket["status"] or "") != "active":
+                            blocked_by.append("reservation_bucket_not_active")
+                        if int(bucket["reserved_points"] or 0) < points:
+                            blocked_by.append("reservation_bucket_points_missing")
+                        if expires_at and expires_at <= now:
+                            blocked_by.append("reservation_bucket_expired")
+                        allocations.append(
+                            {
+                                "bucket_id": bucket_id,
+                                "source_type": str(bucket["source_type"] or ""),
+                                "source_reference_id": str(bucket["source_reference_id"] or ""),
+                                "points": points,
+                                "status": str(bucket["status"] or ""),
+                                "expires_at": str(bucket["expires_at"] or ""),
+                            }
+                        )
+                    if not raw_allocations or allocation_total != int(row["points"] or 0):
+                        blocked_by.append("reservation_bucket_allocation_incomplete")
+                account = self._media_credit_account_row_to_dict(
+                    account_row,
+                    bucket_summary=self._media_credit_bucket_summary(conn, company_id=company_id),
+                )
+        return {
+            "valid_for_provider": not blocked_by,
+            "blocked_by": list(dict.fromkeys(blocked_by)),
+            "reservation": ledger_entry,
+            "allocations": allocations,
+            "account": account,
+            "secret_exposed": False,
+        }
 
     def apply_media_credit_operation(
         self,
@@ -8934,9 +12511,14 @@ class SaaSRepository:
         safe_reservation_id = str(reservation_id or "").strip()[:80]
         idempotency_hash = hashlib.sha256(f"{company_id}|{raw_idempotency}".encode("utf-8")).hexdigest()
         safe_details = _redact_secret_like(details or {})
+        orphan_watchdog_release = bool(
+            operation == "release"
+            and str(safe_details.get("reason") or "") == "stale_orphan_media_reservation_recovered"
+            and safe_details.get("provider_call_triggered") is False
+        )
 
-        with self.media_credit_company_lock(company_id=company_id):
-            with self._connect() as conn:
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
                 existing = conn.execute(
                     """
                     select ledger_id, company_id, user_id, operation_type, points, status,
@@ -8981,7 +12563,14 @@ class SaaSRepository:
                         """,
                         (company_id, safe_reservation_id),
                     ).fetchone()
-                    if not reservation or reservation["operation_type"] != "reserve" or reservation["status"] != "reserved":
+                    reservation_status = str(reservation["status"] or "") if reservation else ""
+                    if (
+                        not reservation
+                        or reservation["operation_type"] != "reserve"
+                        or reservation_status not in (
+                            {"reserved", "recovering"} if orphan_watchdog_release else {"reserved"}
+                        )
+                    ):
                         raise ValueError("media credit reservation is not available")
                     reserved_by_entry = int(reservation["points"] or 0)
                     if operation in {"settle", "revoke"} and safe_points > reserved_by_entry:
@@ -9243,12 +12832,12 @@ class SaaSRepository:
         details: dict[str, Any],
     ) -> None:
         source_type = str(details.get("credit_source") or "legacy").strip().lower()
-        if source_type not in {"plan_included", "purchased", "legacy"}:
-            source_type = "legacy"
+        if source_type not in MEDIA_CREDIT_SOURCE_ALLOWLIST:
+            raise ValueError("unsupported media credit source")
         source_reference_id = str(details.get("source_reference_id") or reference_id or idempotency_hash).strip()[:160]
         expires_at = str(details.get("expires_at") or "").strip()[:64] or None
-        if source_type == "plan_included" and not expires_at:
-            raise ValueError("plan included media points require an expiry")
+        if source_type in {"plan_included", CONTROLLED_MEDIA_CREDIT_SOURCE, OWNER_MEDIA_TESTING_SOURCE} and not expires_at:
+            raise ValueError("expiring media credit source requires an expiry")
         now = now_iso()
         conn.execute(
             """
@@ -9285,8 +12874,9 @@ class SaaSRepository:
             select bucket_id, source_type, remaining_points, reserved_points, expires_at
             from media_credit_buckets
             where company_id = ? and status = 'active'
+              and source_type not in ('controlled_acceptance', 'internal_owner_testing')
             order by case source_type when 'plan_included' then 0 when 'purchased' then 1 else 2 end,
-                     case when expires_at is null or expires_at = '' then 1 else 0 end,
+                     case when expires_at is null or cast(expires_at as text) = '' then 1 else 0 end,
                      expires_at asc, created_at asc, bucket_id asc
             """,
             (company_id,),
@@ -9395,7 +12985,9 @@ class SaaSRepository:
             """
             select bucket_id, remaining_points, reserved_points, expires_at
             from media_credit_buckets
-            where company_id = ? and source_type = 'plan_included' and status in ('active', 'expiring')
+            where company_id = ?
+              and source_type in ('plan_included', 'controlled_acceptance', 'internal_owner_testing')
+              and status in ('active', 'expiring')
             """,
             (company_id,),
         ).fetchall()
@@ -9865,6 +13457,13 @@ class SaaSRepository:
             if not duplicate_transition and current_status not in allowed_current_statuses:
                 raise ValueError("domestic billing state transition is not allowed")
             safe_order = current.get("order") if isinstance(current.get("order"), dict) else {}
+            previous_state = safe_order.get("state") if isinstance(safe_order.get("state"), dict) else {}
+            # A durable pre-send claim already uses refund_processing. The first
+            # signed PROCESSING receipt is new evidence, not a duplicate to drop.
+            refresh_processing_evidence = (duplicate_transition and status == "refund_processing"
+                and state_details.get("provider_verified") is True
+                and (previous_state.get("provider_refund_status") != state_details.get("provider_refund_status")
+                     or previous_state.get("provider_verified") is not True))
             if status in {"closed", "payment_failed", "refunded"}:
                 safe_order = _without_domestic_checkout_uri(safe_order)
             safe_order = _redact_secret_like(
@@ -9875,7 +13474,7 @@ class SaaSRepository:
                     "secret_exposed": False,
                 }
             )
-            if not duplicate_transition:
+            if not duplicate_transition or refresh_processing_evidence:
                 updated = conn.execute(
                     """
                     update billing_orders
@@ -9918,7 +13517,7 @@ class SaaSRepository:
                 """,
                 (company_id, order_id),
             ).fetchone()
-            if not duplicate_transition:
+            if not duplicate_transition or refresh_processing_evidence:
                 self._insert_audit(
                     conn,
                     company_id=company_id,
@@ -9957,6 +13556,38 @@ class SaaSRepository:
                 limit ?
                 """,
                 (company_id, safe_limit),
+            ).fetchall()
+        return [self._domestic_billing_order_row_to_dict(row) for row in rows]
+
+    def platform_refund_usage_evidence(self, *, company_id: str, paid_at: str) -> dict[str, Any]:
+        """Aggregate account use since this payment without exposing prompts or order PII."""
+        self.initialize()
+        since = str(paid_at or "")
+        if not _parse_iso_datetime(since):
+            return {"available": False, "reason": "payment_timestamp_missing"}
+        window = "cast(created_at as timestamptz) >= cast(? as timestamptz)" if self.database_engine == "postgres" else "julianday(created_at) >= julianday(?)"
+        with self._connect() as conn:
+            model = conn.execute(
+                f"select coalesce(sum(case when usage_owner = 'jiejing_platform_trial' then request_count else 0 end), 0) as platform_requests, coalesce(sum(request_count), 0) as all_requests from model_usage_ledger where company_id = ? and {window}",
+                (company_id, since),
+            ).fetchone()
+            media = conn.execute(f"select coalesce(sum(points), 0) as settled_points from media_credit_ledger where company_id = ? and operation_type = 'settle' and {window}", (company_id, since)).fetchone()
+            costs = conn.execute(f"select count(*) as operation_count from provider_cost_ledger where company_id = ? and {window}", (company_id, since)).fetchone()
+        subscription = self.get_billing_subscription(company_id=company_id) or {}
+        return {"available": True, "since": since, "usage_scope": "company_since_payment_not_order_allocated",
+                "platform_model_request_count": int(model["platform_requests"]), "all_model_request_count": int(model["all_requests"]),
+                "settled_media_points": int(media["settled_points"]), "provider_operation_count": int(costs["operation_count"]),
+                "current_subscription_status": str(subscription.get("status") or "missing"),
+                "current_entitlement_active": subscription.get("entitlement_active") is True,
+                "current_entitlement_until": str(subscription.get("active_until") or ""), "merchant_content_exposed": False}
+
+    def list_platform_refund_review_orders(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Internal operations only: bounded exact refund targets, never provider secrets."""
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select * from billing_orders where provider = 'wechat_pay_native' and status in ('refund_review_requested', 'refund_processing', 'refund_failed', 'refunded') order by updated_at desc limit ?",
+                (max(1, min(int(limit), 100)),),
             ).fetchall()
         return [self._domestic_billing_order_row_to_dict(row) for row in rows]
 
@@ -11299,6 +14930,57 @@ class SaaSRepository:
             ).fetchone()
         return dict(row) if row else {}
 
+    def read_legacy_listing_generation_evidence(
+        self, *, company_id: str, store_id: str, user_id: str, task_id: str,
+        identity: dict[str, str], base_report_id: str, revision: int,
+    ) -> dict[str, Any]:
+        """Read one bounded, immutable-evidence snapshot; never repair legacy rows."""
+        conn = self._connect()
+        try:
+            with conn:
+                if self.database_engine == "postgres":
+                    conn.execute("set transaction isolation level repeatable read, read only")
+                else:
+                    conn.execute("pragma query_only = on")
+                    conn.execute("begin")
+                task = conn.execute("select * from tasks where company_id = ? and store_id = ? and user_id = ? and task_id = ?",
+                                    (company_id, store_id, user_id, task_id)).fetchone()
+                if task is None:
+                    return {}
+                checkpoint = conn.execute("""select * from listing_draft_edit_revisions
+                    where company_id = ? and store_id = ? and project_key = ? and source_report_id = ?
+                      and candidate_id = ? and revision = ? and base_report_id = ?""",
+                    (company_id, store_id, identity["key"], identity["source_report_id"], identity["candidate_id"], revision, base_report_id)).fetchone()
+                base = conn.execute("""select r.*, t.company_id, t.store_id, t.user_id from reports r
+                    join tasks t on t.task_id = r.task_id
+                    where t.company_id = ? and t.store_id = ? and r.report_id = ?""",
+                    (company_id, store_id, base_report_id)).fetchone()
+                ledger = conn.execute("select * from model_usage_ledger where company_id = ? and task_id = ? limit 3",
+                                      (company_id, task_id)).fetchall()
+                field = (lambda key: f"input_json -> 'listing_project_identity' ->> '{key}'") if self.database_engine == "postgres" else (
+                    lambda key: f"case when json_valid(input_json) then json_extract(input_json, '$.listing_project_identity.{key}') end")
+                predicates = " and ".join(f"({field(key)}) = ?" for key in ("key", "source_report_id", "candidate_id"))
+                related = conn.execute(f"""select * from tasks where company_id = ? and store_id = ?
+                    and task_type = 'listing_draft_generation' and {predicates} limit 201""",
+                    (company_id, store_id, identity["key"], identity["source_report_id"], identity["candidate_id"])).fetchall()
+                ids = list(dict.fromkeys([task_id, *(row["task_id"] for row in related)]))
+                marks = ",".join("?" for _ in ids)
+                reports = conn.execute(f"""select r.*, t.company_id, t.store_id, t.user_id from reports r
+                    join tasks t on t.task_id = r.task_id where t.company_id = ? and t.store_id = ?
+                    and r.task_id in ({marks})""", (company_id, store_id, *ids)).fetchall()
+                related_ledger = conn.execute(f"select * from model_usage_ledger where company_id = ? and task_id in ({marks}) limit 401",
+                                              (company_id, *ids)).fetchall()
+                return {"task": self._task_row_to_dict(task), "checkpoint": dict(checkpoint) if checkpoint else None,
+                        "base_report": self._report_row_to_dict(base) if base else None,
+                        "ledger": [dict(row) for row in ledger],
+                        "related_tasks": [self._task_row_to_dict(row) for row in related],
+                        "related_truncated": len(related) > 200 or len(related_ledger) > 400,
+                        "related_ledger": [dict(row) for row in related_ledger],
+                        "reports": [self._report_row_to_dict(row) for row in reports]}
+        finally:
+            if self.database_engine != "postgres":
+                conn.close()
+
     def record_model_usage(
         self,
         *,
@@ -11422,7 +15104,10 @@ class SaaSRepository:
             "users",
             "companies",
             "platform_trial_activations",
+            "platform_model_trial_reservations",
             "merchant_onboarding_states",
+            "listing_draft_edit_heads",
+            "listing_draft_edit_revisions",
             "team_members",
             "team_invitations",
             "stores",
@@ -14214,6 +17899,37 @@ class SaaSRepository:
             conn.execute("alter table user_sessions add column refresh_session_id text")
 
     @staticmethod
+    def _ensure_platform_model_trial_reservation_lifecycle(conn: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in conn.execute("pragma table_info(platform_model_trial_reservations)").fetchall()
+        }
+        if "baseline_used" not in columns:
+            conn.execute(
+                "alter table platform_model_trial_reservations "
+                "add column baseline_used integer not null default 0"
+            )
+        if "status" not in columns:
+            conn.execute(
+                "alter table platform_model_trial_reservations "
+                "add column status text not null default 'consumed'"
+            )
+        if "released_at" not in columns:
+            conn.execute("alter table platform_model_trial_reservations add column released_at text")
+        conn.execute(
+            """
+            update platform_model_trial_reservations as reservation
+            set baseline_used = (
+              select max(0, min(period_rows.slot_number) - 1)
+              from platform_model_trial_reservations as period_rows
+              where period_rows.company_id = reservation.company_id
+                and period_rows.period_key = reservation.period_key
+            )
+            where reservation.baseline_used = 0
+            """
+        )
+
+    @staticmethod
     def _ensure_account_scoped_confirmations(conn: sqlite3.Connection) -> None:
         """Make store/task ownership optional for billing and other account controls."""
 
@@ -14598,6 +18314,8 @@ class SaaSRepository:
             "asset_manifest": payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), list) else [],
             "asset_manifest_validation": payload.get("asset_manifest_validation") if isinstance(payload.get("asset_manifest_validation"), dict) else {},
             "asset_review": payload.get("asset_review") if isinstance(payload.get("asset_review"), dict) else {},
+            "product_fact_gate": payload.get("product_fact_gate") if isinstance(payload.get("product_fact_gate"), dict) else {},
+            "media_router": payload.get("media_router") if isinstance(payload.get("media_router"), dict) else {},
             "asset_version": payload.get("asset_version") if isinstance(payload.get("asset_version"), dict) else {},
             "merchant_review": payload.get("merchant_review") if isinstance(payload.get("merchant_review"), dict) else {},
             "cost_guard": payload.get("cost_guard") if isinstance(payload.get("cost_guard"), dict) else {},
@@ -14609,7 +18327,7 @@ class SaaSRepository:
         }
 
     def _report_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
-        return {
+        projected = {
             "report_id": row["report_id"],
             "task_id": row["task_id"],
             "runtime_run_id": row["runtime_run_id"],
@@ -14619,6 +18337,14 @@ class SaaSRepository:
             "created_at": row["created_at"],
             "report": _load_json_field(row["report_json"]),
         }
+        row_keys = set(row.keys())
+        if "company_id" in row_keys:
+            projected["company_id"] = row["company_id"]
+        if "store_id" in row_keys:
+            projected["store_id"] = row["store_id"]
+        if "user_id" in row_keys:
+            projected["user_id"] = row["user_id"]
+        return projected
 
     def _task_step_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         step_json = _load_json_field(row["step_json"])
@@ -14730,6 +18456,11 @@ class SaaSRepository:
         turn["store_id"] = str(row["store_id"] or turn.get("store_id") or "")
         turn["created_at"] = str(row["created_at"] or turn.get("created_at") or "")
         turn["updated_at"] = str(row["updated_at"] or turn.get("updated_at") or "")
+        if isinstance(payload, dict) and payload.get("archive_contract") == "server_finalized_chat_archive_v1":
+            dispatch = payload.get("semantic_dispatch")
+            if (isinstance(dispatch, dict) and dispatch.get("company_id") == str(row["company_id"])
+                    and dispatch.get("store_id") == str(row["store_id"] or "")):
+                turn["semantic_dispatch"] = _redact_secret_like(dispatch)
         turn["secret_exposed"] = False
         return turn
 
@@ -14794,7 +18525,13 @@ class SaaSRepository:
         included_reserved = 0
         purchased_points = 0
         purchased_reserved = 0
+        controlled_acceptance_points = 0
+        controlled_acceptance_reserved = 0
+        owner_testing_points = 0
+        owner_testing_reserved = 0
         included_expiries: list[str] = []
+        controlled_acceptance_expiries: list[str] = []
+        owner_testing_expiries: list[str] = []
         for item in rows:
             remaining = max(0, int(item["remaining_points"] or 0))
             reserved = max(0, int(item["reserved_points"] or 0))
@@ -14806,6 +18543,18 @@ class SaaSRepository:
                 expires_at = str(item["expires_at"] or "").strip()
                 if expires_at:
                     included_expiries.append(expires_at)
+            elif source_type == CONTROLLED_MEDIA_CREDIT_SOURCE:
+                controlled_acceptance_points += available
+                controlled_acceptance_reserved += reserved
+                expires_at = str(item["expires_at"] or "").strip()
+                if expires_at:
+                    controlled_acceptance_expiries.append(expires_at)
+            elif source_type == OWNER_MEDIA_TESTING_SOURCE:
+                owner_testing_points += available
+                owner_testing_reserved += reserved
+                expires_at = str(item["expires_at"] or "").strip()
+                if expires_at:
+                    owner_testing_expiries.append(expires_at)
             else:
                 purchased_points += available
                 purchased_reserved += reserved
@@ -14815,6 +18564,14 @@ class SaaSRepository:
             "included_expires_at": min(included_expiries) if included_expiries else "",
             "purchased_points": purchased_points,
             "purchased_reserved_points": purchased_reserved,
+            "controlled_acceptance_points": controlled_acceptance_points,
+            "controlled_acceptance_reserved_points": controlled_acceptance_reserved,
+            "controlled_acceptance_expires_at": (
+                min(controlled_acceptance_expiries) if controlled_acceptance_expiries else ""
+            ),
+            "owner_testing_points": owner_testing_points,
+            "owner_testing_reserved_points": owner_testing_reserved,
+            "owner_testing_expires_at": min(owner_testing_expiries) if owner_testing_expiries else "",
         }
 
     def _media_credit_account_row_to_dict(
@@ -14838,6 +18595,8 @@ class SaaSRepository:
         }
 
     def _media_credit_ledger_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        ledger_payload = _load_json_field(row["ledger_json"])
+        details = ledger_payload.get("details") if isinstance(ledger_payload.get("details"), dict) else {}
         return {
             "ledger_id": row["ledger_id"],
             "operation_type": row["operation_type"],
@@ -14848,6 +18607,7 @@ class SaaSRepository:
             "reservation_id": row["reservation_id"] or "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            "details": _redact_secret_like(details),
             "provider_neutral": True,
             "secret_exposed": False,
         }
@@ -14980,6 +18740,24 @@ def _load_json_field(value: Any) -> Any:
     if isinstance(value, (bytes, bytearray)):
         return json.loads(value.decode("utf-8"))
     return json.loads(value)
+
+
+def _project_evidence_key(value: Any) -> str | None:
+    text = str(value or "").strip()[:160]
+    return text if text and all(character.isalnum() or character in "._:-" for character in text) else None
+
+
+def _project_evidence_time(value: Any) -> str:
+    """Comparable UTC text for SQLite evidence timestamps, including offsets."""
+    text = str(value or "").strip()
+    try:
+        normalized = f"{text[:-1]}+00:00" if text.endswith(("Z", "z")) else text
+        instant = datetime.fromisoformat(normalized)
+    except ValueError:
+        return text
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    return instant.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _model_usage_required_sql(*, database_engine: str, alias: str) -> str:
@@ -15277,6 +19055,23 @@ SAFE_SECRET_FLAG_KEYS = {
     "raw_provider_response_persisted",
 }
 
+SAFE_TOKEN_COUNTER_KEYS = {
+    "cached_tokens",
+    "completion_tokens",
+    "input_tokens",
+    "model_max_output_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+}
+
+SAFE_SECRET_CONTAINER_KEYS = {
+    "model_secret_resolution",
+    "model_secret_ref_scope",
+    "secret_ref_scope",
+}
+
 
 _UNPUBLISHED_DRAFT_CLAIM_MINT_TOKEN = object()
 
@@ -15375,6 +19170,12 @@ def _runtime_confirmation_matches(
     )
 
 
+class TeamSeatQuotaExceeded(ValueError):
+    def __init__(self, quota: dict[str, Any]) -> None:
+        super().__init__("team_member_quota_exhausted")
+        self.quota = quota
+
+
 class ConfirmationDecisionConflict(ValueError):
     """Raised when a terminal confirmation is asked to transition again."""
 
@@ -15400,7 +19201,12 @@ def _redact_secret_like(value: Any) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             lower = str(key).lower()
-            if lower in SAFE_SECRET_FLAG_KEYS:
+            if (
+                isinstance(item, bool)
+                or lower in SAFE_SECRET_FLAG_KEYS
+                or lower in SAFE_TOKEN_COUNTER_KEYS
+                or lower in SAFE_SECRET_CONTAINER_KEYS
+            ):
                 redacted[key] = _redact_secret_like(item)
             elif any(marker in lower for marker in ("secret", "token", "password", "api_key", "apikey", "refresh")):
                 redacted[key] = "[REDACTED]"
@@ -15439,6 +19245,372 @@ def _sanitize_merchant_ceo_text(value: Any, *, limit: int = 600) -> str:
     return text[:limit]
 
 
+def _safe_ai_ceo_supplier_text(value: Any, *, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip()
+    if not raw or len(raw) > limit or re.search(r"[\x00-\x1f<>]", raw):
+        return ""
+    safe = _sanitize_merchant_ceo_text(raw, limit=limit)
+    if safe != raw or "redacted" in safe.lower():
+        return ""
+    compact = re.sub(r"\s+", "", safe).lower()
+    if compact in {"-", "--", "n/a", "na", "none", "null", "unknown", "pending", "tbd"}:
+        return ""
+    if any(marker in compact for marker in ("待确认", "未确认", "不清楚", "不知道")):
+        return ""
+    return safe
+
+
+def _safe_ai_ceo_supplier_number(value: Any, *, maximum: float, unit_suffix: str = "") -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        suffix = rf"(?:\s*(?:{unit_suffix}))?" if unit_suffix else ""
+        if not re.fullmatch(rf"[0-9]+(?:\.[0-9]+)?{suffix}", text, flags=re.IGNORECASE):
+            return None
+        numeric_text = re.match(r"[0-9]+(?:\.[0-9]+)?", text)
+        number = float(numeric_text.group(0)) if numeric_text else float("nan")
+    else:
+        return None
+    if not math.isfinite(number) or number <= 0 or number > maximum:
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _safe_ai_ceo_supplier_dimensions(value: Any) -> dict[str, int | float] | None:
+    if isinstance(value, dict):
+        dimensions = {
+            key: _safe_ai_ceo_supplier_number(value.get(key), maximum=1_000, unit_suffix=r"cm|厘米")
+            for key in ("length", "width", "height")
+        }
+    elif isinstance(value, str):
+        match = re.fullmatch(
+            r"\s*([0-9]+(?:\.[0-9]+)?)\s*[x×*]\s*([0-9]+(?:\.[0-9]+)?)\s*[x×*]\s*"
+            r"([0-9]+(?:\.[0-9]+)?)\s*(?:cm|厘米)?\s*",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        dimensions = {
+            key: _safe_ai_ceo_supplier_number(raw, maximum=1_000)
+            for key, raw in zip(("length", "width", "height"), match.groups())
+        }
+    else:
+        return None
+    if any(dimensions[key] is None for key in ("length", "width", "height")):
+        return None
+    return {key: dimensions[key] for key in ("length", "width", "height") if dimensions[key] is not None}
+
+
+def _safe_ai_ceo_supplier_unit_cost(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    match = re.fullmatch(
+        r"(?i)(CNY|RMB|USD|EUR|GBP|AUD|CAD|HKD|JPY|SGD)\s+([0-9]+(?:\.[0-9]{1,2})?)",
+        text,
+    )
+    if not match:
+        return ""
+    amount = float(match.group(2))
+    if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000_000:
+        return ""
+    return f"{match.group(1).upper()} {match.group(2)}"
+
+
+def normalize_ai_ceo_supplier_fact_attestation(
+    *,
+    supplier_facts: Any,
+    supplier_facts_verified: Any,
+    source: str,
+) -> dict[str, Any]:
+    """Allowlist and attest merchant-supplied facts without trusting model output."""
+
+    raw = supplier_facts if isinstance(supplier_facts, dict) else {}
+    cleaned: dict[str, Any] = {}
+    material = _safe_ai_ceo_supplier_text(raw.get("material"), limit=120)
+    if material:
+        cleaned["material"] = material
+    weight = _safe_ai_ceo_supplier_number(raw.get("package_weight_g"), maximum=100_000, unit_suffix=r"g|克")
+    if weight is not None:
+        cleaned["package_weight_g"] = weight
+    dimensions = _safe_ai_ceo_supplier_dimensions(raw.get("package_dimensions_cm"))
+    if dimensions:
+        cleaned["package_dimensions_cm"] = dimensions
+    location = _safe_ai_ceo_supplier_text(raw.get("item_location"), limit=160)
+    if location:
+        cleaned["item_location"] = location
+    unit_cost = _safe_ai_ceo_supplier_unit_cost(raw.get("unit_cost"))
+    if unit_cost:
+        cleaned["unit_cost"] = unit_cost
+
+    present_keys = {key for key in AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS if raw.get(key) not in (None, "", {}, [])}
+    valid_keys = set(cleaned)
+    unresolved_keys = [key for key in AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS if key not in valid_keys]
+    invalid_keys = sorted(present_keys - valid_keys)
+    trusted_source = str(source or "") == AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE
+    merchant_confirmation_received = bool(trusted_source and supplier_facts_verified is True)
+    verified = bool(trusted_source and merchant_confirmation_received and not unresolved_keys)
+    return {
+        "contract_version": AI_CEO_SUPPLIER_FACT_ATTESTATION_CONTRACT_VERSION,
+        "source": AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE if trusted_source else "untrusted_chat_output",
+        "supplier_facts": cleaned,
+        "supplier_facts_verified": verified,
+        "merchant_confirmation_received": merchant_confirmation_received,
+        "missing_supplier_fact_keys": unresolved_keys,
+        "invalid_supplier_fact_keys": invalid_keys,
+        "unknown_field_count": len(set(str(key) for key in raw) - set(AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS)),
+        "secret_exposed": False,
+    }
+
+
+def normalize_merchant_product_fact_packet(
+    value: Any,
+    *,
+    source: str,
+) -> dict[str, Any]:
+    """Normalize an authenticated merchant fact form without trusting AI labels."""
+
+    raw = value if isinstance(value, dict) else {}
+    trusted_merchant_request = str(source or "") == "authenticated_merchant_request"
+    simulation_only = raw.get("simulation_only") is True
+    sensitive_text_detected = contains_secret_like_data(raw)
+    submitted = raw.get("merchant_confirmed_facts") if isinstance(raw.get("merchant_confirmed_facts"), dict) else {}
+    derived_submitted = raw.get("derived_listing_suggestions") if isinstance(raw.get("derived_listing_suggestions"), dict) else {}
+
+    def clean_values(items: dict[str, Any], *, allow_confirmation: bool) -> dict[str, Any]:
+        cleaned: dict[str, Any] = {}
+        for key in MERCHANT_PRODUCT_FACT_KEYS:
+            raw_value = items.get(key)
+            if key in {"image_rights_confirmed", "merchant_owned_product_confirmed"}:
+                if allow_confirmation and raw_value is True:
+                    cleaned[key] = True
+                continue
+            limit = 2400 if key == "image_urls" else 700 if key == "source_url" else 240
+            if key == "image_urls" and isinstance(raw_value, str):
+                # The image editor/writeback joins multiple URLs with newlines.
+                # Normalize only these separators before the existing strict
+                # text/secret checks; do not silently drop the whole photo set.
+                raw_value = re.sub(r"\r\n|[\r\n]", " ", raw_value)
+            text = _safe_ai_ceo_supplier_text(raw_value, limit=limit)
+            if not text:
+                continue
+            if contains_secret_like_text(text):
+                continue
+            redacted = _redact_secret_like(text)
+            if not isinstance(redacted, str) or redacted != text:
+                continue
+            if key == "source_url" and not re.match(r"^https?://", text, flags=re.IGNORECASE):
+                continue
+            if key in {"currency", "unit_cost_currency"}:
+                text = text.upper()
+                if not re.fullmatch(r"[A-Z]{3}", text):
+                    continue
+            if key in {
+                "package_weight_g",
+                "net_weight_g",
+                "package_length_cm",
+                "package_width_cm",
+                "package_height_cm",
+                "unit_cost",
+                "selling_price",
+                "quantity",
+                "handling_time_days",
+            }:
+                try:
+                    numeric = float(text)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(numeric) or numeric <= 0 or numeric > 1_000_000_000:
+                    continue
+            cleaned[key] = text
+        # Legacy supplier intake labelled the only currency as `currency`.
+        # With a procurement amount but no sale price it cannot attest to the
+        # listing currency. Preserve the quote in its cost role instead.
+        if cleaned.get("unit_cost") and cleaned.get("currency") and not cleaned.get("selling_price") and not cleaned.get("unit_cost_currency"):
+            cleaned["unit_cost_currency"] = cleaned.pop("currency")
+        return cleaned
+
+    merchant_confirmed = clean_values(submitted, allow_confirmation=trusted_merchant_request) if trusted_merchant_request else {}
+    derived = clean_values(derived_submitted, allow_confirmation=False)
+    unknown = [key for key in MERCHANT_PRODUCT_FACT_REQUIRED_KEYS if key not in merchant_confirmed]
+    source_records: list[dict[str, Any]] = []
+    source_url = str(merchant_confirmed.get("source_url") or "")
+    merchant_owned_product_confirmed = merchant_confirmed.get("merchant_owned_product_confirmed") is True
+    if not source_url and not merchant_owned_product_confirmed:
+        unknown.append("merchant_owned_product_confirmed")
+    # Optional facts can be explicitly cleared too. Keep that negative
+    # evidence so later history reconstruction cannot revive an old suggestion.
+    submitted_unknown = raw.get("unknown_facts") if isinstance(raw.get("unknown_facts"), list) else []
+    unknown = list(dict.fromkeys([*unknown, *(key for key in submitted_unknown
+        if isinstance(key, str) and key in MERCHANT_PRODUCT_FACT_KEYS and key not in merchant_confirmed
+        and not (key == "merchant_owned_product_confirmed" and source_url))]))
+    if source_url:
+        source_records.append(
+            {
+                "type": "merchant_product_link",
+                "url": source_url,
+                "rights_status": "not_applicable",
+                "secret_exposed": False,
+            }
+        )
+    image_urls = str(merchant_confirmed.get("image_urls") or "")
+    for image_url in re.findall(r"https?://[^\s,，；;]+", image_urls, flags=re.IGNORECASE)[:10]:
+        source_records.append(
+            {
+                "type": "merchant_product_image",
+                "url": image_url[:700],
+                "rights_status": "merchant_confirmed" if merchant_confirmed.get("image_rights_confirmed") is True else "pending",
+                "secret_exposed": False,
+            }
+        )
+    # A sellable product needs one explicit source path: a supplier URL or a
+    # merchant-owned-product attestation. This conditional requirement counts
+    # as one field without making both alternatives mandatory.
+    total = len(MERCHANT_PRODUCT_FACT_REQUIRED_KEYS) + 1
+    ready_count = total - len(unknown)
+    blocked_by = [f"merchant_product_fact_missing:{key}" for key in unknown]
+    if not source_url and not merchant_owned_product_confirmed:
+        blocked_by.append("merchant_product_source_unconfirmed")
+    if simulation_only:
+        blocked_by.append("simulation_only_product_facts")
+    if sensitive_text_detected:
+        blocked_by.append("listing_product_fact_sensitive_text")
+    # Browser-carried evidence stays unverified metadata. Keeping it does not
+    # promote an extracted value, image right, or product ownership to a fact.
+    vision_version = _safe_ai_ceo_supplier_text(raw.get("vision_contract_version"), limit=80)
+    vision_origin = bool(vision_version) or raw.get("source") == "backend_product_vision_extraction"
+    def evidence_indexes(value: Any) -> list[int]:
+        return [index for index in (value if isinstance(value, list) else [])
+                if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < 20][:10]
+
+    def clean_evidence(value: Any, *, pending: bool = False) -> dict[str, Any]:
+        result = {}
+        for key, item in (value if isinstance(value, dict) else {}).items():
+            if key not in MERCHANT_PRODUCT_FACT_KEYS or not isinstance(item, dict):
+                continue
+            confidence = item.get("confidence")
+            confidence = float(confidence) if isinstance(confidence, (int, float)) and math.isfinite(confidence) else 0.0
+            result[key] = {
+                "source_type": _safe_ai_ceo_supplier_text(item.get("source_type"), limit=80),
+                "image_indexes": evidence_indexes(item.get("image_indexes")),
+                "confidence": max(0.0, min(1.0, confidence)),
+                "merchant_confirmation_received": not pending and key in merchant_confirmed,
+            }
+            for name, limit in (("source_quote", 700), ("evidence_role", 80), ("source_id", 160), ("sku", 160)):
+                text = _safe_ai_ceo_supplier_text(item.get(name), limit=limit)
+                if text and not contains_secret_like_text(text):
+                    result[key][name] = text
+        return result
+
+    evidence = clean_evidence(raw.get("field_evidence"))
+    pending_evidence = clean_evidence(raw.get("pending_field_evidence"), pending=True)
+    conflicts = []
+    for item in (raw.get("fact_conflicts") if isinstance(raw.get("fact_conflicts"), list) else [])[:20]:
+        if not isinstance(item, dict) or item.get("field") not in MERCHANT_PRODUCT_FACT_KEYS:
+            continue
+        values = item.get("values") if isinstance(item.get("values"), list) else []
+        conflict = {"field": item["field"], "values": [_safe_ai_ceo_supplier_text(item, limit=240) for item in values[:5]],
+                    "reason": _safe_ai_ceo_supplier_text(item.get("reason"), limit=320)}
+        if "image_indexes" in item:
+            conflict["image_indexes"] = evidence_indexes(item["image_indexes"])
+        if isinstance(item.get("source_ids"), list):
+            conflict["source_ids"] = [text for value in item["source_ids"][:10]
+                                      if (text := _safe_ai_ceo_supplier_text(value, limit=160)) and not contains_secret_like_text(text)]
+        conflicts.append(conflict)
+    for item in (raw.get("source_records") if isinstance(raw.get("source_records"), list) else [])[:12]:
+        if not isinstance(item, dict) or item.get("type") not in {"merchant_product_link", "merchant_product_image"}:
+            continue
+        record = {"type": item["type"], "rights_status": "not_applicable" if item["type"] == "merchant_product_link" else "pending_merchant_confirmation",
+                  "signed_url_persisted": False, "secret_exposed": False}
+        for key, limit in (("url", 700), ("asset_id", 120), ("sha256", 64), ("original_filename", 120)):
+            value = _safe_ai_ceo_supplier_text(item.get(key), limit=limit)
+            if value and (key != "url" or re.match(r"^https?://", value, flags=re.IGNORECASE)):
+                record[key] = value
+        for key in ("source_index", "width", "height"):
+            value = item.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and 0 < value < 1_000_000:
+                record[key] = value
+        if not record.get("url") and not record.get("asset_id"):
+            continue
+        if any((record.get("url") and existing.get("url") == record["url"]) or
+               (record.get("asset_id") and existing.get("asset_id") == record["asset_id"]) for existing in source_records):
+            continue
+        source_records.append(record)
+    return {
+        "contract_version": MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION,
+        "source": "backend_product_vision_extraction" if vision_origin else "authenticated_merchant_request" if trusted_merchant_request else "untrusted_input",
+        "vision_contract_version": vision_version,
+        "buyer_copy_requires_validated_listing_generation": vision_origin or raw.get("buyer_copy_requires_validated_listing_generation") is True,
+        "field_evidence": evidence,
+        "pending_field_evidence": pending_evidence,
+        "fact_conflicts": conflicts,
+        "source_mode": (
+            "merchant_source_supplied"
+            if source_url
+            else "merchant_owned_product"
+            if merchant_owned_product_confirmed
+            else "merchant_images_supplied"
+            if raw.get("source_mode") == "merchant_images_supplied"
+            else "source_missing"
+        ),
+        "product_name": str(merchant_confirmed.get("product_name") or derived.get("product_name") or "")[:120],
+        # Source-confirmed facts require a separate extractor/provenance step;
+        # the browser cannot award that status to its own values.
+        "source_confirmed_facts": {},
+        "merchant_confirmed_facts": merchant_confirmed,
+        "derived_listing_suggestions": derived,
+        "simulation_only": simulation_only,
+        "fact_scope": "simulation_rehearsal" if simulation_only else "merchant_product",
+        "unknown_facts": unknown,
+        "source_records": source_records,
+        "listing_readiness": {
+            "ready_fact_count": ready_count,
+            "total_fact_count": total,
+            "completion_percent": round((ready_count / total) * 100) if total else 0,
+            "ready_for_listing_generation": not unknown,
+            "ready_for_real_publish": False,
+            "reason": (
+                "模拟演练资料仅供内部 Listing 与素材流程，不可写入 eBay"
+                if simulation_only
+                else "商品事实已补齐，仍需 eBay 体检和发布确认"
+                if not unknown
+                else "仍有商品事实待商家确认"
+            ),
+        },
+        "blocked_by": blocked_by,
+        "sensitive_text_detected": sensitive_text_detected,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def normalize_listing_project_identity(value: Any) -> dict[str, str]:
+    """Allowlist a non-secret Listing project identity; an empty key is legacy-only."""
+
+    raw = value if isinstance(value, dict) else {}
+
+    def clean(field: str, *, limit: int, alias: str = "") -> str:
+        text = _sanitize_merchant_ceo_text(raw.get(field) or (raw.get(alias) if alias else ""), limit=limit)
+        if not text or not re.fullmatch(r"[A-Za-z0-9._:-]+", text):
+            return ""
+        return text
+
+    key = clean("key", limit=160)
+    if not key:
+        return {}
+    return {
+        "key": key,
+        "source_report_id": clean("source_report_id", alias="source_id", limit=160),
+        "candidate_id": clean("candidate_id", limit=120),
+    }
+
+
 def _scoped_ai_ceo_chat_turn_id(*, company_id: str, user_id: str, assistant_id: str) -> str:
     digest = hashlib.sha256(f"{company_id}|{user_id}|{assistant_id}".encode("utf-8")).hexdigest()[:32]
     return f"ceo_turn_{digest}"
@@ -15471,6 +19643,9 @@ def _normalize_ai_ceo_chat_history_turn(
             if record_type == "source":
                 cleaned.append(
                     {
+                        "citation_id": re.sub(r"[^A-Za-z0-9]", "", str(item.get("citation_id") or ""))[:20],
+                        "published_at": _sanitize_merchant_ceo_text(item.get("published_at"), limit=100),
+                        "updated_at": _sanitize_merchant_ceo_text(item.get("updated_at"), limit=100),
                         "title": _sanitize_merchant_ceo_text(item.get("title") or item.get("domain"), limit=160),
                         "url": _sanitize_merchant_ceo_text(item.get("url"), limit=500),
                         "domain": _sanitize_merchant_ceo_text(item.get("domain"), limit=120),
@@ -15508,6 +19683,7 @@ def _normalize_ai_ceo_chat_history_turn(
         return cleaned
 
     delivery = value.get("market_report_delivery") if isinstance(value.get("market_report_delivery"), dict) else {}
+    listing_project_identity = normalize_listing_project_identity(value.get("listing_project_identity"))
     normalized = {
         "assistant_id": raw_assistant_id,
         "store_id": re.sub(r"[^A-Za-z0-9_-]", "", str(value.get("store_id") or ""))[:120],
@@ -15522,6 +19698,8 @@ def _normalize_ai_ceo_chat_history_turn(
         "decision_center_required": bool(value.get("decision_center_required")),
         "market_report_id": re.sub(r"[^A-Za-z0-9_-]", "", str(value.get("market_report_id") or ""))[:120],
         "market_report_delivery": {
+            "artifact_kind": str(delivery.get("artifact_kind") or "")[:40],
+            "product_fact_report_id": re.sub(r"[^A-Za-z0-9_-]", "", str(delivery.get("product_fact_report_id") or ""))[:120],
             "report_id": re.sub(r"[^A-Za-z0-9_-]", "", str(delivery.get("report_id") or ""))[:120],
             "report_type": str(delivery.get("report_type") or "")[:80],
             "status": str(delivery.get("status") or "")[:80],
@@ -15538,6 +19716,7 @@ def _normalize_ai_ceo_chat_history_turn(
         }
         if delivery
         else None,
+        "listing_project_identity": listing_project_identity or None,
         "blocked_by": [str(item)[:80] for item in value.get("blocked_by", [])[:8]] if isinstance(value.get("blocked_by"), list) else [],
         "source_records": clean_records(value.get("source_records"), record_type="source"),
         "work_records": clean_records(value.get("work_records"), record_type="work"),
@@ -15554,6 +19733,15 @@ def _normalize_ai_ceo_chat_history_turn(
 
 
 def _ai_ceo_chat_turn_merge_score(turn: Any) -> int:
+    content_score = _ai_ceo_chat_turn_content_score(turn)
+    if content_score < 0:
+        return -1
+    identity = normalize_listing_project_identity(turn.get("listing_project_identity"))
+    identity_evidence = 1_000 if identity.get("key") else 0
+    return content_score + identity_evidence
+
+
+def _ai_ceo_chat_turn_content_score(turn: Any) -> int:
     if not isinstance(turn, dict):
         return -1
     status = str(turn.get("status") or "")
@@ -15567,11 +19755,35 @@ def _ai_ceo_chat_turn_merge_score(turn: Any) -> int:
     return completion + answer + evidence + report
 
 
+def _merge_ai_ceo_chat_listing_identity(existing: Any, incoming: Any) -> dict[str, str]:
+    existing_identity = normalize_listing_project_identity(
+        existing.get("listing_project_identity") if isinstance(existing, dict) else None
+    )
+    incoming_identity = normalize_listing_project_identity(
+        incoming.get("listing_project_identity") if isinstance(incoming, dict) else None
+    )
+    if not incoming_identity:
+        return {}
+    if not existing_identity:
+        return incoming_identity
+    if existing_identity.get("key") != incoming_identity.get("key"):
+        return {}
+    merged = dict(existing_identity)
+    changed = False
+    for field in ("source_report_id", "candidate_id"):
+        current = existing_identity.get(field, "")
+        candidate = incoming_identity.get(field, "")
+        if current and candidate and current != candidate:
+            return {}
+        if not current and candidate:
+            merged[field] = candidate
+            changed = True
+    return merged if changed else {}
+
+
 def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any]) -> bool:
-    answer = str(chat.get("answer") or "")
     route = str(chat.get("route") or "")
     status = str(chat.get("status") or "")
-    combined = f"{message}\n{answer}\n{route}\n{chat.get('route_label') or ''}".lower()
     if status not in {
         "model_answered",
         "model_answered_non_live",
@@ -15581,26 +19793,33 @@ def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any
         "market_report_recovery_draft",
     }:
         return False
-    finance_only = any(
-        marker in combined
-        for marker in (
-            "stock",
-            "nasdaq",
-            "nyse",
-            "eps",
-            "earnings",
-            "美股",
-            "股票",
-            "股价",
-            "财报",
-            "营收",
-            "利润指引",
-        )
-    ) and not any(marker in combined for marker in ("ebay", "listing", "sku", "商品", "产品", "选品", "货源", "上架", "刊登"))
-    if finance_only:
+    if route not in {"ebay_workflow", "external_realtime", "confirmation_required", "general_chat", ""}:
         return False
-    has_market_signal = any(
-        marker in combined
+    request = _sanitize_merchant_ceo_text(message, limit=900).lower()
+    # Listing/刊登/上架 are shared by every marketplace.  They must not turn a
+    # request naming Shopify, Amazon, Taobao, etc. into an eBay artifact.
+    has_explicit_ebay_context = "ebay" in request
+    has_other_platform_context = any(
+        marker in request
+        for marker in (
+            "淘宝",
+            "天猫",
+            "京东",
+            "拼多多",
+            "亚马逊",
+            "amazon",
+            "shopify",
+            "shopee",
+            "lazada",
+            "temu",
+            "tiktok shop",
+            "抖音小店",
+            "快手小店",
+            "微信小店",
+        )
+    )
+    has_market_request = any(
+        marker in request
         for marker in (
             "market research",
             "market report",
@@ -15621,30 +19840,66 @@ def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any
             "需求",
         )
     )
-    has_product_signal = any(
-        marker in combined
+    has_selection_request = any(
+        marker in request
         for marker in (
-            "ebay",
-            "listing",
-            "sku",
-            "item specific",
-            "product",
-            "supplier",
-            "sourcing",
-            "1688",
-            "商品",
-            "产品",
-            "品类",
-            "货源",
             "选品",
-            "上架",
-            "刊登",
-            "标题",
-            "主图",
-            "类目",
+            "候选商品",
+            "候选产品",
+            "候选品",
+            "推荐商品",
+            "推荐产品",
+            "推荐品类",
+            "建议商品",
+            "建议产品",
+            "建议品类",
+            "商品方向",
+            "产品方向",
+            "卖什么",
+            "最值得测试",
+            "优先测试",
+            "小众品",
+            "货源",
+            "供应商",
+            "1688",
+            "recommend one product",
+            "recommend products",
+            "product candidate",
+            "product candidates",
+            "sourcing",
         )
     )
-    return bool(has_market_signal and has_product_signal and route in {"ebay_workflow", "external_realtime", "confirmation_required", ""})
+    has_explicit_selection_intent = "选品" in request or "product research" in request
+    has_artifact_context = bool(
+        has_explicit_ebay_context
+        or (
+            not has_other_platform_context
+            and (route == "ebay_workflow" or has_explicit_selection_intent)
+        )
+    )
+    return bool(has_artifact_context and (has_selection_request or has_market_request))
+
+
+def ai_ceo_market_artifact_eligible(*, message: str, chat: dict[str, Any]) -> bool:
+    """Public policy boundary used by the API before persisting a market artifact."""
+
+    return _looks_like_ai_ceo_market_research_turn(message=message, chat=chat)
+
+
+def _ai_ceo_supplier_source_intake_failed(*, message: str, answer: str) -> bool:
+    """A disclosed URL-read failure is a saved conversation, not an intake result."""
+    if not re.search(r"https?://", message, flags=re.IGNORECASE):
+        return False
+    for line in answer[:800].splitlines():
+        # Conditional guidance is not proof that a read was attempted and failed.
+        if re.search(r"如果|假如|若", line):
+            continue
+        if re.search(
+            r"(?:未(?:能|成功)?|无法|不能|没有)(?:获取|读取|提取|访问|解析)(?:到)?[^。；;，,\n]{0,80}(?:页面|网页|链接|详情|内容)|"
+            r"(?:页面|链接)(?:访问受限|读取失败|无法访问)", line,
+        ):
+            return True
+    return False
 
 
 def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
@@ -15652,6 +19907,28 @@ def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
     if not text:
         return True
     compact = re.sub(r"\s+", " ", text).strip().lower()
+    if re.search(r"^(?:如果|假如|若|我(?:会|将|保持|无法|不能)|请(?:你|提供|补充|确认)|本轮(?:仅|只|不)|这次(?:仅|只|不))", compact) and re.search(r"[，,。；;]", compact):
+        return True
+    if re.search(r"\S\s+(?:vs\.?|versus)\s+\S", compact, flags=re.IGNORECASE):
+        return True
+    section_label = re.sub(r"\s*[（(][^()（）]{1,40}[）)]\s*$", "", compact)
+    if re.fullmatch(
+        r"(?:商品|产品)?(?:名称|状态|材质|品牌|型号|产地|尺寸|净重)|包装(?:方式|类型|重量|尺寸)|"
+        r"(?:采购|单件)?成本|(?:建议|计划)?售价|建议库存|库存(?:数量)?|(?:实际)?发货地|处理时间|图片授权|食品接触认证|"
+        r"sku|mpn|(?:product\s+)?(?:name|condition|material|brand|model|origin|dimensions?|size)|"
+        r"(?:net|package)\s+weight|package\s+(?:dimensions?|size)|unit\s+cost|selling\s+price|quantity|handling\s+time",
+        section_label,
+    ):
+        return True
+    if re.fullmatch(
+        r"(?:未验证|未核实|待验证|待核验|待确认|待补)(?:事项|项目|项|事实|资料|信息)?(?:汇总|清单|说明|总结|列表)?|"
+        r"(?:供应商|商家|商品|货源|采购)?(?:资料|参数|事实|信息)(?:清单|汇总|要求|说明|核验|确认)|"
+        r"(?:证据|操作|交易|流程|执行|任务|本轮)?边界(?:说明|约束|限制)?|"
+        r"(?:(?:supplier|merchant|product|source)\s+)?(?:information|facts?|evidence|verification)\s+(?:checklist|summary|notes|requirements)|"
+        r"(?:unverified|unconfirmed|missing)\s+(?:items|facts|information)|(?:evidence\s+)?boundary\s+(?:notes|explanation)",
+        section_label,
+    ):
+        return True
     invalid_markers = (
         "ai ceo 市场调研",
         "ai ceo market",
@@ -15668,6 +19945,16 @@ def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
         "这次调研",
         "本次调研",
         "待确认商品",
+        "证据边界说明",
+        "证据边界",
+        "证据说明",
+        "来源与限制",
+        "来源与资料日期",
+        "注意事项",
+        "下一步",
+        "evidence limitations",
+        "evidence boundary",
+        "sources and limitations",
     )
     if compact in invalid_markers:
         return True
@@ -15698,6 +19985,12 @@ def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
         return True
     if re.fullmatch(r"e?bay\s*(us|美国站)?", compact, flags=re.IGNORECASE):
         return True
+    if re.match(
+        r"^(?:继续|接着)(?:当前|现有|这个|该).{0,70}(?:项目|演练|listing|商品|产品)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return True
     if len(text) > 70 and re.search(r"帮我|应该|卖什么|不知道|你觉得|市场调研|报告", text):
         return True
     return False
@@ -15725,6 +20018,113 @@ def _ai_ceo_market_candidate_score(raw_block: str, index: int) -> int:
         score = max(0, min(100, int(match.group(1))))
         return score
     return max(62, 88 - index * 5)
+
+
+def _ai_ceo_market_table_product_column(cells: list[str]) -> int | None:
+    """Identify product columns, not arbitrary report headings or prose."""
+    labels = [re.sub(r"\s*[（(][^()（）]{1,40}[）)]\s*$", "", cell).strip() for cell in cells]
+    strong = r"候选(?:商品|品|方向)?|商品(?:名称|标题)?|产品(?:名称)?|品类|candidate(?: product)?|product(?: name| title)?|item name"
+    for index, label in enumerate(labels):
+        if re.fullmatch(strong, label, flags=re.IGNORECASE):
+            return index
+    if re.search(r"推荐|评分|score|risk|风险|标题|title|链接|link|url|标价|price|检索日期|依据|证据|未验证", " ".join(labels), re.I):
+        return next((i for i, label in enumerate(labels) if re.fullmatch(r"名称|name", label, re.I)), None)
+    return None
+
+
+def _ai_ceo_market_table_product_headers(cells: list[str]) -> list[str]:
+    """Only an explicit dimension axis can make product names into columns."""
+    if not 3 <= len(cells) <= 6 or not re.fullmatch(
+        r"(?:比较|对比)?(?:维度|项目|指标|属性)|比较项|对比项|dimension|attribute|feature|criteria|criterion",
+        cells[0], re.I,
+    ):
+        return []
+    names = [_clean_ai_ceo_market_candidate_name(cell) for cell in cells[1:]]
+    if any(not name or re.fullmatch(
+        r"依据|证据|内容|状态|名称|取值|数值|说明|来源|value|content|status|source|evidence|notes?", name, re.I,
+    ) for name in names) or len({name.casefold() for name in names}) != len(names):
+        return []
+    return names
+
+
+def _ai_ceo_market_normalize_source_cell(value: str) -> str:
+    grouped = re.sub(
+        r"\[\s*(S\d+(?:\s*[,，、/;；]\s*S\d+)+)\s*\]",
+        lambda match: " ".join(f"[{ref}]" for ref in dict.fromkeys(re.findall(r"S\d+", match.group(1)))),
+        value,
+    )
+    return re.sub(r"(?<![\w\[])(S\d+)(?![\w\]])", r"[\1]", grouped)
+
+
+def _ai_ceo_market_normalize_source_cells(answer: str) -> str:
+    """Recognize bare S# only inside explicitly labelled comparison source cells."""
+    lines = str(answer or "").replace("*", "").splitlines()
+    source_columns: list[int] = []
+    column_count = 0
+    normalized: list[str] = []
+    for index, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        if not line.startswith("|"):
+            source_columns, column_count = [], 0
+            normalized.append(raw_line)
+            continue
+        if re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+            normalized.append(raw_line)
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if _ai_ceo_market_table_product_column(cells) is not None:
+            source_columns = [i for i, label in enumerate(cells) if re.search(
+                r"来源|引用|依据|证据|source|reference|citation|evidence", label, re.I)]
+            column_count = len(cells) if index + 1 < len(lines) and re.fullmatch(
+                r"\|?\s*[-:|\s]+\|?", lines[index + 1].strip()) else 0
+        elif source_columns and len(cells) == column_count:
+            for column in source_columns:
+                cells[column] = _ai_ceo_market_normalize_source_cell(cells[column])
+            raw_line = "| " + " | ".join(cells) + " |"
+        normalized.append(raw_line)
+    return "\n".join(normalized)
+
+
+def _ai_ceo_market_split_comparison_tables(answer: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Return per-product column blocks and the remaining non-comparison lines."""
+    lines = [line.strip() for line in str(answer or "").replace("*", "").splitlines()]
+    result: list[tuple[str, str]] = []
+    remainder: list[str] = []
+    index = 0
+    while index + 1 < len(lines):
+        line = lines[index]
+        cells = [cell.strip() for cell in line.strip("|").split("|")] if line.startswith("|") else []
+        names = _ai_ceo_market_table_product_headers(cells)
+        if not names or not re.fullmatch(r"\|?\s*[-:|\s]+\|?", lines[index + 1]):
+            remainder.append(line)
+            index += 1
+            continue
+        rows: list[list[str]] = []
+        aligned = True
+        table_start = index
+        index += 2
+        while index < len(lines) and lines[index].startswith("|"):
+            row = [cell.strip() for cell in lines[index].strip("|").split("|")]
+            if len(row) == len(cells) and row[0]:
+                rows.append(row)
+            else:
+                aligned = False
+            index += 1
+        if not rows or not aligned:
+            remainder.extend(lines[table_start:index])
+            continue
+        for column, name in enumerate(names, 1):
+            attributes = []
+            for row in rows:
+                value = row[column]
+                # Bare S# in an explicitly labelled source row is a citation,
+                # not a reason to discard the product or borrow a peer's URL.
+                if re.search(r"来源|引用|依据|证据|source|reference|citation|evidence", row[0], re.I):
+                    value = _ai_ceo_market_normalize_source_cell(value)
+                attributes.append(f"{row[0]}：{value}")
+            result.append((name, f"候选商品：{name}\n" + "\n".join(attributes)))
+    remainder.extend(lines[index:])
+    return result, remainder
 
 
 def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict[str, Any]]:
@@ -15817,12 +20217,17 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
             return ""
         return cleaned
 
-    def add_candidate(name: str, *, start_index: int = 0, block: str = "", source: str = "ai_ceo_market_report") -> None:
+    def add_candidate(name: str, *, start_index: int = 0, block: str = "", source: str = "ai_ceo_market_report", isolated_block: bool = False) -> None:
         cleaned = plausible_name(name)
         if not cleaned:
             return
         key = cleaned.lower()
         if key in seen or len(candidates) >= 5:
+            return
+        def alias_keys(value: str) -> set[str]:
+            parts = re.split(r"[/、（）()]|(?<=[\u4e00-\u9fff])\s+(?=[A-Za-z])|(?<=[A-Za-z])\s+(?=[\u4e00-\u9fff])", value)
+            return {re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", part.lower()) for part in parts if len(part.strip()) >= 2}
+        if any(alias_keys(cleaned) & alias_keys(item["name"]) for item in candidates):
             return
         seen.add(key)
         score_block = block or "\n".join(lines[start_index : start_index + 8])
@@ -15831,7 +20236,12 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
                 "candidate_id": f"candidate_{len(candidates) + 1}",
                 "name": cleaned,
                 "score": _ai_ceo_market_candidate_score(score_block, len(candidates)),
-                "reasons": nearby_reasons(start_index) if lines else [_sanitize_merchant_ceo_text(score_block or clean_answer, limit=160)],
+                "reasons": (
+                    [_sanitize_merchant_ceo_text(line, limit=160) for line in block.splitlines()
+                     if re.search(r"来源|价格|主价|风险|需求|未验证|未知", line)][:3]
+                    if isolated_block else nearby_reasons(start_index) if lines
+                    else [_sanitize_merchant_ceo_text(score_block or clean_answer, limit=160)]
+                ),
                 "price_band": _extract_ai_ceo_price_band(score_block or clean_answer),
                 "source": source,
                 "selected": len(candidates) == 0,
@@ -15846,13 +20256,16 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
         r"^(?:[-*•]\s*)?(?:#+\s*)?(?:推荐产品|建议产品|目标商品|推荐品类|建议品类|商品方向|具体商品|商品名称|产品名称|名称)\s*[:：-]\s*(.+)$",
         r"^(?:[-*•]\s*)?(?:#+\s*)?(?:recommended product|suggested product|target product|product name|item name)\s*[:：-]\s*(.+)$",
     )
+    explicit_card_names: set[str] = set()
     for index, line in enumerate(lines):
         name = ""
-        for pattern in heading_patterns:
+        for pattern_index, pattern in enumerate(heading_patterns):
             match = re.search(pattern, line, flags=re.IGNORECASE)
             if not match:
                 continue
             name = plausible_name(match.group(match.lastindex or 1))
+            if name and pattern_index < 2:
+                explicit_card_names.add(name.lower())
             break
         if not name:
             continue
@@ -15910,22 +20323,46 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
             if len(candidates) >= 5:
                 break
 
-    if not candidates:
+    # A report may compare several products in a table and name just one
+    # recommendation in a heading. That heading must not suppress the table.
+    # add_candidate still deduplicates names and enforces the five-item bound.
+    if len(candidates) < 5:
         table_header_index = -1
+        table_product_column = 0
         for index, line in enumerate(lines):
-            if line.startswith("|") and re.search(r"商品|产品|品类|名称|product", line, flags=re.IGNORECASE) and re.search(r"推荐|评分|score|risk|风险", line, flags=re.IGNORECASE):
+            if not line.startswith("|"):
+                table_header_index = -1
+                continue
+            if re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+                continue
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            product_column = _ai_ceo_market_table_product_column(cells)
+            # Evidence tables need not contain a recommendation score. Only
+            # an explicit product column can identify a candidate; section
+            # headings such as "证据边界说明" are not product fallbacks.
+            if product_column is not None:
+                # With cards already present, a generic product/title column
+                # lists competitor references, not additional choices. An
+                # explicitly labelled candidate table may still complete a
+                # report that has only its winner as a card.
+                if explicit_card_names and not re.fullmatch(r"候选(?:商品|品|方向)?|candidate(?: product)?",
+                                                            cells[product_column], re.I):
+                    table_header_index = -1
+                    continue
                 table_header_index = index
+                table_product_column = product_column
                 continue
             if table_header_index < 0 or index <= table_header_index:
                 continue
-            if not line.startswith("|") or re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+            if len(cells) < 2 or table_product_column >= len(cells):
                 continue
-            cells = [cell.strip() for cell in line.strip("|").split("|")]
-            if len(cells) < 2:
-                continue
-            add_candidate(cells[0], start_index=max(0, table_header_index), block="\n".join(lines[table_header_index : index + 2]), source="ai_ceo_market_report_table")
+            add_candidate(cells[table_product_column], start_index=max(0, table_header_index), block=line, source="ai_ceo_market_report_table")
             if len(candidates) >= 5:
                 break
+
+    column_candidates, _ = _ai_ceo_market_split_comparison_tables(clean_answer)
+    for name, block in column_candidates:
+        add_candidate(name, block=block, source="ai_ceo_market_report_column_table", isolated_block=True)
 
     if not candidates:
         vertical_table_label_pattern = re.compile(
@@ -15971,20 +20408,9 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
             if len(candidates) >= 5:
                 break
 
-    if not candidates:
-        for index, line in enumerate(lines):
-            stripped = re.sub(r"^[#>\-\s]+", "", line).strip(" *-:：")
-            if not re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9 /()（）&+\-]{3,60}", stripped):
-                continue
-            block = "\n".join(lines[index : index + 8])
-            if not re.search(
-                r"\u9700\u6c42|\u7ade\u4e89|\u4f18\u52bf|\u98ce\u9669|\u91c7\u8d2d|\u6210\u672c|\u552e\u4ef7|\u5229\u6da6|\u8f7b\u5c0f|\u4e0d\u5e26\u7535|demand|competition|risk|cost|margin",
-                block,
-                flags=re.IGNORECASE,
-            ):
-                continue
-            add_candidate(stripped, start_index=index, block=block, source="ai_ceo_market_report_heading")
-
+    # A short heading with nearby risk/cost words is not product evidence.
+    # Require an explicit candidate/name structure rather than inventing cards
+    # from arbitrary sections such as supplier checklists or boundary notes.
     if not candidates:
         fallback_patterns = (
             r"(?:建议产品|推荐产品|目标商品|商品方向|推荐品类|建议品类)\s*[:：]\s*([^\n。；;]{2,90})",
@@ -16054,7 +20480,7 @@ def _ai_ceo_should_inherit_market_context(message: str) -> bool:
         return False
     return bool(
         re.search(
-            r"这个品|这个商品|这个产品|该商品|该产品|它(?:的|有|是|能|适合)|刚才(?:的|那个)|上面(?:的|那个)|继续(?:分析|调研|整理)|接着(?:分析|调研|整理)",
+            r"report_[A-Za-z0-9_-]+|这个品|这个商品|这个产品|该商品|该产品|它(?:的|有|是|能|适合)|刚才(?:的|那个)|上面(?:的|那个)|继续(?:现有|当前|这份|市场)?(?:分析|调研|整理)|接着(?:分析|调研|整理)|供应商(?:公开)?事实核验|货源核验|相对赢家|商品锁定|产品锁定",
             text,
         )
     )
@@ -16062,6 +20488,10 @@ def _ai_ceo_should_inherit_market_context(message: str) -> bool:
 
 def _ai_ceo_market_context_reset_requested(message: str) -> bool:
     text = _sanitize_merchant_ceo_text(message, limit=300)
+    text = re.sub(
+        r"(?:不需要|不要|不用|无需|无须|不必|不得|禁止|不)\s*(?:重新(?:选品?|推荐)|换(?:一)?个|另(?:选|换)一个)",
+        " ", text,
+    )
     return bool(re.search(r"换一个|换个|不要这个|这个不合适|重新选|重新推荐|另一个", text))
 
 
@@ -16170,6 +20600,7 @@ def _infer_ai_ceo_market_product(*, message: str, answer: str, candidates: list[
 def _ai_ceo_listing_handoff_fields(
     *,
     product: str,
+    message: str = "",
     answer: str,
     source_records: list[dict[str, Any]],
     selected_candidate: dict[str, Any] | None = None,
@@ -16215,6 +20646,32 @@ def _ai_ceo_listing_handoff_fields(
     item_specifics = _ai_ceo_item_specifics(product=clean_product, answer=selected_context)
     image_plan = _ai_ceo_image_plan(answer=selected_context)
     logistics_plan = _ai_ceo_logistics_plan(answer=selected_context)
+    merchant_product_fact_packet = _ai_ceo_listing_intake_fact_packet(
+        message=message,
+        product=clean_product,
+    )
+    rehearsal_suggestions = _ai_ceo_simulation_fact_suggestions(
+        message=message,
+        answer=clean_answer,
+        product=clean_product,
+    )
+    if rehearsal_suggestions:
+        fact_conflicts = list(merchant_product_fact_packet.get("fact_conflicts") or [])
+        confirmed_product_name = str(
+            (merchant_product_fact_packet.get("merchant_confirmed_facts") or {}).get("product_name")
+            or rehearsal_suggestions.get("product_name")
+            or ""
+        ).strip()
+        merchant_product_fact_packet = normalize_merchant_product_fact_packet(
+            {
+                "merchant_confirmed_facts": {"product_name": confirmed_product_name} if confirmed_product_name else {},
+                "derived_listing_suggestions": rehearsal_suggestions,
+                "simulation_only": True,
+            },
+            source="authenticated_merchant_request",
+        )
+        merchant_product_fact_packet["fact_conflicts"] = fact_conflicts
+        merchant_product_fact_packet["intake_contract"] = "ai_ceo_simulation_rehearsal_fact_suggestions_v1"
     publish_gaps = _ai_ceo_listing_publish_gaps(
         item_specifics=item_specifics,
         price_band=price_band,
@@ -16254,6 +20711,7 @@ def _ai_ceo_listing_handoff_fields(
         "item_specifics": item_specifics,
         "image_requirements": image_plan,
         "logistics_requirements": logistics_plan,
+        "merchant_product_fact_packet": merchant_product_fact_packet,
         "risk_notes": risk_notes,
         "description_seed": "",
         "ebay_inventory_item_draft": {
@@ -16343,15 +20801,26 @@ def _ai_ceo_item_specifics(*, product: str, answer: str) -> dict[str, str]:
         specifics["Type"] = "待商家确认：Mosquito Repeller"
     elif "jewelry" in lower_product or "jewelry" in lower_answer or "首饰" in answer:
         specifics["Type"] = "待商家确认：Jewelry Organizer"
-    elif "case" in lower_product or "box" in lower_product or "盒" in answer:
+    elif "case" in lower_product or "box" in lower_product or re.search(r"收纳盒|储物盒|首饰盒", product):
         specifics["Type"] = "待商家确认：Storage Case"
     for key, label in (("Brand", "Brand|品牌"), ("Type", "Type|类型|品类"), ("MPN", "MPN|制造商零件编号")):
         match = re.search(rf"(?:{label})\s*[:：]\s*([A-Za-z0-9\u4e00-\u9fff /_.-]{{2,60}})", answer, flags=re.IGNORECASE)
         if match:
             specifics[key] = _sanitize_merchant_ceo_text(match.group(1), limit=60)
-    material_match = re.search(r"(?:Material|材质)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{2,60})", answer, flags=re.IGNORECASE)
+    material_match = re.search(
+        r"(?:^|\n)\s*(?:Material|材质)\s*[:：]\s*([^|\n]{2,60})"
+        r"|(?:^|\n)\s*\|\s*(?:Material|材质)\s*\|\s*([^|\n]{2,60})\s*\|",
+        answer,
+        flags=re.IGNORECASE,
+    )
     if material_match:
-        specifics["Material"] = _sanitize_merchant_ceo_text(material_match.group(1), limit=60)
+        material_value = _sanitize_merchant_ceo_text(material_match.group(1) or material_match.group(2), limit=60)
+        if not re.search(
+            r"^(?:证书|认证|声明|冲突|待补|待确认|未知|certificate|certification|declaration|unknown|todo)\b",
+            material_value,
+            flags=re.IGNORECASE,
+        ):
+            specifics["Material"] = material_value
     pack_match = re.search(r"(?:Pack(?:age)? Quantity|数量|件数|pack)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{1,40})", answer, flags=re.IGNORECASE)
     if pack_match:
         specifics["Pack Quantity"] = _sanitize_merchant_ceo_text(pack_match.group(1), limit=40)
@@ -16359,7 +20828,13 @@ def _ai_ceo_item_specifics(*, product: str, answer: str) -> dict[str, str]:
 
 
 def _ai_ceo_image_plan(*, answer: str) -> dict[str, Any]:
-    urls = re.findall(r"https?://[^\s,，；;]+", answer)
+    urls = [
+        url
+        for url in re.findall(r"https?://[^\s,，；;]+", answer)
+        if re.search(r"\.(?:avif|gif|jpe?g|png|webp)(?:$|[?#])", url, flags=re.IGNORECASE)
+    ]
+    if re.search(r"(?:不要|不得|禁止)(?:上传|复用|发布|使用)[^。；;\n]{0,50}(?:原始|原图|供应商|这些)?图片", answer):
+        urls = []
     return {
         "imageUrls": urls[:12],
         "main_image": "白底主图，展示真实商品全貌；不可使用旧 demo 图片冒充真实素材。",
@@ -16375,8 +20850,17 @@ def _ai_ceo_image_plan(*, answer: str) -> dict[str, Any]:
 
 
 def _ai_ceo_logistics_plan(*, answer: str) -> dict[str, str]:
-    weight_match = re.search(r"(\d+(?:\.\d+)?)\s*(kg|千克|g|克)\b", answer, flags=re.IGNORECASE)
-    dimension_match = re.search(r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm", answer, flags=re.IGNORECASE)
+    weight_match = re.search(
+        r"(?:package\s*weight|gross\s*weight|包装重量|毛重)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(kg|千克|g|克)\b",
+        answer,
+        flags=re.IGNORECASE,
+    )
+    dimension_match = re.search(
+        r"(?:package\s*(?:dimensions?|size)|包装尺寸|外箱尺寸)\s*[:：]?\s*"
+        r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm",
+        answer,
+        flags=re.IGNORECASE,
+    )
     ship_from_match = re.search(r"(?:ship from|item location|发货地)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{2,60})", answer, flags=re.IGNORECASE)
     return {
         "merchantLocationKey": "",
@@ -16389,6 +20873,247 @@ def _ai_ceo_logistics_plan(*, answer: str) -> dict[str, str]:
         "payment_policy_id": "",
         "return_policy_id": "",
     }
+
+
+def _ai_ceo_simulation_fact_suggestions(*, message: str, answer: str, product: str) -> dict[str, Any]:
+    """Extract clearly labelled rehearsal values as unconfirmed AI suggestions."""
+
+    request = _sanitize_merchant_ceo_text(message, limit=2400)
+    if not re.search(r"模拟演练|流程演练|受控处理演练|simulation\s+(?:rehearsal|drill)", request, flags=re.IGNORECASE):
+        return {}
+    # Rehearsal values stay simulated even when the merchant omits a separate
+    # no-publish clause. Real-write protection must not depend on that wording.
+
+    answer_text = _sanitize_merchant_ceo_text(answer, limit=12000)
+    value_sources = (answer_text, request)
+
+    def table_value(label_pattern: str, *, limit: int = 240) -> str:
+        match = None
+        for source in value_sources:
+            match = re.search(
+                rf"(?:^|\n)\s*\|\s*(?:{label_pattern})\s*\|\s*([^|\n]+?)\s*\|",
+                source,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                break
+        if not match:
+            for source in value_sources:
+                match = re.search(
+                    rf"(?:^|[\n\r、，,；;。])\s*(?:{label_pattern})(?=\s|[:：])\s*(?:[:：]\s*|\s+)([^|\n\r、，,；;。]+)",
+                    source,
+                    flags=re.IGNORECASE,
+                )
+                if match:
+                    break
+        if not match:
+            return ""
+        value = re.sub(r"\s*[（(](?:演练用|模拟演练|仅供演练)[)）]\s*$", "", match.group(1).strip(), flags=re.IGNORECASE)
+        if re.search(r"待定|待补|待确认|unknown|todo|n/?a|虚拟仓", value, flags=re.IGNORECASE):
+            return ""
+        return _sanitize_merchant_ceo_text(value, limit=limit)
+
+    def numeric(value: str) -> str:
+        match = re.search(r"\d+(?:\.\d+)?", value or "")
+        return match.group(0) if match else ""
+
+    suggestions: dict[str, Any] = {}
+    if product and product != "待选择商品方向":
+        suggestions["product_name"] = product
+
+    sku_value = ""
+    for source in value_sources:
+        sku_match = re.search(
+            r"(?:^|\n)\s*\|\s*SKU(?:\s*[（(][^）)\n]{0,24}[)）])?\s*\|\s*"
+            r"([A-Za-z0-9][A-Za-z0-9._-]{2,80})\s*\|",
+            source,
+            flags=re.IGNORECASE,
+        )
+        if not sku_match:
+            sku_match = re.search(
+                r"(?:^|[\n\r、，,；;。])\s*SKU(?:\s*[（(][^）)\n]{0,24}[)）])?(?=\s|[:：])\s*"
+                r"(?:[:：]\s*|\s+)([A-Za-z0-9][A-Za-z0-9._-]{2,80})(?=$|[\s|\n\r、，,；;。])",
+                source,
+                flags=re.IGNORECASE,
+            )
+        if sku_match:
+            sku_value = sku_match.group(1)
+            break
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{2,80}", sku_value):
+        suggestions["sku"] = sku_value
+
+    direct_fields = {
+        "brand": r"品牌|Brand",
+        "mpn": r"MPN",
+        "condition": r"商品状态|Condition",
+        "material": r"材质|Material",
+        "product_origin": r"商品产地|产地|Origin",
+        "packaging_type": r"包装方式|包装类型|Packaging",
+        "item_location": r"实际\s*Item\s*location|实际发货地",
+    }
+    for key, label_pattern in direct_fields.items():
+        value = table_value(label_pattern)
+        if value:
+            suggestions[key] = value
+
+    product_dimensions = table_value(r"商品尺寸|尺寸|Product\s*(?:dimensions?|size)")
+    dimension_match = re.search(
+        r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm",
+        product_dimensions,
+        flags=re.IGNORECASE,
+    )
+    if dimension_match:
+        suggestions["product_dimensions_cm"] = " x ".join(dimension_match.groups())
+
+    package_dimensions = table_value(r"包装尺寸|Package\s*(?:dimensions?|size)")
+    package_match = re.search(
+        r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm",
+        package_dimensions,
+        flags=re.IGNORECASE,
+    )
+    if package_match:
+        suggestions["package_length_cm"], suggestions["package_width_cm"], suggestions["package_height_cm"] = package_match.groups()
+
+    numeric_fields = {
+        "net_weight_g": r"净重|商品净重|Net\s*weight",
+        "package_weight_g": r"包装重量|Package\s*weight",
+        "unit_cost": r"采购成本|单件成本|Unit\s*cost",
+        "selling_price": r"建议售价|计划售价|Selling\s*price",
+        "quantity": r"建议库存|库存数量|真实可售数量|Quantity",
+        "handling_time_days": r"处理时间|Handling\s*time",
+    }
+    raw_numeric_values: dict[str, str] = {}
+    for key, label_pattern in numeric_fields.items():
+        value = table_value(label_pattern)
+        raw_numeric_values[key] = value
+        clean_number = numeric(value)
+        if clean_number:
+            suggestions[key] = clean_number
+
+    price_text = " ".join([raw_numeric_values.get("unit_cost", ""), raw_numeric_values.get("selling_price", "")])
+    if re.search(r"\bUSD\b|\$", price_text, flags=re.IGNORECASE):
+        suggestions["currency"] = "USD"
+    elif re.search(r"\bCNY\b|人民币|¥|￥", price_text, flags=re.IGNORECASE):
+        suggestions["currency"] = "CNY"
+
+    normalized = normalize_merchant_product_fact_packet(
+        {"derived_listing_suggestions": suggestions},
+        source="untrusted_input",
+    )
+    return normalized.get("derived_listing_suggestions") or {}
+
+
+def _ai_ceo_listing_intake_fact_packet(*, message: str, product: str) -> dict[str, Any]:
+    """Extract only explicitly labelled merchant facts from an authenticated AI CEO turn."""
+
+    text = _sanitize_merchant_ceo_text(message, limit=1800)
+    merchant_facts: dict[str, Any] = {}
+    if product and product != "待选择商品方向":
+        merchant_facts["product_name"] = product
+
+    source_match = re.search(
+        r"(?:货源(?:链接)?|供应商链接|source\s*url)\s*[:：]\s*(https?://[^\s,，；;]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if source_match:
+        merchant_facts["source_url"] = source_match.group(1).rstrip(".)）]")
+
+    item_match = re.search(
+        r"(?:供应商货号|货号(?:/产品编号)?|产品编号)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,80})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if item_match:
+        merchant_facts["supplier_item_number"] = item_match.group(1)
+
+    dimensions_match = re.search(
+        r"(?:外形(?:尺寸)?|商品尺寸|实物尺寸|尺寸|约)\s*[:：]?\s*"
+        r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if dimensions_match:
+        merchant_facts["product_dimensions_cm"] = " x ".join(dimensions_match.groups())
+
+    net_weight_match = re.search(
+        r"(?:商品)?净重\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(kg|千克|g|克)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if net_weight_match:
+        net_weight = float(net_weight_match.group(1))
+        if re.search(r"kg|千克", net_weight_match.group(2), flags=re.IGNORECASE):
+            net_weight *= 1000
+        merchant_facts["net_weight_g"] = str(int(net_weight) if net_weight.is_integer() else net_weight)
+
+    origin_match = re.search(r"(?:商品)?产地\s*[:：]?\s*([^、，,；;。\n]{2,80})", text)
+    if origin_match:
+        origin = re.split(r"\s*(?:不是|不等于|≠)\s*eBay", origin_match.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        if origin:
+            merchant_facts["product_origin"] = origin
+
+    if "纸盒安全包装" in text:
+        merchant_facts["packaging_type"] = "纸盒安全包装"
+    else:
+        packaging_match = re.search(r"(?:包装方式|供应商包装)\s*[:：]?\s*([^、，,；;。\n]{2,80})", text)
+        if packaging_match:
+            merchant_facts["packaging_type"] = packaging_match.group(1).strip()
+
+    if re.search(r"东南亚[^，,；;。\n]{0,12}禅意", text):
+        merchant_facts["style"] = "东南亚禅意"
+    else:
+        style_match = re.search(r"(?:风格)\s*[:：]?\s*([^、，,；;。\n]{2,80})", text)
+        if style_match:
+            merchant_facts["style"] = style_match.group(1).strip()
+
+    conflicts: list[dict[str, Any]] = []
+    material_conflict = bool(
+        re.search(r"材质[^。；;\n]{0,100}(?:冲突|待确认|不能自行定案)", text)
+        or ("树脂" in text and "紫砂" in text)
+    )
+    if material_conflict:
+        conflicts.append(
+            {
+                "field": "material",
+                "values": [value for value in ("树脂", "紫砂") if value in text],
+                "reason": "商家提供的来源资料存在材质冲突，必须人工确认。",
+                "requires_merchant_confirmation": True,
+            }
+        )
+    else:
+        material_match = re.search(r"(?:材质|Material)\s*[:：]\s*([^、，,；;。\n]{2,80})", text, flags=re.IGNORECASE)
+        if material_match:
+            merchant_facts["material"] = material_match.group(1).strip()
+
+    craft_conflict = bool(
+        re.search(r"工艺[^。；;\n]{0,120}(?:冲突|待确认|不能自行定案)", text)
+        or ("半手工半机械" in text and "Handmade" in text)
+    )
+    if craft_conflict:
+        conflicts.append(
+            {
+                "field": "craft",
+                "values": [value for value in ("半手工半机械", "Handmade") if value in text],
+                "reason": "商家提供的来源资料存在工艺冲突，必须人工确认。",
+                "requires_merchant_confirmation": True,
+            }
+        )
+    else:
+        craft_match = re.search(r"工艺\s*[:：]\s*([^、，,；;。\n]{2,80})", text)
+        if craft_match:
+            merchant_facts["craft"] = craft_match.group(1).strip()
+
+    packet = normalize_merchant_product_fact_packet(
+        {
+            "merchant_confirmed_facts": merchant_facts,
+            "derived_listing_suggestions": {},
+        },
+        source="authenticated_merchant_request",
+    )
+    packet["fact_conflicts"] = conflicts
+    packet["intake_contract"] = "ai_ceo_authenticated_text_to_product_facts_v1"
+    return packet
 
 
 def _ai_ceo_listing_publish_gaps(

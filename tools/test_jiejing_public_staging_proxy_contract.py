@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -37,17 +38,12 @@ def main() -> int:
         _assert_contains(nginx + compose, marker, f"anti-scrape marker {marker}")
     for route in [
         "/health",
-        "/infrastructure",
         "/oauth",
         "/auth",
-        "/owner",
         "/stores",
         "/secret-refs",
         "/connections",
-        "/backup",
-        "/billing",
         "/model",
-        "/commercial",
         "/ebay-read-only",
         "/controlled-bridges",
         "/data-packets",
@@ -85,6 +81,83 @@ def main() -> int:
         raise AssertionError("public staging nginx must keep exactly isolated ops and app server blocks")
     ops_server = server_blocks[1]
     app_server = server_blocks[2]
+    ops_static_routes = (
+        "/ops.css",
+        "/ops.js",
+        "/assets/jiejing-logo-mark.svg",
+        "/assets/jiejing-app-icon.svg",
+        "/assets/jiejing-ops-panels.js",
+    )
+    for route in ops_static_routes:
+        block = _exact_location_block(ops_server, route)
+        if "$request_method !~ ^(?:GET|HEAD)$" not in block or "return 405" not in block or "try_files $uri =404" not in block:
+            raise AssertionError(f"ops static allowlist must be exact and GET/HEAD-only for {route}")
+    if "location ~ ^/(ops\\." in ops_server or "assets/jiejing-(?:" in ops_server:
+        raise AssertionError("ops host must not use a regex static allowlist")
+    if "location / {\n        return 404;" not in ops_server:
+        raise AssertionError("unknown ops assets and routes must fail closed with 404")
+
+    merchant_namespace_roots = (
+        "infrastructure",
+        "readiness",
+        "domain",
+        "monitoring",
+        "billing",
+        "commercial",
+        "security",
+    )
+    for block in _all_location_blocks(app_server):
+        header = block.split("{", 1)[0]
+        if "proxy_pass" not in block or "(?:/|$)" not in header:
+            continue
+        for root in merchant_namespace_roots:
+            if re.search(rf"(?:\(|\|){root}(?:\||\))", header):
+                raise AssertionError(f"merchant generic proxy must not include internal-capable namespace /{root}/*")
+    merchant_safe_routes = (
+        "/health",
+        "/health/deep",
+        "/readiness/product-saas",
+        "/billing/plans",
+        "/billing/usage",
+        "/billing/media-credits",
+        "/billing/checkout-contract",
+        "/billing/domestic/contract",
+        "/billing/domestic/orders",
+        "/billing/manual-beta/orders",
+        "/billing/webhook",
+        "/billing/domestic/wechat-pay/notify",
+        "/billing/domestic/wechat-pay/refund-notify",
+        "/monitoring/cls/callback",
+    )
+    merchant_safe_proxy = next(
+        (
+            block
+            for block in _all_location_blocks(app_server)
+            if "proxy_pass http://jiejing-saas:8788" in block
+            and all(route.lstrip("/") in block.split("{", 1)[0] for route in merchant_safe_routes)
+            and "^/" in block.split("{", 1)[0]
+            and ")$" in block.split("{", 1)[0]
+        ),
+        "",
+    )
+    if not merchant_safe_proxy:
+        raise AssertionError("merchant-safe API routes need one anchored positive allowlist proxy")
+    for route_pattern in (
+        r"^/billing/domestic/orders/[^/]+(?:/(?:checkout|close|query|refund-request))?$",
+        r"^/billing/manual-beta/orders/[^/]+/confirm$",
+    ):
+        if route_pattern not in app_server:
+            raise AssertionError(f"merchant dynamic billing allowlist is missing: {route_pattern}")
+    default_deny = next(
+        (
+            block
+            for block in _all_location_blocks(app_server)
+            if all(root in block for root in merchant_namespace_roots) and "return 404" in block and "proxy_pass" not in block
+        ),
+        "",
+    )
+    if not default_deny:
+        raise AssertionError("new endpoints in internal-capable merchant namespaces must default to 404")
     for route, allowed_method in (
         ("/owner/operations/feedback", "GET"),
         ("/owner/product-feedback/review", "POST"),
@@ -119,6 +192,14 @@ def _exact_location_block(server_block: str, route: str) -> str:
         raise AssertionError(f"missing exact location: {route}")
     next_location = server_block.find("\n    location ", start + len(marker))
     return server_block[start : next_location if next_location >= 0 else len(server_block)]
+
+
+def _all_location_blocks(server_block: str) -> list[str]:
+    starts = [match.start() for match in re.finditer(r"(?m)^    location ", server_block)]
+    return [
+        server_block[start : starts[index + 1] if index + 1 < len(starts) else len(server_block)]
+        for index, start in enumerate(starts)
+    ]
 
 
 if __name__ == "__main__":

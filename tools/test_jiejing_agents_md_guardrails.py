@@ -33,7 +33,8 @@ def main() -> int:
         "https://app.jiejing.shop/health/deep",
         "https://app.jiejing.shop/readiness/product-saas",
         "Do not run or repeat eBay OAuth",
-        "The old eBay account is frozen",
+        "Historical eBay account restrictions are not current proof",
+        "Inspect the specific account's current status when relevant",
         "Do not run Stripe live payment cutover",
         "Do not read, print, commit, or write secrets",
         "Never use `git credential fill`",
@@ -44,7 +45,11 @@ def main() -> int:
         "python tools/jiejing_secret_scan.py",
         "node --check app.js",
         "python tools/jiejing_precloud_deployment_gate.py",
-        "ready_for_paid_commercial_launch=false",
+        "Report launch flags as calculated from current evidence",
+        "do not hardcode a desired true or false value into the report",
+        "docs/JIEJING_CURRENT_EXECUTION_STATE.md",
+        "dated handoffs are historical evidence, not automatic next-step instructions",
+        "Code review, local test success, production health, paid availability, and real eBay execution are distinct evidence",
         "Proactive Principal Audit",
         "Do not wait for the operator to ask for an audit",
         "SaaS product fit",
@@ -77,6 +82,8 @@ def main() -> int:
         return fail("AGENTS.md not wired into: " + ",".join(integration_missing))
 
     forbidden = [
+        "The old eBay account is frozen",
+        "ready_for_paid_commercial_launch=false",
         "JIEJING_EBAY_REFRESH_TOKEN=",
         "STRIPE_SECRET_KEY=",
         "OPENAI_API_KEY=",

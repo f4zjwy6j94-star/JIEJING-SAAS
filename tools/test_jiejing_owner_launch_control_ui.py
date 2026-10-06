@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Static guard for the platform-internal launch-control UI."""
+"""Static contract: launch control lives on ops, never in the merchant app."""
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 
@@ -14,81 +15,106 @@ def fail(message: str) -> int:
     return 1
 
 
+def function_scope(source: str, function_name: str) -> str:
+    start = source.find(f"function {function_name}(")
+    if start < 0:
+        return ""
+    next_sync = source.find("\nfunction ", start + 1)
+    next_async = source.find("\nasync function ", start + 1)
+    ends = [position for position in (next_sync, next_async) if position >= 0]
+    return source[start : min(ends) if ends else len(source)]
+
+
 def main() -> int:
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
-    styles = (ROOT / "styles.css").read_text(encoding="utf-8")
+    app_html = (ROOT / "app.html").read_text(encoding="utf-8")
+    merchant_panels = (ROOT / "assets" / "jiejing-settings-panels.js").read_text(encoding="utf-8")
+    ops_html = (ROOT / "ops.html").read_text(encoding="utf-8")
+    ops_js = (ROOT / "ops.js").read_text(encoding="utf-8")
+    ops_panels_path = ROOT / "assets" / "jiejing-ops-panels.js"
+    ops_panels = ops_panels_path.read_text(encoding="utf-8") if ops_panels_path.exists() else ""
     api_server = (ROOT / "jiejing_saas" / "api_server.py").read_text(encoding="utf-8")
     deploy = (ROOT / "deploy" / "apply-staging-patch.sh").read_text(encoding="utf-8")
-    nginx = (ROOT / "deploy" / "nginx.public-staging.conf").read_text(encoding="utf-8")
-    production_caddy = (ROOT / "deploy" / "Caddyfile.production").read_text(encoding="utf-8")
 
-    for marker in [
-        "saasOwnerLaunchControl: null",
-        'optionalSaasFetchFast("/owner/launch-control"',
-        "state.saasOwnerLaunchControl = canViewPlatformInternal ? ownerLaunchControl.owner_launch_control",
-        "async function refreshSaasOwnerLaunchControl",
-        "function maybeRefreshSaasOwnerLaunchControlForActiveTab",
-        "maybeRefreshSaasOwnerLaunchControlForActiveTab();",
-        'data-saas-action="refresh-owner-launch-control"',
-        'if (action === "refresh-owner-launch-control")',
-        "function renderSaasOwnerLaunchControlPanel",
-        "function saasOwnerLaunchCanView",
-        'control?.audience === "platform_internal_admin"',
-        'if (!saasOwnerLaunchCanView()) return "";',
+    merchant_bundle = "\n".join((app_html, app_js, merchant_panels))
+    if "maybeRefreshSaasOwnerLaunchControlForActiveTab" in app_js:
+        return fail("merchant app contains a dangling owner launch-control refresh call")
+    for marker in (
+        "/owner/launch-control",
+        "renderSaasOwnerLaunchControlPanel",
+        "saasOwnerLaunchControl",
         "saas-owner-launch-control",
-        "fixed_launch_progress",
-        "real_merchant_workflow_validation_v1",
-        "owner_pilot_workflow_validation",
-        "owner_pilot_workflow_validation_v1",
-        "单主理人上线验收",
-        "未来规模化验证",
-        "不阻挡你的单账号私测上线",
-        "固定正式上线准备度",
-        "固定 100 分口径",
-        "saas-owner-fixed-progress",
-        "saas-owner-fixed-progress-grid",
-        "saas-owner-fixed-progress-queue",
-        "next_autonomous_action",
-        "owner_admin_only",
-        "platform_internal_admin_only",
-        "not_customer_visible",
-        "charge_now_allowed=false",
-        "platform_write_now_allowed=false",
-        "repeat_ebay_oauth_allowed=false",
-        "secret_exposed=false",
         "owner_war_room_v3",
-        "expert_feasibility_review_v1",
-        "saas-owner-feasibility-review",
-        "saas-owner-feasibility-grid",
-        "saas-owner-feasibility-actions",
-        "saas-owner-feasibility-note",
-        "feasible_for_private_beta",
-        "feasible_for_paid_public_launch",
         "owner_review_packet_v1",
-        'data-saas-action="copy-owner-review-packet"',
-        'data-saas-action="download-owner-review-packet"',
-        'data-saas-action="copy-launch-rehearsal-audit"',
-        'data-saas-action="download-launch-rehearsal-audit"',
-        'data-saas-action="copy-release-history"',
-        'data-saas-action="download-release-history"',
-        'data-saas-action="copy-continuity-handoff"',
-        'data-saas-action="download-continuity-handoff"',
-        'data-saas-action="copy-cutover-decision-checklist"',
-        'data-saas-action="download-cutover-decision-checklist"',
-        'data-saas-action="copy-final-launch-rehearsal-record"',
-        'data-saas-action="download-final-launch-rehearsal-record"',
-        'data-saas-action="copy-owner-paid-launch-dossier"',
-        'data-saas-action="download-owner-paid-launch-dossier"',
-        'data-saas-action="copy-prelaunch-acceptance-report"',
-        'data-saas-action="download-prelaunch-acceptance-report"',
-        "function buildSaasOwnerReviewPacketDownloadPayload",
-        "function buildSaasLaunchRehearsalAuditDownloadPayload",
-        "function buildSaasReleaseHistoryDownloadPayload",
-        "function buildSaasContinuityHandoffDownloadPayload",
-        "function buildSaasCutoverDecisionChecklistDownloadPayload",
-        "function buildSaasFinalLaunchRehearsalRecordDownloadPayload",
-        "function buildSaasOwnerPaidLaunchDossierDownloadPayload",
-        "function buildSaasPrelaunchAcceptanceReportDownloadPayload",
+        "owner_release_history_v1",
+        "continuity_handoff_v1",
+        "固定正式上线准备度",
+        "主理人高级",
+        "refresh-owner-launch-control",
+        "copy-owner-review-packet",
+        "download-owner-review-packet",
+        "copy-launch-rehearsal-audit",
+        "download-launch-rehearsal-audit",
+        "copy-release-history",
+        "download-release-history",
+        "copy-continuity-handoff",
+        "download-continuity-handoff",
+    ):
+        if marker in merchant_bundle:
+            return fail(f"merchant bundle contains owner launch-control marker: {marker}")
+
+    if not ops_panels_path.exists():
+        return fail("physically separate assets/jiejing-ops-panels.js is missing")
+    if "jiejing-ops-panels.js" not in ops_html:
+        return fail("ops.html must load the physically separate ops panels bundle")
+    ops_bundle = "\n".join((ops_html, ops_js, ops_panels))
+    for marker in (
+        "上线与发布",
+        "支付验收",
+        "备份与恢复",
+        "运行与安全",
+        "/owner/launch-control",
+    ):
+        if marker not in ops_bundle:
+            return fail(f"ops bundle is missing launch-control capability: {marker}")
+
+    for marker in (
+        "global.JiejingOpsPanels",
+        "function renderOwnerLaunchControlPanel",
+        "renderOwnerLaunchControlPanel",
+    ):
+        if marker not in ops_panels:
+            return fail(f"ops panels bundle is missing its launch-control renderer/export: {marker}")
+    if "window.JiejingOpsPanels" not in ops_js or "renderOwnerLaunchControlPanel" not in ops_js:
+        return fail("ops.js must invoke the exported launch-control renderer")
+
+    if "<div hidden" in ops_panels or " hidden>" in ops_panels:
+        return fail("ops panels must not carry hidden keyword markers to satisfy tests")
+
+    for action in (
+        "refresh-owner-launch-control",
+        "copy-owner-review-packet",
+        "download-owner-review-packet",
+        "copy-launch-rehearsal-audit",
+        "download-launch-rehearsal-audit",
+        "copy-release-history",
+        "download-release-history",
+        "copy-continuity-handoff",
+        "download-continuity-handoff",
+        "copy-cutover-decision-checklist",
+        "download-cutover-decision-checklist",
+        "copy-final-launch-rehearsal-record",
+        "download-final-launch-rehearsal-record",
+        "copy-owner-paid-launch-dossier",
+        "download-owner-paid-launch-dossier",
+        "copy-prelaunch-acceptance-report",
+        "download-prelaunch-acceptance-report",
+    ):
+        if action not in ops_bundle:
+            return fail(f"ops launch control is missing safe operator action: {action}")
+
+    for handler in (
+        "async function refreshSaasOwnerLaunchControl",
         "function copySaasOwnerReviewPacket",
         "function downloadSaasOwnerReviewPacket",
         "function copySaasLaunchRehearsalAudit",
@@ -105,233 +131,217 @@ def main() -> int:
         "function downloadSaasOwnerPaidLaunchDossier",
         "function copySaasPrelaunchAcceptanceReport",
         "function downloadSaasPrelaunchAcceptanceReport",
-        "saas-owner-review-packet",
-        "saas-owner-review-grid",
-        "saas-owner-review-note",
-        "cutover_decision_checklist_v1",
-        "saas-owner-cutover-checklist",
-        "saas-owner-cutover-grid",
-        "saas-owner-cutover-actions",
-        "saas-owner-cutover-note",
-        "founder_external_actions",
-        "codex_internal_actions",
-        "final_launch_rehearsal_execution_record_v1",
-        "saas-owner-final-rehearsal-record",
-        "saas-owner-final-rehearsal-grid",
-        "saas-owner-final-rehearsal-actions",
-        "saas-owner-final-rehearsal-note",
-        "remaining_external_blockers",
-        "remaining_internal_actions",
-        "rollback_controls",
-        "owner_paid_launch_approval_dossier_v1",
-        "saas-owner-paid-launch-dossier",
-        "saas-owner-paid-launch-dossier-grid",
-        "saas-owner-paid-launch-evidence-grid",
-        "saas-owner-paid-launch-dossier-actions",
-        "saas-owner-paid-launch-dossier-note",
-        "no_charge_evidence_items",
-        "ordinary_merchant_visible",
-        "merchant_surface_safe",
-        "prelaunch_acceptance_report_v1",
-        "saas-owner-prelaunch-report",
-        "saas-owner-prelaunch-grid",
-        "saas-owner-prelaunch-actions",
-        "saas-owner-prelaunch-note",
-        "founder_required_actions",
-        "codex_continue_actions",
-        "report_markdown",
-        "launch_rehearsal_audit_v1",
-        "saas-owner-launch-audit",
-        "saas-owner-launch-audit-grid",
-        "saas-owner-launch-audit-note",
-        "owner_release_history_v1",
-        "saas-owner-release-history",
-        "saas-owner-release-history-grid",
-        "saas-owner-release-check-grid",
-        "saas-owner-release-rollback-list",
-        "saas-owner-release-history-note",
-        "continuity_handoff_v1",
-        "saas-owner-continuity-handoff",
-        "saas-owner-continuity-grid",
-        "saas-owner-continuity-actions",
-        "saas-owner-continuity-no-go",
-        "saas-owner-continuity-note",
-        "includes_raw_tokens=${Boolean",
-        "includes_payment_secret=${Boolean",
-        "reads_env_secret_values=${Boolean",
-        "operations_observability_v1",
-        "resilience_war_room_v1",
-        "subscription_shutdown_control_v1",
-        "test_data_governance",
-        "saas-owner-war-room",
-        "saas-owner-ops-observability",
-        "saas-owner-ops-grid",
-        "saas-owner-ops-note",
-        "saas-owner-resilience-war-room",
-        "saas-owner-resilience-grid",
-        "saas-owner-resilience-note",
-        "saas-owner-subscription-shutdown",
-        "saas-owner-subscription-shutdown-grid",
-        "saas-owner-subscription-shutdown-note",
-        "public_charging_allowed=${Boolean",
-        "frontend_gets_payment_secret=${Boolean",
-        "frontend_gets_api_key=${Boolean",
-        "exports_database=${Boolean",
-        "exports_raw_secret=${Boolean",
-        "saas-owner-test-data",
-        "需要你外部介入",
-        "我方内部继续推进",
-        "renderSaasOwnerLaunchControlPanel()",
-    ]:
-        if marker not in app_js:
-            return fail(f"app.js missing owner launch-control marker: {marker}")
+    ):
+        if handler not in ops_bundle:
+            return fail(f"ops launch control is missing migrated action handler: {handler}")
+    for action in (
+        "refresh-owner-launch-control",
+        "copy-owner-review-packet",
+        "download-owner-review-packet",
+        "copy-launch-rehearsal-audit",
+        "download-launch-rehearsal-audit",
+        "copy-release-history",
+        "download-release-history",
+        "copy-continuity-handoff",
+        "download-continuity-handoff",
+        "copy-cutover-decision-checklist",
+        "download-cutover-decision-checklist",
+        "copy-final-launch-rehearsal-record",
+        "download-final-launch-rehearsal-record",
+        "copy-owner-paid-launch-dossier",
+        "download-owner-paid-launch-dossier",
+        "copy-prelaunch-acceptance-report",
+        "download-prelaunch-acceptance-report",
+    ):
+        if f'if (action === "{action}")' not in ops_bundle:
+            return fail(f"ops launch control action is not registered: {action}")
 
-    for marker in [
-        ".saas-owner-launch-control",
-        ".saas-owner-fixed-progress",
-        ".saas-owner-fixed-progress-head",
-        ".saas-owner-fixed-progress-track",
-        ".saas-owner-fixed-progress-grid",
-        ".saas-owner-fixed-progress-queue",
-        ".saas-owner-fixed-progress-next",
-        ".saas-owner-launch-head",
-        ".saas-owner-launch-head-actions",
-        ".saas-owner-launch-summary",
-        ".saas-owner-launch-safety",
-        ".saas-owner-launch-lanes",
-        ".saas-owner-launch-queues",
-        ".saas-owner-launch-evidence",
-        ".saas-owner-war-room",
-        ".saas-owner-war-room-grid",
-        ".saas-owner-feasibility-review",
-        ".saas-owner-feasibility-grid",
-        ".saas-owner-feasibility-actions",
-        ".saas-owner-feasibility-note",
-        ".saas-owner-review-packet",
-        ".saas-owner-review-grid",
-        ".saas-owner-review-note",
-        ".saas-owner-launch-audit",
-        ".saas-owner-launch-audit-grid",
-        ".saas-owner-launch-audit-note",
-        ".saas-owner-release-history",
-        ".saas-owner-release-history-grid",
-        ".saas-owner-release-check-grid",
-        ".saas-owner-release-rollback-list",
-        ".saas-owner-release-history-note",
-        ".saas-owner-continuity-handoff",
-        ".saas-owner-continuity-grid",
-        ".saas-owner-continuity-actions",
-        ".saas-owner-continuity-no-go",
-        ".saas-owner-continuity-note",
-        ".saas-owner-cutover-checklist",
-        ".saas-owner-cutover-grid",
-        ".saas-owner-cutover-actions",
-        ".saas-owner-cutover-note",
-        ".saas-owner-final-rehearsal-record",
-        ".saas-owner-final-rehearsal-grid",
-        ".saas-owner-final-rehearsal-actions",
-        ".saas-owner-final-rehearsal-note",
-        ".saas-owner-paid-launch-dossier",
-        ".saas-owner-paid-launch-dossier-grid",
-        ".saas-owner-paid-launch-evidence-grid",
-        ".saas-owner-paid-launch-dossier-actions",
-        ".saas-owner-paid-launch-dossier-note",
-        ".saas-owner-prelaunch-report",
-        ".saas-owner-prelaunch-grid",
-        ".saas-owner-prelaunch-actions",
-        ".saas-owner-prelaunch-note",
-        ".saas-owner-ops-observability",
-        ".saas-owner-ops-grid",
-        ".saas-owner-ops-note",
-        ".saas-owner-resilience-war-room",
-        ".saas-owner-resilience-grid",
-        ".saas-owner-resilience-note",
-        ".saas-owner-subscription-shutdown",
-        ".saas-owner-subscription-shutdown-grid",
-        ".saas-owner-subscription-shutdown-note",
-        ".saas-owner-test-data",
-        ".saas-owner-test-data-grid",
-        ".saas-confirm-approval-brief",
-        ".saas-confirm-impact-grid",
-        ".saas-confirm-evidence-list",
-        ".saas-confirm-rollback-plan",
-    ]:
-        if marker not in styles:
-            return fail(f"styles.css missing owner launch-control marker: {marker}")
+    export_builders = (
+        "buildSaasOwnerReviewPacketDownloadPayload",
+        "buildSaasLaunchRehearsalAuditDownloadPayload",
+        "buildSaasReleaseHistoryDownloadPayload",
+        "buildSaasContinuityHandoffDownloadPayload",
+        "buildSaasCutoverDecisionChecklistDownloadPayload",
+        "buildSaasFinalLaunchRehearsalRecordDownloadPayload",
+        "buildSaasOwnerPaidLaunchDossierDownloadPayload",
+        "buildSaasPrelaunchAcceptanceReportDownloadPayload",
+    )
+    for builder in export_builders:
+        scope = function_scope(ops_bundle, builder)
+        if not scope:
+            return fail(f"ops launch control is missing safe export builder: {builder}")
+        if "secret_exposed: false" not in scope:
+            return fail(f"ops launch control export must state secret_exposed=false: {builder}")
+        for forbidden in (
+            "process.env",
+            "localStorage",
+            "sessionStorage",
+            "refresh_token",
+            "access_token",
+            "client_secret",
+            "sk_live",
+            "whsec",
+            "...source",
+            "...packet",
+        ):
+            if forbidden.lower() in scope.lower():
+                return fail(f"ops launch control export is not allowlisted ({builder}): {forbidden}")
 
-    for marker in [
-        "from .owner_launch_control import build_owner_launch_control",
-        '"owner/"',
-        'if path == "owner/launch-control":',
-        "internal_admin_emails",
-        "_is_platform_internal_admin",
-        "platform-internal admin only",
-        '"owner_launch_control": build_owner_launch_control',
-        '"platform-internal-admin-only launch and production-release evidence"',
-        '"GET /security/rate-limit/status"',
-    ]:
-        if marker not in api_server:
-            return fail(f"api_server.py missing owner launch-control marker: {marker}")
+    authoritative_artifact_mappings = (
+        ("copySaasLaunchRehearsalAudit", "launch_rehearsal_audit_packet"),
+        ("downloadSaasLaunchRehearsalAudit", "launch_rehearsal_audit_packet"),
+        ("copySaasReleaseHistory", "release_history"),
+        ("downloadSaasReleaseHistory", "release_history"),
+        ("copySaasContinuityHandoff", "continuity_handoff_digest"),
+        ("downloadSaasContinuityHandoff", "continuity_handoff_digest"),
+    )
+    for handler, artifact_key in authoritative_artifact_mappings:
+        scope = function_scope(ops_js, handler)
+        if f'ownerLaunchArtifact("{artifact_key}")' not in scope:
+            return fail(f"ops export handler does not use authoritative payload key: {handler} -> {artifact_key}")
 
-    for marker in [
-        "jiejing_saas/owner_launch_control.py",
-        "jiejing_saas/launch_progress.py",
-        "tools/test_jiejing_owner_launch_control.py",
-        "tools/test_jiejing_owner_launch_control_ui.py",
-        "tools/test_jiejing_fixed_launch_progress.py",
-        "tools/codex_jiejing_owner_launch_control_smoke.js",
-    ]:
-        if marker not in deploy:
-            return fail(f"staging patch should include owner launch-control file: {marker}")
+    runtime_contract = r"""
+global.window = {};
+require(process.argv[1]);
+const panels = window.JiejingOpsPanels;
+const secretSentinel = "DO_NOT_RENDER_THIS_SECRET";
+const control = {
+  status: "attention",
+  next_action: "核对八类上线证据",
+  secret_exposed: false,
+  access_token: secretSentinel,
+  owner_review_packet: { status: "review_ready", generated_at: "2026-08-28T00:00:00Z", client_secret: secretSentinel },
+  launch_rehearsal_audit_packet: { status: "audit_ready", generated_at: "2026-08-28T00:01:00Z", api_key: secretSentinel },
+  release_history: { status: "history_ready", updated_at: "2026-08-28T00:02:00Z", refresh_token: secretSentinel },
+  continuity_handoff_digest: { status: "handoff_ready", updated_at: "2026-08-28T00:03:00Z", password: secretSentinel },
+  cutover_decision_checklist: { status: "cutover_ready", generated_at: "2026-08-28T00:04:00Z", summary: { recommended_next_step: "review" }, token: secretSentinel },
+  final_launch_rehearsal_execution_record: { status: "rehearsal_ready", generated_at: "2026-08-28T00:05:00Z", summary: { decision: "hold" }, secret: secretSentinel },
+  owner_paid_launch_approval_dossier: { status: "dossier_ready", generated_at: "2026-08-28T00:06:00Z", summary: { decision: "hold", readiness_score_percent: 75 }, private_key: secretSentinel },
+  prelaunch_acceptance_report: { status: "acceptance_ready", generated_at: "2026-08-28T00:07:00Z", summary: { decision: "hold", readiness_score_percent: 80 }, webhook_secret: secretSentinel },
+};
+const evidence = [
+  ["owner-review-packet", panels.buildSaasOwnerReviewPacketDownloadPayload, control.owner_review_packet],
+  ["launch-rehearsal-audit", panels.buildSaasLaunchRehearsalAuditDownloadPayload, control.launch_rehearsal_audit_packet],
+  ["release-history", panels.buildSaasReleaseHistoryDownloadPayload, control.release_history],
+  ["continuity-handoff", panels.buildSaasContinuityHandoffDownloadPayload, control.continuity_handoff_digest],
+  ["cutover-decision-checklist", panels.buildSaasCutoverDecisionChecklistDownloadPayload, control.cutover_decision_checklist],
+  ["final-launch-rehearsal-record", panels.buildSaasFinalLaunchRehearsalRecordDownloadPayload, control.final_launch_rehearsal_execution_record],
+  ["owner-paid-launch-dossier", panels.buildSaasOwnerPaidLaunchDossierDownloadPayload, control.owner_paid_launch_approval_dossier],
+  ["prelaunch-acceptance-report", panels.buildSaasPrelaunchAcceptanceReportDownloadPayload, control.prelaunch_acceptance_report],
+];
+const launchHtml = panels.renderOwnerLaunchControlPanel(control);
+if (launchHtml.includes("<div hidden") || launchHtml.includes(secretSentinel)) {
+  throw new Error("launch renderer emitted a hidden marker or secret field");
+}
+for (const [key, builder, source] of evidence) {
+  if (!launchHtml.includes(`data-evidence-kind="${key}"`)) {
+    throw new Error(`launch renderer omitted visible evidence card: ${key}`);
+  }
+  for (const action of [`copy-${key}`, `download-${key}`]) {
+    if (!launchHtml.includes(`data-ops-action="${action}"`)) throw new Error(`launch renderer omitted action: ${action}`);
+  }
+  const payload = builder(source);
+  const serialized = JSON.stringify(payload);
+  if (!payload || payload.status === "unknown" || !(payload.generated_at || payload.updated_at) || payload.secret_exposed !== false) {
+    throw new Error(`authoritative artifact produced empty export: ${serialized}`);
+  }
+  if (serialized.includes(secretSentinel)) throw new Error(`export leaked a secret field: ${key}`);
+}
+const paymentHtml = panels.renderPaymentAcceptancePanel({
+  testEvent: { status: "ready", reason: "recorded", api_key: secretSentinel },
+  provider: { status: "ready", reason: "recorded", client_secret: secretSentinel },
+  wechat: { status: "ready", reason: "recorded", refresh_token: secretSentinel },
+});
+for (const action of ["billing-test-event", "billing-provider-rehearsal", "wechat-zero-charge-rehearsal"]) {
+  const matches = paymentHtml.match(new RegExp(`data-ops-action="${action}"`, "g")) || [];
+  if (matches.length !== 1) throw new Error(`payment renderer action count mismatch: ${action}=${matches.length}`);
+}
+if (paymentHtml.includes("<div hidden") || paymentHtml.includes(secretSentinel)) throw new Error("payment renderer emitted a hidden marker or secret field");
+"""
+    runtime = subprocess.run(
+        ["node", "-e", runtime_contract, str(ops_panels_path)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if runtime.returncode != 0:
+        return fail(f"ops authoritative artifact runtime contract failed: {runtime.stderr.strip()}")
 
-    if "owner" not in nginx or "/owner/*" not in production_caddy:
-        return fail("public proxy configs must route owner launch-control API to backend")
+    payment_scope = function_scope(ops_panels, "renderPaymentAcceptancePanel")
+    for action in ("billing-test-event", "billing-provider-rehearsal", "wechat-zero-charge-rehearsal"):
+        if f'data-ops-action="{action}"' not in payment_scope:
+            return fail(f"ops payment acceptance is missing exact action: {action}")
+        if f'if (action === "{action}")' not in ops_js:
+            return fail(f"ops payment acceptance action is not registered: {action}")
+    for route in (
+        "/owner/billing/test-event",
+        "/owner/billing/provider-rehearsal",
+        "/owner/billing/wechat-pay/zero-charge-rehearsal",
+    ):
+        if route not in ops_js:
+            return fail(f"ops payment acceptance route is missing: {route}")
+    payment_runtime_scope = "\n".join(
+        function_scope(ops_js, name)
+        for name in (
+            "runSaasBillingTestEvent",
+            "runSaasBillingProviderRehearsal",
+            "runSaasWechatZeroChargeRehearsal",
+        )
+    )
+    for forbidden in ("localStorage", "sessionStorage", "window.location", "location.href", "window.open"):
+        if forbidden in payment_runtime_scope:
+            return fail(f"ops payment acceptance must not persist or redirect: {forbidden}")
 
-    scope = _function_scope(app_js, "function renderSaasOwnerLaunchControlPanel", "function renderSaasPublicSecurityStatusPanel")
-    for forbidden in [
+    renderer_start = ops_panels.find("function renderOwnerLaunchControlPanel")
+    renderer_end = ops_panels.find("\n  function ", renderer_start + 1)
+    renderer_scope = ops_panels[renderer_start : renderer_end if renderer_end >= 0 else len(ops_panels)]
+    for forbidden in (
         "refresh_token",
         "access_token",
         "client_secret",
         "sk_live",
         "whsec",
-        'data-saas-action="plan-ebay-oauth"',
-        'data-saas-action="create-checkout-session"',
-        "createStripeCheckout",
         "auto_publish",
         "skip_confirmation",
-    ]:
-        if forbidden in scope.lower():
-            return fail(f"owner launch-control panel must not contain unsafe marker: {forbidden}")
+    ):
+        if forbidden in renderer_scope.lower():
+            return fail(f"ops launch-control renderer exposes unsafe marker: {forbidden}")
 
-    confirm_scope = _function_scope(app_js, "function saasWorkbenchApprovalBriefMarkup", "function saasWorkbenchActionLabel")
-    for marker in [
-        "function saasConfirmationApprovalLevel",
-        "function saasConfirmationImpactRows",
-        "function saasConfirmationEvidenceChecklist",
-        "function saasConfirmationRollbackPlan",
-        "资金/预算动作",
-        "平台动作",
-        "买家承诺",
-        "敏感凭证隔离",
-        "saas-confirm-approval-brief",
-    ]:
-        if marker not in confirm_scope:
-            return fail(f"confirmation approval brief missing marker: {marker}")
-    for forbidden in ["sk_live", "whsec", "refresh_token", "access_token", "client_secret"]:
-        if forbidden in confirm_scope.lower():
-            return fail(f"confirmation approval brief must not contain unsafe marker: {forbidden}")
+    route_start = api_server.find('if path == "owner/launch-control":')
+    route_end = api_server.find("\n        if path == ", route_start + 1)
+    if route_start < 0:
+        return fail("owner launch-control backend route is missing")
+    route_scope = api_server[route_start : route_end if route_end >= 0 else len(api_server)]
+    if "_require_platform_internal_admin" not in route_scope:
+        return fail("owner launch-control route must require platform-internal admin in its own scope")
+    surface_guards = (
+        "_require_operations_console_request(",
+        "_require_operations_console_surface(",
+        "_require_ops_surface(",
+        "_require_owner_ops_surface(",
+    )
+    if not any(marker in route_scope for marker in surface_guards):
+        return fail("owner launch-control route must call the unified ops-surface request guard in its own scope")
+
+    if "assets/jiejing-ops-panels.js" not in deploy:
+        return fail("staging patch must ship the physically separate ops panels bundle")
+
+    # Merchant confirmation safety remains a merchant workflow concern.
+    confirmation_scope_start = app_js.find("function saasWorkbenchApprovalBriefMarkup")
+    confirmation_scope_end = app_js.find("function saasWorkbenchActionLabel", confirmation_scope_start)
+    if confirmation_scope_start < 0 or confirmation_scope_end < 0:
+        return fail("merchant confirmation approval brief is missing")
+    confirmation_scope = app_js[confirmation_scope_start:confirmation_scope_end]
+    for marker in ("资金/预算动作", "平台动作", "买家承诺", "敏感凭证隔离"):
+        if marker not in confirmation_scope:
+            return fail(f"merchant confirmation approval brief is missing: {marker}")
+    for forbidden in ("sk_live", "whsec", "refresh_token", "access_token", "client_secret"):
+        if forbidden in confirmation_scope.lower():
+            return fail(f"merchant confirmation approval brief exposes secret marker: {forbidden}")
 
     print("PASS jiejing_owner_launch_control_ui")
     return 0
-
-
-def _function_scope(text: str, start_marker: str, end_marker: str) -> str:
-    try:
-        start = text.index(start_marker)
-        end = text.index(end_marker, start)
-    except ValueError as exc:
-        raise AssertionError(f"missing function scope marker: {exc}") from exc
-    return text[start:end]
 
 
 if __name__ == "__main__":

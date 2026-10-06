@@ -44,7 +44,7 @@ def main() -> int:
         "credentials: options.credentials || \"include\"",
         "sessionHint: \"jiejing_saas_backend_session_hint\"",
         "protectedSnapshot: \"jiejing_saas_protected_snapshot\"",
-        "hydrateSaasProtectedStateFromCache()",
+        "hydrateSaasProtectedStateFromCache({ me: coreMe, stores: state.saasStores, storeId: store.store_id })",
         "saveSaasProtectedStateSnapshot()",
         "state.saasProtectedStateFromCache",
         "viewId === \"cockpit\" && hasSaasProtectedSessionCandidate()",

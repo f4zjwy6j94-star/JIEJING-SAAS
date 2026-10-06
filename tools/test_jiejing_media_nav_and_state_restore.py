@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static checks for the Jiejing 7-module shell and media restore path."""
+"""Static checks for the Jiejing merchant shell and media restore path."""
 
 from __future__ import annotations
 
@@ -31,15 +31,34 @@ def main() -> int:
     nav_end = app_html.index("</nav>", nav_start)
     nav_html = app_html[nav_start:nav_end]
     nav_views = re.findall(r'data-view="([^"]+)"', nav_html)
-    expected_nav_views = ["cockpit", "product", "bulk", "media", "confirm", "service", "connect"]
+    expected_nav_views = ["cockpit", "product", "media", "confirm", "service", "connect"]
     if nav_views != expected_nav_views:
-        return fail(f"left navigation should expose exactly 7 MVP modules: {nav_views}")
-    for removed_view in ["workflow", "activity", "report"]:
+        return fail(f"left navigation should expose the six merchant work areas: {nav_views}")
+    for removed_view in ["bulk", "activity", "workflow", "report"]:
         if f'data-view="{removed_view}"' in nav_html:
             return fail(f"left navigation must not expose retired module: {removed_view}")
-    for retained_view in ["view-workflow", "view-activity"]:
+    for retained_view in ["view-bulk", "view-workflow", "view-activity"]:
         if f'id="{retained_view}"' not in app_html:
             return fail(f"retired sidebar content must remain available for re-homing: {retained_view}")
+
+    for alias in ['activity: "cockpit"', 'report: "cockpit"', 'reports: "cockpit"', 'batch: "bulk"']:
+        if alias not in app_js:
+            return fail(f"legacy route must remain normalized without restoring a primary nav item: {alias}")
+
+    for listing_mode_marker in [
+        'data-listing-mode="single"',
+        'data-listing-mode="bulk"',
+        'data-listing-mode="recent"',
+        'aria-current="page"',
+        "单个商品",
+        "批量选品与草稿",
+        "最近任务",
+        "data-recent-product-task-id",
+        "data-recent-product-task-type",
+        "data-open-recent-product-task",
+    ]:
+        if listing_mode_marker not in app_js:
+            return fail(f"listing workspace must expose the three internal modes: {listing_mode_marker}")
 
     media_body = function_body(app_js, "renderMediaProjectTabs", "renderListingDraftGallery")
     for marker in [
@@ -53,6 +72,14 @@ def main() -> int:
         "function bindRestoredMediaStudioEvents",
         "function renderSaasMediaStudioStatus",
         "function renderSaasMediaGeneratedAssetsPanel",
+        "function saasMediaAssetJobFailureDiagnostic",
+        "private_media_source_asset_not_found",
+        "private_media_source_asset_unavailable",
+        "private_media_source_asset_scope_mismatch",
+        "private_media_source_asset_expired",
+        "private_media_source_asset_integrity_failed",
+        "saasMediaAssetJobFailureDiagnostic(job)",
+        "素材来源诊断：",
         "function syncSaasMediaProjectDraft",
         'data-media-saas-real="1"',
         "素材结果",
@@ -129,7 +156,7 @@ def main() -> int:
         "AI CEO 已接单",
         "saas-ceo-route-card",
         "saas-ceo-module-handoff",
-        "handleSaasCeoCommandSubmit(text);",
+        "handleSaasCeoCommandSubmit(text, { sourceAssetIds });",
     ]:
         if marker not in app_js:
             return fail(f"AI CEO command intake must persist and route real SaaS work: {marker}")
@@ -150,11 +177,10 @@ def main() -> int:
     ceo_submit_body = function_body(app_js, "handleCeoFormSubmit", "bindCeoForm")
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
-    for marker in [
-        "20260803-product-feedback-v1",
-    ]:
-        if marker not in app_html + index_html:
-            return fail(f"frontend cache version must advance after owner publish UI change: {marker}")
+    app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
+    index_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", index_html)
+    if len(app_versions) != 1 or index_versions != [app_versions[0], app_versions[0]]:
+        return fail("frontend entries must share one current versioned media UI bundle")
     for stale_asset_version in [
         "20260525-workflow-feedback-v1",
         "20260526-owner-publish-v1",
@@ -172,6 +198,10 @@ def main() -> int:
         "20260619-confirmation-preflight-v1",
         "20260621-listing-ordered-flow-v14",
         "20260704-bulk-media-handoff-v20",
+        "20260825-media-retry-confirm-v1",
+        "20260825-listing-publish-truth-v1",
+        "20260825-listing-media-restore-v1",
+        "20260825-listing-media-restore-v2",
     ]:
         if stale_asset_version in app_html + index_html:
             return fail(f"frontend cache version must not keep stale asset after owner publish UI change: {stale_asset_version}")
@@ -237,8 +267,14 @@ def main() -> int:
     public_nav = index_html[nav_start_public:nav_end_public]
     if 'href="./index.html?auth=login">AI CEO 工作台</a>' in public_nav:
         return fail("public AI CEO workbench nav must not jump directly to the login modal")
-    if 'href="#ai-ceo-workbench">AI CEO 工作台</a>' not in public_nav:
-        return fail("public AI CEO workbench nav should scroll to the real SaaS workbench section")
+    for marker in (
+        'href="#outcome">草稿内容</a>',
+        'href="#logic">使用流程</a>',
+        'href="#trust">安全边界</a>',
+        'href="#paths">套餐方案</a>',
+    ):
+        if marker not in public_nav:
+            return fail(f"public merchant navigation must retain the simplified homepage sections: {marker}")
     if 'href="./index.html?auth=register"' in index_html or 'href="./index.html?auth=login"' in index_html:
         return fail("public homepage must not use URL parameters to auto-open login/register")
     if "function openWorkbenchOrAuth" not in index_html or "function hasEntrySaasSessionCandidate" not in index_html:
@@ -255,7 +291,7 @@ def main() -> int:
         "AI 连接",
         "来源记录",
         "决策中心",
-        'view", "cockpit"',
+        'target.searchParams.set("view", activePlan === "free" ? "cockpit" : "connect")',
     ]:
         if marker not in index_html:
             return fail(f"public AI CEO workbench section missing SaaS-ready marker: {marker}")

@@ -208,12 +208,19 @@ def main() -> int:
         order_id=str(spent_order["order_id"]),
         reason="测试已使用素材点时的退款门禁",
     )
-    repository.decide_confirmation(
+    operator = repository.create_user_with_company(email="media-refund-operator@example.test", password="Local-media-operator-2026", company_name="Media Refund Operations")
+    operator_company_id = operator["company"]["company_id"]
+    operator_user_id = operator["user"]["user_id"]
+    internal_admin_emails = ("media-refund-operator@example.test",)
+    repository.review_platform_refund_confirmation(
         company_id=company_id,
+        order_id=str(spent_order["order_id"]),
         confirmation_id=str(review.get("confirmation_id") or ""),
         decision="approve",
-        decided_by=user_id,
-        note="Approved test fixture.",
+        reviewer_company_id=operator_company_id,
+        reviewer_user_id=operator_user_id,
+        internal_admin_emails=internal_admin_emails,
+        review_reason="Reviewed payment and usage records for this test fixture.",
     )
     provider_calls: list[str] = []
 
@@ -224,7 +231,9 @@ def main() -> int:
     blocked_refund = execute_approved_domestic_billing_refund(
         repository,
         company_id=company_id,
-        user_id=user_id,
+        user_id=operator_user_id,
+        operator_company_id=operator_company_id,
+        internal_admin_emails=internal_admin_emails,
         order_id=str(spent_order["order_id"]),
         provider_refund=forbidden_refund,
     )

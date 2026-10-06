@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +63,10 @@ def main() -> int:
             return fail(f"missing operations rotating session marker: {marker}")
     if "localStorage" in ops or "sessionStorage" in ops:
         return fail("operations session state must stay in HttpOnly cookies and request-local memory")
+    behavior = subprocess.run(["node", "tools/test_jiejing_homepage_session_refresh.js"], cwd=ROOT, capture_output=True, text=True, timeout=30)
+    if behavior.returncode:
+        return fail("homepage session refresh behavior regression: " + behavior.stderr)
+    print(behavior.stdout.strip())
     print("PASS jiejing_frontend_rotating_browser_sessions")
     return 0
 

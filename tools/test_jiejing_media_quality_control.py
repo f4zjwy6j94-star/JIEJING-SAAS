@@ -36,7 +36,7 @@ def main() -> int:
 
     required_html = (
         'id="mediaGenerationTierSelect"',
-        "快速样图 · 20 点/张",
+        "草稿图 · 20 点/张",
         "标准图（推荐） · 80 点/张",
         "高清图（最终候选） · 250 点/张",
         'id="mediaGenerationPointQuote"',
@@ -48,6 +48,19 @@ def main() -> int:
     for marker in required_html:
         if marker not in app_html:
             raise AssertionError(f"media quality UI is missing {marker}")
+    count_select = app_html.split('id="mediaCountSelect"', 1)[1].split("</select>", 1)[0]
+    tier_select = app_html.split('id="mediaGenerationTierSelect"', 1)[1].split("</select>", 1)[0]
+    if '<option selected>1 张</option>' not in count_select or '<option selected>4 张</option>' in count_select:
+        raise AssertionError("first media run must default to one image instead of silently quoting four")
+    if '<option selected>草稿图 · 20 点/张</option>' not in tier_select or '<option selected>标准图（推荐） · 80 点/张</option>' in tier_select:
+        raise AssertionError("first media run must default to the low-cost draft tier")
+    for truthful_default in (
+        '<strong id="mediaOutputStatus">1 张草稿 · 默认不生成视频</strong>',
+        'data-media-template="standard" data-template-size="平台推荐自动匹配" data-template-count="1 张"',
+        '<strong id="mediaChoiceCount">1 张 · 平台推荐自动匹配</strong>',
+    ):
+        if truthful_default not in app_html:
+            raise AssertionError(f"media package summary must agree with the one-image draft default: {truthful_default}")
     if 'data-template-video="15 秒产品展示视频"' in app_html:
         raise AssertionError("image templates must not silently enable a video")
     if "<option>15 秒产品展示视频</option>" in app_html or "<option>30 秒产品短视频脚本</option>" in app_html:
@@ -67,25 +80,52 @@ def main() -> int:
         '"camera_motion_only"',
         '"product_remains_static"',
         '"no_use_or_installation_demo"',
-        'motion_and_usage_consistency_confirmed: true',
+        'motion_and_usage_consistency_confirmed: evidence.motion_and_usage_consistency_confirmed',
+        'readSaasMediaReviewEvidenceFromActiveModal(mediaJobId, hasVideoAsset)',
         'const groundingGate = saasMediaGenerationGroundingGate(productFacts, config)',
         'groundingGate.conceptOnly ? "concept_reference_only" : "reference_grounded_listing_draft"',
         "const mediaPointsByGenerationTier = { draft: 20, standard: 80, high_quality: 250 }",
         'setText("#mediaGenerationPointQuote"',
+        'if (/草稿|快速|低成本/.test(String(value))) return "draft"',
+        "function saasMediaAssetJobRequestedImageCount",
+        "const plannedCount = saasMediaAssetJobRequestedImageCount(manifestJob || {}, config.count)",
+        "function saasMerchantAssetSpecification",
+        'return "规格待确认"',
+        "const estimatedPoints = Number(quote.estimated_points)",
+        "实际扣点以设置中的素材点记录为准",
     )
     for marker in required_js:
         if marker not in app_js:
             raise AssertionError(f"media generation payload is missing {marker}")
+    manifest_card_scope = app_js.split("function saasMediaManifestAssetCards", 1)[1].split(
+        "function saasMediaSourceImageForReview", 1
+    )[0]
+    if '|| "provider_returned"' in manifest_card_scope:
+        raise AssertionError("merchant media cards must not expose an internal provider lifecycle code as dimensions")
+    cost_label_scope = app_js.split("function saasMediaAssetJobCostLabel", 1)[1].split(
+        "function saasMediaAssetJobCanRework", 1
+    )[0]
+    for internal_cost_marker in ("estimated_max_cost_cents", "actual_cost_cents", "实际素材用量约 $", "本次上限估算 $"):
+        if internal_cost_marker in cost_label_scope:
+            raise AssertionError(f"merchant media records must use points instead of provider cost: {internal_cost_marker}")
+    approval_block = app_js.split("async function approveLatestSaasMediaAssetJobForListingDraft", 1)[1].split(
+        "async function retrySaasMediaAssetJob", 1
+    )[0]
+    if "motion_and_usage_consistency_confirmed: true" in approval_block:
+        raise AssertionError("media review must collect motion confirmation from the active checklist")
     active_media_sync = app_js.split("function syncSaasMediaProjectDraft", 1)[1].split("\nfunction ", 1)[0]
     if 'setText("#mediaGapTitle", gap)' not in active_media_sync:
         raise AssertionError("active media project must replace the legacy static gap with current product gaps")
     if "是否含香粒" in active_media_sync:
         raise AssertionError("active media project must not inherit incense-demo facts")
+    for status_marker in ("概念参考图已返回 · 不可用于刊登", "真实素材已返回 · 等待审核", "素材正在后台生成"):
+        if status_marker not in active_media_sync:
+            raise AssertionError(f"media project refresh must derive current status from backend jobs: {status_marker}")
     if (
-        'optionalSaasFetchFast("/readiness/product-saas"' not in app_js
-        or "state.saasReadiness = coreReadiness.readiness" not in app_js
+        'optionalSaasFetchFast("/media/capabilities"' not in app_js
+        or "state.saasMediaCapabilities = mediaCapabilities.media_capabilities" not in app_js
     ):
-        raise AssertionError("authenticated refresh must hydrate media readiness before rendering the workshop")
+        raise AssertionError("authenticated refresh must hydrate media capabilities before rendering the workshop")
 
     adapter = MediaGenerationAdapter()
     grounded = MediaGenerationConfig(

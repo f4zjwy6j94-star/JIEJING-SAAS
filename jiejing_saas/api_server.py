@@ -19,14 +19,30 @@ from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 from jiejing_runtime.execution import ExecutionRequest, ExecutionService
+from jiejing_runtime.execution_preflight import finite_publish_number
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
 
-from .account_health import build_account_health_snapshot, merge_account_health_into_payload
-from .ai_ceo_chat import ai_ceo_route_metadata, run_ai_ceo_chat, run_ai_ceo_fast_turn
+
+from .account_health import (
+    TRUSTED_PROVIDER_RESTRICTION_RESOLUTION_TYPES,
+    build_account_health_snapshot,
+    merge_account_health_into_payload,
+)
+from .ai_ceo_chat import (
+    _explicit_new_listing_project_request,
+    ai_ceo_route_metadata,
+    build_public_search_capability_status,
+    run_ai_ceo_chat,
+)
+from .ai_ceo_semantic_plan import SemanticPlanError, pending_semantic_plan, plan_ai_ceo_turn
+from .ai_ceo_project_binding import (
+    merge_product_fact_proposals, new_project_fact_packet, new_project_identity,
+    semantic_dispatch_receipt, submitted_project_identity,
+)
 from .backup_plan import build_backup_plan
 from .billing_plan import build_billing_plan, build_billing_usage, evaluate_quota_action
 from .billing_checkout import build_billing_checkout_contract, create_stripe_checkout_session, create_stripe_customer_portal_session
@@ -37,6 +53,7 @@ from .billing_domestic import (
     execute_approved_domestic_billing_refund,
     merchant_domestic_billing_order,
     open_domestic_billing_checkout,
+    platform_refund_review_packet,
     query_and_reconcile_domestic_billing_order,
     query_and_reconcile_domestic_billing_refund,
     reconcile_domestic_billing_orders,
@@ -84,7 +101,25 @@ from .ebay_token_refresh_adapter import EbayVaultTokenRefreshAdapter, public_tok
 from .ebay_write_adapter import EbayWriteHttpAdapter, build_ebay_write_adapter_contract, build_publish_readiness
 from .independence import build_independence_status
 from .infrastructure_drivers import build_infrastructure_driver_status
-from .media_credits import build_media_credit_summary, estimate_media_points
+from .media_asset_pipeline import (
+    is_concept_only_media_spec,
+    media_asset_is_listing_review_eligible,
+    media_asset_is_video,
+    media_manifest_matches_approved_quote,
+    missing_media_product_fact_keys,
+)
+from .media_credits import (
+    build_merchant_media_credit_summary,
+    build_media_credit_summary,
+    controlled_media_acceptance_company_allowed,
+    controlled_media_acceptance_enabled,
+    controlled_media_acceptance_source_reference,
+    estimate_media_points,
+    media_live_provider_requested,
+    normalize_media_generation_inputs,
+    owner_media_testing_company_allowed,
+    owner_media_testing_enabled,
+)
 from .merchant_onboarding import (
     AUTHORIZED_CONNECTION_STATUSES,
     MerchantOnboardingValidationError,
@@ -93,6 +128,22 @@ from .merchant_onboarding import (
 )
 from .ip_risk_screening import build_ip_logo_brand_screening
 from .json_safe import json_default
+from .listing_draft_generation import (
+    listing_draft_generation_request_failure,
+    listing_draft_rewrite_source,
+    is_listing_buyer_copy_rewrite_contract,
+    ListingDraftGenerationError,
+    generate_listing_draft,
+    listing_draft_core_missing_fields,
+    listing_draft_merchant_copy_failure,
+)
+from .listing_generation_operations import (
+    build_listing_generation_operation,
+    claim_listing_generation_operation,
+    finish_listing_generation_operation,
+    read_listing_generation_operation,
+)
+from .listing_generation_legacy_recovery import read_legacy_listing_generation_result
 from .model_value_gate import build_model_value_gate
 from .model_value_rehearsal import run_model_value_rehearsal
 from .model_provider_catalog import (
@@ -102,15 +153,31 @@ from .model_provider_catalog import (
     build_model_provider_catalog,
     get_model_provider,
     model_secret_provider,
+    model_secret_storage_recovery_required,
     normalize_model_api_base_url,
     public_model_settings_from_secret_refs,
 )
 from .monitoring import build_monitoring_status
 from .operations_metering import MeteredModelClient, model_cost_measurement, sanitize_analytics_event
 from .media_source_assets import MAX_MEDIA_SOURCE_BYTES, MediaSourceAssetError, MediaSourceAssetStore
+from .product_vision import (
+    MAX_AI_CEO_SOURCE_IMAGES,
+    ProductVisionError,
+    build_product_vision_capability_status,
+    build_product_vision_fact_packet,
+    fal_product_vision_client_from_env,
+    product_vision_prompt_context,
+)
+from .publish_source_rights import (
+    PublishSourceRightsEvidenceError,
+    canonicalize_publish_asset_manifest,
+    resolve_publish_source_rights_evidence,
+    validate_publish_source_rights_evidence,
+)
+from .merchant_project_status import build_merchant_project_status
 from .operational_health import build_operational_health
 from .owner_launch_control import build_owner_launch_control
-from .platform_model_status import platform_default_serving_model
+from .platform_model_status import platform_default_serving_model, platform_model_for_tier
 from .paid_launch_approval_packet import build_paid_launch_approval_packet
 from .platform_registry import build_platform_connection_plan, get_platform_definition, registry_summary
 from .platform_data_packet_handoff import build_runtime_handoff_from_platform_packet, merge_runtime_handoff_input
@@ -128,9 +195,15 @@ from .product_feedback import (
     ProductFeedbackStatusConflict,
     ProductFeedbackValidationError,
 )
-from .readiness import build_degraded_product_readiness, build_product_readiness_or_degraded
+from .readiness import (
+    build_degraded_product_readiness,
+    build_media_generation_capability_status,
+    build_product_readiness_or_degraded,
+)
 from .repository import (
     ACTIVE_SECRET_REF_STATUSES,
+    CONTROLLED_MEDIA_CREDIT_SOURCE,
+    OWNER_MEDIA_TESTING_SOURCE,
     EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE,
     EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP,
     EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE,
@@ -138,7 +211,13 @@ from .repository import (
     ConfirmationDecisionConflict,
     HIGH_RISK_ACTIONS,
     OAuthPlanExactApprovalError,
+    ProductFactSaveConflict,
+    ProductFactSaveValidationError,
     SaaSRepository,
+    TeamSeatQuotaExceeded,
+    normalize_ai_ceo_supplier_fact_attestation,
+    normalize_listing_project_identity,
+    normalize_merchant_product_fact_packet,
 )
 from .runtime_bridge import RuntimeBridge
 from .security import SessionManager
@@ -207,8 +286,9 @@ EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
 EXPENSIVE_API_RATE_LIMIT_EXACT_PATHS = {
     "billing/checkout-session",
     "billing/customer-portal",
-    "billing/test-event",
-    "billing/wechat-pay/zero-charge-rehearsal",
+    "owner/billing/test-event",
+    "owner/billing/provider-rehearsal",
+    "owner/billing/wechat-pay/zero-charge-rehearsal",
 }
 SESSION_COOKIE_NAME = "jiejing_saas_session"
 REFRESH_COOKIE_NAME = "jiejing_saas_refresh"
@@ -223,6 +303,65 @@ PLATFORM_TRIAL_ACTIVATION_MAX_PER_IP_DEFAULT = 3
 PLATFORM_TRIAL_ACTIVATION_MAX_GLOBAL_DEFAULT = 200
 
 
+def _ai_ceo_chat_request_fingerprint(
+    *,
+    secret: bytes,
+    canonical_request: dict[str, Any],
+) -> str:
+    """HMAC a canonical request envelope without resolving mutable assets."""
+
+    fingerprint_bytes = json.dumps(
+        canonical_request,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hmac.new(
+        secret,
+        b"ai-ceo-chat-request-fingerprint-v1\0" + fingerprint_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _resolve_ai_ceo_chat_final_response(
+    *,
+    attempted_payload: dict[str, Any],
+    attempted_status: HTTPStatus,
+    finalized_request: dict[str, Any],
+    request_task_id: str,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    """Return only the response owned by the winning terminal transition."""
+
+    existing_output = (
+        finalized_request.get("output")
+        if isinstance(finalized_request.get("output"), dict)
+        else {}
+    )
+    existing_payload = (
+        existing_output.get("response_payload")
+        if isinstance(existing_output.get("response_payload"), dict)
+        else {}
+    )
+    existing_status = int(existing_output.get("response_status") or HTTPStatus.CONFLICT)
+    if existing_status < 200 or existing_status > 599:
+        existing_status = int(HTTPStatus.CONFLICT)
+    finalize_applied = finalized_request.get("_idempotent_finalize_applied") is True
+    if not existing_payload and finalize_applied:
+        fallback_payload = _redact_secret_like(attempted_payload)
+        existing_payload = fallback_payload if isinstance(fallback_payload, dict) else {}
+        existing_status = int(attempted_status)
+    return (
+        {
+            **existing_payload,
+            "idempotent_replay": not finalize_applied,
+            "request_task_id": request_task_id,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        },
+        HTTPStatus(existing_status),
+    )
+
+
 def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[str, Any] | None:
     """Return a merchant-safe handoff summary for AI CEO market reports."""
 
@@ -233,8 +372,10 @@ def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[s
     return {
         "contract_version": "2026-07-04-ai-ceo-market-report-delivery-v1",
         "mode": "quick_then_structured_report",
+        "artifact_kind": str(body.get("artifact_kind") or ""),
+        "product_fact_report_id": str(body.get("product_fact_report_id") or ""),
         "report_id": str(report.get("report_id") or ""),
-        "report_type": str(report.get("report_type") or "ai_ceo.market_research"),
+        "report_type": str(report.get("report_type") or ""),
         "status": str(report.get("status") or "saved"),
         "title": str(report.get("title") or body.get("merchant_readable_summary") or "AI CEO 市场调研")[:180],
         "product": str(body.get("product") or "")[:120],
@@ -249,6 +390,208 @@ def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[s
         "runtime_gets_raw_ebay_token": False,
         "secret_exposed": False,
     }
+
+
+_MERCHANT_INTERNAL_REPORT_TYPES = frozenset({"owner.review"})
+_LISTING_QUALITY_REJECTION_CODES = frozenset({
+    "listing_model_output_invalid_json", "listing_model_output_not_object",
+    "listing_model_output_rewrite_copy_invalid", "listing_model_output_rewrite_copy_too_long",
+    "listing_model_output_rewrite_copy_sensitive_text",
+    *{f"{prefix}_{reason}" for prefix in ("listing_model_output", "listing_final_copy") for reason in (
+        "missing_buyer_copy", "selling_points_count", "marketplace_language", "unverified_compatibility",
+        "ungrounded_material", "ungrounded_performance_claim", "ungrounded_warranty",
+        "ungrounded_certification", "ungrounded_numeric_spec", "semantic_unsupported", "semantic_review_invalid",
+    )},
+})
+
+
+def _merchant_safe_reports(value: Any) -> list[dict[str, Any]]:
+    """Project report history to merchant-visible business artifacts only."""
+
+    reports: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        body = item.get("report") if isinstance(item.get("report"), dict) else {}
+        report_type = str(item.get("report_type") or body.get("task_type") or "").strip()
+        if report_type in _MERCHANT_INTERNAL_REPORT_TYPES:
+            continue
+        reports.append(item)
+    return reports
+
+
+_MERCHANT_AUDIT_DETAIL_KEYS = frozenset(
+    {
+        "action_type",
+        "candidate_id",
+        "command_id",
+        "confirmation_id",
+        "context_labels_present",
+        "detail_length",
+        "detail_present",
+        "duplicate_request",
+        "evidence_type",
+        "execution_id",
+        "external_provider_action_triggered",
+        "feedback_type",
+        "listing_project_key",
+        "module_key",
+        "previous_status",
+        "product",
+        "ready_for_listing_draft",
+        "ready_for_listing_generation",
+        "real_platform_write_performed",
+        "real_platform_writes_enabled",
+        "reason",
+        "report_type",
+        "reports",
+        "confirmations",
+        "source_record_count",
+        "stage",
+        "status",
+        "step",
+        "task_id",
+        "unknown_fact_count",
+        "verified_at",
+    }
+)
+
+
+def _merchant_safe_audit_logs(value: Any, *, include_internal: bool) -> list[dict[str, Any]]:
+    """Return an allowlisted business trace; never expose audit identities or raw payloads."""
+
+    projected: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        internal = str(item.get("actor_type") or "") == "platform_internal_admin"
+        if internal and not include_internal:
+            continue
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        safe_details: dict[str, Any] = {}
+        for key in _MERCHANT_AUDIT_DETAIL_KEYS:
+            raw = details.get(key)
+            if isinstance(raw, (str, int, float, bool)) or raw is None:
+                safe = _redact_secret_like(raw)
+                safe_details[key] = safe[:500] if isinstance(safe, str) else safe
+        projected.append(
+            {
+                "audit_id": str(item.get("audit_id") or "")[:120],
+                "store_id": str(item.get("store_id") or "")[:120],
+                "actor_type": "platform_internal_admin" if internal else str(item.get("actor_type") or "system")[:80],
+                "action_type": str(item.get("action_type") or "")[:160],
+                "target_type": str(item.get("target_type") or "")[:120],
+                "target_id": str(item.get("target_id") or "")[:180],
+                "summary": str(_redact_secret_like(str(item.get("summary") or "")))[:600],
+                "created_at": str(item.get("created_at") or "")[:80],
+                "details": safe_details,
+                **({"internal_actor": True} if internal else {}),
+            }
+        )
+    return projected
+
+
+def build_ai_ceo_pre_model_attempt_input(
+    *,
+    command_id: str,
+    route: str,
+    route_label: str,
+) -> dict[str, Any]:
+    """Build the positive allowlist persisted for a non-metered dependency attempt."""
+
+    command_reference = "cmdref_" + hashlib.sha256(str(command_id or "").encode("utf-8")).hexdigest()[:32]
+    return {
+        "attempt_state": "accepted",
+        "command_id": command_reference,
+        "model_usage_required": False,
+        "route": str(route or "")[:80],
+        "route_label": str(route_label or "")[:120],
+        "frontend_gets_model_api_key": False,
+        "runtime_gets_raw_ebay_token": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _ai_ceo_listing_project_identity_for_turn(
+    body: Any,
+    *,
+    route: str,
+    message: str = "",
+) -> dict[str, str]:
+    """Bind only Jiejing workflow turns to the authenticated current Listing project."""
+
+    if route not in {"ebay_workflow", "confirmation_required"} or not isinstance(body, dict):
+        return {}
+    if _explicit_new_listing_project_request(message):
+        return {}
+    context = body.get("active_listing_context")
+    if not isinstance(context, dict) or context.get("contract_version") != "active_listing_context_v1":
+        return {}
+    return normalize_listing_project_identity(context.get("listing_project_identity"))
+
+
+AI_CEO_ARTIFACT_OUTCOMES = {
+    "not_requested",
+    "not_eligible",
+    "saved_not_importable",
+    "saved_import_ready",
+    "artifact_save_failed",
+}
+
+
+def build_ai_ceo_attempt_output(
+    *,
+    attempt_state: str,
+    failure_code: str = "",
+    actual_task_id: str = "",
+    artifact_outcome: str = "not_requested",
+    artifact_report_id: str = "",
+    usage_consumed: bool = False,
+) -> dict[str, Any]:
+    """Return the strict, secret-free output contract for an AI CEO attempt."""
+
+    safe_state = re.sub(r"[^a-z0-9_]", "", str(attempt_state or "").lower())[:80] or "accepted"
+    safe_failure = re.sub(r"[^a-z0-9_]", "", str(failure_code or "").lower())[:120]
+    safe_task_id = re.sub(r"[^A-Za-z0-9_-]", "", str(actual_task_id or ""))[:120]
+    safe_report_id = re.sub(r"[^A-Za-z0-9_-]", "", str(artifact_report_id or ""))[:120]
+    safe_outcome = artifact_outcome if artifact_outcome in AI_CEO_ARTIFACT_OUTCOMES else "not_requested"
+    return {
+        "attempt_state": safe_state,
+        "failure_code": safe_failure,
+        "actual_task_id": safe_task_id,
+        "artifact_outcome": safe_outcome,
+        "artifact_report_id": safe_report_id,
+        "usage_consumed": usage_consumed is True,
+        "model_usage_required": False,
+        "frontend_gets_model_api_key": False,
+        "runtime_gets_raw_ebay_token": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _ai_ceo_attempt_failure_code(blockers: Any, fallback: str) -> str:
+    values: list[str] = []
+
+    def collect(value: Any) -> None:
+        if value in (None, "", {}, []):
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                collect(item)
+            return
+        if isinstance(value, str):
+            values.append(value)
+
+    collect(blockers)
+    if "platform_model_default_not_configured" in values:
+        return "platform_model_default_not_configured"
+    for value in values:
+        safe = re.sub(r"[^a-z0-9_]", "", value.lower())[:120]
+        if safe:
+            return safe
+    return re.sub(r"[^a-z0-9_]", "", fallback.lower())[:120]
 
 
 class RequestBodyError(ValueError):
@@ -301,6 +644,10 @@ _DATABASE_DEPENDENCY_SQLSTATES = frozenset(
 class JiejingSafeThreadingHTTPServer(ThreadingHTTPServer):
     """Emit a bounded event for unhandled handlers without request or exception details."""
 
+    # Queue a merchant refresh's parallel connections while accept resumes.
+    # This bounds pending connections, not handler threads or HTTP keepalive.
+    request_queue_size = 128
+
     def handle_error(self, request: Any, client_address: Any) -> None:
         event = {
             "event": "http_request_handler_error",
@@ -317,6 +664,89 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _media_orphan_reservation_stale_after_seconds() -> int:
+    raw = str(os.environ.get("JIEJING_MEDIA_QUEUE_SETUP_STALE_AFTER_SECONDS") or "900").strip()
+    try:
+        return max(30, int(raw))
+    except ValueError:
+        return 900
+
+
+def _reserve_ops_media_points(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    user_id: str,
+    media_idempotency_key: str,
+    media_quote: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Use an exact private testing bucket when this tenant is explicitly enabled."""
+
+    if owner_media_testing_enabled() and owner_media_testing_company_allowed(company_id):
+        owner_bucket = repository.get_media_credit_source(
+            company_id=company_id,
+            source_type=OWNER_MEDIA_TESTING_SOURCE,
+        )
+        if owner_bucket:
+            owner_source_reference = str(owner_bucket.get("source_reference_id") or "")
+            owner_reserve_key = repository.media_credit_reservation_attempt_idempotency_key(
+                company_id=company_id,
+                reference_type="media_job",
+                reference_id=media_idempotency_key,
+                base_idempotency_key=f"{media_idempotency_key}:owner-media-testing-reserve:v1",
+            )
+            return repository.reserve_media_credit_source(
+                company_id=company_id,
+                user_id=user_id,
+                source_type=OWNER_MEDIA_TESTING_SOURCE,
+                source_reference_id=owner_source_reference,
+                points=int(media_quote["estimated_points"]),
+                idempotency_key=owner_reserve_key,
+                reference_type="media_job",
+                reference_id=media_idempotency_key,
+                details={
+                    "quote": media_quote,
+                    "credit_source": OWNER_MEDIA_TESTING_SOURCE,
+                    "source_reference_id": owner_source_reference,
+                },
+            )
+
+    if not (
+        controlled_media_acceptance_enabled()
+        and controlled_media_acceptance_company_allowed(company_id)
+    ):
+        return None
+    source_bucket = repository.get_media_credit_source(
+        company_id=company_id,
+        source_type=CONTROLLED_MEDIA_CREDIT_SOURCE,
+    )
+    source_reference = str(
+        (source_bucket or {}).get("source_reference_id")
+        or controlled_media_acceptance_source_reference(company_id)
+    )
+    reserve_operation_key = repository.media_credit_reservation_attempt_idempotency_key(
+        company_id=company_id,
+        reference_type="media_job",
+        reference_id=media_idempotency_key,
+        base_idempotency_key=f"{media_idempotency_key}:controlled-acceptance-reserve:v1",
+    )
+    return repository.reserve_media_credit_source(
+        company_id=company_id,
+        user_id=user_id,
+        source_type=CONTROLLED_MEDIA_CREDIT_SOURCE,
+        source_reference_id=source_reference,
+        points=int(media_quote["estimated_points"]),
+        idempotency_key=reserve_operation_key,
+        reference_type="media_job",
+        reference_id=media_idempotency_key,
+        details={
+            "quote": media_quote,
+            "credit_source": CONTROLLED_MEDIA_CREDIT_SOURCE,
+            "source_reference_id": source_reference,
+        },
+    )
 
 
 def initialize_repository_for_startup(repository: SaaSRepository, settings: SaaSSettings) -> Exception | None:
@@ -405,17 +835,407 @@ def _parse_utc_datetime(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _media_asset_request_fingerprint(*, store_id: str, provider_job_key: str, inputs: dict[str, Any]) -> str:
+    """Bind a media request to its authoritative source evidence and normalized generation spec."""
+
+    canonical_inputs = _redact_secret_like(inputs)
+    if isinstance(canonical_inputs, dict):
+        canonical_inputs = dict(canonical_inputs)
+        canonical_inputs.pop("private_media_source_preflight_validated", None)
+        canonical_inputs.pop("private_media_source_hydrated", None)
+        for container in (
+            canonical_inputs,
+            canonical_inputs.get("product_facts") if isinstance(canonical_inputs.get("product_facts"), dict) else None,
+        ):
+            if not isinstance(container, dict) or not isinstance(container.get("reference_images"), list):
+                continue
+            container["reference_images"] = sorted(
+                {
+                    str(reference).strip()
+                    for reference in container["reference_images"]
+                    if str(reference or "").strip()
+                }
+            )
+    fingerprint_payload = {
+        "store_id": store_id,
+        "provider_job_key": provider_job_key,
+        "inputs": canonical_inputs,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=json_default,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _media_asset_idempotency_key(*, store_id: str, provider_job_key: str, inputs: dict[str, Any], supplied: Any = None) -> str:
     supplied_text = str(supplied or "").strip()
     if supplied_text:
         return supplied_text[:160]
-    fingerprint_payload = {
-        "store_id": store_id,
-        "provider_job_key": provider_job_key,
-        "inputs": _redact_secret_like(inputs),
+    fingerprint = _media_asset_request_fingerprint(
+        store_id=store_id,
+        provider_job_key=provider_job_key,
+        inputs=inputs,
+    )
+    return f"media:{store_id}:{fingerprint[:24]}"
+
+
+def _reconcile_media_asset_job_review_readiness(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    media_job: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Repair a stranded media state only from its authoritative credit outcome."""
+
+    if not isinstance(media_job, dict) or media_job.get("status") not in {"running", "provider_returned"}:
+        return media_job
+    manifest = media_job.get("asset_manifest") if isinstance(media_job.get("asset_manifest"), list) else []
+    validation = media_job.get("asset_manifest_validation") if isinstance(media_job.get("asset_manifest_validation"), dict) else {}
+    asset_review = media_job.get("asset_review") if isinstance(media_job.get("asset_review"), dict) else {}
+    review_gates = asset_review.get("review_gates") if isinstance(asset_review.get("review_gates"), list) else []
+    product_fact_gate = media_job.get("product_fact_gate") if isinstance(media_job.get("product_fact_gate"), dict) else {}
+    missing_fact_keys = product_fact_gate.get("missing_fact_keys") if isinstance(product_fact_gate.get("missing_fact_keys"), list) else []
+    job_payload = media_job.get("job") if isinstance(media_job.get("job"), dict) else {}
+    job_spec = job_payload.get("job_spec") if isinstance(job_payload.get("job_spec"), dict) else {}
+    credit_state = job_spec.get("media_credits") if isinstance(job_spec.get("media_credits"), dict) else {}
+    quote = credit_state.get("quote") if isinstance(credit_state.get("quote"), dict) else {}
+    reservation_result = credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+    reservation_entry = reservation_result.get("ledger_entry") if isinstance(reservation_result.get("ledger_entry"), dict) else {}
+    reservation_id = str(reservation_entry.get("ledger_id") or "")
+    if credit_state.get("enforcement_enabled") is True and not reservation_id:
+        return media_job
+    if reservation_id:
+        terminal = repository.get_media_credit_terminal_for_reservation(
+            company_id=company_id,
+            reservation_id=reservation_id,
+        )
+        if isinstance(terminal, dict) and terminal.get("operation_type") == "release":
+            return repository.reconcile_released_media_asset_job(
+                company_id=company_id, media_job_id=str(media_job.get("media_job_id") or ""),
+            )
+        if not (
+            isinstance(terminal, dict)
+            and terminal.get("operation_type") == "settle"
+            and terminal.get("status") in {"completed", "settled"}
+        ):
+            return media_job
+    if media_job.get("status") != "provider_returned":
+        return media_job
+    if not (
+        media_job.get("live_provider_called") is True
+        and manifest
+        and validation.get("status") == "manifest_ready"
+        and asset_review.get("status") == "waiting_for_human_asset_review"
+        and review_gates
+        and all(isinstance(gate, dict) and gate.get("status") == "needs_review" for gate in review_gates)
+        and not missing_fact_keys
+        and media_manifest_matches_approved_quote(quote, manifest)
+        and all(isinstance(asset, dict) and media_asset_is_listing_review_eligible(asset) for asset in manifest)
+    ):
+        return media_job
+    return repository.update_media_asset_job(
+        company_id=company_id,
+        media_job_id=str(media_job.get("media_job_id") or ""),
+        status="waiting_review",
+        error_reason="",
+        expected_status="provider_returned",
+        details={
+            "event": "media_credit_settlement_read_repair",
+            "message": "Authoritative settled credit ledger restored the final media review state.",
+            "reservation_id_present": bool(reservation_id),
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        },
+    )
+
+
+class _CanonicalMediaQueueAlreadyExists(RuntimeError):
+    def __init__(self, media_job: dict[str, Any]) -> None:
+        super().__init__("canonical media queue already exists")
+        self.media_job = media_job
+
+
+def _prepare_link_activate_media_queue(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    task: dict[str, Any],
+    media_asset_job: dict[str, Any],
+    provider_job_key: str,
+    contract: dict[str, Any],
+    safe_inputs: dict[str, Any],
+    media_idempotency_key: str,
+    media_credit_state: dict[str, Any] | None,
+    secret_ref: str,
+    run_mode: str,
+    creation_state: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Durably prepare, link, then activate one chargeable media queue graph."""
+
+    creation_state["stage"] = "create_queue_job"
+    job = repository.create_queue_job(
+        company_id=company_id,
+        task_id=task["task_id"],
+        max_attempts=int(contract.get("max_attempts") or 1),
+        initial_status="preparing",
+        publish=False,
+        job_data={
+            "kind": "provider_job",
+            "provider_job_key": provider_job_key,
+            "provider_family": contract.get("provider_family"),
+            "queue": contract.get("queue"),
+            "contract": contract,
+            "inputs": safe_inputs,
+            "secret_ref": secret_ref,
+            "media_job_id": media_asset_job.get("media_job_id") or "",
+            "idempotency_key": media_idempotency_key,
+            "media_credits": media_credit_state,
+            "run_mode": run_mode,
+            "queue_setup_protocol": "media_queue_saga_v1",
+            "setup_committed": False,
+            "live_provider_called": False,
+            "real_platform_writes_enabled": False,
+        },
+    )
+    creation_state["queue_job"] = job
+    creation_state["stage"] = "link_media_queue"
+    media_asset_job = repository.update_media_asset_job(
+        company_id=company_id,
+        media_job_id=media_asset_job["media_job_id"],
+        status="queued",
+        queue_job_id=job["job_id"],
+        details={
+            "message": "Media asset job linked to SaaS queue job.",
+            "queue": contract.get("queue"),
+            "live_provider_called": False,
+            "spend_now_allowed": False,
+            "secret_exposed": False,
+        },
+    )
+    creation_state["media_asset_job"] = media_asset_job
+    creation_state["stage"] = "activate_queue"
+    job = repository.activate_prepared_queue_job(job_id=job["job_id"], company_id=company_id)
+    creation_state["queue_job"] = job
+    return media_asset_job, job
+
+
+def _create_provider_job_queue_records(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    store_id: str,
+    user_id: str,
+    title: str,
+    provider_job_key: str,
+    contract: dict[str, Any],
+    contract_version: str,
+    safe_inputs: dict[str, Any],
+    media_idempotency_key: str,
+    media_request_fingerprint: str,
+    media_credit_state: dict[str, Any] | None,
+    is_media_provider_job: bool,
+    secret_ref: str,
+    run_mode: str,
+    creation_state: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]:
+    """Create the local task graph while exposing partial state to the compensating saga."""
+
+    creation_state["stage"] = "create_task"
+    task = repository.create_task(
+        company_id=company_id,
+        store_id=store_id,
+        user_id=user_id,
+        task_type="provider_job",
+        title=title,
+        input_data={
+            "provider_job_key": provider_job_key,
+            "provider_family": contract.get("provider_family"),
+            "store_id": store_id,
+            "inputs": safe_inputs,
+            "contract_version": contract_version,
+            "media_asset_idempotency_key": media_idempotency_key,
+            "media_credits": media_credit_state,
+            "real_platform_writes_enabled": False,
+        },
+    )
+    creation_state["task"] = task
+    media_asset_job = None
+    if is_media_provider_job:
+        creation_state["stage"] = "create_media_asset_job"
+        media_asset_job = repository.create_media_asset_job(
+            company_id=company_id,
+            store_id=store_id,
+            task_id=task["task_id"],
+            user_id=user_id,
+            provider_job_key=provider_job_key,
+            idempotency_key=media_idempotency_key,
+            job_spec={
+                "provider_job_key": provider_job_key,
+                "contract_version": contract_version,
+                "inputs": safe_inputs,
+                "request_fingerprint": media_request_fingerprint,
+                "merchant_visible_provider_name": False,
+                "live_media_provider_call_allowed": False,
+                "spend_now_allowed": False,
+                "media_credits": media_credit_state,
+                "secret_exposed": False,
+            },
+            status="pending",
+        )
+        if str(media_asset_job.get("task_id") or "") != str(task.get("task_id") or ""):
+            creation_state["canonical_media_asset_job"] = media_asset_job
+            raise _CanonicalMediaQueueAlreadyExists(media_asset_job)
+        creation_state["media_asset_job"] = media_asset_job
+    if media_asset_job:
+        media_asset_job, job = _prepare_link_activate_media_queue(
+            repository,
+            company_id=company_id,
+            task=task,
+            media_asset_job=media_asset_job,
+            provider_job_key=provider_job_key,
+            contract=contract,
+            safe_inputs=safe_inputs,
+            media_idempotency_key=media_idempotency_key,
+            media_credit_state=media_credit_state,
+            secret_ref=secret_ref,
+            run_mode=run_mode,
+            creation_state=creation_state,
+        )
+    else:
+        creation_state["stage"] = "create_queue_job"
+        job = repository.create_queue_job(
+            company_id=company_id,
+            task_id=task["task_id"],
+            max_attempts=int(contract.get("max_attempts") or 1),
+            job_data={
+                "kind": "provider_job",
+                "provider_job_key": provider_job_key,
+                "provider_family": contract.get("provider_family"),
+                "queue": contract.get("queue"),
+                "contract": contract,
+                "inputs": safe_inputs,
+                "secret_ref": secret_ref,
+                "media_job_id": "",
+                "idempotency_key": media_idempotency_key,
+                "media_credits": media_credit_state,
+                "run_mode": run_mode,
+                "queue_setup_protocol": "",
+                "setup_committed": True,
+                "live_provider_called": False,
+                "real_platform_writes_enabled": False,
+            },
+        )
+        creation_state["queue_job"] = job
+    creation_state["stage"] = "committed"
+    return task, media_asset_job, job
+
+
+def _compensate_provider_queue_creation_failure(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    user_id: str,
+    creation_state: dict[str, Any],
+    media_credit_state: dict[str, Any] | None,
+    media_idempotency_key: str,
+) -> dict[str, Any]:
+    """Fail closed and release a pre-provider reservation after partial queue creation."""
+
+    result = {
+        "queue_disabled": False,
+        "media_job_blocked": False,
+        "task_failed": False,
+        "reservation_released": False,
+        "manual_reconcile_required": False,
+        "provider_call_triggered": False,
+        "secret_exposed": False,
     }
-    fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, default=json_default).encode("utf-8")).hexdigest()[:24]
-    return f"media:{store_id}:{fingerprint}"
+    queue_job = creation_state.get("queue_job") if isinstance(creation_state.get("queue_job"), dict) else {}
+    if queue_job.get("job_id"):
+        try:
+            failed_queue = repository.fail_close_queue_job_before_provider(
+                job_id=str(queue_job["job_id"]),
+                company_id=company_id,
+                error_code="media_queue_creation_failed_before_provider",
+            )
+            result["queue_disabled"] = failed_queue.get("fail_closed_before_provider") is True
+        except Exception:
+            pass
+        if not result["queue_disabled"]:
+            result["manual_reconcile_required"] = True
+            result["provider_call_triggered"] = None
+            return result
+    media_job = creation_state.get("media_asset_job") if isinstance(creation_state.get("media_asset_job"), dict) else {}
+    if media_job.get("media_job_id"):
+        try:
+            blocked_media_job = repository.update_media_asset_job(
+                company_id=company_id,
+                media_job_id=str(media_job["media_job_id"]),
+                status="needs_rework",
+                error_reason="media_queue_creation_failed_before_provider",
+                details={"provider_call_triggered": False, "real_platform_writes_enabled": False, "secret_exposed": False},
+            )
+            result["media_job_blocked"] = blocked_media_job.get("status") == "needs_rework"
+        except Exception:
+            pass
+    task = creation_state.get("task") if isinstance(creation_state.get("task"), dict) else {}
+    if task.get("task_id"):
+        try:
+            repository.update_task_status(
+                task_id=str(task["task_id"]),
+                company_id=company_id,
+                status="failed",
+                output={"error_code": "media_queue_creation_failed_before_provider", "provider_call_triggered": False},
+                audit_summary="Provider job queue creation failed before any provider call.",
+            )
+            result["task_failed"] = True
+        except Exception:
+            pass
+    credit_state = media_credit_state if isinstance(media_credit_state, dict) else {}
+    reservation_result = credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+    reservation = reservation_result.get("ledger_entry") if isinstance(reservation_result.get("ledger_entry"), dict) else {}
+    reservation_id = str(reservation.get("ledger_id") or "")
+    if reservation_id:
+        try:
+            terminal = repository.get_media_credit_terminal_for_reservation(
+                company_id=company_id,
+                reservation_id=reservation_id,
+            )
+            if not terminal:
+                repository.apply_media_credit_operation(
+                    company_id=company_id,
+                    user_id=user_id or None,
+                    operation_type="release",
+                    points=int(reservation.get("points") or 0),
+                    idempotency_key=f"{reservation_id}:terminal:v2",
+                    reference_type="media_job",
+                    reference_id=media_idempotency_key,
+                    reservation_id=reservation_id,
+                    details={
+                        "reason": "media_queue_creation_failed_before_provider",
+                        "points_source": "full_reservation_release",
+                    },
+                )
+                terminal = repository.get_media_credit_terminal_for_reservation(
+                    company_id=company_id,
+                    reservation_id=reservation_id,
+                )
+            result["reservation_released"] = bool(
+                isinstance(terminal, dict) and terminal.get("operation_type") == "release"
+            )
+        except Exception:
+            pass
+    result["manual_reconcile_required"] = bool(
+        (queue_job.get("job_id") and not result["queue_disabled"])
+        or (media_job.get("media_job_id") and not result["media_job_blocked"])
+        or (task.get("task_id") and not result["task_failed"])
+        or (reservation_id and not result["reservation_released"])
+    )
+    return result
 
 
 def _sanitize_media_source_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -434,26 +1254,66 @@ def _sanitize_media_source_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
-def _merchant_safe_replaceable_media_provider(value: Any) -> Any:
-    """Remove replaceable media driver names from every browser JSON response."""
+def _merchant_safe_replaceable_media_provider(value: Any, *, _inside_asset_manifest: bool = False) -> Any:
+    """Hide replaceable driver labels without corrupting browser-loadable asset URLs."""
 
     if isinstance(value, dict):
         safe: dict[str, Any] = {}
         for raw_key, raw_value in value.items():
             key = str(raw_key)
-            if key.lower() in {"media_provider", "preferred_media_provider", "source_provider_or_upload"}:
+            lower_key = key.lower()
+            child_inside_manifest = _inside_asset_manifest or lower_key == "asset_manifest"
+            if key == "buyer_copy_rewrite" and is_listing_buyer_copy_rewrite_contract(raw_value):
+                # Validated merchant text and URLs are immutable snapshots, not driver labels.
+                safe[key] = dict(raw_value)
+            elif child_inside_manifest and lower_key in {"url", "url_or_file_path"}:
+                safe[key] = raw_value if _is_safe_public_media_asset_url(raw_value) else ""
+            elif lower_key in {"media_provider", "preferred_media_provider", "source_provider_or_upload"}:
                 safe[key] = "jiejing_media_router"
             else:
-                safe[key] = _merchant_safe_replaceable_media_provider(raw_value)
+                safe[key] = _merchant_safe_replaceable_media_provider(
+                    raw_value,
+                    _inside_asset_manifest=child_inside_manifest,
+                )
         return safe
     if isinstance(value, list):
-        return [_merchant_safe_replaceable_media_provider(item) for item in value]
+        return [
+            _merchant_safe_replaceable_media_provider(item, _inside_asset_manifest=_inside_asset_manifest)
+            for item in value
+        ]
     if isinstance(value, tuple):
-        return [_merchant_safe_replaceable_media_provider(item) for item in value]
+        return [
+            _merchant_safe_replaceable_media_provider(item, _inside_asset_manifest=_inside_asset_manifest)
+            for item in value
+        ]
     if isinstance(value, str):
+        # Public transport URLs are data, not replaceable driver labels. They
+        # also occur in fact packets, source records and Listing fields, outside
+        # asset_manifest. Preserve a URL-only value/list byte-for-byte; never
+        # extend this exemption to signed/userinfo URLs or diagnostic prose.
+        public_urls = re.split(r"[\s,，；;]+", value.strip())
+        if public_urls and all(_is_safe_public_media_asset_url(url) for url in public_urls):
+            return value
         safe_text = re.sub(r"media\.fal_asset_generation", "media.asset_generation", value, flags=re.IGNORECASE)
         return re.sub(r"\bfal(?:\.ai)?\b", "jiejing_media_router", safe_text, flags=re.IGNORECASE)
     return value
+
+
+def _is_safe_public_media_asset_url(value: Any) -> bool:
+    """Allow an HTTPS media transport URL through only when it carries no URL capability secret."""
+
+    try:
+        parsed = urlparse(str(value or ""))
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        parsed.scheme == "https"
+        and parsed.hostname
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def _is_signed_media_source_url(value: Any) -> bool:
@@ -466,13 +1326,108 @@ def _is_signed_media_source_url(value: Any) -> bool:
 
 
 def _readiness_has_startup_blockers(readiness: object) -> bool:
-    """Fail closed on malformed readiness, but do not turn warnings into outages."""
+    """Keep unsafe cold starts closed without turning expired drill proof into an outage."""
     if not isinstance(readiness, dict):
         return True
     blocker_count = readiness.get("blocker_count")
     if type(blocker_count) is not int or blocker_count < 0:
         return True
-    return blocker_count > 0
+    return blocker_count > 0 and not _expired_vault_recovery_evidence_only(readiness)
+
+
+def _expired_vault_recovery_evidence_only(readiness: dict[str, Any]) -> bool:
+    """A narrow availability exception; it neither approves launch nor changes capabilities."""
+    if not (
+        readiness.get("environment") == "production"
+        and readiness.get("reason") == "readiness_blocked"
+        and readiness.get("degraded", False) is False
+        and all(readiness.get(key) is False for key in (
+            "production_ready", "beta_ready", "can_accept_real_customers", "secret_exposed",
+            "real_platform_writes_enabled", "requested_real_platform_writes",
+        ))
+        and type(readiness.get("blocker_count")) is int and readiness["blocker_count"] == 1
+        and type(readiness.get("warning_count")) is int and readiness["warning_count"] == 0
+    ):
+        return False
+    items = readiness.get("items")
+    if not isinstance(items, list) or not items:
+        return False
+    by_key: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict) or not all(
+            isinstance(item.get(key), str) and bool(item[key].strip())
+            for key in ("key", "label", "status", "severity", "detail", "next_action")
+        ) or item["key"] in by_key:
+            return False
+        if item["key"] == "backup_restore":
+            if item["severity"] != "blocker" or item["status"] != "blocked_backup_restore_not_ready":
+                return False
+        elif item["severity"] != "info":
+            return False
+        by_key[item["key"]] = item
+    # Verify the actual safety foundations, not all business info labels (many
+    # legitimate info states are named managed_adapter_live, exercised, etc.).
+    required = {
+        "environment": "ready", "session_secret": "ready", "cors_origin": "ready",
+        "team_permission_boundary": "role_boundary_ready", "database": "ready",
+        "database_adapter_contract": "managed_adapter_live",
+        "database_migration_plan": "migration_shape_ready", "queue": "postgres_durable_queue_ready",
+        "queue_adapter_contract": "managed_queue_live", "queue_worker_plan": "ready",
+        "database_live_probe": "ready", "queue_runtime_health": "ready", "worker_runtime_health": "ready",
+        "infrastructure_drivers": "ready", "independent_runtime": "ready", "controlled_bridges": "ready",
+        "vault": "ready", "vault_adapter_contract": "adapter_contract_ready", "runtime_workers": "ready",
+        "monitoring_alerting": "cloud_monitoring_ready", "tenant_audit": "ready", "billing_quota": "ready",
+        "backup_restore": "blocked_backup_restore_not_ready",
+    }
+    if any(by_key.get(key, {}).get("status") != status for key, status in required.items()):
+        return False
+    provider = readiness.get("provider_status")
+    backup = provider.get("backup") if isinstance(provider, dict) else None
+    if not isinstance(backup, dict) or not (
+        backup.get("contract_version") == "2026-05-18-backup-restore-boundary"
+        and backup.get("backup_ready_for_paid_launch") is False
+        and backup.get("secret_exposed") is False
+        and backup.get("blockers") == ["vault_restore_drill_overdue"]
+    ):
+        return False
+    health = readiness.get("operational_health")
+    if not isinstance(health, dict) or not (
+        health.get("contract_version") == "2026-06-17-deep-operational-health"
+        and health.get("environment") == "production" and health.get("status") == "ready"
+        and health.get("secret_exposed") is False
+        and health.get("blockers") == [] and health.get("warnings") == []
+    ):
+        return False
+    return all(
+        isinstance(health.get(key), dict)
+        and health[key].get("status") == "ready" and health[key].get("secret_exposed") is False
+        for key in ("database_live_probe", "redis_live_probe", "vault_live_probe")
+    )
+
+
+def _production_controlled_unpublished_draft_boot_allowed(settings: SaaSSettings) -> bool:
+    """Allow only confirmation-gated eBay lanes to coexist with launch blockers."""
+
+    policy = str(os.environ.get("JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY") or "").strip()
+    controlled_publish = settings.effective_ebay_controlled_publish_enabled
+    return bool(
+        settings.environment == "production"
+        and _env_bool("JIEJING_PRODUCTION_CONTROLLED_DRAFT_BOOT_ALLOWED")
+        and not _env_bool("JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED")
+        and settings.ebay_draft_save_live_enabled
+        and settings.effective_ebay_draft_save_enabled
+        and not settings.requested_real_platform_writes
+        and not settings.effective_real_platform_writes_enabled
+        and not settings.ebay_write_live_enabled
+        and policy
+        == (
+            "controlled_existing_draft_publish"
+            if controlled_publish
+            else "controlled_unpublished_draft_only"
+        )
+        and not _env_bool("JIEJING_WECHAT_PAY_CHARGE_ALLOWED")
+        and not _env_bool("JIEJING_WECHAT_PAY_REFUND_ALLOWED")
+    )
 
 
 class SaaSBackendServer:
@@ -556,10 +1511,14 @@ class SaaSBackendServer:
         production_candidate_boot_allowed = str(
             os.environ.get("JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
+        controlled_unpublished_draft_boot_allowed = _production_controlled_unpublished_draft_boot_allowed(
+            backend_settings
+        )
         if (
             backend_settings.environment == "production"
             and _readiness_has_startup_blockers(readiness)
             and not production_candidate_boot_allowed
+            and not controlled_unpublished_draft_boot_allowed
         ):
             raise RuntimeError(
                 "Refusing to start a blocked production candidate without "
@@ -1638,10 +2597,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if path in {"readiness", "readiness/product-saas"}:
             readiness = build_product_readiness_or_degraded(self.settings, self.repository)
             identity = self._optional_identity()
-            if not self.settings.is_production_like or self._can_view_internal_diagnostics(identity):
-                self._send_json({"readiness": readiness})
-            else:
-                self._send_json({"readiness": self._public_readiness_summary(readiness, authenticated=identity is not None)})
+            # This is a merchant/public endpoint on every host and in every
+            # environment. Internal-admin identity must never widen its
+            # response; full operational evidence belongs behind exact
+            # owner/ops routes guarded by both Host and role.
+            self._send_json(
+                {
+                    "readiness": self._public_readiness_summary(
+                        readiness,
+                        authenticated=identity is not None,
+                    )
+                }
+            )
             return
 
         if path in {"health/deep", "operational-health"}:
@@ -1651,18 +2618,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_json({"operational_health": operational_health})
             else:
                 self._send_json({"operational_health": self._public_operational_health_summary(operational_health, authenticated=identity is not None)})
-            return
-
-        if path == "independence/status":
-            self._send_json(
-                {
-                    "independence": build_independence_status(
-                        settings=self.settings,
-                        repository=self.repository,
-                        project_root=Path(__file__).resolve().parents[1],
-                    )
-                }
-            )
             return
 
         if path == "platforms":
@@ -1747,6 +2702,35 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if identity is None:
             return
 
+        if path == "media/capabilities":
+            self._send_json(
+                {
+                    "media_capabilities": {
+                        "product_image_recognition": build_product_vision_capability_status(),
+                        "image_generation": build_media_generation_capability_status(),
+                        "public_search": build_public_search_capability_status(),
+                        "secret_exposed": False,
+                    }
+                }
+            )
+            return
+
+        if path == "independence/status":
+            if not self._require_operations_console_request("independence status"):
+                return
+            if not self._require_platform_internal_admin(identity, "independence status"):
+                return
+            self._send_json(
+                {
+                    "independence": build_independence_status(
+                        settings=self.settings,
+                        repository=self.repository,
+                        project_root=Path(__file__).resolve().parents[1],
+                    )
+                }
+            )
+            return
+
         if path == "product-feedback":
             limit = _query_limit(query, default=20, maximum=50) or 20
             receipts = self.repository.list_product_feedback(
@@ -1817,8 +2801,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/launch-control":
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "owner launch control is platform-internal admin only")
+            if not self._require_operations_console_request("owner launch control"):
+                return
+            if not self._require_platform_internal_admin(identity, "owner launch control"):
                 return
             store_id = query.get("store_id", [None])[0]
             if store_id:
@@ -1839,8 +2824,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/production-release-gate":
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "production release gate is platform-internal admin only")
+            if not self._require_operations_console_request("production release gate"):
+                return
+            if not self._require_platform_internal_admin(identity, "production release gate"):
                 return
             store_id = query.get("store_id", [None])[0]
             if store_id and not self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id):
@@ -1859,29 +2845,39 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/production-evidence-ledger":
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "production evidence ledger is platform-internal admin only")
+            if not self._require_operations_console_request("production evidence ledger"):
+                return
+            if not self._require_platform_internal_admin(identity, "production evidence ledger"):
                 return
             self._send_json({"production_evidence_ledger": build_production_evidence_ledger(self.settings, self.repository)})
             return
 
         if path in {"owner/billing-domain-cutover-rehearsal", "commercial/billing-domain-cutover-rehearsal"}:
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "billing domain cutover rehearsal is platform-internal admin only")
+            if path.startswith("owner/") and not self._require_operations_console_request(
+                "billing domain cutover rehearsal"
+            ):
+                return
+            if not self._require_platform_internal_admin(identity, "billing domain cutover rehearsal"):
                 return
             self._send_error(HTTPStatus.GONE, "legacy_stripe_billing_cutover_retired")
             return
 
         if path in {"owner/billing-provider-evidence-register", "commercial/billing-provider-evidence-register"}:
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "billing provider evidence register is platform-internal admin only")
+            if path.startswith("owner/") and not self._require_operations_console_request(
+                "billing provider evidence register"
+            ):
+                return
+            if not self._require_platform_internal_admin(identity, "billing provider evidence register"):
                 return
             self._send_error(HTTPStatus.GONE, "legacy_stripe_billing_evidence_retired")
             return
 
         if path in {"owner/paid-launch-approval-packet", "commercial/paid-launch-approval-packet"}:
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "paid launch approval packet is platform-internal admin only")
+            if path.startswith("owner/") and not self._require_operations_console_request(
+                "paid launch approval packet"
+            ):
+                return
+            if not self._require_platform_internal_admin(identity, "paid launch approval packet"):
                 return
             store_id = query.get("store_id", [None])[0]
             if store_id and not self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id):
@@ -1900,8 +2896,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path in {"owner/edge-cutover-preflight", "domain/edge-cutover-preflight"}:
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "edge cutover preflight is platform-internal admin only")
+            if path.startswith("owner/") and not self._require_operations_console_request("edge cutover preflight"):
+                return
+            if not self._require_platform_internal_admin(identity, "edge cutover preflight"):
                 return
             self._send_json({"edge_cutover_preflight": build_edge_cutover_preflight(self.settings)})
             return
@@ -1974,8 +2971,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         if path == "billing/plans":
             plan = build_billing_plan(self.settings, self.repository)
-            if not self._is_platform_internal_admin(identity):
-                plan = self._merchant_safe_billing_plan(plan)
+            plan = self._merchant_safe_billing_plan(plan)
             self._send_json({"billing_plan": plan})
             return
 
@@ -1991,6 +2987,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/operations-overview":
+            if not self._require_operations_console_request("operations overview"):
+                return
             if not self._require_platform_internal_admin(identity, "operations overview"):
                 return
             try:
@@ -2003,6 +3001,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 3 and parts[0] == "owner" and parts[1] == "operations":
+            if not self._require_operations_console_request("operations detail"):
+                return
             if not self._require_platform_internal_admin(identity, "operations detail"):
                 return
             try:
@@ -2024,6 +3024,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
             self._send_json({"operations_detail": detail})
+            return
+
+        if path == "owner/billing/domestic/refunds":
+            if not self._require_operations_console_request("SaaS refund review") or not self._require_platform_internal_admin(identity, "SaaS refund review"):
+                return
+            orders = self.repository.list_platform_refund_review_orders(limit=_query_limit(query, default=50, maximum=100) or 50)
+            self._send_json({"refund_reviews": [platform_refund_review_packet(self.repository, order, internal_admin_emails=self.settings.internal_admin_emails) for order in orders], "secret_exposed": False})
             return
 
         if path == "billing/domestic/contract":
@@ -2055,6 +3062,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "billing/domestic/orders":
+            if not self._require_permission(identity, "manage_billing"):
+                return
             orders = self.repository.list_domestic_billing_orders(
                 company_id=identity["company_id"],
                 limit=_query_limit(query, default=20, maximum=100) or 20,
@@ -2081,6 +3090,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 4 and parts[:3] == ["billing", "domestic", "orders"]:
+            if not self._require_permission(identity, "manage_billing"):
+                return
             order = self.repository.get_domestic_billing_order(company_id=identity["company_id"], order_id=parts[3])
             if not order:
                 self._send_error(HTTPStatus.NOT_FOUND, "domestic billing order not found")
@@ -2095,10 +3106,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if path == "billing/media-credits":
             self._send_json(
                 {
-                    "media_credits": build_media_credit_summary(
+                    "media_credits": build_merchant_media_credit_summary(
                         self.repository,
                         company_id=identity["company_id"],
                         limit=_query_limit(query, default=30, maximum=100) or 30,
+                        include_usage=True,
                     )
                 }
             )
@@ -2263,11 +3275,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         if path == "ai-ceo/chat-history":
             limit = _query_limit(query, default=30, maximum=50) or 30
-            turns = self.repository.list_ai_ceo_chat_history(
-                company_id=identity["company_id"],
-                user_id=identity["user_id"],
-                limit=limit,
-            )
+            try:
+                page = self.repository.page_ai_ceo_chat_history(
+                    company_id=identity["company_id"], user_id=identity["user_id"], limit=limit,
+                    cursor=query.get("cursor", [""])[0],
+                )
+            except ValueError:
+                self._send_error(HTTPStatus.BAD_REQUEST, "invalid chat history cursor")
+                return
             revision = self.repository.ai_ceo_chat_history_revision(
                 company_id=identity["company_id"],
                 user_id=identity["user_id"],
@@ -2277,8 +3292,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "ai_ceo_chat_history": {
                         "scope": "account",
                         "cross_store": True,
-                        "turns": turns,
-                        "turn_count": len(turns),
+                        **page,
+                        "turn_count": len(page["turns"]),
                         "revision": revision,
                         "sync_contract": "2026-07-11-ai-ceo-cross-device-revision-v1",
                         "raw_provider_secret_stored": False,
@@ -2325,6 +3340,35 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         self.repository,
                         company_id=identity["company_id"],
                         store_id=store_id,
+                    )
+                }
+            )
+            return
+
+        if len(parts) == 3 and parts[0] == "stores" and parts[2] == "merchant-project-status":
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            project_id = str(query.get("project_id", [""])[0] or "").strip()
+            if not project_id:
+                self._send_error(HTTPStatus.BAD_REQUEST, "project_id is required")
+                return
+            account_health = build_account_health_snapshot(
+                self.repository,
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
+            self._send_json(
+                {
+                    "merchant_project_status": build_merchant_project_status(
+                        repository=self.repository,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                        project_id=project_id,
+                        user_id=identity["user_id"],
+                        account_health=account_health,
                     )
                 }
             )
@@ -2471,6 +3515,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not media_job:
                 self._send_error(HTTPStatus.NOT_FOUND, "media asset job not found")
                 return
+            media_job = _reconcile_media_asset_job_review_readiness(
+                self.repository,
+                company_id=identity["company_id"],
+                media_job=media_job,
+            )
             self._send_json({"media_asset_job": media_job, "secret_exposed": False})
             return
 
@@ -2555,10 +3604,86 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.NOT_FOUND, "task not found")
             return
 
+        if len(parts) == 5 and parts[0] == "stores" and parts[2] == "listing-drafts" and parts[4] == "generation-status":
+            if not self._require_permission(identity, "view_report"):
+                return
+            status_query = parse_qs(parsed.query, keep_blank_values=True)
+            legacy = "legacy_task_id" in status_query
+            required = (("legacy_task_id", "source_report_id", "candidate_id", "expected_base_report_id", "expected_checkpoint_revision")
+                        if legacy else ("operation_id", "source_report_id", "candidate_id"))
+            if set(status_query) != set(required) or any(len(status_query.get(key, [])) != 1 for key in required):
+                self._send_json({"error_code": "listing_generation_status_invalid", "secret_exposed": False},
+                                status=HTTPStatus.BAD_REQUEST)
+                return
+            if not self.repository.get_store_for_company(company_id=identity["company_id"], store_id=parts[1]):
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            try:
+                status_identity = {"key": parts[3], "source_report_id": status_query["source_report_id"][0],
+                                   "candidate_id": status_query["candidate_id"][0]}
+                if legacy:
+                    revision = status_query["expected_checkpoint_revision"][0]
+                    if not re.fullmatch(r"0|[1-9][0-9]{0,9}", revision) or int(revision) >= 2147483647:
+                        raise ValueError("invalid revision")
+                    result = read_legacy_listing_generation_result(
+                        repository=self.repository, company_id=identity["company_id"], store_id=parts[1],
+                        user_id=identity["user_id"], task_id=status_query["legacy_task_id"][0],
+                        listing_project_identity=status_identity,
+                        expected_base_report_id=status_query["expected_base_report_id"][0],
+                        expected_checkpoint_revision=int(revision),
+                    )
+                else:
+                    result = read_listing_generation_operation(
+                        repository=self.repository, company_id=identity["company_id"], store_id=parts[1],
+                        user_id=identity["user_id"], operation_id=status_query["operation_id"][0],
+                        listing_project_identity=status_identity,
+                    )
+            except ValueError:
+                self._send_json({"error_code": "listing_generation_status_invalid", "secret_exposed": False},
+                                status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception:
+                self._send_json({"error_code": "listing_generation_status_unavailable", "secret_exposed": False},
+                                status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(result, status=HTTPStatus.CONFLICT if result["status"] == "conflict" else HTTPStatus.OK)
+            return
+
+        if len(parts) == 5 and parts[0] == "stores" and parts[2] == "listing-drafts" and parts[4] == "checkpoint":
+            if not self._require_permission(identity, "view_report"):
+                return
+            from .listing_draft_checkpoint import CheckpointValidationError
+            checkpoint_query = parse_qs(parsed.query, keep_blank_values=True)
+            project_identity = {"key": parts[3], **{
+                key: checkpoint_query[key][0] for key in ("source_report_id", "candidate_id") if key in checkpoint_query}}
+            try:
+                if any(len(checkpoint_query.get(key, [])) != 1 for key in ("source_report_id", "candidate_id")):
+                    raise CheckpointValidationError()
+                result = self.repository.get_listing_draft_checkpoint(
+                    company_id=identity["company_id"], store_id=parts[1], identity=project_identity)
+            except KeyError:
+                self._send_error(HTTPStatus.NOT_FOUND, "listing_draft_not_found")
+                return
+            except CheckpointValidationError as exc:
+                self._send_json({"error_code": str(exc), "secret_exposed": False}, status=HTTPStatus(exc.status))
+                return
+            except Exception:
+                self._send_json({"error_code": "listing_draft_storage_unavailable", "secret_exposed": False},
+                                status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_checkpoint_json(result)
+            return
+
         if path == "reports":
             task_id = query.get("task_id", [None])[0]
             limit = _query_limit(query, default=None, maximum=100)
-            self._send_json({"reports": self.repository.list_reports(company_id=identity["company_id"], task_id=task_id, limit=limit)})
+            reports = self.repository.list_reports(
+                company_id=identity["company_id"],
+                task_id=task_id,
+                limit=limit,
+                exclude_report_types=_MERCHANT_INTERNAL_REPORT_TYPES,
+            )
+            self._send_json({"reports": _merchant_safe_reports(reports)})
             return
 
         if path == "confirmations":
@@ -2573,8 +3698,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "audit-logs":
-            limit = int(query.get("limit", ["100"])[0] or 100)
-            self._send_json({"audit_logs": self.repository.list_audit_logs(company_id=identity["company_id"], limit=limit)})
+            limit = _query_limit(query, default=100, maximum=500) or 100
+            audits = self.repository.list_audit_logs(company_id=identity["company_id"], limit=limit)
+            self._send_json(
+                {
+                    "audit_logs": _merchant_safe_audit_logs(
+                        audits,
+                        include_internal=self._is_platform_internal_admin(identity),
+                    )
+                }
+            )
             return
 
         self._send_error(HTTPStatus.NOT_FOUND, "endpoint not found")
@@ -2585,9 +3718,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         except RequestBodyError as exc:
             self._send_error(exc.status, exc.message)
         except Exception as exc:
+            recover_ai_ceo_attempt = getattr(self, "_active_ai_ceo_attempt_recovery", None)
+            if callable(recover_ai_ceo_attempt):
+                try:
+                    if recover_ai_ceo_attempt(exc):
+                        return
+                except Exception:
+                    # The ordinary dependency handler below remains the final
+                    # safe boundary if even the attempt-recovery write fails.
+                    pass
             if self._handle_service_dependency_exception(exc):
                 return
             raise
+        finally:
+            self._active_ai_ceo_attempt_recovery = None
 
     def _handle_post(self) -> None:
         parsed = urlparse(self.path)
@@ -2707,24 +3851,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "secret_exposed": False,
                     }
                 else:
-                    try:
-                        billing_trial = apply_test_billing_event(
-                            self.repository,
-                            company_id=user["default_company_id"],
-                            user_id=user["user_id"],
-                            plan_key=requested_plan,
-                            action="activate",
-                        )
-                    except Exception as exc:  # pragma: no cover - defensive onboarding guardrail
-                        billing_trial = {
-                            "ok": False,
-                            "status": "billing_trial_activation_skipped",
-                            "reason": str(exc.__class__.__name__),
-                            "creates_real_checkout_session": False,
-                            "calls_stripe_api": False,
-                            "triggers_real_charge": False,
-                            "secret_exposed": False,
-                        }
+                    billing_trial = {
+                        "ok": False,
+                        "status": "paid_plan_checkout_required",
+                        "plan_key": requested_plan,
+                        "creates_real_checkout_session": False,
+                        "calls_stripe_api": False,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    }
                 challenge_verification = verify_registration_challenge(
                     body.get("trial_activation_challenge")
                     if isinstance(body.get("trial_activation_challenge"), dict)
@@ -2786,6 +3921,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/auth/login":
+            if not self._require_operations_console_request("operations console login"):
+                return
             body = self._read_json_body()
             if not self._check_auth_rate_limit("auth/login", body):
                 return
@@ -2802,8 +3939,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "company_id": user["default_company_id"],
                 "email": user["email"],
             }
-            if not self._is_platform_internal_admin(preflight_identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "operations console is platform-internal admin only")
+            if not self._require_platform_internal_admin(preflight_identity, "operations console"):
                 return
             token, refresh_token, _browser_session = self._issue_browser_session(
                 user_id=user["user_id"],
@@ -3196,6 +4332,157 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if identity is None:
             return
 
+        if len(parts) == 6 and parts[:4] == ["owner", "billing", "domestic", "refunds"] and parts[5] in {"review", "execute", "query"}:
+            if not self._require_operations_console_request("SaaS refund operation") or not self._require_platform_internal_admin(identity, "SaaS refund operation"):
+                return
+            body = self._read_json_body()
+            company_id = str(body.get("company_id") or "").strip()
+            order = self.repository.get_domestic_billing_order(company_id=company_id, order_id=parts[4])
+            if not order:
+                self._send_error(HTTPStatus.NOT_FOUND, "domestic_billing_order_not_found")
+                return
+            packet = platform_refund_review_packet(self.repository, order)
+            if parts[5] == "review":
+                try:
+                    result = self.repository.review_platform_refund_confirmation(
+                        company_id=company_id, order_id=parts[4], confirmation_id=packet["confirmation_id"],
+                        reviewer_company_id=identity["company_id"], reviewer_user_id=identity["user_id"],
+                        internal_admin_emails=self.settings.internal_admin_emails,
+                        decision=str(body.get("decision") or ""), review_reason=str(body.get("review_reason") or ""),
+                    )
+                except PermissionError as exc:
+                    self._send_error(HTTPStatus.FORBIDDEN, str(exc))
+                    return
+                except KeyError:
+                    self._send_error(HTTPStatus.NOT_FOUND, "domestic_billing_order_not_found")
+                    return
+                except ConfirmationDecisionConflict:
+                    self._send_error(HTTPStatus.CONFLICT, "domestic_refund_review_state_conflict")
+                    return
+                except ValueError as exc:
+                    self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+                self._send_json({"refund_review": {"confirmation_id": result["confirmation_id"], "status": result["status"], "secret_exposed": False}}, status=HTTPStatus.CREATED)
+                return
+            if not self._check_domestic_reconciliation_rate_limit(identity):
+                return
+            if parts[5] == "execute":
+                if not hmac.compare_digest(str(body.get("exact_confirmation") or ""), packet["execution_confirmation"]):
+                    self._send_error(HTTPStatus.CONFLICT, "domestic_refund_exact_confirmation_required")
+                    return
+                result = execute_approved_domestic_billing_refund(
+                    self.repository, company_id=company_id, user_id=identity["user_id"], order_id=parts[4],
+                    operator_company_id=identity["company_id"], internal_admin_emails=self.settings.internal_admin_emails,
+                )
+            else:
+                result = query_and_reconcile_domestic_billing_refund(self.repository, company_id=company_id, order_id=parts[4], internal_admin_emails=self.settings.internal_admin_emails)
+            self._send_json({"domestic_billing_refund_execution" if parts[5] == "execute" else "domestic_billing_refund_query": result}, status=HTTPStatus.ACCEPTED if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)))
+            return
+
+        if path == "owner/ebay/provider-restriction-resolution":
+            if not self._require_operations_console_request("eBay provider restriction resolution evidence"):
+                return
+            if not self._require_platform_internal_admin(identity, "eBay provider restriction resolution evidence"):
+                return
+            body = self._read_json_body()
+            company_id = str(body.get("company_id") or "").strip()
+            store_id = str(body.get("store_id") or "").strip()
+            evidence_type = str(body.get("evidence_type") or "").strip().lower()
+            verified_at = str(body.get("verified_at") or "").strip()
+            restriction_error_id = str(body.get("restriction_error_id") or "").strip()
+            evidence_sha256 = str(body.get("evidence_sha256") or "").strip().lower()
+            exact_confirmation = str(body.get("exact_confirmation") or "").strip()
+            if not company_id or not store_id:
+                self._send_error(HTTPStatus.BAD_REQUEST, "company_id and store_id are required")
+                return
+            store = self.repository.get_store_for_company(company_id=company_id, store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found")
+                return
+            if evidence_type not in TRUSTED_PROVIDER_RESTRICTION_RESOLUTION_TYPES:
+                self._send_error(HTTPStatus.BAD_REQUEST, "unsupported eBay restriction-resolution evidence type")
+                return
+            if restriction_error_id != "25019":
+                self._send_error(HTTPStatus.BAD_REQUEST, "restriction_error_id must match the active eBay restriction")
+                return
+            if not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256):
+                self._send_error(HTTPStatus.BAD_REQUEST, "a SHA-256 digest of the reviewed evidence file is required")
+                return
+            try:
+                datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                self._send_error(HTTPStatus.BAD_REQUEST, "verified_at must be an ISO-8601 timestamp")
+                return
+            expected_confirmation = (
+                f"record_provider_restriction_resolution:{company_id}:{store_id}:"
+                f"{restriction_error_id}:{evidence_sha256}"
+            )
+            if not hmac.compare_digest(exact_confirmation, expected_confirmation):
+                self._send_error(HTTPStatus.CONFLICT, "exact restriction-resolution evidence confirmation is required")
+                return
+            prior = self.repository.find_latest_audit_log_by_target(
+                company_id=company_id,
+                store_id=store_id,
+                action_type="ebay.provider_restriction.resolution_verified",
+                target_type="store",
+                target_id=store_id,
+            )
+            prior_details = prior.get("details") if isinstance(prior, dict) and isinstance(prior.get("details"), dict) else {}
+            duplicate_request = bool(
+                prior
+                and prior.get("actor_type") == "platform_internal_admin"
+                and prior_details.get("evidence_sha256") == evidence_sha256
+                and prior_details.get("restriction_error_id") == restriction_error_id
+            )
+            if duplicate_request:
+                audit = prior
+            else:
+                audit = self.repository.write_audit(
+                    company_id=company_id,
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    actor_type="platform_internal_admin",
+                    action_type="ebay.provider_restriction.resolution_verified",
+                    target_type="store",
+                    target_id=store_id,
+                    summary="An eBay provider restriction-resolution notice was reviewed and recorded.",
+                    details={
+                        "status": "clear",
+                        "evidence_type": evidence_type,
+                        "verified_at": verified_at,
+                        "restriction_error_id": restriction_error_id,
+                        "evidence_sha256": evidence_sha256,
+                        "raw_evidence_stored": False,
+                        "real_platform_write_performed": False,
+                        "secret_exposed": False,
+                    },
+                )
+            self._send_json(
+                {
+                    "provider_restriction_resolution": {
+                        "recorded": True,
+                        "duplicate_request": duplicate_request,
+                        "company_id": company_id,
+                        "store_id": store_id,
+                        "restriction_error_id": restriction_error_id,
+                        "evidence_type": evidence_type,
+                        "verified_at": verified_at,
+                        "evidence_sha256": evidence_sha256,
+                        "audit_id": audit.get("audit_id") if isinstance(audit, dict) else None,
+                        "raw_evidence_stored": False,
+                        "real_platform_write_performed": False,
+                        "secret_exposed": False,
+                    },
+                    "account_health": build_account_health_snapshot(
+                        self.repository,
+                        company_id=company_id,
+                        store_id=store_id,
+                    ),
+                },
+                status=HTTPStatus.OK if duplicate_request else HTTPStatus.CREATED,
+            )
+            return
+
         if path == "product-feedback":
             if not self._check_product_feedback_rate_limit(identity):
                 return
@@ -3234,6 +4521,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path in {"owner/product-feedback/review", "owner/product-feedback/resolve"}:
+            if not self._require_operations_console_request("product feedback operation"):
+                return
             if not self._require_platform_internal_admin(identity, "product feedback operation"):
                 return
             body = self._read_json_body()
@@ -3301,6 +4590,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/operations-reliability-alerts/reconcile":
+            if not self._require_operations_console_request("operations reliability alerts"):
+                return
             if not self._require_platform_internal_admin(identity, "operations reliability alerts"):
                 return
             monitoring_snapshot = self.repository.provider_monitoring_snapshot(
@@ -3330,6 +4621,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/operations-reliability-alerts/acknowledge":
+            if not self._require_operations_console_request("operations reliability alerts"):
+                return
             if not self._require_platform_internal_admin(identity, "operations reliability alerts"):
                 return
             body = self._read_json_body()
@@ -3405,10 +4698,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not media_job:
                 self._send_error(HTTPStatus.NOT_FOUND, "media asset job not found")
                 return
+            media_job = _reconcile_media_asset_job_review_readiness(
+                self.repository,
+                company_id=identity["company_id"],
+                media_job=media_job,
+            )
             manifest = media_job.get("asset_manifest") if isinstance(media_job.get("asset_manifest"), list) else []
             if not manifest:
                 self._send_error(HTTPStatus.BAD_REQUEST, "media asset job has no asset manifest to review")
                 return
+            validation = (
+                media_job.get("asset_manifest_validation")
+                if isinstance(media_job.get("asset_manifest_validation"), dict)
+                else {}
+            )
+            asset_review = media_job.get("asset_review") if isinstance(media_job.get("asset_review"), dict) else {}
+            review_gates = asset_review.get("review_gates") if isinstance(asset_review.get("review_gates"), list) else []
             live_provider_called = media_job.get("live_provider_called") is True
             real_asset_references = [
                 str(item.get("url_or_file_path") or item.get("url") or item.get("file_path") or "").strip()
@@ -3419,8 +4724,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 reference.startswith("https://") for reference in real_asset_references
             )
             video_assets_present = any(
-                "video" in str(item.get("asset_type") or item.get("type") or "").lower()
-                or str(item.get("url_or_file_path") or item.get("url") or "").lower().split("?", 1)[0].endswith((".mp4", ".webm", ".mov"))
+                media_asset_is_video(item)
                 for item in manifest
                 if isinstance(item, dict)
             )
@@ -3434,18 +4738,84 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             job_inputs = job_spec.get("inputs") if isinstance(job_spec.get("inputs"), dict) else {}
             creative_job_spec = job_inputs.get("creative_job_spec") if isinstance(job_inputs.get("creative_job_spec"), dict) else {}
             product_fact_gate = media_job.get("product_fact_gate") if isinstance(media_job.get("product_fact_gate"), dict) else {}
-            concept_only = creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+            concept_only = bool(
+                is_concept_only_media_spec(creative_job_spec)
+                or any(
+                    str(item.get("asset_type") or "").strip().lower() == "concept_reference_image"
+                    or str(item.get("listing_use_status") or "").strip().lower()
+                    == "concept_only_not_eligible_for_listing"
+                    for item in manifest
+                    if isinstance(item, dict)
+                )
+            )
             missing_fact_keys = product_fact_gate.get("missing_fact_keys") if isinstance(product_fact_gate.get("missing_fact_keys"), list) else []
-            if decision == "approve_for_listing_draft" and (not live_provider_called or not has_only_reviewable_asset_references):
+            reservation_state = job_spec.get("media_credits") if isinstance(job_spec.get("media_credits"), dict) else {}
+            media_quote = reservation_state.get("quote") if isinstance(reservation_state.get("quote"), dict) else {}
+            manifest_matches_quote = media_manifest_matches_approved_quote(media_quote, manifest)
+            reservation_result = (
+                reservation_state.get("reservation")
+                if isinstance(reservation_state.get("reservation"), dict)
+                else {}
+            )
+            reservation_entry = (
+                reservation_result.get("ledger_entry")
+                if isinstance(reservation_result.get("ledger_entry"), dict)
+                else {}
+            )
+            reservation_id = str(reservation_entry.get("ledger_id") or "")
+            credit_terminal = (
+                self.repository.get_media_credit_terminal_for_reservation(
+                    company_id=identity["company_id"],
+                    reservation_id=reservation_id,
+                )
+                if reservation_id
+                else None
+            )
+            credit_settled = bool(
+                not reservation_id
+                or (
+                    isinstance(credit_terminal, dict)
+                    and credit_terminal.get("operation_type") == "settle"
+                    and credit_terminal.get("status") in {"completed", "settled"}
+                )
+            )
+            if decision == "approve_for_listing_draft" and media_job.get("status") != "waiting_review":
                 self._send_error(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
-                    "素材服务没有返回可核验的真实文件，本次结果不能审核或回写 Listing",
+                    "素材任务尚未同时完成文件校验与素材点结算，当前不能审核或回写 Listing",
+                )
+                return
+            if decision == "approve_for_listing_draft" and (
+                validation.get("status") != "manifest_ready"
+                or asset_review.get("status") != "waiting_for_human_asset_review"
+                or not review_gates
+                or not all(isinstance(gate, dict) and gate.get("status") == "needs_review" for gate in review_gates)
+                or bool(missing_fact_keys)
+                or not credit_settled
+                or not manifest_matches_quote
+            ):
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "素材清单、商品事实或素材点结算尚未通过，当前不能审核或回写 Listing",
                 )
                 return
             if decision == "approve_for_listing_draft" and (concept_only or "reference_images_or_source_notes" in missing_fact_keys):
                 self._send_error(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                     "concept reference needs a real product source image before Listing draft approval",
+                )
+                return
+            if decision == "approve_for_listing_draft" and (
+                not live_provider_called
+                or not has_only_reviewable_asset_references
+                or not all(
+                    isinstance(item, dict) and media_asset_is_listing_review_eligible(item)
+                    for item in manifest
+                )
+            ):
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "素材服务没有返回可核验的真实文件，本次结果不能审核或回写 Listing",
                 )
                 return
             required_confirmations = [
@@ -3531,8 +4901,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if path == "billing/test-event":
-            if not self._require_permission(identity, "manage_billing"):
+        if path == "owner/billing/test-event":
+            if not self._require_operations_console_request("billing test event"):
+                return
+            if not self._require_platform_internal_admin(identity, "billing test event"):
                 return
             body = self._read_json_body()
             result = apply_test_billing_event(
@@ -3548,8 +4920,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if path == "billing/provider-rehearsal":
-            if not self._require_permission(identity, "manage_billing"):
+        if path == "owner/billing/provider-rehearsal":
+            if not self._require_operations_console_request("billing provider rehearsal"):
+                return
+            if not self._require_platform_internal_admin(identity, "billing provider rehearsal"):
                 return
             body = self._read_json_body()
             result = run_billing_provider_rehearsal(
@@ -3601,8 +4975,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if path == "billing/wechat-pay/zero-charge-rehearsal":
-            if not self._require_permission(identity, "manage_billing"):
+        if path == "owner/billing/wechat-pay/zero-charge-rehearsal":
+            if not self._require_operations_console_request("WeChat zero-charge rehearsal"):
+                return
+            if not self._require_platform_internal_admin(identity, "WeChat zero-charge rehearsal"):
                 return
             if not self._check_wechat_zero_charge_rehearsal_rate_limit(identity):
                 return
@@ -3712,22 +5088,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "refund-execute":
-            if not self._require_permission(identity, "manage_billing"):
-                return
-            if not self._require_permission(identity, "approve_high_risk"):
-                return
-            if not self._check_domestic_reconciliation_rate_limit(identity):
-                return
-            result = execute_approved_domestic_billing_refund(
-                self.repository,
-                company_id=identity["company_id"],
-                user_id=identity["user_id"],
-                order_id=parts[3],
-            )
-            self._send_json(
-                {"domestic_billing_refund_execution": result},
-                status=HTTPStatus.ACCEPTED if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
-            )
+            self._send_error(HTTPStatus.FORBIDDEN, "domestic_refund_execution_requires_platform_operations")
             return
 
         if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "refund-query":
@@ -3739,6 +5100,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self.repository,
                 company_id=identity["company_id"],
                 order_id=parts[3],
+                internal_admin_emails=self.settings.internal_admin_emails,
             )
             self._send_json(
                 {"domestic_billing_refund_query": result},
@@ -3785,13 +5147,29 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if len(parts) == 3 and parts[0] == "stores" and parts[2] in {"publish-confirmation", "ebay-draft-confirmation"}:
+        if len(parts) == 3 and parts[0] == "stores" and parts[2] in {
+            "publish-precheck",
+            "publish-confirmation",
+            "ebay-draft-confirmation",
+            "existing-draft-publish-confirmation",
+        }:
             body = self._read_json_body()
+            readonly_precheck = parts[2] == "publish-precheck"
+            if body.get("simulation_only") is True and not readonly_precheck:
+                self._send_error(
+                    HTTPStatus.CONFLICT,
+                    "simulation_only_listing_cannot_create_ebay_confirmation",
+                )
+                return
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=parts[1])
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found")
                 return
             draft_save_intake = parts[2] == "ebay-draft-confirmation"
+            existing_draft_publish_intake = parts[2] == "existing-draft-publish-confirmation"
+            if existing_draft_publish_intake and not self.settings.effective_ebay_controlled_publish_enabled:
+                self._send_error(HTTPStatus.CONFLICT, "controlled_existing_draft_publish_disabled")
+                return
             workflow_scope = str(body.get("workflow_scope") or "").strip()
             smoke_contract_version = "2026-06-18-new-ebay-account-low-risk-smoke"
             if workflow_scope and workflow_scope != "new_ebay_account_low_risk_smoke":
@@ -3802,6 +5180,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             intake_source = (
                 "merchant_ebay_draft_save_intake"
                 if draft_save_intake
+                else "merchant_existing_ebay_draft_publish_intake"
+                if existing_draft_publish_intake
                 else "new_ebay_account_low_risk_smoke"
                 if new_account_smoke
                 else "merchant_listing_publish_intake"
@@ -3813,25 +5193,155 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 limit=1,
             )
             packet = latest_packets[0].get("packet") if latest_packets and isinstance(latest_packets[0].get("packet"), dict) else {}
-            publish_payload = _publish_confirmation_payload_from_body(
-                body=body,
-                packet=packet,
-                marketplace_id=str(store.get("marketplace") or body.get("marketplace_id") or "EBAY_US"),
-            )
+            latest_execution_results = self.repository.list_execution_results(company_id=identity["company_id"], limit=100)
+            recent_confirmations = self.repository.list_confirmations(company_id=identity["company_id"], limit=100)
+            controlled_context: dict[str, Any] = {}
+            if existing_draft_publish_intake:
+                controlled_context = _controlled_existing_draft_publish_context(
+                    execution_results=latest_execution_results,
+                    confirmations=recent_confirmations,
+                    company_id=identity["company_id"],
+                    store_id=parts[1],
+                    offer_id=_safe_publish_text(body.get("offer_id"), limit=80),
+                    sku=_safe_publish_text(body.get("sku"), limit=80),
+                    execution_id=_safe_publish_text(body.get("execution_id"), limit=120),
+                )
+                if controlled_context.get("status") != "ready":
+                    self._send_error(
+                        HTTPStatus.CONFLICT,
+                        str(controlled_context.get("status") or "controlled_publish_exact_draft_not_found"),
+                    )
+                    return
+                publish_payload = _deep_merge({}, controlled_context.get("publish_payload") or {})
+            else:
+                publish_payload = _publish_confirmation_payload_from_body(
+                    body=body,
+                    packet=packet,
+                    marketplace_id=str(store.get("marketplace") or body.get("marketplace_id") or "EBAY_US"),
+                )
             account_health = build_account_health_snapshot(
                 self.repository,
                 company_id=identity["company_id"],
                 store_id=parts[1],
             )
             publish_payload = merge_account_health_into_payload(publish_payload, account_health)
-            raw_project_identity = body.get("listing_project_identity") if isinstance(body.get("listing_project_identity"), dict) else {}
+            raw_project_identity = (
+                controlled_context.get("listing_project_identity")
+                if existing_draft_publish_intake and isinstance(controlled_context.get("listing_project_identity"), dict)
+                else body.get("listing_project_identity")
+                if isinstance(body.get("listing_project_identity"), dict)
+                else {}
+            )
             listing_project_identity = {
                 "key": _safe_publish_text(raw_project_identity.get("key"), limit=160),
                 "product": _safe_publish_text(raw_project_identity.get("product"), limit=160),
-                "source_id": _safe_publish_text(raw_project_identity.get("source_id"), limit=160),
+                "source_id": _safe_publish_text(
+                    raw_project_identity.get("source_id") or raw_project_identity.get("source_report_id"),
+                    limit=160,
+                ),
                 "candidate_id": _safe_publish_text(raw_project_identity.get("candidate_id"), limit=120),
                 "secret_exposed": False,
             }
+            evidence_blockers: list[str] = []
+            try:
+                # Persist the server-owned project and URL spellings in the
+                # approved payload. Execution preflight must evaluate the same
+                # exact scope and URL hashes that the evidence resolver used.
+                publish_payload["listing_project_identity"] = {
+                    "key": listing_project_identity["key"],
+                    "source_report_id": listing_project_identity["source_id"],
+                    "candidate_id": listing_project_identity["candidate_id"],
+                }
+                publish_payload["asset_manifest"] = canonicalize_publish_asset_manifest(
+                    publish_payload.get("asset_manifest") or {}
+                )
+                if existing_draft_publish_intake:
+                    stored_publish_evidence = (
+                        publish_payload.get("publish_evidence")
+                        if isinstance(publish_payload.get("publish_evidence"), dict)
+                        else {}
+                    )
+                    validate_publish_source_rights_evidence(
+                        stored_publish_evidence,
+                        company_id=identity["company_id"],
+                        store_id=parts[1],
+                        listing_project_identity=listing_project_identity,
+                        asset_manifest=publish_payload.get("asset_manifest") or {},
+                    )
+                    evidence_refs = stored_publish_evidence.get("refs") or {}
+                else:
+                    evidence_refs = body.get("publish_evidence_refs") if isinstance(body.get("publish_evidence_refs"), dict) else {}
+                canonical_publish_evidence = resolve_publish_source_rights_evidence(
+                    self.repository,
+                    company_id=identity["company_id"],
+                    store_id=parts[1],
+                    listing_project_identity=listing_project_identity,
+                    asset_manifest=publish_payload.get("asset_manifest") or {},
+                    evidence_refs=evidence_refs,
+                )
+                if existing_draft_publish_intake and (
+                    str(canonical_publish_evidence.get("fingerprint") or "")
+                    != str(stored_publish_evidence.get("fingerprint") or "")
+                ):
+                    raise PublishSourceRightsEvidenceError(
+                        "publish_evidence_changed",
+                        "authoritative_evidence_fingerprint_changed",
+                    )
+                publish_payload["publish_evidence"] = canonical_publish_evidence
+            except PublishSourceRightsEvidenceError as exc:
+                if not readonly_precheck:
+                    self._send_json(
+                        {
+                            "error": exc.code,
+                            "status": int(_publish_evidence_error_status(exc)),
+                            "blockers": list(exc.blockers),
+                            "confirmation_created": False,
+                            "secret_exposed": False,
+                        },
+                        status=_publish_evidence_error_status(exc),
+                    )
+                    return
+                evidence_blockers = list(exc.blockers)
+            if readonly_precheck:
+                # This path deliberately ends before any task, confirmation,
+                # credential resolution, or platform adapter can be reached.
+                request = ExecutionRequest(
+                    action_type="publish_listing", task_id="readonly-publish-precheck",
+                    user_id=identity["user_id"], company_id=identity["company_id"],
+                    store_id=parts[1], platform="ebay", payload=publish_payload,
+                )
+                preflight = ExecutionService(demo_mode=False).preflight(request)
+                simulation_only = body.get("simulation_only") is True or "simulation_only_product_facts" in evidence_blockers
+                if simulation_only:
+                    preflight["issues"].append({"key": "simulation_only", "severity": "blocking",
+                                               "message": "当前为模拟资料，只能检查，不能提交 eBay。"})
+                if evidence_blockers:
+                    preflight["issues"].append({"key": "publish_evidence.source", "severity": "blocking",
+                                               "message": "商品来源或图片授权尚未通过服务器核验，请核对当前商品资料。"})
+                preflight["read_only"] = True
+                preflight["real_execution_allowed"] = False
+                publish_payload["simulation_only"] = simulation_only
+                readiness = build_publish_readiness(
+                    publish_payload, preflight=preflight,
+                    latest_execution_results=latest_execution_results,
+                    recent_confirmations=recent_confirmations,
+                    expected_company_id=identity["company_id"], expected_store_id=parts[1],
+                    expected_listing_project_key=listing_project_identity.get("key") or "",
+                    read_only=True,
+                )
+                readiness["read_only"] = True
+                readiness["ready_for_platform_adapter"] = False
+                self._send_json({
+                    "status": "checked", "read_only": True, "simulation_only": simulation_only,
+                    "listing_project_key": listing_project_identity.get("key") or "",
+                    "store_id": parts[1], "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "preflight": preflight, "publish_readiness": readiness,
+                    "source_blockers": evidence_blockers,
+                    "confirmation_created": False, "task_created": False,
+                    "platform_write_attempted": False, "real_execution_allowed": False,
+                    "secret_exposed": False,
+                })
+                return
             task_title = _safe_publish_text(
                 body.get("product")
                 or publish_payload.get("listing", {}).get("title")
@@ -3839,11 +5349,121 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 or ("Fresh eBay draft save confirmation" if draft_save_intake else "Fresh eBay publish confirmation"),
                 limit=120,
             )
+            controlled_confirmation_matches: list[dict[str, Any]] = []
+            controlled_task_id: str | None = None
+            controlled_confirmation_id: str | None = None
+            if existing_draft_publish_intake:
+                controlled_confirmation_matches = _matching_controlled_existing_draft_publish_confirmations(
+                    confirmations=recent_confirmations,
+                    company_id=identity["company_id"],
+                    store_id=parts[1],
+                    controlled_context=controlled_context,
+                )
+                pending_matches = [
+                    item for item in controlled_confirmation_matches if str(item.get("status") or "") == "pending"
+                ]
+                non_pending_active = [
+                    item
+                    for item in controlled_confirmation_matches
+                    if str(item.get("status") or "")
+                    in {"approved", EXTERNAL_EXECUTION_PROCESSING_STATUS, "executed"}
+                ]
+                if len(pending_matches) > 1:
+                    self._send_error(HTTPStatus.CONFLICT, "controlled_publish_confirmation_not_unique")
+                    return
+                if non_pending_active:
+                    active_status = str(non_pending_active[0].get("status") or "")
+                    self._send_error(
+                        HTTPStatus.CONFLICT,
+                        (
+                            "controlled_publish_already_executed"
+                            if active_status == "executed"
+                            else "controlled_publish_manual_reconcile_required"
+                            if active_status == EXTERNAL_EXECUTION_PROCESSING_STATUS
+                            else "controlled_publish_confirmation_already_approved"
+                        ),
+                    )
+                    return
+                if len(pending_matches) == 1:
+                    existing_confirmation = pending_matches[0]
+                    existing_item = (
+                        existing_confirmation.get("item")
+                        if isinstance(existing_confirmation.get("item"), dict)
+                        else {}
+                    )
+                    existing_payload = (
+                        existing_item.get("publish_payload")
+                        if isinstance(existing_item.get("publish_payload"), dict)
+                        else publish_payload
+                    )
+                    existing_request = ExecutionRequest(
+                        action_type="publish_listing",
+                        task_id=str(existing_confirmation.get("task_id") or ""),
+                        user_id=identity["user_id"],
+                        company_id=identity["company_id"],
+                        store_id=parts[1],
+                        platform="ebay",
+                        payload=existing_payload,
+                        confirmation_id=None,
+                        confirmed_by=None,
+                        confirmed_at=None,
+                        idempotency_key=f"existing-draft-publish-confirmation-{existing_confirmation['confirmation_id']}",
+                    )
+                    existing_general_preflight = ExecutionService(demo_mode=True).preflight(existing_request)
+                    existing_preflight = _controlled_existing_draft_publish_preflight(
+                        existing_request,
+                        require_confirmation=False,
+                    )
+                    existing_readiness = _controlled_existing_draft_publish_readiness(
+                        preflight=existing_preflight,
+                        general_preflight=existing_general_preflight,
+                    )
+                    self._send_json(
+                        {
+                            "task": self.repository.get_task(
+                                company_id=identity["company_id"],
+                                task_id=str(existing_confirmation.get("task_id") or ""),
+                            )
+                            or {},
+                            "confirmation": existing_confirmation,
+                            "preflight": existing_preflight,
+                            "publish_readiness": existing_readiness,
+                            "account_health": account_health,
+                            "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
+                            "controlled_existing_draft_publish_enabled": self.settings.effective_ebay_controlled_publish_enabled,
+                            "reused_existing_confirmation": True,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.OK,
+                    )
+                    return
+                controlled_attempt = len(controlled_confirmation_matches) + 1
+                controlled_digest = hashlib.sha256(
+                    "\0".join(
+                        [
+                            identity["company_id"],
+                            parts[1],
+                            str(controlled_context.get("source_execution_id") or ""),
+                            str(controlled_context.get("source_confirmation_id") or ""),
+                            str(controlled_context.get("offer_id") or ""),
+                            str(controlled_context.get("sku") or ""),
+                            str(controlled_attempt),
+                        ]
+                    ).encode("utf-8")
+                ).hexdigest()[:32]
+                controlled_task_id = f"task_existing_draft_publish_{controlled_digest}"
+                controlled_confirmation_id = f"confirm_existing_draft_publish_{controlled_digest}"
             task = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=parts[1],
                 user_id=identity["user_id"],
-                task_type="ebay_draft_save_intake" if draft_save_intake else "publish_confirmation_intake",
+                task_type=(
+                    "ebay_draft_save_intake"
+                    if draft_save_intake
+                    else "existing_ebay_draft_publish_intake"
+                    if existing_draft_publish_intake
+                    else "publish_confirmation_intake"
+                ),
                 title=(f"eBay draft save intake · {task_title}" if draft_save_intake else f"Publish confirmation intake · {task_title}"),
                 input_data={
                     "product": task_title,
@@ -3852,6 +5472,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "listing_project_identity": listing_project_identity,
                     "secret_exposed": False,
                 },
+                task_id=controlled_task_id,
             )
             execution_request = ExecutionRequest(
                 action_type=action_type,
@@ -3866,27 +5487,88 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 confirmed_at=None,
                 idempotency_key=str(
                     body.get("idempotency_key")
-                    or (f"ebay-draft-intake-{task['task_id']}" if draft_save_intake else f"publish-intake-{task['task_id']}")
+                    or (
+                        f"ebay-draft-intake-{task['task_id']}"
+                        if draft_save_intake
+                        else f"existing-draft-publish-intake-{task['task_id']}"
+                        if existing_draft_publish_intake
+                        else f"publish-intake-{task['task_id']}"
+                    )
                 ),
             )
-            preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            general_preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            preflight = (
+                _controlled_existing_draft_publish_preflight(
+                    execution_request,
+                    require_confirmation=False,
+                )
+                if existing_draft_publish_intake
+                else general_preflight
+            )
             latest_execution_results = self.repository.list_execution_results(company_id=identity["company_id"], limit=100)
             recent_confirmations = self.repository.list_confirmations(company_id=identity["company_id"], limit=100)
-            readiness = build_publish_readiness(
-                publish_payload,
-                preflight=preflight,
-                latest_execution_results=latest_execution_results,
-                recent_confirmations=recent_confirmations,
+            readiness_confirmations = (
+                [
+                    item
+                    for item in recent_confirmations
+                    if str(item.get("confirmation_id") or "")
+                    != str(controlled_context.get("source_confirmation_id") or "")
+                ]
+                if existing_draft_publish_intake
+                else recent_confirmations
             )
-            confirmation = self.repository.create_confirmation(
+            readiness = (
+                _controlled_existing_draft_publish_readiness(
+                    preflight=preflight,
+                    general_preflight=general_preflight,
+                )
+                if existing_draft_publish_intake
+                else build_publish_readiness(
+                    publish_payload,
+                    preflight=preflight,
+                    latest_execution_results=latest_execution_results,
+                    recent_confirmations=readiness_confirmations,
+                    expected_company_id=identity["company_id"],
+                    expected_store_id=parts[1],
+                    expected_listing_project_key=listing_project_identity.get("key") or "",
+                )
+            )
+            reused_existing_confirmation = False
+            try:
+                confirmation = self.repository.create_confirmation(
                 company_id=identity["company_id"],
                 store_id=parts[1],
                 task_id=task["task_id"],
-                runtime_run_id="merchant_ebay_draft_save_intake" if draft_save_intake else "merchant_publish_confirmation_intake",
+                runtime_run_id=(
+                    "merchant_ebay_draft_save_intake"
+                    if draft_save_intake
+                    else "merchant_existing_ebay_draft_publish_intake"
+                    if existing_draft_publish_intake
+                    else "merchant_publish_confirmation_intake"
+                ),
                 action_type=action_type,
                 title=(f"保存到 eBay 草稿确认 · {task_title}" if draft_save_intake else f"发布确认 · {task_title}"),
                 item={
                     "source": intake_source,
+                    **(
+                        {
+                            "company_id": identity["company_id"],
+                            "store_id": parts[1],
+                            "controlled_existing_draft_publish": True,
+                            "existing_ebay_draft": _deep_merge(
+                                {}, publish_payload.get("existing_ebay_draft") or {}
+                            ),
+                            "source_execution_id": controlled_context.get("source_execution_id"),
+                            "source_confirmation_id": controlled_context.get("source_confirmation_id"),
+                            "publish_payload_sha256": _draft_publish_payload_sha256(publish_payload),
+                            "controlled_publish_preflight": _deep_merge({}, preflight),
+                            "writes_to_ebay_after_approval": True,
+                            "public_publish_enabled": True,
+                            "real_platform_writes_enabled": False,
+                        }
+                        if existing_draft_publish_intake
+                        else {}
+                    ),
                     **(
                         {
                             "company_id": identity["company_id"],
@@ -3917,16 +5599,23 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "reason": (
                         "商家希望先把完整商品资料保存为 eBay 未发布草稿；这仍会写入卖家账号，必须由确认中心批准。"
                         if draft_save_intake
+                        else "商家要公开发布当前已保存的 eBay 未发布草稿；确认单精确绑定现有 Offer、SKU 和原草稿执行记录。"
+                        if existing_draft_publish_intake
                         else "商家从捷境 Listing 页面录入全新商品；真实发布必须先看发布体检报告，再由确认中心批准。"
                     ),
                     "expected_result": (
                         "后端只创建或更新 Inventory Item 和未发布 Offer，不调用 publishOffer，也不产生公开 Listing。"
                         if draft_save_intake
+                        else "后端先只读核对同一 SKU 下唯一的未发布 Offer，再只对确认单绑定的 Offer 调用 publishOffer；不得创建第二个 Offer。"
+                        if existing_draft_publish_intake
                         else "通过发布体检后，后端执行服务才可用 eBay Inventory API 发布；失败会写入审计和平台规则记忆。"
                     ),
                     "publish_payload": publish_payload,
+                    "publish_payload_sha256": _draft_publish_payload_sha256(publish_payload),
+                    "publish_evidence_fingerprint": str(canonical_publish_evidence.get("fingerprint") or ""),
                     "publish_payload_summary": _publish_payload_summary(publish_payload),
                     "listing_project_identity": listing_project_identity,
+                    "simulation_only": body.get("simulation_only") is True,
                     "publish_readiness": readiness,
                     "account_health": account_health,
                     "preflight_status": preflight.get("status"),
@@ -3935,16 +5624,42 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "writes_to_ebay_after_approval": (
                         self.settings.effective_ebay_draft_save_enabled
                         if draft_save_intake
+                        else True
+                        if existing_draft_publish_intake
                         else self.settings.effective_real_platform_writes_enabled
                     ),
-                    "creates_public_listing": False if draft_save_intake else self.settings.effective_real_platform_writes_enabled,
-                    "requires_publish_offer_call": False if draft_save_intake else self.settings.effective_real_platform_writes_enabled,
+                    "creates_public_listing": (
+                        False
+                        if draft_save_intake
+                        else True
+                        if existing_draft_publish_intake
+                        else self.settings.effective_real_platform_writes_enabled
+                    ),
+                    "requires_publish_offer_call": (
+                        False
+                        if draft_save_intake
+                        else True
+                        if existing_draft_publish_intake
+                        else self.settings.effective_real_platform_writes_enabled
+                    ),
                     "frontend_gets_token": False,
                     "runtime_gets_token": False,
                 },
-                created_by=identity["user_id"],
-                default_action="hold",
-            )
+                    created_by=identity["user_id"],
+                    confirmation_id=controlled_confirmation_id,
+                    default_action="hold",
+                )
+            except ConfirmationDecisionConflict:
+                if not existing_draft_publish_intake or not controlled_confirmation_id:
+                    raise
+                confirmation = self.repository.get_confirmation(
+                    company_id=identity["company_id"],
+                    confirmation_id=controlled_confirmation_id,
+                ) or {}
+                if not confirmation or str(confirmation.get("status") or "") != "pending":
+                    self._send_error(HTTPStatus.CONFLICT, "controlled_publish_confirmation_create_conflict")
+                    return
+                reused_existing_confirmation = True
             self._send_json(
                 {
                     "task": task,
@@ -3953,9 +5668,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "publish_readiness": readiness,
                     "account_health": account_health,
                     "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
+                    "controlled_existing_draft_publish_enabled": self.settings.effective_ebay_controlled_publish_enabled,
+                    "reused_existing_confirmation": reused_existing_confirmation,
                     "secret_exposed": False,
                 },
-                status=HTTPStatus.CREATED,
+                status=HTTPStatus.OK if reused_existing_confirmation else HTTPStatus.CREATED,
             )
             return
 
@@ -3981,10 +5698,28 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     role=str(body.get("role") or "viewer"),
                     metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
                 )
+            except TeamSeatQuotaExceeded as exc:
+                self._send_json(
+                    {
+                        "error": "team_member_quota_exhausted",
+                        "merchant_message": (
+                            f"当前套餐包含 {exc.quota['limit']} 个团队席位（含账号所有者），"
+                            "现有成员和待加入邀请已占满；请在套餐与付款中选择更多席位的套餐。"
+                        ),
+                        "quota": exc.quota,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.PAYMENT_REQUIRED,
+                )
+                return
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
-            self._send_json({"team_invitation": invite, "real_platform_writes_enabled": False}, status=HTTPStatus.CREATED)
+            self._send_json(
+                {"team_invitation": invite, "real_platform_writes_enabled": False},
+                status=HTTPStatus.OK if invite.get("reused_existing") else HTTPStatus.CREATED,
+            )
             return
 
         if len(parts) == 3 and parts[0] == "stores" and parts[2] == "connections":
@@ -5634,9 +7369,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             if is_media_provider_job:
                 safe_inputs = _sanitize_media_source_inputs(safe_inputs)
+                try:
+                    safe_inputs = normalize_media_generation_inputs(safe_inputs)
+                except ValueError as exc:
+                    self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+            live_media_requested = bool(
+                is_media_provider_job and media_live_provider_requested(safe_inputs, body)
+            )
+            if is_media_provider_job:
+                safe_inputs["live_provider_requested"] = live_media_requested
             media_idempotency_key = ""
+            media_request_fingerprint = ""
             media_credit_state: dict[str, Any] | None = None
             if is_media_provider_job:
+                media_request_fingerprint = _media_asset_request_fingerprint(
+                    store_id=store_id,
+                    provider_job_key=provider_job_key,
+                    inputs=safe_inputs,
+                )
                 media_idempotency_key = _media_asset_idempotency_key(
                     store_id=store_id,
                     provider_job_key=provider_job_key,
@@ -5648,6 +7399,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     idempotency_key=media_idempotency_key,
                 )
                 if existing_media_job:
+                    existing_media_job = _reconcile_media_asset_job_review_readiness(
+                        self.repository,
+                        company_id=identity["company_id"],
+                        media_job=existing_media_job,
+                    ) or existing_media_job
+                    existing_job = existing_media_job.get("job") if isinstance(existing_media_job.get("job"), dict) else {}
+                    existing_job_spec = existing_job.get("job_spec") if isinstance(existing_job.get("job_spec"), dict) else {}
+                    existing_inputs = existing_job_spec.get("inputs") if isinstance(existing_job_spec.get("inputs"), dict) else {}
+                    existing_fingerprint = str(existing_job_spec.get("request_fingerprint") or "").strip()
+                    if not existing_fingerprint:
+                        existing_fingerprint = _media_asset_request_fingerprint(
+                            store_id=str(existing_media_job.get("store_id") or store_id),
+                            provider_job_key=str(existing_job_spec.get("provider_job_key") or existing_media_job.get("provider_job_key") or provider_job_key),
+                            inputs=existing_inputs,
+                        )
+                    if existing_fingerprint != media_request_fingerprint:
+                        self._send_json(
+                            {
+                                "error": "这个任务键已经绑定到另一份商品素材或生成规格，请刷新后重新发起。",
+                                "status": int(HTTPStatus.CONFLICT),
+                                "idempotency_conflict": True,
+                                "provider_call_triggered": False,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
                     existing_task = self.repository.get_task(company_id=identity["company_id"], task_id=existing_media_job["task_id"])
                     existing_queue = None
                     if existing_media_job.get("queue_job_id"):
@@ -5670,6 +7449,90 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         status=HTTPStatus.ACCEPTED,
                     )
                     return
+                if live_media_requested:
+                    product_facts = (
+                        dict(safe_inputs.get("product_facts"))
+                        if isinstance(safe_inputs.get("product_facts"), dict)
+                        else {}
+                    )
+                    source_asset_id = str(product_facts.get("source_asset_id") or "").strip()
+                    if source_asset_id:
+                        try:
+                            source_asset, _source_content = self.media_source_asset_store.read_for_provider(
+                                asset_id=source_asset_id,
+                                company_id=identity["company_id"],
+                                store_id=store_id,
+                            )
+                        except MediaSourceAssetError as exc:
+                            self._send_json(
+                                {
+                                    "error": "商品来源图片不可用，请重新上传后再生成。",
+                                    "status": int(HTTPStatus.UNPROCESSABLE_ENTITY),
+                                    "missing_inputs": [f"private_media_source_{exc.code}"],
+                                    "provider_call_triggered": False,
+                                    "triggers_real_charge": False,
+                                    "secret_exposed": False,
+                                },
+                                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                            )
+                            return
+                        supplied_sha256 = str(product_facts.get("source_image_sha256") or "").strip().lower()
+                        if supplied_sha256 and supplied_sha256 != source_asset.sha256:
+                            self._send_json(
+                                {
+                                    "error": "商品来源图片指纹不一致，请重新上传后再生成。",
+                                    "status": int(HTTPStatus.CONFLICT),
+                                    "source_integrity_conflict": True,
+                                    "provider_call_triggered": False,
+                                    "triggers_real_charge": False,
+                                    "secret_exposed": False,
+                                },
+                                status=HTTPStatus.CONFLICT,
+                            )
+                            return
+                        product_facts["source_image_sha256"] = source_asset.sha256
+                        safe_inputs["product_facts"] = product_facts
+                        safe_inputs["private_media_source_preflight_validated"] = True
+                preflight_missing = missing_media_product_fact_keys(safe_inputs)
+                creative_job_spec = (
+                    safe_inputs.get("creative_job_spec")
+                    if isinstance(safe_inputs.get("creative_job_spec"), dict)
+                    else {}
+                )
+                concept_only = is_concept_only_media_spec(creative_job_spec)
+                product_facts = (
+                    safe_inputs.get("product_facts")
+                    if isinstance(safe_inputs.get("product_facts"), dict)
+                    else {}
+                )
+                reference_images = (
+                    product_facts.get("reference_images")
+                    if isinstance(product_facts.get("reference_images"), list)
+                    else []
+                )
+                has_grounded_source = bool(
+                    product_facts.get("source_asset_id")
+                    or str(safe_inputs.get("reference_image_url") or "").strip().startswith("https://")
+                    or any(str(item or "").strip().startswith("https://") for item in reference_images)
+                )
+                if concept_only and safe_inputs.get("concept_only_accepted") is not True:
+                    preflight_missing.append("concept_only_usage_acceptance")
+                if (not concept_only or has_grounded_source) and safe_inputs.get("commercial_rights_confirmed") is not True:
+                    preflight_missing.append("commercial_use_rights_authorization")
+                preflight_missing = list(dict.fromkeys(preflight_missing))
+                if live_media_requested and preflight_missing:
+                    self._send_json(
+                        {
+                            "error": "商品事实、来源图片或商用权确认尚未完整，本次没有进入生成队列。",
+                            "status": int(HTTPStatus.UNPROCESSABLE_ENTITY),
+                            "missing_inputs": preflight_missing,
+                            "provider_call_triggered": False,
+                            "triggers_real_charge": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                    )
+                    return
                 media_quote = estimate_media_points(safe_inputs)
                 media_credit_state = {
                     "quote": media_quote,
@@ -5678,30 +7541,80 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "provider_neutral": True,
                     "secret_exposed": False,
                 }
-                if media_credit_state["enforcement_enabled"] and bool(safe_inputs.get("live_provider_requested")):
-                    if media_quote.get("chargeable") is not True:
+                if live_media_requested and media_credit_state["enforcement_enabled"] is not True:
+                    self._send_json(
+                        {
+                            "error": "真实素材生成的扣点保护尚未开启，本次没有调用生成服务。",
+                            "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                            "failure_code": "media_credit_enforcement_required",
+                            "retryable": False,
+                            "provider_call_triggered": False,
+                            "triggers_real_charge": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                    return
+                if live_media_requested and media_quote.get("chargeable") is not True:
+                    self._send_json(
+                        {
+                            "error": "视频素材点价格尚未开放，本次任务没有进入生成队列。",
+                            "status": int(HTTPStatus.CONFLICT),
+                            "media_quote": media_quote,
+                            "triggers_real_charge": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
+                if media_credit_state["enforcement_enabled"] and live_media_requested:
+                    orphan_recovery = self.repository.recover_stale_orphan_media_credit_reservations(
+                        company_id=identity["company_id"],
+                        reference_id=media_idempotency_key,
+                        stale_after_seconds=_media_orphan_reservation_stale_after_seconds(),
+                        limit=5,
+                    )
+                    if orphan_recovery.get("status") == "attention_required":
                         self._send_json(
                             {
-                                "error": "视频素材点价格尚未开放，本次任务没有进入生成队列。",
-                                "status": int(HTTPStatus.CONFLICT),
-                                "media_quote": media_quote,
+                                "error": "上一次素材任务的预占记录需要后台安全对账，本次没有进入生成队列。",
+                                "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                                "failure_code": "media_reservation_recovery_required",
+                                "retryable": True,
+                                "provider_call_triggered": False,
                                 "triggers_real_charge": False,
                                 "secret_exposed": False,
                             },
-                            status=HTTPStatus.CONFLICT,
+                            status=HTTPStatus.SERVICE_UNAVAILABLE,
                         )
                         return
                     try:
-                        media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                        ops_reservation = _reserve_ops_media_points(
+                            self.repository,
                             company_id=identity["company_id"],
                             user_id=identity["user_id"],
-                            operation_type="reserve",
-                            points=int(media_quote["estimated_points"]),
-                            idempotency_key=f"{media_idempotency_key}:reserve:v1",
-                            reference_type="media_job",
-                            reference_id=media_idempotency_key,
-                            details={"quote": media_quote},
+                            media_idempotency_key=media_idempotency_key,
+                            media_quote=media_quote,
                         )
+                        if ops_reservation is None:
+                            reserve_operation_key = self.repository.media_credit_reservation_attempt_idempotency_key(
+                                company_id=identity["company_id"],
+                                reference_type="media_job",
+                                reference_id=media_idempotency_key,
+                                base_idempotency_key=f"{media_idempotency_key}:reserve:v1",
+                            )
+                            media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                                company_id=identity["company_id"],
+                                user_id=identity["user_id"],
+                                operation_type="reserve",
+                                points=int(media_quote["estimated_points"]),
+                                idempotency_key=reserve_operation_key,
+                                reference_type="media_job",
+                                reference_id=media_idempotency_key,
+                                details={"quote": media_quote},
+                            )
+                        else:
+                            media_credit_state["reservation"] = ops_reservation
                     except ValueError as exc:
                         if "insufficient" not in str(exc).lower():
                             raise
@@ -5720,79 +7633,152 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             status=HTTPStatus.PAYMENT_REQUIRED,
                         )
                         return
-            task = self.repository.create_task(
-                company_id=identity["company_id"],
-                store_id=store_id,
-                user_id=identity["user_id"],
-                task_type="provider_job",
-                title=str(body.get("title") or f"Provider job: {contract.get('label') or provider_job_key}"),
-                input_data={
-                    "provider_job_key": provider_job_key,
-                    "provider_family": contract.get("provider_family"),
-                    "store_id": store_id,
-                    "inputs": safe_inputs,
-                    "contract_version": catalog.get("contract_version"),
-                    "media_asset_idempotency_key": media_idempotency_key,
-                    "media_credits": media_credit_state,
-                    "real_platform_writes_enabled": False,
-                },
-            )
-            media_asset_job = None
-            if is_media_provider_job:
-                media_asset_job = self.repository.create_media_asset_job(
+                reservation_result = (
+                    media_credit_state.get("reservation")
+                    if isinstance(media_credit_state.get("reservation"), dict)
+                    else {}
+                )
+                if reservation_result.get("duplicate_request") is True:
+                    canonical_media_job = self.repository.get_media_asset_job_by_idempotency(
+                        company_id=identity["company_id"],
+                        idempotency_key=media_idempotency_key,
+                    )
+                    if not canonical_media_job:
+                        self._send_json(
+                            {
+                                "error": "同一素材任务正在建立安全队列，请稍后读取原任务状态。",
+                                "status": int(HTTPStatus.CONFLICT),
+                                "failure_code": "media_queue_setup_in_progress",
+                                "retryable": True,
+                                "provider_call_triggered": False,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    canonical_task = self.repository.get_task(
+                        company_id=identity["company_id"],
+                        task_id=canonical_media_job["task_id"],
+                    )
+                    canonical_queue = (
+                        self.repository.get_queue_job(
+                            job_id=canonical_media_job["queue_job_id"],
+                            company_id=identity["company_id"],
+                        )
+                        if canonical_media_job.get("queue_job_id")
+                        else None
+                    )
+                    self._send_json(
+                        {
+                            "task": canonical_task,
+                            "queue_job": canonical_queue,
+                            "provider_job_contract": contract,
+                            "worker_result": None,
+                            "provider_job": (canonical_task or {}).get("output") if isinstance((canonical_task or {}).get("output"), dict) else None,
+                            "media_asset_job": canonical_media_job,
+                            "idempotent_replay": True,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                    return
+            creation_state: dict[str, Any] = {}
+            try:
+                task, media_asset_job, job = _create_provider_job_queue_records(
+                    self.repository,
                     company_id=identity["company_id"],
                     store_id=store_id,
-                    task_id=task["task_id"],
                     user_id=identity["user_id"],
+                    title=str(body.get("title") or f"Provider job: {contract.get('label') or provider_job_key}"),
                     provider_job_key=provider_job_key,
-                    idempotency_key=media_idempotency_key,
-                    job_spec={
-                        "provider_job_key": provider_job_key,
-                        "contract_version": catalog.get("contract_version"),
-                        "inputs": safe_inputs,
-                        "merchant_visible_provider_name": False,
-                        "live_media_provider_call_allowed": False,
-                        "spend_now_allowed": False,
-                        "media_credits": media_credit_state,
-                        "secret_exposed": False,
-                    },
-                    status="pending",
+                    contract=contract,
+                    contract_version=str(catalog.get("contract_version") or ""),
+                    safe_inputs=safe_inputs,
+                    media_idempotency_key=media_idempotency_key,
+                    media_request_fingerprint=media_request_fingerprint,
+                    media_credit_state=media_credit_state,
+                    is_media_provider_job=is_media_provider_job,
+                    secret_ref=str(body.get("secret_ref") or ""),
+                    run_mode=str(body.get("run_mode") or "queued"),
+                    creation_state=creation_state,
                 )
-            max_attempts = int(contract.get("max_attempts") or 1)
-            job = self.repository.create_queue_job(
-                company_id=identity["company_id"],
-                task_id=task["task_id"],
-                max_attempts=max_attempts,
-                job_data={
-                    "kind": "provider_job",
-                    "provider_job_key": provider_job_key,
-                    "provider_family": contract.get("provider_family"),
-                    "queue": contract.get("queue"),
-                    "contract": contract,
-                    "inputs": safe_inputs,
-                    "secret_ref": str(body.get("secret_ref") or ""),
-                    "media_job_id": media_asset_job.get("media_job_id") if media_asset_job else "",
-                    "idempotency_key": media_idempotency_key,
-                    "media_credits": media_credit_state,
-                    "run_mode": body.get("run_mode") or "queued",
-                    "live_provider_called": False,
-                    "real_platform_writes_enabled": False,
-                },
-            )
-            if media_asset_job:
-                media_asset_job = self.repository.update_media_asset_job(
+            except _CanonicalMediaQueueAlreadyExists as conflict:
+                duplicate_task = creation_state.get("task") if isinstance(creation_state.get("task"), dict) else {}
+                if duplicate_task.get("task_id"):
+                    try:
+                        self.repository.update_task_status(
+                            task_id=str(duplicate_task["task_id"]),
+                            company_id=identity["company_id"],
+                            status="failed",
+                            output={"error_code": "duplicate_media_queue_setup_loser", "provider_call_triggered": False},
+                            audit_summary="Duplicate media queue setup stopped before queue creation.",
+                        )
+                    except Exception:
+                        pass
+                canonical_media_job = conflict.media_job
+                canonical_task = self.repository.get_task(
                     company_id=identity["company_id"],
-                    media_job_id=media_asset_job["media_job_id"],
-                    status="queued",
-                    queue_job_id=job["job_id"],
-                    details={
-                        "message": "Media asset job linked to SaaS queue job.",
-                        "queue": contract.get("queue"),
-                        "live_provider_called": False,
-                        "spend_now_allowed": False,
+                    task_id=str(canonical_media_job.get("task_id") or ""),
+                )
+                canonical_queue = (
+                    self.repository.get_queue_job(
+                        job_id=str(canonical_media_job.get("queue_job_id") or ""),
+                        company_id=identity["company_id"],
+                    )
+                    if canonical_media_job.get("queue_job_id")
+                    else None
+                )
+                self._send_json(
+                    {
+                        "task": canonical_task,
+                        "queue_job": canonical_queue,
+                        "provider_job_contract": contract,
+                        "worker_result": None,
+                        "provider_job": None,
+                        "media_asset_job": canonical_media_job,
+                        "idempotent_replay": True,
+                        "provider_call_triggered": False,
+                        "real_platform_writes_enabled": False,
                         "secret_exposed": False,
                     },
+                    status=HTTPStatus.ACCEPTED,
                 )
+                return
+            except Exception:
+                compensation = _compensate_provider_queue_creation_failure(
+                    self.repository,
+                    company_id=identity["company_id"],
+                    user_id=identity["user_id"],
+                    creation_state=creation_state,
+                    media_credit_state=media_credit_state,
+                    media_idempotency_key=media_idempotency_key,
+                )
+                compensation_complete = compensation.get("manual_reconcile_required") is not True
+                self._send_json(
+                    {
+                        "error": (
+                            "任务没有安全进入队列，已阻止外部调用并回滚素材点预占。"
+                            if compensation_complete
+                            else "任务队列结果需要后台对账；为避免重复调用，素材点预占暂不释放。"
+                        ),
+                        "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                        "failure_code": "media_queue_setup_failed",
+                        "failure_stage": str(creation_state.get("stage") or "create_task"),
+                        "retryable": False,
+                        "retry_requires_new_attempt_key": True,
+                        "compensation": compensation,
+                        "provider_call_triggered": compensation.get("provider_call_triggered"),
+                        "triggers_real_charge": (
+                            False if compensation.get("provider_call_triggered") is False else None
+                        ),
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
             worker_result = None
             run_mode = str(body.get("run_mode") or "queued")
             if run_mode in {"inline", "enqueue_and_wait", "local_worker_now"}:
@@ -5885,26 +7871,263 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not self._require_permission(identity, "create_task"):
                 return
             body = self._read_json_body()
+            command_body = body.get("command") if isinstance(body.get("command"), dict) else {}
+            command_id = str(command_body.get("id") or command_body.get("command_id") or "").strip()
+            legacy_command_key = f"ai-ceo:{command_id}" if re.fullmatch(r"[A-Za-z0-9._:-]{1,145}", command_id) else ""
+            idempotency_key = str(body.get("idempotency_key") or legacy_command_key).strip()
+            if idempotency_key and not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", idempotency_key):
+                self._send_error(HTTPStatus.BAD_REQUEST, "AI CEO 请求包含无效的幂等标识。")
+                return
             store_id = parts[1]
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
-            command_body = body.get("command") if isinstance(body.get("command"), dict) else {}
-            message = str(body.get("message") or command_body.get("text") or command_body.get("command_text") or "")
-            route_meta = ai_ceo_route_metadata(message)
+            raw_message = body.get("message") or command_body.get("text") or command_body.get("command_text") or ""
+            message = raw_message if isinstance(raw_message, str) else ""
+            raw_source_asset_ids = body.get("source_asset_ids")
+            if raw_source_asset_ids is not None and not isinstance(raw_source_asset_ids, list):
+                self._send_error(HTTPStatus.BAD_REQUEST, "商品图片附件格式不正确。")
+                return
+            source_asset_ids: list[str] = []
+            for value in (raw_source_asset_ids or [])[: MAX_AI_CEO_SOURCE_IMAGES + 1]:
+                asset_id = str(value or "").strip()
+                if asset_id and asset_id not in source_asset_ids:
+                    source_asset_ids.append(asset_id)
+            if len(source_asset_ids) > MAX_AI_CEO_SOURCE_IMAGES:
+                self._send_error(HTTPStatus.BAD_REQUEST, f"AI CEO 每次最多识别 {MAX_AI_CEO_SOURCE_IMAGES} 张商品图片。")
+                return
+            product_vision_assets: list[dict[str, Any]] = []
+            product_vision_signed_urls: list[str] = []
+            if source_asset_ids and not message.strip():
+                message = "请识别这些商品图片，整理来源事实、冲突项和待核对 Listing 草稿。"
+            conversation_history = body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else []
+            turn_plan = pending_semantic_plan()
+            route_meta = ai_ceo_route_metadata(
+                message,
+                route=str(turn_plan.get("route") or ""),
+                realtime_kind=str(turn_plan.get("realtime_kind") or ""),
+            )
+            listing_project_identity: dict[str, str] = {}
+            active_listing_context = (
+                body.get("active_listing_context")
+                if isinstance(body.get("active_listing_context"), dict)
+                else {}
+            )
+            submitted_identity = submitted_project_identity(active_listing_context)
+            verified_listing_context = self.repository.resolve_ai_ceo_listing_context(
+                company_id=identity["company_id"], store_id=store_id, identity=submitted_identity,
+            )
+            active_listing_product_name = ""
+            semantic_status = "blocked"
+            consumed_source_asset_ids: list[str] = []
+            supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
+                supplier_facts=body.get("supplier_facts"),
+                supplier_facts_verified=body.get("supplier_facts_verified"),
+                source="authenticated_merchant_request",
+            )
+
+            fingerprint_payload = {
+                "contract_version": "ai_ceo_chat_request_fingerprint_v1",
+                "message": message,
+                "command": command_body,
+                "conversation_history": conversation_history,
+                "source_asset_ids": source_asset_ids,
+                "listing_project_identity": submitted_identity,
+                "active_listing_context": active_listing_context,
+                "supplier_fact_attestation": supplier_fact_attestation,
+                "client_now": str(body.get("client_now") or ""),
+                "client_timezone": str(body.get("client_timezone") or ""),
+            }
+            archive_contract = str(body.get("chat_archive_contract") or "")
+            if archive_contract and archive_contract != "server_finalized_chat_archive_v1":
+                self._send_error(HTTPStatus.BAD_REQUEST, "unsupported chat archive contract")
+                return
+            if archive_contract:
+                fingerprint_payload["chat_archive_contract"] = archive_contract
+            if body.get("semantic_dispatch_contract"):
+                fingerprint_payload["semantic_dispatch_contract"] = str(body["semantic_dispatch_contract"])
+            payload_fingerprint = _ai_ceo_chat_request_fingerprint(
+                secret=self.sessions.secret,
+                canonical_request=fingerprint_payload,
+            )
+            if not idempotency_key:
+                # Backward compatibility for first-party callers that predate
+                # the explicit key. Exact request envelopes remain idempotent;
+                # the production frontend always sends a durable explicit key.
+                idempotency_key = f"legacy:{payload_fingerprint}"
+            request_claim = self.repository.claim_ai_ceo_chat_request(
+                company_id=identity["company_id"],
+                store_id=store_id,
+                user_id=identity["user_id"],
+                idempotency_key=idempotency_key,
+                payload_fingerprint=payload_fingerprint,
+                archive_context={"contract_version": archive_contract, "user_text": message} if archive_contract else None,
+                # Prior releases omitted the project for non-workflow turns.
+                # Compare that old canonical envelope solely for replay; a new
+                # client-less request still stops at the upgrade gate below.
+                compatible_payload_fingerprints=(
+                    (_ai_ceo_chat_request_fingerprint(secret=self.sessions.secret,
+                        canonical_request={**fingerprint_payload, "listing_project_identity": {}}),)
+                    if not body.get("semantic_dispatch_contract") else ()
+                ),
+            )
+            request_task = request_claim["request_task"]
+            def dispatch_receipt() -> dict[str, Any]:
+                return semantic_dispatch_receipt(plan=turn_plan, status=semantic_status,
+                    command_id=command_id, idempotency_key=idempotency_key,
+                    request_task_id=str(request_task.get("task_id") or request_claim.get("request_task_id") or ""), company_id=identity["company_id"],
+                    store_id=store_id, submitted_identity=submitted_identity,
+                    target_identity=listing_project_identity, consumed_asset_ids=consumed_source_asset_ids)
+
+            if request_claim["claim_state"] == "conflict":
+                self._send_json(
+                    {
+                        "error": "同一幂等标识不能用于不同的 AI CEO 请求。",
+                        "error_code": "ai_ceo_idempotency_payload_conflict",
+                        "semantic_dispatch": dispatch_receipt(),
+                        "ai_ceo_chat": {
+                            "semantic_dispatch": dispatch_receipt(),
+                            "status": "idempotency_payload_conflict",
+                            "answer": "这次请求与已保存的同一操作标识不一致，捷境已停止处理。请重新发起本轮任务；本次没有调用模型，也没有生成草稿。",
+                            "route": "ebay_workflow",
+                            "route_label": "请求一致性保护",
+                            "source_records": [],
+                            "work_records": [],
+                            "confirmation_items": [],
+                            "blocked_by": ["idempotency_payload_conflict"],
+                        },
+                        "request_task_id": request_task.get("task_id") or request_claim.get("request_task_id"),
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            if request_claim["claim_state"] == "in_progress":
+                self._send_json(
+                    {
+                        "ai_ceo_chat_request": {
+                            "status": "in_progress",
+                            "request_task_id": request_task.get("task_id"),
+                            "retry_after_ms": 1500,
+                        },
+                        "semantic_dispatch": dispatch_receipt(),
+                        "ai_ceo_chat": {"status": "in_progress", "semantic_dispatch": dispatch_receipt()},
+                        "idempotent_replay": False,
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.ACCEPTED,
+                )
+                return
+            if request_claim["claim_state"] == "replay":
+                if body.get("semantic_dispatch_contract") != "ai_ceo_semantic_dispatch_v1":
+                    # Old clients project archived artifacts without checking
+                    # semantic receipts. Keep the archive intact for read-only
+                    # history, but never deliver executable artifacts to them.
+                    self._send_json({
+                        "error_code": "ai_ceo_client_upgrade_required",
+                        "ai_ceo_chat": {
+                            "status": "client_upgrade_required", "blocked_by": ["ai_ceo_client_upgrade_required"],
+                            "answer": "这条回复已保存在聊天历史。请刷新页面后查看；本次没有重新调用模型或修改商品资料。",
+                            "semantic_dispatch": dispatch_receipt(), **route_meta,
+                        },
+                        "semantic_dispatch": dispatch_receipt(),
+                        "idempotent_replay": True, "archived_response_available": True,
+                        "request_task_id": request_task.get("task_id"),
+                        "usage_consumed": False, "listing_created": False,
+                        "real_platform_writes_enabled": False, "secret_exposed": False,
+                    }, status=HTTPStatus.CONFLICT)
+                    return
+                replay = request_claim.get("replay") if isinstance(request_claim.get("replay"), dict) else {}
+                replay_payload = replay.get("response_payload") if isinstance(replay.get("response_payload"), dict) else {}
+                if not isinstance(replay_payload.get("semantic_dispatch"), dict):
+                    replay_chat = replay_payload.get("ai_ceo_chat") or {}
+                    replay_payload = {**replay_payload, "semantic_dispatch": dispatch_receipt(),
+                        "ai_ceo_chat": {**replay_chat, "semantic_dispatch": dispatch_receipt()}}
+                replay_status = int(replay.get("response_status") or HTTPStatus.OK)
+                if replay_status < 200 or replay_status > 599:
+                    replay_status = int(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self._send_json(
+                    {
+                        **replay_payload,
+                        "idempotent_replay": True,
+                        "request_task_id": request_task.get("task_id"),
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus(replay_status),
+                )
+                return
+
+            def attach_supplier_fact_attestation(chat_payload: dict[str, Any]) -> dict[str, Any]:
+                # The authenticated request, never provider/model prose, owns
+                # the merchant verification bit and the allowlisted values.
+                return {
+                    **chat_payload,
+                    "supplier_facts": supplier_fact_attestation["supplier_facts"],
+                    "supplier_facts_verified": supplier_fact_attestation["supplier_facts_verified"],
+                    "supplier_fact_attestation": supplier_fact_attestation,
+                }
+
             stream_requested = str((query.get("stream") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
             stream_started = False
             last_stream_stage = ""
 
             def send_chat_payload(payload: dict[str, Any], status: HTTPStatus) -> None:
                 nonlocal stream_started
+                receipt = dispatch_receipt()
+                chat_payload = payload.get("ai_ceo_chat") if isinstance(payload.get("ai_ceo_chat"), dict) else None
+                if chat_payload is not None:
+                    chat_payload = {key: value for key, value in chat_payload.items() if key != "listing_project_identity"}
+                    payload = {
+                        **payload,
+                        "ai_ceo_chat": {
+                            **chat_payload,
+                            "semantic_dispatch": receipt,
+                            **({"listing_project_identity": receipt["target_project_identity"]}
+                               if receipt["target_project_identity"] else {}),
+                        },
+                    }
+                payload = {
+                    **payload,
+                    "semantic_dispatch": receipt,
+                    "request_task_id": request_task.get("task_id"),
+                    "idempotent_replay": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                }
+                finalized_request = self.repository.finalize_ai_ceo_chat_request(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    request_task_id=str(request_task.get("task_id") or ""),
+                    terminal_status="failed" if int(status) >= 500 else "completed",
+                    response_status=int(status),
+                    response_payload=payload,
+                )
+                payload, status = _resolve_ai_ceo_chat_final_response(
+                    attempted_payload=payload,
+                    attempted_status=status,
+                    finalized_request=finalized_request,
+                    request_task_id=str(request_task.get("task_id") or ""),
+                )
                 if not stream_requested:
                     self._send_json(payload, status=status)
                     return
+                # Before any accepted/delta event the HTTP response is still
+                # uncommitted. Preserve an immediate quota/dependency
+                # rejection as ordinary JSON with its real HTTP status so the
+                # browser can finish the pending turn and show the exact
+                # backend blocker. Once streaming has begun, only an NDJSON
+                # final event can safely close the response.
                 if not stream_started:
-                    self._start_ndjson_stream()
-                    stream_started = True
+                    self._send_json(payload, status=status)
+                    return
                 self._send_ndjson_event(
                     {
                         "type": "final",
@@ -5913,6 +8136,68 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "secret_exposed": False,
                     }
                 )
+
+            if body.get("semantic_dispatch_contract") != "ai_ceo_semantic_dispatch_v1":
+                send_chat_payload({
+                    "error_code": "ai_ceo_client_upgrade_required", "usage_consumed": False,
+                    "listing_created": False, "ai_ceo_chat": {
+                        "status": "client_upgrade_required", "blocked_by": ["ai_ceo_client_upgrade_required"],
+                        "answer": "AI CEO 的商品隔离已更新，请刷新页面后重新发送这条消息。本次未调用模型，商品资料保持不变。",
+                        **route_meta,
+                    },
+                }, status=HTTPStatus.CONFLICT)
+                return
+            if not isinstance(raw_message, str) or not message.strip() or len(message) > 900:
+                send_chat_payload({
+                    "error_code": "semantic_plan_invalid_message", "usage_consumed": False,
+                    "listing_created": False, "ai_ceo_chat": {
+                        "status": "semantic_plan_blocked", "blocked_by": ["semantic_plan_invalid_message"],
+                        "answer": "请将这条消息控制在 900 字以内并保留完整要求。本次未调用模型，商品资料保持不变。",
+                        **route_meta,
+                    },
+                }, status=HTTPStatus.BAD_REQUEST)
+                return
+
+            try:
+                for asset_id in source_asset_ids:
+                    asset, _content = self.media_source_asset_store.read_for_provider(
+                        asset_id=asset_id,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                    )
+                    product_vision_assets.append(
+                        {
+                            "asset_id": asset.asset_id,
+                            "sha256": asset.sha256,
+                            "original_filename": asset.original_filename,
+                            "content_type": asset.content_type,
+                            "size_bytes": asset.size_bytes,
+                            "width": asset.width,
+                            "height": asset.height,
+                        }
+                    )
+                    product_vision_signed_urls.append(self.media_source_asset_store.signed_url(asset.asset_id))
+            except MediaSourceAssetError:
+                send_chat_payload(
+                    {
+                        "error": "商品图片不存在、已过期或不属于当前店铺。",
+                        "error_code": "product_source_asset_unavailable",
+                        "ai_ceo_chat": {
+                            "status": "blocked_before_model_chat",
+                            "answer": "商品图片不存在、已过期或不属于当前店铺。本次没有调用模型，也没有生成草稿。",
+                            "route": "ebay_workflow",
+                            "route_label": "商品图片校验",
+                            "source_records": [],
+                            "work_records": [],
+                            "confirmation_items": [],
+                            "blocked_by": ["product_source_asset_unavailable"],
+                        },
+                        "usage_consumed": False,
+                        "listing_created": False,
+                    },
+                    status=HTTPStatus.NOT_FOUND,
+                )
+                return
 
             def emit_chat_stage(stage: str) -> None:
                 nonlocal stream_started, last_stream_stage
@@ -5942,118 +8227,348 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_ndjson_event({"type": "delta", "delta": safe_delta, "secret_exposed": False})
 
             command_response = None
-            if command_body:
-                command_response = self.repository.save_merchant_ceo_command(
-                    company_id=identity["company_id"],
-                    store_id=store_id,
-                    user_id=identity["user_id"],
-                    command={**command_body, **route_meta},
-                )
-            fast_chat = run_ai_ceo_fast_turn(
-                repository=self.repository,
+            attempt = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=store_id,
                 user_id=identity["user_id"],
-                message=message,
-                client_now=str(body.get("client_now") or ""),
-                client_timezone=str(body.get("client_timezone") or ""),
+                task_type="merchant_ceo_chat_attempt",
+                title="AI CEO model request attempt",
+                input_data={
+                    **build_ai_ceo_pre_model_attempt_input(
+                        command_id=str(command_id or ""),
+                        route=str(route_meta.get("route") or ""),
+                        route_label=str(route_meta.get("route_label") or ""),
+                    ),
+                    **(
+                        {"listing_project_identity": listing_project_identity}
+                        if listing_project_identity
+                        else {}
+                    ),
+                },
             )
-            if fast_chat:
-                if command_body and fast_chat.get("answer"):
-                    command_response = self.repository.save_merchant_ceo_command(
+            attempt_recovery_state: dict[str, Any] = {
+                "terminal": False,
+                "actual_task_id": "",
+                "usage_consumed": False,
+                "metered_model_client": None,
+                "model_usage": {},
+                "chat": {},
+                "metered_task_factory": None,
+                "model_usage_persister": None,
+                "platform_trial_reservation": {},
+                "platform_trial_reservation_settlement": {},
+                "failure_stage": "dependency_resolution",
+                "attempt_failure_state": "failed_internal_dependency",
+                "attempt_failure_code": "internal_dependency_failed",
+            }
+
+            def settle_platform_trial_for_usage(model_usage: dict[str, Any] | None) -> dict[str, Any]:
+                usage = model_usage if isinstance(model_usage, dict) else {}
+                request_count = max(0, int(usage.get("request_count") or 0))
+                if attempt_recovery_state.get("usage_consumed") is True and request_count <= 0:
+                    request_count = 1
+                try:
+                    settlement = self._settle_platform_model_trial_reservation(
+                        identity=identity,
+                        reservation=attempt_recovery_state.get("platform_trial_reservation"),
+                        request_count=request_count,
+                    )
+                except Exception:
+                    settlement = {
+                        "settled": False,
+                        "status": "settlement_failed",
+                        "provider_request_count": request_count,
+                        "secret_exposed": False,
+                    }
+                attempt_recovery_state["platform_trial_reservation_settlement"] = settlement
+                return settlement
+
+            def update_model_attempt(
+                *,
+                attempt_state: str,
+                task_status: str = "running",
+                failure_code: str = "",
+                actual_task_id: str = "",
+                artifact_outcome: str = "not_requested",
+                artifact_report_id: str = "",
+                usage_consumed: bool = False,
+                summary: str,
+            ) -> dict[str, Any]:
+                updated_attempt = self.repository.update_task_status(
+                    task_id=attempt["task_id"],
+                    company_id=identity["company_id"],
+                    status=task_status,
+                    output=build_ai_ceo_attempt_output(
+                        attempt_state=attempt_state,
+                        failure_code=failure_code,
+                        actual_task_id=actual_task_id,
+                        artifact_outcome=artifact_outcome,
+                        artifact_report_id=artifact_report_id,
+                        usage_consumed=usage_consumed,
+                    ),
+                    audit_summary=summary,
+                )
+                if actual_task_id:
+                    attempt_recovery_state["actual_task_id"] = actual_task_id
+                if usage_consumed:
+                    attempt_recovery_state["usage_consumed"] = True
+                if task_status in {"blocked", "completed", "failed"}:
+                    attempt_recovery_state["terminal"] = True
+                return updated_attempt
+
+            def recover_unexpected_model_attempt(_exc: Exception) -> bool:
+                """Fail closed without leaking an internal exception or stranding the attempt."""
+                nonlocal semantic_status
+                semantic_status = "blocked"
+                if attempt_recovery_state.get("terminal") is True:
+                    return True
+                model_usage = (
+                    attempt_recovery_state.get("model_usage")
+                    if isinstance(attempt_recovery_state.get("model_usage"), dict)
+                    else {}
+                )
+                metered_client = attempt_recovery_state.get("metered_model_client")
+                if not model_usage and metered_client is not None:
+                    try:
+                        model_usage = metered_client.usage_summary()
+                    except Exception:
+                        model_usage = {}
+                usage_consumed = bool(
+                    attempt_recovery_state.get("usage_consumed")
+                    or int((model_usage or {}).get("request_count") or 0) > 0
+                )
+                settlement = settle_platform_trial_for_usage(model_usage)
+                actual_task_id = str(attempt_recovery_state.get("actual_task_id") or "")
+                actual_task: dict[str, Any] | None = None
+                if usage_consumed and not actual_task_id:
+                    metered_task_factory = attempt_recovery_state.get("metered_task_factory")
+                    if callable(metered_task_factory):
+                        try:
+                            actual_task = metered_task_factory()
+                            actual_task_id = str((actual_task or {}).get("task_id") or "")
+                            if actual_task_id:
+                                attempt_recovery_state["actual_task_id"] = actual_task_id
+                        except Exception:
+                            actual_task = None
+                elif actual_task_id:
+                    try:
+                        actual_task = self.repository.get_task(
+                            company_id=identity["company_id"],
+                            task_id=actual_task_id,
+                        )
+                    except Exception:
+                        actual_task = None
+                if usage_consumed and actual_task_id:
+                    model_usage_persister = attempt_recovery_state.get("model_usage_persister")
+                    if callable(model_usage_persister):
+                        try:
+                            model_usage_persister(actual_task or {"task_id": actual_task_id})
+                        except Exception:
+                            pass
+                failure_stage = re.sub(
+                    r"[^a-z0-9_]",
+                    "",
+                    str(attempt_recovery_state.get("failure_stage") or "internal_dependency").lower(),
+                )[:80] or "internal_dependency"
+                attempt_failure_state = str(
+                    attempt_recovery_state.get("attempt_failure_state") or "failed_internal_dependency"
+                )
+                attempt_failure_code = str(
+                    attempt_recovery_state.get("attempt_failure_code") or "internal_dependency_failed"
+                )
+                provider_failure_codes = {
+                    "empty_model_answer", "model_network_or_timeout", "model_rate_limited",
+                    "model_provider_temporary_error", "model_auth_or_permission_error",
+                    "model_quota_or_billing_limited", "model_provider_error", "model_runtime_failed",
+                }
+                error_type = (
+                    (attempt_failure_code if attempt_failure_code in provider_failure_codes else "model_provider_failed")
+                    if failure_stage == "model_provider"
+                    else re.sub(r"[^A-Za-z0-9_]", "", _exc.__class__.__name__)[:80] or "InternalError"
+                )
+                public_failure_status = (
+                    "model_call_failed"
+                    if attempt_failure_state == "failed_model_provider"
+                    else "internal_dependency_failed"
+                )
+                try:
+                    self.repository.write_audit(
                         company_id=identity["company_id"],
                         store_id=store_id,
                         user_id=identity["user_id"],
-                        command={
-                            **command_body,
-                            "ai_reply": fast_chat.get("answer"),
-                            "ai_reply_status": fast_chat.get("status"),
-                            "ai_reply_model": fast_chat.get("model_client"),
-                            "route": fast_chat.get("route"),
-                            "route_label": fast_chat.get("route_label"),
-                            "memory_policy": fast_chat.get("memory_policy"),
-                            "long_term_memory": fast_chat.get("long_term_memory"),
-                            "writes_merchant_rule": fast_chat.get("writes_merchant_rule"),
-                            "decision_center_required": fast_chat.get("decision_center_required"),
-                        },
-                    )
-                task = self.repository.create_task(
-                    company_id=identity["company_id"],
-                    store_id=store_id,
-                    user_id=identity["user_id"],
-                    task_type="merchant_ceo_chat",
-                    title="AI CEO fast chat turn",
-                    input_data={
-                        "message": message,
-                        "command_id": (command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
-                        "route": fast_chat.get("route"),
-                        "route_label": fast_chat.get("route_label"),
-                        "memory_policy": fast_chat.get("memory_policy"),
-                        "decision_center_required": bool(fast_chat.get("decision_center_required")),
-                        "model_secret_ref": "",
-                        "provider_key": "fast_route",
-                        "model_usage_required": False,
-                        "frontend_gets_model_api_key": False,
-                        "runtime_gets_raw_ebay_token": False,
-                        "real_platform_writes_enabled": False,
-                        "secret_exposed": False,
-                    },
-                )
-                completed_statuses = {
-                    "capability_status_answered",
-                    "local_clock_answered",
-                    "realtime_search_answered",
-                    "realtime_search_answered_without_model",
-                }
-                self.repository.update_task_status(
-                    task_id=task["task_id"],
-                    company_id=identity["company_id"],
-                    status="completed" if fast_chat.get("status") in completed_statuses else "blocked",
-                    output={"ai_ceo_chat": fast_chat, "secret_exposed": False},
-                    audit_summary="AI CEO fast chat turn completed before model secret resolution.",
-                )
-                ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
-                    task=task,
-                    message=message,
-                    chat=fast_chat,
-                    command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
-                    conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
-                )
-                ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
-                send_chat_payload(
-                    {
-                        "ai_ceo_chat": fast_chat,
-                        "merchant_ceo_command": command_response,
-                        "ai_ceo_market_report": ai_ceo_market_report,
-                        "ai_ceo_market_report_delivery": ai_ceo_market_report_delivery,
-                        "model_secret_resolution": {
-                            "status": "not_required_for_fast_route",
-                            "frontend_gets_model_api_key": False,
+                        actor_type="system",
+                        action_type="ai_ceo.attempt.internal_failure",
+                        target_type="task",
+                        target_id=attempt["task_id"],
+                        summary="AI CEO attempt failed at a categorized internal boundary.",
+                        details={
+                            "stage": failure_stage,
+                            "error_type": error_type,
+                            "usage_consumed": usage_consumed,
                             "secret_exposed": False,
                         },
-                        "frontend_gets_model_api_key": False,
-                        "runtime_gets_raw_ebay_token": False,
+                    )
+                except Exception:
+                    pass
+                if actual_task_id:
+                    try:
+                        self.repository.update_task_status(
+                            task_id=actual_task_id,
+                            company_id=identity["company_id"],
+                            status="failed",
+                            output={
+                                "ai_ceo_chat": {
+                                    "status": public_failure_status,
+                                    "blocked_by": [attempt_failure_code],
+                                    "secret_exposed": False,
+                                },
+                                "usage_consumed": usage_consumed,
+                                "model_request_count": int(model_usage.get("request_count") or 0),
+                                "semantic_dispatch": dispatch_receipt(),
+                                "secret_exposed": False,
+                            },
+                            audit_summary="AI CEO model task failed at a categorized boundary.",
+                        )
+                    except Exception:
+                        pass
+                try:
+                    update_model_attempt(
+                        attempt_state=attempt_failure_state,
+                        task_status="failed",
+                        failure_code=attempt_failure_code,
+                        actual_task_id=actual_task_id,
+                        usage_consumed=usage_consumed,
+                        summary="AI CEO attempt failed at an internal dependency boundary.",
+                    )
+                except Exception:
+                    pass
+                zero_request_quota_released = str(settlement.get("status") or "") in {
+                    "released",
+                    "unmetered",
+                }
+                answer = (
+                    "模型调用已经发生，但没有返回可用结果或后续内部记录没有完成；本次未生成草稿，请勿立即重复提交，稍后查看任务记录。"
+                    if usage_consumed
+                    else (
+                        "内部依赖暂时不可用；本次未调用模型、未消耗次数、未生成草稿，请稍后重试。"
+                        if zero_request_quota_released
+                        else "内部依赖暂时不可用；本次未调用模型、未生成草稿，试用次数状态正在核对，请稍后查看。"
+                    )
+                )
+                if usage_consumed and attempt_failure_code == "empty_model_answer":
+                    answer = "模型没有返回可用正文，本次未生成调研报告或草稿。调用用量已记录，已有商品资料不受影响；无需重新填写密钥，可以稍后重试本次请求。"
+                try:
+                    send_chat_payload(
+                        {
+                            "ai_ceo_chat": {
+                                "status": public_failure_status,
+                                "blocked_by": [attempt_failure_code],
+                                "answer": answer,
+                                **route_meta,
+                                "frontend_gets_model_api_key": False,
+                                "runtime_gets_raw_ebay_token": False,
+                                "secret_exposed": False,
+                            },
+                            "merchant_ceo_command": command_response,
+                            "usage_consumed": usage_consumed,
+                            "listing_created": False,
+                            "ai_ceo_market_report": None,
+                            "ai_ceo_market_report_delivery": None,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                except Exception:
+                    pass
+                return True
+
+            self._active_ai_ceo_attempt_recovery = recover_unexpected_model_attempt
+
+            def send_database_schema_blocked_attempt() -> None:
+                reservation_record = attempt_recovery_state.get("platform_trial_reservation")
+                reservation_id = (
+                    str(reservation_record.get("reservation_id") or "")
+                    if isinstance(reservation_record, dict)
+                    else ""
+                )
+                settlement_record = attempt_recovery_state.get("platform_trial_reservation_settlement")
+                settlement_status = (
+                    str(settlement_record.get("status") or "")
+                    if isinstance(settlement_record, dict)
+                    else ""
+                )
+                quota_released = not reservation_id or settlement_status in {"released", "unmetered"}
+                update_model_attempt(
+                    attempt_state="blocked_database_schema",
+                    task_status="blocked",
+                    failure_code="database_schema_unavailable",
+                    summary="AI CEO attempt was blocked by the database schema dependency.",
+                )
+                send_chat_payload(
+                    {
+                        "ai_ceo_chat": {
+                            "status": "blocked_before_model_chat",
+                            "blocked_by": ["database_schema_unavailable"],
+                            "answer": (
+                                "数据库结构检查未通过，本次未调用模型、未消耗次数、未生成草稿。请稍后重试。"
+                                if quota_released
+                                else "数据库结构检查未通过，本次未调用模型、未生成草稿，试用次数状态正在核对。请稍后查看。"
+                            ),
+                            **route_meta,
+                            "frontend_gets_model_api_key": False,
+                            "runtime_gets_raw_ebay_token": False,
+                            "secret_exposed": False,
+                        },
+                        "merchant_ceo_command": command_response,
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
                         "real_platform_writes_enabled": False,
                         "secret_exposed": False,
                     },
-                    status=HTTPStatus.CREATED if fast_chat.get("status") in completed_statuses else HTTPStatus.ACCEPTED,
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
                 )
+
+            update_model_attempt(
+                attempt_state="resolving_dependencies",
+                summary="AI CEO attempt is resolving backend model dependencies.",
+            )
+            attempt_recovery_state["failure_stage"] = "model_connection"
+            try:
+                model_secret_resolution = self._resolve_model_client_for_store(
+                    identity=identity,
+                    store_id=store_id,
+                    body={**body, "ai_ceo_turn_plan": turn_plan},
+                )
+            except Exception as exc:
+                if not self._is_database_unavailable_exception(exc):
+                    raise
+                send_database_schema_blocked_attempt()
                 return
-            model_secret_resolution = self._resolve_model_client_for_store(identity=identity, store_id=store_id, body=body)
             if model_secret_resolution.get("status") != "resolved":
                 blockers = model_secret_resolution.get("blocked_by") or [model_secret_resolution.get("status") or "model_secret_not_resolved"]
                 blocker_set = set(str(item) for item in blockers)
+                update_model_attempt(
+                    attempt_state="blocked_model_connection",
+                    task_status="blocked",
+                    failure_code=_ai_ceo_attempt_failure_code(blockers, "model_secret_not_resolved"),
+                    summary="AI CEO model dependency attempt blocked before model usage.",
+                )
                 if {"merchant_model_api_key_not_saved", "platform_model_default_not_configured"}.issubset(blocker_set):
                     blocked_answer = (
                         "AI CEO 这次还不能生成完整回复：当前账号还没有保存自己的 AI 连接，"
                         "捷境试用 AI 当前也未开通。你可以到设置里的 AI 与素材保存 DeepSeek/OpenAI 连接；"
                         "普通公开来源搜索已接入，但没有可用文本 AI 时不会冒充完整模型回答。"
+                        "本次未调用模型、未消耗次数、未生成草稿。"
                     )
                 else:
                     blocked_answer = (
                         "AI 连接暂时不可用。这次没有拿到可展示回复。"
                         "你可以稍后重试，或到设置里的 AI 与素材查看连接状态；"
                         "不要重复保存连接信息，除非页面明确提示连接已失效。"
+                        "本次未调用模型、未消耗次数、未生成草稿。"
                     )
                 send_chat_payload(
                     {
@@ -6073,9 +8588,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         },
                         "merchant_ceo_command": command_response,
                         "platform_model_resolution": model_secret_resolution.get("platform_model_resolution") or {},
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
                         "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
                     },
-                    status=HTTPStatus.ACCEPTED,
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
                 )
                 return
             model_resolution_mode = str(model_secret_resolution.get("mode") or "")
@@ -6084,10 +8604,80 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if model_resolution_mode == "platform_managed_default"
                 else "ai_ceo_task"
             )
-            if not self._require_quota(identity, quota_action):
+            quota_block_state: dict[str, Any] = {}
+
+            def block_model_attempt_for_subscription_quota(evaluation: dict[str, Any]) -> None:
+                quota_block_state["evaluation"] = evaluation
+                update_model_attempt(
+                    attempt_state="blocked_quota",
+                    task_status="blocked",
+                    failure_code=_ai_ceo_attempt_failure_code(
+                        [evaluation.get("reason"), evaluation.get("blocked_by")],
+                        "subscription_quota_blocked",
+                    ),
+                    summary="AI CEO attempt was blocked by subscription quota before model usage.",
+                )
+
+            attempt_recovery_state["failure_stage"] = "quota_check"
+            try:
+                quota_allowed = self._require_quota(
+                    identity,
+                    quota_action,
+                    on_block=block_model_attempt_for_subscription_quota,
+                    extra_response={
+                        "message": "当前套餐或额度暂时不能继续。本次未调用模型、未消耗次数、未生成草稿。",
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                    },
+                    send_response=False,
+                )
+            except Exception as exc:
+                if not self._is_database_unavailable_exception(exc):
+                    raise
+                send_database_schema_blocked_attempt()
                 return
+            if not quota_allowed:
+                send_chat_payload(
+                    {
+                        "error": "quota exhausted",
+                        "status": int(HTTPStatus.PAYMENT_REQUIRED),
+                        "quota": quota_block_state.get("evaluation") or {},
+                        "message": "当前套餐或额度暂时不能继续。本次未调用模型、未消耗次数、未生成草稿。",
+                        "ai_ceo_chat": {
+                            "status": "blocked_before_model_chat",
+                            "answer": "当前套餐或额度暂时不能继续。本次未调用模型、未消耗次数、未生成草稿。",
+                            "route": "ebay_workflow",
+                            "route_label": "套餐与额度",
+                            "source_records": [],
+                            "work_records": [],
+                            "confirmation_items": [],
+                            "blocked_by": ["subscription_quota_blocked"],
+                        },
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.PAYMENT_REQUIRED,
+                )
+                return
+            update_model_attempt(
+                attempt_state="quota_checked",
+                summary="AI CEO attempt passed subscription quota checks.",
+            )
             if model_secret_resolution.get("mode") == "platform_managed_default":
-                platform_trial_quota = self._platform_model_trial_quota(identity=identity)
+                attempt_recovery_state["failure_stage"] = "platform_trial_quota"
+                try:
+                    platform_trial_quota = self._platform_model_trial_quota(identity=identity)
+                except Exception as exc:
+                    if not self._is_database_unavailable_exception(exc):
+                        raise
+                    send_database_schema_blocked_attempt()
+                    return
                 model_secret_resolution["platform_trial_quota"] = platform_trial_quota
                 if not platform_trial_quota.get("allowed"):
                     trial_blocker = str(
@@ -6108,6 +8698,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "当前账号的 20 次捷境 AI 免费体验额度已用完。"
                             "你可以在设置中连接自己的 DeepSeek 或 OpenAI；软件套餐和素材点仍分别管理。"
                         )
+                    trial_answer = f"{trial_answer} 本次未调用模型、未消耗次数、未生成草稿。"
+                    update_model_attempt(
+                        attempt_state="blocked_quota",
+                        task_status="blocked",
+                        failure_code=trial_blocker,
+                        summary="AI CEO attempt was blocked by platform trial quota before model usage.",
+                    )
                     send_chat_payload(
                         {
                             "ai_ceo_chat": {
@@ -6131,85 +8728,95 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                 for key, value in model_secret_resolution.items()
                                 if key not in {"model_client", "secret_value"}
                             },
+                            "usage_consumed": False,
+                            "listing_created": False,
+                            "ai_ceo_market_report": None,
+                            "ai_ceo_market_report_delivery": None,
                             "real_platform_writes_enabled": False,
                             "secret_exposed": False,
                         },
                         status=HTTPStatus.PAYMENT_REQUIRED,
                     )
                     return
-            metered_model_client = MeteredModelClient(model_secret_resolution["model_client"])
-            chat = run_ai_ceo_chat(
-                repository=self.repository,
-                company_id=identity["company_id"],
-                store_id=store_id,
-                user_id=identity["user_id"],
-                message=message,
-                model_client=metered_model_client,
-                client_now=str(body.get("client_now") or ""),
-                client_timezone=str(body.get("client_timezone") or ""),
-                command=command_body,
-                conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
-                model_resolution={
-                    key: value
-                    for key, value in model_secret_resolution.items()
-                    if key not in {"model_client", "secret_value"}
-                },
-                on_stage=emit_chat_stage if stream_requested else None,
-                on_text_delta=emit_text_delta if stream_requested else None,
-            )
-            if command_body and chat.get("answer"):
-                command_response = self.repository.save_merchant_ceo_command(
+            product_vision_fact_packet: dict[str, Any] | None = None
+            product_vision_report: dict[str, Any] | None = None
+            product_vision_task: dict[str, Any] | None = None
+
+            metered_task_id = "task_" + hashlib.sha256(
+                f"ai-ceo-model-task|{identity['company_id']}|{attempt['task_id']}".encode("utf-8")
+            ).hexdigest()[:24]
+
+            def ensure_metered_model_task() -> dict[str, Any]:
+                chat_for_task = (
+                    attempt_recovery_state.get("chat")
+                    if isinstance(attempt_recovery_state.get("chat"), dict)
+                    else {}
+                )
+                return self.repository.create_task(
                     company_id=identity["company_id"],
                     store_id=store_id,
                     user_id=identity["user_id"],
-                    command={
-                        **command_body,
-                        "ai_reply": chat.get("answer"),
-                        "ai_reply_status": chat.get("status"),
-                        "ai_reply_model": chat.get("model_client"),
-                        "route": chat.get("route"),
-                        "route_label": chat.get("route_label"),
-                        "memory_policy": chat.get("memory_policy"),
-                        "long_term_memory": chat.get("long_term_memory"),
-                        "writes_merchant_rule": chat.get("writes_merchant_rule"),
-                        "decision_center_required": chat.get("decision_center_required"),
+                    task_type="merchant_ceo_chat",
+                    title="AI CEO chat turn",
+                    task_id=metered_task_id,
+                    input_data={
+                        "message": message,
+                        "command_id": (
+                            (command_response or {}).get("command", {}).get("id")
+                            if isinstance(command_response, dict)
+                            else ""
+                        ),
+                        "attempt_task_id": attempt["task_id"],
+                        "route": chat_for_task.get("route") or route_meta.get("route"),
+                        "route_label": chat_for_task.get("route_label") or route_meta.get("route_label"),
+                        "turn_plan": _redact_secret_like(turn_plan),
+                        "memory_policy": chat_for_task.get("memory_policy") or "transient_no_long_term_memory",
+                        "decision_center_required": bool(chat_for_task.get("decision_center_required")),
+                        **(
+                            {"listing_project_identity": listing_project_identity}
+                            if listing_project_identity
+                            else {}
+                        ),
+                        "model_secret_ref": model_secret_resolution.get("secret_ref"),
+                        "model_resolution_mode": model_secret_resolution.get("mode"),
+                        "model_secret_ref_scope": model_secret_resolution.get("secret_ref_scope"),
+                        "model_usage_owner": (
+                            "merchant_account_byok"
+                            if model_secret_resolution.get("merchant_pays_provider_directly")
+                            else "jiejing_platform_trial"
+                            if model_secret_resolution.get("mode") == "platform_managed_default"
+                            else "unknown"
+                        ),
+                        "platform_trial_quota": model_secret_resolution.get("platform_trial_quota") or {},
+                        "provider_key": model_secret_resolution.get("provider_key"),
+                        "model_tier": model_secret_resolution.get("model_tier") or turn_plan.get("model_tier"),
+                        "reasoning_mode": model_secret_resolution.get("reasoning_mode") or "disabled",
+                        "product_vision_task_id": str((product_vision_task or {}).get("task_id") or ""),
+                        "product_vision_report_id": str((product_vision_report or {}).get("report_id") or ""),
+                        "product_vision_source_asset_count": len(source_asset_ids),
+                        "signed_source_urls_persisted": False,
+                        "model_usage_required": True,
+                        "frontend_gets_model_api_key": False,
+                        "runtime_gets_raw_ebay_token": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
                     },
                 )
-            task = self.repository.create_task(
-                company_id=identity["company_id"],
-                store_id=store_id,
-                user_id=identity["user_id"],
-                task_type="merchant_ceo_chat",
-                title="AI CEO chat turn",
-                input_data={
-                    "message": message,
-                    "command_id": (command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
-                    "route": chat.get("route"),
-                    "route_label": chat.get("route_label"),
-                    "memory_policy": chat.get("memory_policy"),
-                    "decision_center_required": bool(chat.get("decision_center_required")),
-                    "model_secret_ref": model_secret_resolution.get("secret_ref"),
-                    "model_resolution_mode": model_secret_resolution.get("mode"),
-                    "model_secret_ref_scope": model_secret_resolution.get("secret_ref_scope"),
-                    "model_usage_owner": (
-                        "merchant_account_byok"
-                        if model_secret_resolution.get("merchant_pays_provider_directly")
-                        else "jiejing_platform_trial"
-                        if model_secret_resolution.get("mode") == "platform_managed_default"
-                        else "unknown"
-                    ),
-                    "platform_trial_quota": model_secret_resolution.get("platform_trial_quota") or {},
-                    "provider_key": model_secret_resolution.get("provider_key"),
-                    "model_usage_required": True,
-                    "frontend_gets_model_api_key": False,
-                    "runtime_gets_raw_ebay_token": False,
-                    "real_platform_writes_enabled": False,
-                    "secret_exposed": False,
-                },
-            )
-            model_usage = metered_model_client.usage_summary()
-            model_reliability = metered_model_client.reliability_summary()
-            if model_usage.get("request_count"):
+
+            def persist_metered_model_usage(task_for_usage: dict[str, Any]) -> None:
+                model_usage_for_task = (
+                    attempt_recovery_state.get("model_usage")
+                    if isinstance(attempt_recovery_state.get("model_usage"), dict)
+                    else {}
+                )
+                if int(model_usage_for_task.get("request_count") or 0) <= 0:
+                    return
+                metered_client_for_task = attempt_recovery_state.get("metered_model_client")
+                reliability = (
+                    metered_client_for_task.reliability_summary()
+                    if metered_client_for_task is not None
+                    else {}
+                )
                 usage_owner = (
                     "merchant_account_byok"
                     if model_secret_resolution.get("merchant_pays_provider_directly")
@@ -6217,29 +8824,372 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     if model_secret_resolution.get("mode") == "platform_managed_default"
                     else "unknown"
                 )
-                cost_measurement = model_cost_measurement(usage_owner=usage_owner, usage=model_usage)
+                cost_measurement = model_cost_measurement(usage_owner=usage_owner, usage=model_usage_for_task)
+                self.repository.record_model_usage(
+                    company_id=identity["company_id"],
+                    user_id=identity["user_id"],
+                    task_id=task_for_usage["task_id"],
+                    usage_owner=usage_owner,
+                    model_family=str(model_secret_resolution.get("provider_key") or "provider_neutral"),
+                    model_label=str(
+                        model_secret_resolution.get("model")
+                        or getattr(metered_client_for_task, "model", "")
+                    ),
+                    request_count=int(model_usage_for_task.get("request_count") or 0),
+                    input_tokens=int(model_usage_for_task.get("input_tokens") or 0),
+                    output_tokens=int(model_usage_for_task.get("output_tokens") or 0),
+                    total_tokens=int(model_usage_for_task.get("total_tokens") or 0),
+                    cost_minor=int(cost_measurement.get("cost_minor") or 0),
+                    currency=str(cost_measurement.get("currency") or "CNY"),
+                    cost_status=str(cost_measurement.get("cost_status") or "unavailable"),
+                    idempotency_key=f"{task_for_usage['task_id']}:model-usage:v1",
+                    details={
+                        "provider_reported_tokens": bool(model_usage_for_task.get("total_tokens")),
+                        "retry_calls_included": True,
+                        "reliability": reliability,
+                    },
+                )
+
+            attempt_recovery_state["metered_task_factory"] = ensure_metered_model_task
+            attempt_recovery_state["model_usage_persister"] = persist_metered_model_usage
+            if model_secret_resolution.get("mode") == "platform_managed_default":
+                attempt_recovery_state["failure_stage"] = "platform_trial_reservation"
                 try:
-                    self.repository.record_model_usage(
-                        company_id=identity["company_id"],
-                        user_id=identity["user_id"],
-                        task_id=task["task_id"],
-                        usage_owner=usage_owner,
-                        model_family=str(model_secret_resolution.get("provider_key") or "provider_neutral"),
-                        model_label=str(model_secret_resolution.get("model") or getattr(metered_model_client, "model", "")),
-                        request_count=int(model_usage.get("request_count") or 0),
-                        input_tokens=int(model_usage.get("input_tokens") or 0),
-                        output_tokens=int(model_usage.get("output_tokens") or 0),
-                        total_tokens=int(model_usage.get("total_tokens") or 0),
-                        cost_minor=int(cost_measurement.get("cost_minor") or 0),
-                        currency=str(cost_measurement.get("currency") or "CNY"),
-                        cost_status=str(cost_measurement.get("cost_status") or "unavailable"),
-                        idempotency_key=f"{task['task_id']}:model-usage:v1",
-                        details={
-                            "provider_reported_tokens": bool(model_usage.get("total_tokens")),
-                            "retry_calls_included": True,
-                            "reliability": model_reliability,
-                        },
+                    platform_trial_reservation = self._reserve_platform_model_trial(
+                        identity=identity,
+                        route_scope="merchant_ceo_chat",
                     )
+                    attempt_recovery_state["platform_trial_reservation"] = platform_trial_reservation
+                except Exception as exc:
+                    if not self._is_database_unavailable_exception(exc):
+                        raise
+                    send_database_schema_blocked_attempt()
+                    return
+                platform_trial_quota = platform_trial_reservation.get("quota") or {}
+                model_secret_resolution["platform_trial_quota"] = platform_trial_quota
+                if platform_trial_reservation.get("allowed") is not True:
+                    trial_blocker = str(
+                        platform_trial_quota.get("blocked_by") or "platform_default_model_trial_exhausted"
+                    )
+                    trial_answer = (
+                        "当前账号已注册，但捷境提供的 AI 试用尚未激活；你也可以在设置中连接自己的模型。"
+                        if trial_blocker == "platform_trial_activation_required"
+                        else "当前账号的捷境 AI 免费体验已到期；你可以在设置中连接自己的模型，已有资料和历史结果会保留。"
+                        if trial_blocker == "platform_default_model_trial_expired"
+                        else "当前账号的捷境 AI 免费体验额度已用完；你也可以在设置中连接自己的模型。"
+                        if trial_blocker == "platform_default_model_trial_exhausted"
+                        else "捷境 AI 试用当前暂不可用；请刷新状态或在设置中连接自己的模型。"
+                    )
+                    trial_answer = f"{trial_answer} 本次未调用模型、未消耗新的次数、未生成草稿。"
+                    update_model_attempt(
+                        attempt_state="blocked_quota",
+                        task_status="blocked",
+                        failure_code=trial_blocker,
+                        summary="AI CEO attempt lost the atomic platform trial reservation before model usage.",
+                    )
+                    send_chat_payload(
+                        {
+                            "ai_ceo_chat": {
+                                "status": "blocked_before_model_chat",
+                                "blocked_by": [trial_blocker],
+                                "answer": trial_answer,
+                                **route_meta,
+                                "model_secret_resolution": {
+                                    key: value
+                                    for key, value in model_secret_resolution.items()
+                                    if key not in {"model_client", "secret_value"}
+                                },
+                                "platform_trial_quota": platform_trial_quota,
+                                "frontend_gets_model_api_key": False,
+                                "runtime_gets_raw_ebay_token": False,
+                                "secret_exposed": False,
+                            },
+                            "merchant_ceo_command": command_response,
+                            "model_secret_resolution": {
+                                key: value
+                                for key, value in model_secret_resolution.items()
+                                if key not in {"model_client", "secret_value"}
+                            },
+                            "usage_consumed": False,
+                            "listing_created": False,
+                            "ai_ceo_market_report": None,
+                            "ai_ceo_market_report_delivery": None,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.PAYMENT_REQUIRED,
+                    )
+                    return
+            update_model_attempt(
+                attempt_state="model_running",
+                summary="AI CEO attempt entered the backend model boundary.",
+            )
+            attempt_recovery_state["failure_stage"] = "model_provider"
+            try:
+                metered_model_client = MeteredModelClient(model_secret_resolution["model_client"])
+                attempt_recovery_state["metered_model_client"] = metered_model_client
+                # Planning is the first provider call inside the existing
+                # reservation/metering boundary. No product effects precede it.
+                try:
+                    turn_plan = plan_ai_ceo_turn(
+                        model_client=metered_model_client, message=message,
+                        conversation_history=conversation_history,
+                        active_listing_context=verified_listing_context,
+                        has_source_assets=bool(source_asset_ids),
+                    )
+                except SemanticPlanError as exc:
+                    plan_error = str(exc)
+                    turn_plan = {**pending_semantic_plan(), "status": "blocked",
+                                 "blocked_by": [plan_error]}
+                    chat = {"status": "semantic_plan_blocked", "blocked_by": [plan_error],
+                            "answer": "这次未能可靠确认你的任务和商品目标，原商品资料保持不变。请稍后重试。",
+                            **route_meta, "turn_plan": turn_plan}
+                else:
+                    route_meta = ai_ceo_route_metadata(
+                        message, route=str(turn_plan.get("route") or "general_chat"),
+                        realtime_kind=str(turn_plan.get("realtime_kind") or ""),
+                    )
+                    if turn_plan.get("status") == "clarification_required":
+                        semantic_status = "clarification_required"
+                        chat = {"status": "semantic_clarification_required",
+                                "answer": turn_plan.get("question"), **route_meta,
+                                "turn_plan": turn_plan, "blocked_by": turn_plan.get("blocked_by") or []}
+                    else:
+                        action = str(turn_plan.get("project_action") or "none")
+                        if action == "current":
+                            # Recheck the full scope after the planning latency.
+                            active_listing_context = self.repository.resolve_ai_ceo_listing_context(
+                                company_id=identity["company_id"], store_id=store_id,
+                                identity=submitted_identity,
+                            )
+                            if not active_listing_context:
+                                raise SemanticPlanError("semantic_current_project_unavailable")
+                            listing_project_identity = submitted_identity
+                        elif action == "new":
+                            listing_project_identity = new_project_identity(
+                                company_id=identity["company_id"], store_id=store_id,
+                                request_task_id=str(request_task["task_id"]),
+                            )
+                            active_listing_context = {}
+                            conversation_history = []
+                            supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
+                                supplier_facts={}, supplier_facts_verified=False,
+                                source="authenticated_merchant_request",
+                            )
+                        else:
+                            active_listing_context = {}
+                            listing_project_identity = {}
+                        active_listing_product_name = str(
+                            active_listing_context.get("product_name") or turn_plan.get("product_name") or ""
+                        )[:120]
+                        if turn_plan.get("read_images") is True:
+                            emit_chat_stage("sources")
+                            product_vision_task = self.repository.create_task(
+                                company_id=identity["company_id"], store_id=store_id,
+                                user_id=identity["user_id"], task_type="ai_ceo_product_vision",
+                                title=f"AI CEO 商品图片识别（{len(source_asset_ids)} 张）",
+                                input_data={"contract_version": "jiejing_ai_ceo_product_vision_intake_v1",
+                                    "source_assets": product_vision_assets, "source_asset_count": len(source_asset_ids),
+                                    "provider_key": "fal_vision_backend", "signed_source_urls_persisted": False,
+                                    "real_platform_writes_enabled": False, "secret_exposed": False},
+                            )
+                            try:
+                                vision_analysis = fal_product_vision_client_from_env().analyze(
+                                    image_urls=product_vision_signed_urls, merchant_message=message,
+                                )
+                                product_vision_fact_packet = build_product_vision_fact_packet(
+                                    analysis=vision_analysis, merchant_message=message, source_assets=product_vision_assets,
+                                )
+                                if action == "new":
+                                    product_vision_fact_packet["product_name"] = active_listing_product_name
+                            except ProductVisionError as exc:
+                                self.repository.update_task_status(
+                                    task_id=product_vision_task["task_id"], company_id=identity["company_id"],
+                                    status="failed", output={"failure_code": exc.code, "secret_exposed": False},
+                                    audit_summary="Semantic product image extraction failed without a product write.",
+                                )
+                                raise
+                            self.repository.update_task_status(
+                                task_id=product_vision_task["task_id"], company_id=identity["company_id"],
+                                status="completed", output={"usage": vision_analysis.get("usage") or {},
+                                    "provider_key": "fal_vision_backend", "fact_packet_saved": False,
+                                    "secret_exposed": False},
+                                audit_summary="Semantic product image extraction completed; product persistence awaits the answer.",
+                            )
+                            consumed_source_asset_ids = list(source_asset_ids)
+                        simulation_already_protected = (
+                            turn_plan.get("project_action") == "current"
+                            and bool(active_listing_context.get("fact_report_id"))
+                            and (active_listing_context.get("merchant_product_fact_packet") or {}).get("simulation_only") is True
+                        )
+                        # A repeated restriction is not fresh product intake.
+                        # Persistence still rechecks the current fact version
+                        # under the repository lock after the answer succeeds.
+                        if turn_plan.get("product_fact_proposals") or (turn_plan.get("simulation_request")
+                                and (product_vision_fact_packet or not simulation_already_protected)):
+                            proposal_base = product_vision_fact_packet or new_project_fact_packet(active_listing_product_name)
+                            if (turn_plan.get("simulation_request") and not product_vision_fact_packet
+                                    and turn_plan.get("project_action") == "current"):
+                                # This turn is text intake, not another vision
+                                # call. The locked merge preserves prior image
+                                # evidence/records without claiming consumption.
+                                proposal_base = {**(active_listing_context.get("merchant_product_fact_packet") or proposal_base),
+                                    "source": "backend_semantic_product_proposals", "vision_contract_version": "", "vision_usage": {},
+                                    "derived_listing_suggestions": {}, "source_records": [],
+                                    "field_evidence": {}, "fact_conflicts": []}
+                            product_vision_fact_packet = merge_product_fact_proposals(
+                                proposal_base, turn_plan["product_fact_proposals"],
+                                simulation_request=turn_plan.get("simulation_request"),
+                            )
+                        chat = attach_supplier_fact_attestation(run_ai_ceo_chat(
+                            repository=self.repository, company_id=identity["company_id"], store_id=store_id,
+                            user_id=identity["user_id"], message=message, model_client=metered_model_client,
+                            client_now=str(body.get("client_now") or ""),
+                            client_timezone=str(body.get("client_timezone") or ""), command=command_body,
+                            conversation_history=conversation_history, turn_plan=turn_plan,
+                            product_intake_context=(product_vision_prompt_context(product_vision_fact_packet)
+                                                    if product_vision_fact_packet else None),
+                            active_listing_context=active_listing_context,
+                            model_resolution={key: value for key, value in model_secret_resolution.items()
+                                              if key not in {"model_client", "secret_value"}},
+                            on_stage=emit_chat_stage if stream_requested else None,
+                            on_text_delta=emit_text_delta if stream_requested else None,
+                        ))
+                if product_vision_fact_packet:
+                    chat = {
+                        **chat,
+                        "product_intake": product_vision_prompt_context(product_vision_fact_packet),
+                        "source_records": [
+                            *(chat.get("source_records") if isinstance(chat.get("source_records"), list) else []),
+                            *[
+                                {
+                                    "title": f"商家商品图片 {item.get('source_index') or ''}".strip(),
+                                    "url": "",
+                                    "domain": "merchant_upload",
+                                    "snippet": "AI CEO 已读取该图片并形成来源事实；图片商业使用权仍待商家确认。",
+                                    "captured_at": "",
+                                    "source_type": "merchant_product_image",
+                                }
+                                for item in (product_vision_fact_packet.get("source_records") or [])
+                                if item.get("type") == "merchant_product_image"
+                            ],
+                        ][:12],
+                    }
+                attempt_recovery_state["chat"] = chat
+            except Exception as exc:
+                metered_client = attempt_recovery_state.get("metered_model_client")
+                model_usage_after_failure = (
+                    metered_client.usage_summary()
+                    if metered_client is not None
+                    else {}
+                )
+                attempt_recovery_state["model_usage"] = model_usage_after_failure
+                attempt_recovery_state["usage_consumed"] = bool(
+                    int(model_usage_after_failure.get("request_count") or 0) > 0
+                )
+                settlement = settle_platform_trial_for_usage(model_usage_after_failure)
+                if attempt_recovery_state["usage_consumed"]:
+                    attempt_recovery_state["failure_stage"] = "model_provider"
+                    attempt_recovery_state["attempt_failure_state"] = "failed_model_provider"
+                    attempt_recovery_state["attempt_failure_code"] = "model_runtime_failed"
+                    raise
+                if self._is_database_unavailable_exception(exc):
+                    send_database_schema_blocked_attempt()
+                    return
+                update_model_attempt(
+                    attempt_state="failed_model_provider",
+                    task_status="failed",
+                    failure_code="model_runtime_failed",
+                    summary="AI CEO attempt failed inside the backend model provider boundary.",
+                )
+                send_chat_payload(
+                    {
+                        "ai_ceo_chat": {
+                            "status": "model_call_failed",
+                            "blocked_by": ["model_runtime_failed"],
+                            "answer": (
+                                "模型服务本次没有返回可用结果，未消耗次数、未生成草稿。请稍后重试。"
+                                if str(settlement.get("status") or "") in {"released", "unmetered"}
+                                else "模型服务本次没有返回可用结果、未生成草稿，试用次数状态正在核对，请稍后查看。"
+                            ),
+                            **route_meta,
+                            "frontend_gets_model_api_key": False,
+                            "runtime_gets_raw_ebay_token": False,
+                            "secret_exposed": False,
+                        },
+                        "merchant_ceo_command": command_response,
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            provider_failure_code = str(chat.get("provider_error_type") or "")
+            if provider_failure_code:
+                provider_failure_usage = metered_model_client.usage_summary()
+                provider_failure_settlement = settle_platform_trial_for_usage(provider_failure_usage)
+                if int(provider_failure_usage.get("request_count") or 0) > 0:
+                    attempt_recovery_state["model_usage"] = provider_failure_usage
+                    attempt_recovery_state["usage_consumed"] = True
+                    attempt_recovery_state["failure_stage"] = "model_provider"
+                    attempt_recovery_state["attempt_failure_state"] = "failed_model_provider"
+                    attempt_recovery_state["attempt_failure_code"] = provider_failure_code
+                    raise RuntimeError("categorized_model_provider_failure")
+                update_model_attempt(
+                    attempt_state="failed_model_provider",
+                    task_status="failed",
+                    failure_code=provider_failure_code,
+                    summary="AI CEO attempt ended at the model provider boundary without billable task creation.",
+                )
+                chat = {
+                    **chat,
+                    "answer": (
+                        f"{str(chat.get('answer') or '').strip()}\n\n"
+                        +
+                        (
+                            "本次未获得可用模型结果、未消耗次数、未生成草稿。"
+                            if str(provider_failure_settlement.get("status") or "") in {"released", "unmetered"}
+                            else "本次未获得可用模型结果、未生成草稿，试用次数状态正在核对。"
+                        )
+                    ).strip(),
+                }
+                send_chat_payload(
+                    {
+                        "ai_ceo_chat": chat,
+                        "merchant_ceo_command": command_response,
+                        "model_secret_resolution": {
+                            key: value
+                            for key, value in model_secret_resolution.items()
+                            if key not in {"model_client", "secret_value"}
+                        },
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                        "frontend_gets_model_api_key": False,
+                        "runtime_gets_raw_ebay_token": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            model_usage = metered_model_client.usage_summary()
+            usage_consumed = bool(model_usage.get("request_count"))
+            attempt_recovery_state["model_usage"] = model_usage
+            attempt_recovery_state["usage_consumed"] = usage_consumed
+            settle_platform_trial_for_usage(model_usage)
+            attempt_recovery_state["failure_stage"] = "model_task_persistence"
+            task = ensure_metered_model_task()
+            attempt_recovery_state["actual_task_id"] = task["task_id"]
+            if model_usage.get("request_count"):
+                attempt_recovery_state["failure_stage"] = "model_usage_persistence"
+                try:
+                    persist_metered_model_usage(task)
                 except Exception as exc:
                     self.repository.write_audit(
                         company_id=identity["company_id"],
@@ -6252,6 +9202,73 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         summary="Model answer was preserved but internal usage metering did not persist.",
                         details={"error_type": exc.__class__.__name__, "secret_exposed": False},
                     )
+                    raise
+            answer_ready = (
+                turn_plan.get("status") == "ready"
+                and chat.get("status") in {"model_answered", "model_answered_non_live",
+                    "model_answered_with_context_correction", "capability_status_answered",
+                    "local_clock_answered", "realtime_search_answered", "realtime_search_answered_without_model"}
+                and (chat.get("answer_quality") or {}).get("accepted", True) is True
+            )
+            if answer_ready:
+                if turn_plan.get("save_artifact") is not True:
+                    product_vision_fact_packet = None
+                if (turn_plan.get("save_artifact") is True and listing_project_identity
+                        and (turn_plan.get("project_action") == "new" or product_vision_fact_packet
+                             or turn_plan.get("simulation_request"))):
+                    try:
+                        product_vision_report = self.repository.save_ai_ceo_semantic_product_facts(
+                            task=task, packet=product_vision_fact_packet or new_project_fact_packet(active_listing_product_name),
+                            listing_project_identity=listing_project_identity,
+                            expected_fact_report_id=str(active_listing_context.get("fact_report_id") or ""),
+                            new_project=turn_plan.get("project_action") == "new",
+                            simulation_request=turn_plan.get("simulation_request"),
+                            semantic_dispatch={**dispatch_receipt(), "status": "ready",
+                                "target_project_identity": listing_project_identity,
+                                "consumed_source_asset_ids": list(consumed_source_asset_ids),
+                                "workflow_target": str(turn_plan.get("workflow_target") or "")},
+                        )
+                        # None is a version-checked audit-only turn, not a new
+                        # artifact and not permission to rebind an older report.
+                        product_vision_fact_packet = (product_vision_report["report"]["merchant_product_fact_packet"]
+                                                      if product_vision_report else None)
+                        if product_vision_task:
+                            product_vision_task = self.repository.update_task_status(
+                                task_id=product_vision_task["task_id"], company_id=identity["company_id"], status="completed",
+                                output={"provider_key": "fal_vision_backend", "usage": (product_vision_fact_packet or {}).get("vision_usage") or {},
+                                    "fact_packet_saved": True, "report_id": product_vision_report["report_id"], "secret_exposed": False},
+                                audit_summary="Semantic product suggestions saved after answer validation and fact-version comparison.",
+                            )
+                    except ProductFactSaveConflict:
+                        answer_ready = False
+                        chat = {**chat, "status": "semantic_product_version_conflict",
+                            "answer": "商品资料在本次处理中已有更新。这次图片建议没有覆盖新版本，请刷新后继续。",
+                            "blocked_by": ["product_fact_version_conflict"]}
+                if answer_ready:
+                    semantic_status = "ready"
+            chat = {**chat, "semantic_dispatch": dispatch_receipt()}
+            if command_body and chat.get("answer") and answer_ready:
+                attempt_recovery_state["failure_stage"] = "command_persistence"
+                command_response = self.repository.save_merchant_ceo_command(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    command={
+                        "id": command_id,
+                        "text": message,
+                        "created_at": str(command_body.get("created_at") or ""),
+                        "intent": str(turn_plan.get("intent") or "chat"),
+                        "title": active_listing_product_name or str(route_meta.get("route_label") or "AI CEO"),
+                        "summary": "；".join(turn_plan.get("steps") or []),
+                        "status": "confirmation_required" if turn_plan.get("confirmation_required") else "ready",
+                        "high_risk": turn_plan.get("confirmation_required") is True,
+                        "routes": [],
+                        "ai_reply": chat.get("answer"),
+                        "ai_reply_status": chat.get("status"),
+                        "ai_reply_model": chat.get("model_client"),
+                        **route_meta,
+                    },
+                )
             self.repository.update_task_status(
                 task_id=task["task_id"],
                 company_id=identity["company_id"],
@@ -6261,6 +9278,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "capability_status_answered",
                     "model_answered",
                     "model_answered_non_live",
+                    "model_answered_with_context_correction",
                     "local_clock_answered",
                     "realtime_search_answered",
                     "realtime_search_answered_without_model",
@@ -6268,17 +9286,88 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "market_report_recovery_draft",
                 }
                 else "blocked",
-                output={"ai_ceo_chat": chat, "secret_exposed": False},
+                output={
+                    "ai_ceo_chat": chat,
+                    "usage_consumed": usage_consumed,
+                    "model_request_count": int(model_usage.get("request_count") or 0),
+                    "secret_exposed": False,
+                },
                 audit_summary="AI CEO chat turn completed through backend model boundary.",
             )
-            ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
-                task=task,
-                message=message,
-                chat=chat,
-                command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
-                conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
+            update_model_attempt(
+                attempt_state="artifact_validating",
+                actual_task_id=task["task_id"],
+                usage_consumed=usage_consumed,
+                summary="AI CEO attempt is validating the authoritative backend artifact outcome.",
             )
+            artifact_requested = answer_ready and turn_plan.get("save_artifact") is True
+            try:
+                ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
+                    task=task,
+                    message=message,
+                    chat=chat,
+                    command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
+                    conversation_history=conversation_history,
+                    listing_project_identity=listing_project_identity,
+                    active_listing_product_name=active_listing_product_name,
+                    product_fact_report=product_vision_report,
+                ) if artifact_requested else None
+            except Exception as exc:
+                semantic_status = "blocked"
+                update_model_attempt(
+                    attempt_state="failed_artifact_validation",
+                    task_status="failed",
+                    failure_code=(
+                        "database_schema_unavailable"
+                        if self._is_database_unavailable_exception(exc)
+                        else "artifact_save_failed"
+                    ),
+                    actual_task_id=task["task_id"],
+                    artifact_outcome="artifact_save_failed",
+                    usage_consumed=usage_consumed,
+                    summary="AI CEO attempt could not persist the authoritative backend artifact.",
+                )
+                send_chat_payload(
+                    {
+                        "ai_ceo_chat": {
+                            **chat,
+                            "answer": (
+                                f"{str(chat.get('answer') or '').strip()}\n\n"
+                                "模型回复已保留，但市场调研工作记录保存失败，因此未生成可导入 Listing 的草稿。"
+                            ).strip(),
+                        },
+                        "merchant_ceo_command": command_response,
+                        "usage_consumed": usage_consumed,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                        "frontend_gets_model_api_key": False,
+                        "runtime_gets_raw_ebay_token": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
             ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
+            if ai_ceo_market_report:
+                artifact_outcome = (
+                    "saved_import_ready"
+                    if ai_ceo_market_report_delivery
+                    and ai_ceo_market_report_delivery.get("listing_import_ready") is True
+                    else "saved_not_importable"
+                )
+            else:
+                artifact_outcome = "not_eligible" if artifact_requested else "not_requested"
+            update_model_attempt(
+                attempt_state="completed",
+                task_status="completed",
+                actual_task_id=task["task_id"],
+                artifact_outcome=artifact_outcome,
+                artifact_report_id=str((ai_ceo_market_report or {}).get("report_id") or ""),
+                usage_consumed=usage_consumed,
+                summary="AI CEO attempt completed with a recorded model task and artifact outcome.",
+            )
             status = (
                 HTTPStatus.CREATED
                 if chat.get("status")
@@ -6286,6 +9375,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "capability_status_answered",
                     "model_answered",
                     "model_answered_non_live",
+                    "model_answered_with_context_correction",
                     "local_clock_answered",
                     "realtime_search_answered",
                     "realtime_search_answered_without_model",
@@ -6305,6 +9395,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     },
                     "ai_ceo_market_report": ai_ceo_market_report,
                     "ai_ceo_market_report_delivery": ai_ceo_market_report_delivery,
+                    "product_vision_task": product_vision_task,
+                    "product_vision_report": product_vision_report,
+                    "product_vision_fact_packet": product_vision_fact_packet,
+                    "listing_draft_prefill_ready": bool(
+                        product_vision_fact_packet and product_vision_fact_packet.get("ready_for_listing_draft")
+                    ),
+                    "usage_consumed": usage_consumed,
+                    "listing_created": False,
                     "frontend_gets_model_api_key": False,
                     "runtime_gets_raw_ebay_token": False,
                     "real_platform_writes_enabled": False,
@@ -6487,6 +9585,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not original:
                 self._send_error(HTTPStatus.NOT_FOUND, "media asset job not found")
                 return
+            original = _reconcile_media_asset_job_review_readiness(
+                self.repository,
+                company_id=identity["company_id"],
+                media_job=original,
+            ) or original
             if str(original.get("status") or "") in {"pending", "queued", "running", "provider_returned"}:
                 self._send_error(HTTPStatus.CONFLICT, "media asset job is still running and cannot be retried")
                 return
@@ -6528,6 +9631,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "immutable_prior_versions": True,
                 "secret_exposed": False,
             }
+            try:
+                safe_inputs = normalize_media_generation_inputs(safe_inputs)
+            except ValueError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
             provider_job_key = str(original.get("provider_job_key") or "media.asset_generation")
             catalog = build_provider_job_contract_catalog()
             contracts = {item.get("key"): item for item in catalog.get("contracts", [])}
@@ -6535,6 +9643,82 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not contract:
                 self._send_error(HTTPStatus.NOT_FOUND, "media provider job contract not found")
                 return
+            live_media_requested = media_live_provider_requested(safe_inputs, body)
+            if live_media_requested:
+                product_facts = (
+                    dict(safe_inputs.get("product_facts"))
+                    if isinstance(safe_inputs.get("product_facts"), dict)
+                    else {}
+                )
+                source_asset_id = str(product_facts.get("source_asset_id") or "").strip()
+                if source_asset_id:
+                    try:
+                        source_asset, _source_content = self.media_source_asset_store.read_for_provider(
+                            asset_id=source_asset_id,
+                            company_id=identity["company_id"],
+                            store_id=original["store_id"],
+                        )
+                    except MediaSourceAssetError as exc:
+                        self._send_json(
+                            {
+                                "error": "商品来源图片不可用，请重新上传后再重做。",
+                                "status": int(HTTPStatus.UNPROCESSABLE_ENTITY),
+                                "missing_inputs": [f"private_media_source_{exc.code}"],
+                                "provider_call_triggered": False,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                        )
+                        return
+                    supplied_sha256 = str(product_facts.get("source_image_sha256") or "").strip().lower()
+                    if supplied_sha256 and supplied_sha256 != source_asset.sha256:
+                        self._send_json(
+                            {
+                                "error": "商品来源图片指纹不一致，请重新上传后再重做。",
+                                "status": int(HTTPStatus.CONFLICT),
+                                "source_integrity_conflict": True,
+                                "provider_call_triggered": False,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    product_facts["source_image_sha256"] = source_asset.sha256
+                    safe_inputs["product_facts"] = product_facts
+                    safe_inputs["private_media_source_preflight_validated"] = True
+            original_status = str(original.get("status") or "")
+            if original_status != "needs_rework":
+                original = self.repository.update_media_asset_job(
+                    company_id=identity["company_id"],
+                    media_job_id=original["media_job_id"],
+                    status="needs_rework",
+                    details={
+                        "event": "merchant_media_rework_requested",
+                        "reason": reason,
+                        "reviewed_by": identity["user_id"],
+                        "triggers_real_platform_write": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    review_update={
+                        "contract_version": "2026-07-11-media-review-v2",
+                        "decision": "needs_rework",
+                        "confirmations": {
+                            "fact_consistency_confirmed": False,
+                            "commercial_rights_confirmed": False,
+                            "platform_rules_checked": False,
+                            "motion_and_usage_consistency_confirmed": False,
+                        },
+                        "reviewed_by": identity["user_id"],
+                        "note": reason,
+                        "listing_draft_only": True,
+                        "triggers_real_platform_write": False,
+                        "secret_exposed": False,
+                    },
+                    expected_status=original_status,
+                )
             supplied_key = f"media-rework:{original['media_job_id']}:v{version}"
             retry_key = _media_asset_idempotency_key(
                 store_id=original["store_id"],
@@ -6545,6 +9729,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             existing = self.repository.get_media_asset_job_by_idempotency(company_id=identity["company_id"], idempotency_key=retry_key)
             if existing:
                 self._send_json({"media_asset_job": existing, "idempotent_replay": True, "secret_exposed": False}, status=HTTPStatus.ACCEPTED)
+                return
+            orphan_recovery = self.repository.recover_stale_orphan_media_credit_reservations(
+                company_id=identity["company_id"],
+                reference_id=retry_key,
+                stale_after_seconds=_media_orphan_reservation_stale_after_seconds(),
+                limit=5,
+            )
+            if orphan_recovery.get("status") == "attention_required":
+                self._send_json(
+                    {
+                        "error": "上一次素材重做的预占记录需要后台安全对账，本次没有进入生成队列。",
+                        "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                        "failure_code": "media_reservation_recovery_required",
+                        "retryable": True,
+                        "provider_call_triggered": False,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
                 return
             reservation = self.repository.reserve_media_rework(
                 company_id=identity["company_id"],
@@ -6582,35 +9786,70 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "provider_neutral": True,
                 "secret_exposed": False,
             }
-            if media_credit_state["enforcement_enabled"] and bool(safe_inputs.get("live_provider_requested")):
-                if media_quote.get("chargeable") is not True:
-                    self.repository.release_media_rework_reservation(
-                        company_id=identity["company_id"],
-                        parent_media_job_id=original["media_job_id"],
-                        version=version,
-                    )
-                    self._send_json(
-                        {
-                            "error": "视频素材点价格尚未开放，重做任务没有进入生成队列。",
-                            "status": int(HTTPStatus.CONFLICT),
-                            "media_quote": media_quote,
-                            "triggers_real_charge": False,
-                            "secret_exposed": False,
-                        },
-                        status=HTTPStatus.CONFLICT,
-                    )
-                    return
+            if live_media_requested and media_credit_state["enforcement_enabled"] is not True:
+                self.repository.release_media_rework_reservation(
+                    company_id=identity["company_id"],
+                    parent_media_job_id=original["media_job_id"],
+                    version=version,
+                )
+                self._send_json(
+                    {
+                        "error": "真实素材重做的扣点保护尚未开启，本次没有调用生成服务。",
+                        "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                        "failure_code": "media_credit_enforcement_required",
+                        "retryable": False,
+                        "provider_call_triggered": False,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            if live_media_requested and media_quote.get("chargeable") is not True:
+                self.repository.release_media_rework_reservation(
+                    company_id=identity["company_id"],
+                    parent_media_job_id=original["media_job_id"],
+                    version=version,
+                )
+                self._send_json(
+                    {
+                        "error": "视频素材点价格尚未开放，重做任务没有进入生成队列。",
+                        "status": int(HTTPStatus.CONFLICT),
+                        "media_quote": media_quote,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            if media_credit_state["enforcement_enabled"] and live_media_requested:
                 try:
-                    media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                    ops_reservation = _reserve_ops_media_points(
+                        self.repository,
                         company_id=identity["company_id"],
                         user_id=identity["user_id"],
-                        operation_type="reserve",
-                        points=int(media_quote["estimated_points"]),
-                        idempotency_key=f"{retry_key}:reserve:v1",
-                        reference_type="media_rework",
-                        reference_id=retry_key,
-                        details={"quote": media_quote, "parent_media_job_id": original["media_job_id"], "version": version},
+                        media_idempotency_key=retry_key,
+                        media_quote=media_quote,
                     )
+                    if ops_reservation is None:
+                        reserve_operation_key = self.repository.media_credit_reservation_attempt_idempotency_key(
+                            company_id=identity["company_id"],
+                            reference_type="media_rework",
+                            reference_id=retry_key,
+                            base_idempotency_key=f"{retry_key}:reserve:v1",
+                        )
+                        media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                            company_id=identity["company_id"],
+                            user_id=identity["user_id"],
+                            operation_type="reserve",
+                            points=int(media_quote["estimated_points"]),
+                            idempotency_key=reserve_operation_key,
+                            reference_type="media_rework",
+                            reference_id=retry_key,
+                            details={"quote": media_quote, "parent_media_job_id": original["media_job_id"], "version": version},
+                        )
+                    else:
+                        media_credit_state["reservation"] = ops_reservation
                 except ValueError as exc:
                     self.repository.release_media_rework_reservation(
                         company_id=identity["company_id"],
@@ -6634,89 +9873,122 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         status=HTTPStatus.PAYMENT_REQUIRED,
                     )
                     return
-            task = self.repository.create_task(
-                company_id=identity["company_id"],
-                store_id=original["store_id"],
-                user_id=identity["user_id"],
-                task_type="provider_job",
-                title=f"素材重做 v{version}",
-                input_data={
-                    "provider_job_key": provider_job_key,
-                    "provider_family": contract.get("provider_family"),
-                    "store_id": original["store_id"],
-                    "inputs": safe_inputs,
-                    "contract_version": catalog.get("contract_version"),
-                    "media_asset_idempotency_key": retry_key,
-                    "media_credits": media_credit_state,
-                    "real_platform_writes_enabled": False,
-                },
-            )
             version_context = safe_inputs["asset_version"]
-            media_job = self.repository.create_media_asset_job(
-                company_id=identity["company_id"],
-                store_id=original["store_id"],
-                task_id=task["task_id"],
-                user_id=identity["user_id"],
-                provider_job_key=provider_job_key,
-                idempotency_key=retry_key,
-                job_spec={
-                    "provider_job_key": provider_job_key,
-                    "contract_version": catalog.get("contract_version"),
-                    "inputs": safe_inputs,
-                    "merchant_visible_provider_name": False,
-                    "live_media_provider_call_allowed": False,
-                    "spend_now_allowed": False,
-                    "media_credits": media_credit_state,
-                    "secret_exposed": False,
-                },
-                status="pending",
-                version_context=version_context,
-            )
-            self.repository.complete_media_rework_reservation(
-                company_id=identity["company_id"],
-                parent_media_job_id=original["media_job_id"],
-                version=version,
-                media_job_id=media_job["media_job_id"],
-            )
-            queue_job = self.repository.create_queue_job(
-                company_id=identity["company_id"],
-                task_id=task["task_id"],
-                max_attempts=int(contract.get("max_attempts") or 1),
-                job_data={
-                    "kind": "provider_job",
-                    "provider_job_key": provider_job_key,
-                    "provider_family": contract.get("provider_family"),
-                    "queue": contract.get("queue"),
-                    "contract": contract,
-                    "inputs": safe_inputs,
-                    "media_job_id": media_job["media_job_id"],
-                    "idempotency_key": retry_key,
-                    "run_mode": body.get("run_mode") or "queued",
-                    "live_provider_called": False,
-                    "media_credits": media_credit_state,
-                    "real_platform_writes_enabled": False,
-                },
-            )
-            media_job = self.repository.update_media_asset_job(
-                company_id=identity["company_id"],
-                media_job_id=media_job["media_job_id"],
-                status="queued",
-                queue_job_id=queue_job["job_id"],
-                details={"event": "merchant_media_rework_queued", "reason": reason, "secret_exposed": False},
-            )
-            self.repository.update_media_asset_job(
-                company_id=identity["company_id"],
-                media_job_id=original["media_job_id"],
-                status=str(original.get("status") or "needs_rework"),
-                retry_delta=1,
-                details={
-                    "event": "merchant_media_rework_created",
-                    "child_media_job_id": media_job["media_job_id"],
-                    "child_version": version,
-                    "reason": reason,
-                    "secret_exposed": False,
-                },
-            )
+            creation_state: dict[str, Any] = {}
+            try:
+                creation_state["stage"] = "create_task"
+                task = self.repository.create_task(
+                    company_id=identity["company_id"],
+                    store_id=original["store_id"],
+                    user_id=identity["user_id"],
+                    task_type="provider_job",
+                    title=f"素材重做 v{version}",
+                    input_data={
+                        "provider_job_key": provider_job_key,
+                        "provider_family": contract.get("provider_family"),
+                        "store_id": original["store_id"],
+                        "inputs": safe_inputs,
+                        "contract_version": catalog.get("contract_version"),
+                        "media_asset_idempotency_key": retry_key,
+                        "media_credits": media_credit_state,
+                        "real_platform_writes_enabled": False,
+                    },
+                )
+                creation_state["task"] = task
+                creation_state["stage"] = "create_media_asset_job"
+                media_job = self.repository.create_media_asset_job(
+                    company_id=identity["company_id"],
+                    store_id=original["store_id"],
+                    task_id=task["task_id"],
+                    user_id=identity["user_id"],
+                    provider_job_key=provider_job_key,
+                    idempotency_key=retry_key,
+                    job_spec={
+                        "provider_job_key": provider_job_key,
+                        "contract_version": catalog.get("contract_version"),
+                        "inputs": safe_inputs,
+                        "merchant_visible_provider_name": False,
+                        "live_media_provider_call_allowed": False,
+                        "spend_now_allowed": False,
+                        "media_credits": media_credit_state,
+                        "secret_exposed": False,
+                    },
+                    status="pending",
+                    version_context=version_context,
+                )
+                creation_state["media_asset_job"] = media_job
+                media_job, queue_job = _prepare_link_activate_media_queue(
+                    self.repository,
+                    company_id=identity["company_id"],
+                    task=task,
+                    media_asset_job=media_job,
+                    provider_job_key=provider_job_key,
+                    contract=contract,
+                    safe_inputs=safe_inputs,
+                    media_idempotency_key=retry_key,
+                    media_credit_state=media_credit_state,
+                    secret_ref="",
+                    run_mode=str(body.get("run_mode") or "queued"),
+                    creation_state=creation_state,
+                )
+                creation_state["stage"] = "complete_media_rework_reservation"
+                self.repository.complete_media_rework_reservation(
+                    company_id=identity["company_id"],
+                    parent_media_job_id=original["media_job_id"],
+                    version=version,
+                    media_job_id=media_job["media_job_id"],
+                )
+                self.repository.update_media_asset_job(
+                    company_id=identity["company_id"],
+                    media_job_id=original["media_job_id"],
+                    status=str(original.get("status") or "needs_rework"),
+                    retry_delta=1,
+                    details={
+                        "event": "merchant_media_rework_created",
+                        "child_media_job_id": media_job["media_job_id"],
+                        "child_version": version,
+                        "reason": reason,
+                        "secret_exposed": False,
+                    },
+                )
+                creation_state["stage"] = "committed"
+            except Exception:
+                compensation = _compensate_provider_queue_creation_failure(
+                    self.repository,
+                    company_id=identity["company_id"],
+                    user_id=identity["user_id"],
+                    creation_state=creation_state,
+                    media_credit_state=media_credit_state,
+                    media_idempotency_key=retry_key,
+                )
+                if compensation.get("manual_reconcile_required") is not True:
+                    self.repository.release_media_rework_reservation(
+                        company_id=identity["company_id"],
+                        parent_media_job_id=original["media_job_id"],
+                        version=version,
+                    )
+                self._send_json(
+                    {
+                        "error": (
+                            "素材重做任务没有安全进入队列，已回滚素材点预占。"
+                            if compensation.get("manual_reconcile_required") is not True
+                            else "素材重做任务的队列结果需要后台对账，素材点暂未释放。"
+                        ),
+                        "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                        "failure_code": "media_queue_setup_failed",
+                        "failure_stage": str(creation_state.get("stage") or "create_task"),
+                        "retryable": False,
+                        "compensation": compensation,
+                        "provider_call_triggered": compensation.get("provider_call_triggered"),
+                        "triggers_real_charge": (
+                            False if compensation.get("provider_call_triggered") is False else None
+                        ),
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
             worker_result = None
             if str(body.get("run_mode") or "queued") in {"inline", "enqueue_and_wait", "local_worker_now"}:
                 worker_result = self.queue_worker.run_next(company_id=identity["company_id"], job_id=queue_job["job_id"])
@@ -6803,11 +10075,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 company_id=identity["company_id"],
                 user_id=identity["user_id"],
             )
-            history = self.repository.sync_ai_ceo_chat_history(
+            page = self.repository.sync_ai_ceo_chat_history(
                 company_id=identity["company_id"],
                 user_id=identity["user_id"],
                 turns=turns,
                 limit=30,
+                return_page=True,
             )
             revision = self.repository.ai_ceo_chat_history_revision(
                 company_id=identity["company_id"],
@@ -6818,8 +10091,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "ai_ceo_chat_history": {
                         "scope": "account",
                         "cross_store": True,
-                        "turns": history,
-                        "turn_count": len(history),
+                        **page,
+                        "turn_count": len(page["turns"]),
                         "submitted_turn_count": min(len(turns), 30),
                         "revision": revision,
                         "base_revision": base_revision,
@@ -6833,6 +10106,480 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 },
                 status=HTTPStatus.CREATED,
             )
+            return
+
+        if len(parts) == 5 and parts[0] == "stores" and parts[2] == "listing-drafts" and parts[4] == "checkpoint":
+            if not self._require_permission(identity, "create_task"):
+                return
+            from .listing_draft_checkpoint import CheckpointConflict, CheckpointValidationError
+            body = self._read_json_body()
+            try:
+                result = self.repository.save_listing_draft_checkpoint(
+                    company_id=identity["company_id"], store_id=parts[1], user_id=identity["user_id"],
+                    project_key=parts[3], body=body)
+            except KeyError:
+                self._send_error(HTTPStatus.NOT_FOUND, "listing_draft_not_found")
+                return
+            except CheckpointValidationError as exc:
+                self._send_json({"error_code": str(exc), "secret_exposed": False}, status=HTTPStatus(exc.status))
+                return
+            except CheckpointConflict as exc:
+                self._send_checkpoint_json(exc.payload, status=HTTPStatus.CONFLICT)
+                return
+            except Exception:
+                self._send_json({"error_code": "listing_draft_storage_unavailable", "secret_exposed": False},
+                                status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_checkpoint_json(result, status=HTTPStatus.OK if result["idempotent_replay"] else HTTPStatus.CREATED)
+            return
+
+        if len(parts) == 3 and parts[0] == "stores" and parts[2] == "product-facts":
+            if not self._require_permission(identity, "create_task"):
+                return
+            body = self._read_json_body()
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            packet = normalize_merchant_product_fact_packet(
+                body.get("merchant_product_fact_packet"),
+                source="authenticated_merchant_request",
+            )
+            listing_project_identity = normalize_listing_project_identity(body.get("listing_project_identity"))
+            if packet.get("sensitive_text_detected") is True:
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": ["listing_product_fact_sensitive_text"],
+                        "failure_code": "listing_product_fact_sensitive_text",
+                        "merchant_message": "商品资料中包含疑似凭证或密钥文本，请删除后再保存；本次没有保存记录。",
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                )
+                return
+            if not packet.get("product_name"):
+                self._send_error(HTTPStatus.BAD_REQUEST, "商品名称还没有确认，不能保存商品资料。")
+                return
+            try:
+                response_payload = self.repository.save_merchant_product_fact_checkpoint(
+                    company_id=identity["company_id"], store_id=store_id, user_id=identity["user_id"],
+                    packet=packet, listing_project_identity=listing_project_identity,
+                    **({"save_context": body["save_context"]} if "save_context" in body else {}),
+                )
+            except ProductFactSaveValidationError:
+                self._send_json({"error_code": "product_fact_invalid_save_context", "secret_exposed": False}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except ProductFactSaveConflict as exc:
+                self._send_json(exc.payload, status=HTTPStatus.CONFLICT)
+                return
+            except Exception:
+                self._send_json({"error_code": "product_fact_storage_unavailable", "secret_exposed": False}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(response_payload, status=HTTPStatus.OK if response_payload["idempotent_replay"] else HTTPStatus.CREATED)
+            return
+
+        if len(parts) == 4 and parts[0] == "stores" and parts[2:] == ["listing-drafts", "generate"]:
+            if not self._require_permission(identity, "create_task"):
+                return
+            body = self._read_json_body()
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            generation_mode = body.get("generation_mode", "preserve_merchant_edits")
+            request_failure = listing_draft_generation_request_failure(
+                body.get("current_draft_fields"), generation_mode=generation_mode,
+            )
+            if request_failure:
+                self._send_json({
+                    "status": "blocked", "blocked_by": [request_failure], "failure_code": request_failure,
+                    "merchant_message": "重写请求不完整，请保留现有草稿并刷新后重试；本次未调用模型。",
+                    "model_called": False, "usage_consumed": False, "report": None,
+                    "real_platform_writes_enabled": False, "secret_exposed": False,
+                }, status=HTTPStatus.UNPROCESSABLE_ENTITY if request_failure.endswith("sensitive_text") else HTTPStatus.BAD_REQUEST)
+                return
+            operation = None
+            operation_task = None
+            if "operation_id" in body:
+                try:
+                    operation = build_listing_generation_operation(
+                        company_id=identity["company_id"], store_id=store_id, user_id=identity["user_id"],
+                        operation_id=body["operation_id"], listing_project_identity=body.get("listing_project_identity"),
+                        merchant_product_fact_packet=body.get("merchant_product_fact_packet"),
+                        current_draft_fields=body.get("current_draft_fields"), generation_mode=generation_mode,
+                        expected_base_report_id=body.get("expected_base_report_id"),
+                        expected_checkpoint_revision=body.get("expected_checkpoint_revision"),
+                    )
+                    observed = read_listing_generation_operation(
+                        repository=self.repository, company_id=identity["company_id"], store_id=store_id,
+                        user_id=identity["user_id"], operation_id=body["operation_id"],
+                        listing_project_identity=body.get("listing_project_identity"), fingerprint=operation["fingerprint"],
+                    )
+                except ValueError:
+                    self._send_json({"status": "blocked", "failure_code": "listing_generation_operation_invalid",
+                                     "model_called": False, "usage_consumed": False, "report": None,
+                                     "real_platform_writes_enabled": False, "secret_exposed": False}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                except Exception:
+                    self._send_json({"error_code": "listing_generation_status_unavailable", "secret_exposed": False},
+                                    status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                if observed["status"] != "not_found":
+                    self._send_json(observed, status=HTTPStatus.CONFLICT if observed["status"] == "conflict" else HTTPStatus.OK)
+                    return
+                try:
+                    claim = claim_listing_generation_operation(repository=self.repository, operation=operation)
+                    operation_task = claim.get("task")
+                    if claim.get("claimed") is not True:
+                        observed = read_listing_generation_operation(
+                            repository=self.repository, company_id=identity["company_id"], store_id=store_id,
+                            user_id=identity["user_id"], operation_id=body["operation_id"],
+                            listing_project_identity=body.get("listing_project_identity"), fingerprint=operation["fingerprint"],
+                        )
+                        self._send_json(observed, status=HTTPStatus.CONFLICT if observed["status"] == "conflict" else HTTPStatus.OK)
+                        return
+                except Exception:
+                    self._send_json({"error_code": "listing_generation_claim_unavailable", "secret_exposed": False},
+                                    status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+
+            def finish_unstarted_operation(code, *, response_already_sent=False):
+                if operation_task is None:
+                    return True
+                try:
+                    finished = finish_listing_generation_operation(
+                        repository=self.repository, operation_task=operation_task, failure_code=code)
+                except Exception:
+                    finished = None
+                if finished is None and not response_already_sent:
+                    self._send_json({"error_code": "listing_generation_status_unavailable", "secret_exposed": False},
+                                    status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return finished is not None
+
+            if generation_mode == "rewrite_buyer_copy":
+                try:
+                    rewrite_source = listing_draft_rewrite_source(
+                        repository=self.repository, company_id=identity["company_id"], store_id=store_id,
+                        listing_project_identity=body.get("listing_project_identity"),
+                        current_draft_fields=body["current_draft_fields"],
+                        expected_base_report_id=body.get("expected_base_report_id"),
+                        expected_checkpoint_revision=body.get("expected_checkpoint_revision"),
+                        merchant_product_fact_packet=body.get("merchant_product_fact_packet"),
+                    )
+                    source_failure = rewrite_source["failure_code"]
+                except Exception:
+                    source_failure = "listing_rewrite_source_unavailable"
+                if source_failure:
+                    if not finish_unstarted_operation(source_failure):
+                        return
+                    self._send_json({
+                        "status": "blocked", "failure_code": source_failure, "blocked_by": [source_failure],
+                        "merchant_message": "原稿或商品资料已变化，或云端保存暂不可用；请核对后再重写。现有文案未被替换。",
+                        "model_called": False, "usage_consumed": False, "report": None,
+                        "real_platform_writes_enabled": False, "secret_exposed": False,
+                    }, status=HTTPStatus.SERVICE_UNAVAILABLE if source_failure.endswith("unavailable") else
+                       HTTPStatus.BAD_REQUEST if source_failure.endswith("invalid") else HTTPStatus.CONFLICT)
+                    return
+            packet = normalize_merchant_product_fact_packet(
+                rewrite_source["packet"] if generation_mode == "rewrite_buyer_copy" else body.get("merchant_product_fact_packet"),
+                source="authenticated_merchant_request",
+            )
+            listing_project_identity = normalize_listing_project_identity(body.get("listing_project_identity"))
+            if packet.get("sensitive_text_detected") is True:
+                if not finish_unstarted_operation("listing_product_fact_sensitive_text"):
+                    return
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": ["listing_product_fact_sensitive_text"],
+                        "failure_code": "listing_product_fact_sensitive_text",
+                        "merchant_message": "商品资料中包含疑似凭证或密钥文本，请删除后再生成；本次未调用模型。",
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                )
+                return
+            missing_core = listing_draft_core_missing_fields(packet)
+            if not listing_project_identity.get("key"):
+                missing_core.append("listing_project_identity")
+            if missing_core:
+                if not finish_unstarted_operation("listing_core_fact_missing"):
+                    return
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": [f"listing_core_fact_missing:{key}" for key in missing_core],
+                        "missing_fields": missing_core,
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    }
+                )
+                return
+            merchant_copy_failure = "" if generation_mode == "rewrite_buyer_copy" else listing_draft_merchant_copy_failure(
+                body.get("current_draft_fields"),
+                marketplace=str(store.get("marketplace") or "EBAY_US"),
+                merchant_product_fact_packet=packet,
+            )
+            if merchant_copy_failure:
+                if not finish_unstarted_operation(merchant_copy_failure):
+                    return
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": [merchant_copy_failure],
+                        "failure_code": merchant_copy_failure,
+                        "merchant_message": "请先把商家手改文案调整为目标站点语言，并保留 3–5 条有事实依据的卖点。",
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    }
+                )
+                return
+            if not self._require_quota(
+                identity,
+                "model_report_assist",
+                extra_response={
+                    "merchant_message": "当前套餐的 AI/联网工作额度已用完；本次未调用模型、未消耗捷境试用次数，也没有保存 Listing。",
+                    "model_called": False,
+                    "usage_consumed": False,
+                    "report": None,
+                    "listing_project_identity": listing_project_identity,
+                },
+            ):
+                finish_unstarted_operation("listing_generation_quota_unavailable", response_already_sent=True)
+                return
+            model_resolution = self._resolve_model_client_for_store(
+                identity=identity,
+                store_id=store_id,
+                body=body,
+                task_scope="listing_draft_generation",
+            )
+            safe_model_resolution = {
+                key: value
+                for key, value in model_resolution.items()
+                if key not in {"model_client", "secret_value", "secret_ref", "requested_secret_ref"}
+            }
+            if model_resolution.get("status") != "resolved" or not model_resolution.get("model_client"):
+                if not finish_unstarted_operation("listing_model_not_ready"):
+                    return
+                self._send_json(
+                    {
+                        "status": "blocked",
+                        "blocked_by": model_resolution.get("blocked_by") or ["listing_model_not_ready"],
+                        "model_resolution": safe_model_resolution,
+                        "model_called": False,
+                        "usage_consumed": False,
+                        "report": None,
+                        "listing_project_identity": listing_project_identity,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.ACCEPTED,
+                )
+                return
+            if model_resolution.get("mode") == "platform_managed_default":
+                platform_trial_quota = self._platform_model_trial_quota(identity=identity)
+                safe_model_resolution["platform_trial_quota"] = platform_trial_quota
+                if platform_trial_quota.get("allowed") is not True:
+                    trial_blocker = str(
+                        platform_trial_quota.get("blocked_by") or "platform_default_model_trial_exhausted"
+                    )
+                    if not finish_unstarted_operation(trial_blocker):
+                        return
+                    self._send_json(
+                        {
+                            "status": "blocked",
+                            "blocked_by": [trial_blocker],
+                            "merchant_message": (
+                                "捷境托管 AI 试用尚未激活，请先完成账号验证；你也可以在设置中连接自己的模型。"
+                                if trial_blocker == "platform_trial_activation_required"
+                                else "捷境托管 AI 试用已到期，未使用的次数不会延长有效期；请在设置中连接自己的模型。已有资料和历史结果会保留。"
+                                if trial_blocker == "platform_default_model_trial_expired"
+                                else "捷境托管 AI 试用额度已用完；请在设置中连接自己的模型。"
+                                if trial_blocker == "platform_default_model_trial_exhausted"
+                                else "捷境托管 AI 试用当前暂不可用；请刷新状态或在设置中连接自己的模型。"
+                            ),
+                            "platform_trial_quota": platform_trial_quota,
+                            "model_resolution": safe_model_resolution,
+                            "model_called": False,
+                            "usage_consumed": False,
+                            "report": None,
+                            "listing_project_identity": listing_project_identity,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.PAYMENT_REQUIRED,
+                    )
+                    return
+            packet_record = None
+            requested_packet_id = str(body.get("packet_id") or "").strip()
+            if requested_packet_id:
+                candidate = self.repository.get_platform_data_packet(
+                    company_id=identity["company_id"],
+                    packet_id=requested_packet_id,
+                )
+                if candidate and str(candidate.get("store_id") or "") == store_id:
+                    packet_record = candidate
+                else:
+                    if not finish_unstarted_operation("listing_source_packet_not_accessible"):
+                        return
+                    self._send_error(HTTPStatus.NOT_FOUND, "eBay account data packet not found or not accessible")
+                    return
+            platform_trial_reservation: dict[str, Any] = {}
+            if model_resolution.get("mode") == "platform_managed_default":
+                platform_trial_reservation = self._reserve_platform_model_trial(
+                    identity=identity,
+                    route_scope="listing_draft_generation",
+                )
+                platform_trial_quota = platform_trial_reservation.get("quota") or {}
+                safe_model_resolution["platform_trial_quota"] = platform_trial_quota
+                if platform_trial_reservation.get("allowed") is not True:
+                    trial_blocker = str(
+                        platform_trial_quota.get("blocked_by") or "platform_default_model_trial_exhausted"
+                    )
+                    if not finish_unstarted_operation(trial_blocker):
+                        return
+                    self._send_json(
+                        {
+                            "status": "blocked",
+                            "blocked_by": [trial_blocker],
+                            "merchant_message": (
+                                "捷境托管 AI 试用尚未激活，请先完成账号验证；你也可以在设置中连接自己的模型。"
+                                if trial_blocker == "platform_trial_activation_required"
+                                else "捷境托管 AI 试用已到期，未使用的次数不会延长有效期；请在设置中连接自己的模型。已有资料和历史结果会保留。"
+                                if trial_blocker == "platform_default_model_trial_expired"
+                                else "捷境托管 AI 试用额度已用完；请在设置中连接自己的模型。"
+                                if trial_blocker == "platform_default_model_trial_exhausted"
+                                else "捷境托管 AI 试用当前暂不可用；请刷新状态或在设置中连接自己的模型。"
+                            ),
+                            "platform_trial_quota": platform_trial_quota,
+                            "model_resolution": safe_model_resolution,
+                            "model_called": False,
+                            "usage_consumed": False,
+                            "report": None,
+                            "listing_project_identity": listing_project_identity,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.PAYMENT_REQUIRED,
+                    )
+                    return
+            try:
+                result = generate_listing_draft(
+                    repository=self.repository,
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    listing_project_identity=listing_project_identity,
+                    merchant_product_fact_packet=packet,
+                    current_draft_fields=(
+                        body.get("current_draft_fields") if isinstance(body.get("current_draft_fields"), dict) else {}
+                    ),
+                    model_client=model_resolution["model_client"],
+                    model_resolution=safe_model_resolution,
+                    packet_record=packet_record,
+                    generation_mode=generation_mode,
+                    expected_base_report_id=body.get("expected_base_report_id"),
+                    expected_checkpoint_revision=body.get("expected_checkpoint_revision"),
+                    operation_task=operation_task,
+                )
+            except ListingDraftGenerationError as exc:
+                trial_settlement = self._settle_platform_model_trial_reservation(
+                    identity=identity,
+                    reservation=platform_trial_reservation,
+                    request_count=int((exc.model_usage or {}).get("request_count") or 0),
+                )
+                zero_request_released = str(trial_settlement.get("status") or "") in {
+                    "released",
+                    "unmetered",
+                }
+                self._send_json(
+                    {
+                        "status": "failed",
+                        "failure_code": exc.failure_code,
+                        "merchant_message": (
+                            "保存结果尚未确认，请先核对当前商品记录，不要重复生成；尚未写入 eBay。"
+                            if exc.report_save_attempted
+                            else "AI 返回的文案没有通过语言或事实检查，系统已自动纠正一次但仍未通过；"
+                            "本次没有保存 Listing，也没有写入 eBay。商品资料已保留。"
+                            if exc.failure_code.startswith("listing_model_output_")
+                            else "商家编辑与 AI 草稿合并后没有通过语言或事实检查；本次没有保存 Listing，也没有写入 eBay。"
+                            if exc.failure_code.startswith("listing_final_copy_")
+                            else (
+                                "AI 草稿生成暂时失败；本次未消耗捷境试用次数，没有写入 eBay，商品资料已保留。"
+                                if not exc.usage_consumed and zero_request_released
+                                else "AI 草稿生成暂时失败；本次没有写入 eBay，商品资料已保留。"
+                            )
+                        ),
+                        "task_id": exc.task_id,
+                        "model_called": exc.model_called,
+                        "usage_consumed": exc.usage_consumed,
+                        "model_usage": exc.model_usage,
+                        "report_save_attempted": exc.report_save_attempted,
+                        "report": None,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=(HTTPStatus.UNPROCESSABLE_ENTITY
+                            if exc.report_save_attempted is False and exc.failure_code in _LISTING_QUALITY_REJECTION_CODES
+                            else HTTPStatus.BAD_GATEWAY),
+                )
+                return
+            except Exception:
+                trial_settlement = self._settle_platform_model_trial_reservation(
+                    identity=identity,
+                    reservation=platform_trial_reservation,
+                    request_count=0,
+                )
+                zero_request_released = str(trial_settlement.get("status") or "") in {
+                    "released",
+                    "unmetered",
+                }
+                self._send_json(
+                    {
+                        "status": "failed",
+                        "failure_code": "listing_model_generation_failed",
+                        "merchant_message": (
+                            "AI 草稿生成暂时失败；本次未调用模型、未消耗捷境试用次数，没有写入 eBay，商品资料已保留。"
+                            if zero_request_released
+                            else "AI 草稿生成暂时失败；本次没有写入 eBay，商品资料已保留，试用次数状态正在核对。"
+                        ),
+                        "model_called": False if zero_request_released else None,
+                        "usage_consumed": False if zero_request_released else None,
+                        "report": None,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.BAD_GATEWAY,
+                )
+                return
+            self._settle_platform_model_trial_reservation(
+                identity=identity,
+                reservation=platform_trial_reservation,
+                request_count=int((result.get("model_usage") or {}).get("request_count") or 0),
+            )
+            result["model_resolution"] = safe_model_resolution
+            self._send_json(result, status=HTTPStatus.CREATED)
             return
 
         if path == "tasks/product-workflow":
@@ -6938,6 +10685,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "workers/run-next":
+            if not self._require_permission(identity, "create_task"):
+                return
             body = self._read_json_body()
             job_id = str(body.get("job_id") or "") or None
             result = self.queue_worker.run_next(company_id=identity["company_id"], job_id=job_id)
@@ -6946,6 +10695,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 3 and parts[0] == "queue-jobs" and parts[2] == "cancel":
+            if not self._require_permission(identity, "create_task"):
+                return
             body = self._read_json_body()
             try:
                 job = self.repository.cancel_queue_job(
@@ -6964,6 +10715,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 3 and parts[0] == "queue-jobs" and parts[2] == "retry":
+            if not self._require_permission(identity, "create_task"):
+                return
             body = self._read_json_body()
             try:
                 job = self.repository.retry_queue_job(
@@ -6982,6 +10735,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 2 and parts[0] == "queue-jobs" and parts[1] == "recover-stale":
+            if not self._require_permission(identity, "create_task"):
+                return
             body = self._read_json_body()
             stale_after = int(body.get("stale_after_seconds") or 900)
             limit = int(body.get("limit") or 50)
@@ -7000,13 +10755,49 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if not existing_confirmation:
                     self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
                     return
-                decision_value = str(body.get("decision") or "")
-                if (
-                    decision_value == "approve"
-                    and existing_confirmation.get("action_type") in HIGH_RISK_ACTIONS
-                    and not self._require_permission(identity, "approve_high_risk")
-                ):
+                if _is_domestic_billing_refund_confirmation(existing_confirmation):
+                    self._send_error(HTTPStatus.FORBIDDEN, "domestic_refund_review_requires_platform_operations")
                     return
+                decision_value = str(body.get("decision") or "")
+                decision_permission = "approve_high_risk" if existing_confirmation.get("action_type") in HIGH_RISK_ACTIONS else "create_task"
+                if not self._require_permission(identity, decision_permission):
+                    return
+                if decision_value == "approve" and existing_confirmation.get("action_type") in {
+                    "publish_listing",
+                    "save_ebay_listing_draft",
+                }:
+                    try:
+                        _revalidate_confirmation_publish_evidence(
+                            self.repository,
+                            company_id=identity["company_id"],
+                            confirmation=existing_confirmation,
+                        )
+                    except PublishSourceRightsEvidenceError as exc:
+                        if str(existing_confirmation.get("status") or "") == "approved":
+                            try:
+                                self.repository.mark_publish_confirmation_needs_revision(
+                                    company_id=identity["company_id"],
+                                    confirmation_id=existing_confirmation["confirmation_id"],
+                                    user_id=identity["user_id"],
+                                    reason_code=(
+                                        "publish_evidence_changed"
+                                        if exc.code == "publish_evidence_changed"
+                                        else "publish_evidence_revalidation_blocked"
+                                    ),
+                                )
+                            except ConfirmationDecisionConflict:
+                                pass
+                        self._send_json(
+                            {
+                                "error": exc.code,
+                                "status": int(_publish_evidence_error_status(exc, revalidation=True)),
+                                "blockers": list(exc.blockers),
+                                "confirmation_status": existing_confirmation.get("status"),
+                                "secret_exposed": False,
+                            },
+                            status=_publish_evidence_error_status(exc, revalidation=True),
+                        )
+                        return
                 record = self.repository.decide_confirmation(
                     company_id=identity["company_id"],
                     confirmation_id=parts[1],
@@ -7032,6 +10823,55 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not confirmation:
                 self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
                 return
+            if _is_domestic_billing_refund_confirmation(confirmation):
+                self._send_error(HTTPStatus.CONFLICT, "domestic_billing_refund_requires_dedicated_execution")
+                return
+            if confirmation.get("action_type") in {"publish_listing", "save_ebay_listing_draft"}:
+                try:
+                    _revalidate_confirmation_publish_evidence(
+                        self.repository,
+                        company_id=identity["company_id"],
+                        confirmation=confirmation,
+                    )
+                except PublishSourceRightsEvidenceError as exc:
+                    confirmation_status = str(confirmation.get("status") or "")
+                    if confirmation_status == "approved":
+                        try:
+                            revised = self.repository.mark_publish_confirmation_needs_revision(
+                                company_id=identity["company_id"],
+                                confirmation_id=confirmation["confirmation_id"],
+                                user_id=identity["user_id"],
+                                reason_code=(
+                                    "publish_evidence_changed"
+                                    if exc.code == "publish_evidence_changed"
+                                    else "publish_evidence_revalidation_blocked"
+                                ),
+                            )
+                            confirmation_status = str(revised.get("status") or confirmation_status)
+                        except ConfirmationDecisionConflict:
+                            pass
+                    self._send_json(
+                        {
+                            "error": exc.code,
+                            "status": int(_publish_evidence_error_status(exc, revalidation=True)),
+                            "blockers": list(exc.blockers),
+                            "preflight": {
+                                "status": "blocked_publish_evidence",
+                                "issues": [
+                                    {
+                                        "key": "publish_evidence",
+                                        "severity": "blocking",
+                                        "message": blocker,
+                                    }
+                                    for blocker in (exc.blockers or (exc.code,))
+                                ],
+                            },
+                            "confirmation_status": confirmation_status,
+                            "secret_exposed": False,
+                        },
+                        status=_publish_evidence_error_status(exc, revalidation=True),
+                    )
+                    return
             payload = _execution_payload_from_context(
                 repository=self.repository,
                 company_id=identity["company_id"],
@@ -7051,7 +10891,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 confirmed_at=confirmation["decided_at"] if confirmation["status"] == "approved" else None,
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
-            preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            general_preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            controlled_existing_draft_publish = _is_controlled_existing_draft_publish_confirmation(confirmation)
+            preflight = (
+                _controlled_existing_draft_publish_preflight(
+                    execution_request,
+                    require_confirmation=confirmation["status"] == "approved",
+                )
+                if controlled_existing_draft_publish
+                else general_preflight
+            )
             latest_execution_results = self.repository.list_execution_results(company_id=identity["company_id"], limit=20)
             recent_confirmations = [
                 item
@@ -7062,16 +10911,29 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 {
                     "preflight": preflight,
                     "prepared_payload_summary": _publish_payload_summary(payload) if confirmation["action_type"] == "publish_listing" else {},
-                    "publish_readiness": build_publish_readiness(
-                        payload,
-                        preflight=preflight,
-                        latest_execution_results=latest_execution_results,
-                        recent_confirmations=recent_confirmations,
-                    )
-                    if confirmation["action_type"] == "publish_listing"
-                    else {},
+                    "publish_readiness": (
+                        _controlled_existing_draft_publish_readiness(
+                            preflight=preflight,
+                            general_preflight=general_preflight,
+                        )
+                        if controlled_existing_draft_publish
+                        else build_publish_readiness(
+                            payload,
+                            preflight=preflight,
+                            latest_execution_results=latest_execution_results,
+                            recent_confirmations=recent_confirmations,
+                            expected_company_id=identity["company_id"],
+                            expected_store_id=confirmation["store_id"],
+                            expected_listing_project_key=str(
+                                (confirmation.get("item") or {}).get("listing_project_identity", {}).get("key") or ""
+                            ),
+                        )
+                        if confirmation["action_type"] == "publish_listing"
+                        else {}
+                    ),
                     "confirmation": confirmation,
                     "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
+                    "controlled_existing_draft_publish_enabled": self.settings.effective_ebay_controlled_publish_enabled,
                 },
                 status=HTTPStatus.CREATED,
             )
@@ -7111,7 +10973,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 confirmed_at=confirmation["decided_at"] if confirmation["status"] == "approved" else None,
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
-            preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            general_preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            controlled_existing_draft_publish = _is_controlled_existing_draft_publish_confirmation(confirmation)
+            preflight = (
+                _controlled_existing_draft_publish_preflight(
+                    execution_request,
+                    require_confirmation=confirmation["status"] == "approved",
+                )
+                if controlled_existing_draft_publish
+                else general_preflight
+            )
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=confirmation["store_id"]) or {}
             publish_recovery = self.ebay_write_adapter_factory(self.settings).inspect_publish_state(
                 request=execution_request,
@@ -7136,6 +11007,46 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_exposed": False,
                 },
             )
+            fresh_confirmation_required = False
+            controlled_item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            controlled_draft = (
+                controlled_item.get("existing_ebay_draft")
+                if isinstance(controlled_item.get("existing_ebay_draft"), dict)
+                else {}
+            )
+            exact_unpublished = (
+                publish_recovery.get("exact_unpublished_offer")
+                if isinstance(publish_recovery.get("exact_unpublished_offer"), dict)
+                else {}
+            )
+            if (
+                controlled_existing_draft_publish
+                and str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
+                and publish_recovery.get("safe_to_request_fresh_confirmation") is True
+                and publish_recovery.get("safe_to_retry_publish") is False
+                and str(publish_recovery.get("recommended_action") or "")
+                == "request_fresh_exact_offer_confirmation"
+                and not (publish_recovery.get("published_offer") or {})
+                and str(exact_unpublished.get("offer_id") or "")
+                == str(controlled_draft.get("offer_id") or "")
+                and str(publish_recovery.get("sku") or "") == str(controlled_draft.get("sku") or "")
+                and publish_recovery.get("secret_exposed") is False
+            ):
+                confirmation = self.repository.retire_external_execution_after_verified_noop(
+                    company_id=identity["company_id"],
+                    confirmation_id=confirmation["confirmation_id"],
+                    user_id=identity["user_id"],
+                    action_type="publish_listing",
+                    evidence={
+                        "provider_read_only": True,
+                        "external_state_unchanged": True,
+                        "automatic_retry_allowed": False,
+                        "offer_id": exact_unpublished.get("offer_id"),
+                        "sku": publish_recovery.get("sku"),
+                        "secret_exposed": False,
+                    },
+                )
+                fresh_confirmation_required = True
             recent_confirmations = [
                 item
                 for item in self.repository.list_confirmations(company_id=identity["company_id"], limit=100)
@@ -7144,13 +11055,27 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "publish_recovery": publish_recovery,
-                    "publish_readiness": build_publish_readiness(
-                        payload,
-                        preflight=preflight,
-                        latest_execution_results=latest_execution_results,
-                        recent_confirmations=recent_confirmations,
+                    "publish_readiness": (
+                        _controlled_existing_draft_publish_readiness(
+                            preflight=preflight,
+                            general_preflight=general_preflight,
+                        )
+                        if controlled_existing_draft_publish
+                        else build_publish_readiness(
+                            payload,
+                            preflight=preflight,
+                            latest_execution_results=latest_execution_results,
+                            recent_confirmations=recent_confirmations,
+                            expected_company_id=identity["company_id"],
+                            expected_store_id=confirmation["store_id"],
+                            expected_listing_project_key=str(
+                                (confirmation.get("item") or {}).get("listing_project_identity", {}).get("key") or ""
+                            ),
+                        )
                     ),
                     "confirmation": confirmation,
+                    "fresh_confirmation_required": fresh_confirmation_required,
+                    "automatic_retry_allowed": False,
                     "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
                 },
                 status=HTTPStatus.CREATED,
@@ -7287,6 +11212,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not confirmation:
                 self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
                 return
+            if _is_domestic_billing_refund_confirmation(confirmation):
+                self._send_error(HTTPStatus.CONFLICT, "domestic_billing_refund_requires_dedicated_execution")
+                return
             if (
                 confirmation["status"] == "external_execution_claimed_prewrite"
                 and confirmation.get("action_type") == "save_ebay_listing_draft"
@@ -7316,6 +11244,42 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     return
                 self._send_error(HTTPStatus.BAD_REQUEST, "confirmation must be approved before execution service handoff")
                 return
+            if confirmation.get("action_type") in {"publish_listing", "save_ebay_listing_draft"}:
+                try:
+                    _revalidate_confirmation_publish_evidence(
+                        self.repository,
+                        company_id=identity["company_id"],
+                        confirmation=confirmation,
+                    )
+                except PublishSourceRightsEvidenceError as exc:
+                    confirmation_status = str(confirmation.get("status") or "")
+                    try:
+                        revised = self.repository.mark_publish_confirmation_needs_revision(
+                            company_id=identity["company_id"],
+                            confirmation_id=confirmation["confirmation_id"],
+                            user_id=identity["user_id"],
+                            reason_code=(
+                                "publish_evidence_changed"
+                                if exc.code == "publish_evidence_changed"
+                                else "publish_evidence_revalidation_blocked"
+                            ),
+                        )
+                        confirmation_status = str(revised.get("status") or confirmation_status)
+                    except ConfirmationDecisionConflict:
+                        pass
+                    self._send_json(
+                        {
+                            "error": exc.code,
+                            "status": int(_publish_evidence_error_status(exc, revalidation=True)),
+                            "blockers": list(exc.blockers),
+                            "external_execution_claimed": False,
+                            "confirmation_status": confirmation_status,
+                            "real_platform_write_attempted": False,
+                            "secret_exposed": False,
+                        },
+                        status=_publish_evidence_error_status(exc, revalidation=True),
+                    )
+                    return
             payload = _execution_payload_from_context(
                 repository=self.repository,
                 company_id=identity["company_id"],
@@ -7340,17 +11304,88 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
             live_ebay_write_actions = {"publish_listing", "save_ebay_listing_draft", "cleanup_test_listing"}
+            confirmation_item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            if (
+                confirmation["action_type"] in live_ebay_write_actions
+                and (
+                    confirmation_item.get("simulation_only") is True
+                    or payload.get("simulation_only") is True
+                )
+            ):
+                self._send_error(
+                    HTTPStatus.CONFLICT,
+                    "simulation_only_listing_cannot_execute_ebay_write",
+                )
+                return
             draft_save_live = bool(
                 confirmation["action_type"] == "save_ebay_listing_draft"
                 and self.settings.effective_ebay_draft_save_enabled
+            )
+            controlled_existing_draft_publish_live = bool(
+                confirmation["action_type"] == "publish_listing"
+                and self.settings.effective_ebay_controlled_publish_enabled
+                and _is_controlled_existing_draft_publish_confirmation(confirmation)
             )
             broad_ebay_write_live = bool(
                 self.settings.effective_real_platform_writes_enabled
                 and confirmation["action_type"] in live_ebay_write_actions
             )
-            if draft_save_live or broad_ebay_write_live:
+            if draft_save_live or controlled_existing_draft_publish_live or broad_ebay_write_live:
                 boundary_result = ExecutionService(demo_mode=False).execute(execution_request).to_dict()
+                if controlled_existing_draft_publish_live:
+                    controlled_preflight = _controlled_existing_draft_publish_preflight(
+                        execution_request,
+                        require_confirmation=True,
+                    )
+                    boundary_audit = (
+                        boundary_result.get("audit")
+                        if isinstance(boundary_result.get("audit"), dict)
+                        else {}
+                    )
+                    boundary_audit["preflight"] = controlled_preflight
+                    if controlled_preflight.get("status") == "ready_for_platform_adapter":
+                        boundary_result["status"] = "ready_for_platform_adapter"
+                        boundary_result["message"] = (
+                            "The exact existing eBay Offer passed the controlled publish boundary and is ready for publishOffer."
+                        )
+                        boundary_audit["blocked_reason"] = None
+                        boundary_audit["execution_mode"] = "controlled_existing_draft_platform_adapter_required"
+                        execution_intent = (
+                            boundary_audit.get("execution_intent")
+                            if isinstance(boundary_audit.get("execution_intent"), dict)
+                            else {}
+                        )
+                        execution_intent.update(
+                            {
+                                "platform_adapter": "ebay.publish_existing_listing_draft",
+                                "creates_public_listing": True,
+                                "writes_to_ebay": True,
+                                "requires_publish_offer_call": True,
+                                "creates_second_offer": False,
+                            }
+                        )
+                        boundary_audit["execution_intent"] = execution_intent
+                    else:
+                        boundary_result["status"] = "blocked_preflight_missing"
+                        boundary_result["message"] = (
+                            "The exact existing eBay Offer is blocked because buyer-facing or binding facts are missing."
+                        )
+                        boundary_audit["blocked_reason"] = "controlled_existing_draft_preflight_blocked"
+                        boundary_audit["execution_mode"] = "blocked"
+                    boundary_result["audit"] = boundary_audit
                 if boundary_result.get("status") == "ready_for_platform_adapter":
+                    controlled_publish_credential: dict[str, Any] = {}
+                    if controlled_existing_draft_publish_live:
+                        controlled_publish_credential = self.repository.unpublished_draft_execution_credential_boundary(
+                            company_id=identity["company_id"],
+                            store_id=confirmation["store_id"],
+                        )
+                        if controlled_publish_credential.get("ready") is not True:
+                            self._send_error(
+                                HTTPStatus.CONFLICT,
+                                "controlled_publish_credential_boundary_blocked",
+                            )
+                            return
                     if confirmation["action_type"] in live_ebay_write_actions:
                         if confirmation["action_type"] == "save_ebay_listing_draft":
                             if not self.repository.draft_external_execution_confirmation_ready(
@@ -7410,14 +11445,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             self._send_error(HTTPStatus.CONFLICT, public_error)
                             return
                     store = confirmation_store
-                    if confirmation["action_type"] != "save_ebay_listing_draft":
+                    if (
+                        confirmation["action_type"] != "save_ebay_listing_draft"
+                        and not controlled_existing_draft_publish_live
+                    ):
+                        adapter = self.ebay_write_adapter_factory(self.settings)
+                    elif controlled_existing_draft_publish_live:
                         adapter = self.ebay_write_adapter_factory(self.settings)
                     adapter_kwargs = {
                         "request": execution_request,
                         "preflight": boundary_result.get("audit", {}).get("preflight") if isinstance(boundary_result.get("audit"), dict) else {},
                         "marketplace_id": str(store.get("marketplace") or "EBAY_US"),
                     }
-                    if confirmation["action_type"] != "save_ebay_listing_draft":
+                    if (
+                        confirmation["action_type"] != "save_ebay_listing_draft"
+                        and not controlled_existing_draft_publish_live
+                    ):
                         adapter_kwargs.update(
                             {
                                 "connections": self.repository.list_connections(
@@ -7430,6 +11473,53 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                 ),
                             }
                         )
+                    # Close the claim-to-write window with one last
+                    # authoritative read after this handler owns the claim and
+                    # immediately before the adapter can make its first eBay
+                    # request. A deterministic zero-write failure restores the
+                    # claim instead of stranding it in manual reconciliation.
+                    if confirmation["action_type"] in {"publish_listing", "save_ebay_listing_draft"}:
+                        try:
+                            _revalidate_confirmation_publish_evidence(
+                                self.repository,
+                                company_id=identity["company_id"],
+                                confirmation=confirmation,
+                            )
+                        except PublishSourceRightsEvidenceError as exc:
+                            claim_restored = False
+                            try:
+                                if confirmation["action_type"] == "save_ebay_listing_draft":
+                                    restored = self.repository.abort_unpublished_draft_execution_claim(
+                                        capability=draft_claim_capability,
+                                        reason_code="publish_evidence_changed",
+                                    )
+                                else:
+                                    restored = self.repository.abort_publish_execution_claim_before_write(
+                                        company_id=identity["company_id"],
+                                        confirmation_id=confirmation["confirmation_id"],
+                                        user_id=identity["user_id"],
+                                        reason_code=(
+                                            "publish_evidence_changed"
+                                            if exc.code == "publish_evidence_changed"
+                                            else "publish_evidence_revalidation_blocked"
+                                        ),
+                                    )
+                                claim_restored = str(restored.get("status") or "") in {"approved", "needs_revision"}
+                            except ConfirmationDecisionConflict:
+                                claim_restored = False
+                            self._send_json(
+                                {
+                                    "error": exc.code,
+                                    "status": int(_publish_evidence_error_status(exc, revalidation=True)),
+                                    "blockers": list(exc.blockers),
+                                    "external_execution_claimed": not claim_restored,
+                                    "external_execution_claim_restored": claim_restored,
+                                    "real_platform_write_attempted": False,
+                                    "secret_exposed": False,
+                                },
+                                status=_publish_evidence_error_status(exc, revalidation=True),
+                            )
+                            return
                     try:
                         if confirmation["action_type"] == "save_ebay_listing_draft":
                             write_result = adapter.execute_prepared_listing_draft(
@@ -7495,6 +11585,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                     return
                         elif confirmation["action_type"] == "cleanup_test_listing":
                             write_result = adapter.execute_cleanup_plan(**adapter_kwargs)
+                        elif controlled_existing_draft_publish_live:
+                            controlled_item = (
+                                confirmation.get("item")
+                                if isinstance(confirmation.get("item"), dict)
+                                else {}
+                            )
+                            controlled_draft = (
+                                controlled_item.get("existing_ebay_draft")
+                                if isinstance(controlled_item.get("existing_ebay_draft"), dict)
+                                else {}
+                            )
+                            write_result = adapter.publish_existing_listing_draft(
+                                **adapter_kwargs,
+                                credential_boundary=controlled_publish_credential,
+                                expected_offer_id=str(controlled_draft.get("offer_id") or ""),
+                            )
                         else:
                             write_result = adapter.publish_listing(**adapter_kwargs)
                     except Exception:
@@ -7582,6 +11688,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "execution": stored,
                     "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
                     "ebay_draft_save_enabled": self.settings.effective_ebay_draft_save_enabled,
+                    "controlled_existing_draft_publish_enabled": self.settings.effective_ebay_controlled_publish_enabled,
                 },
                 status=HTTPStatus.CREATED,
             )
@@ -7914,8 +12021,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return host.endswith(".trycloudflare.com")
 
     def _operations_console_cookie_context(self) -> bool:
+        return self._is_operations_console_request()
+
+    def _is_operations_console_request(self) -> bool:
         host = str(self.headers.get("host") or "").split(":", 1)[0].strip().lower()
-        return host == "ops.jiejing.shop" or host.startswith("ops.") and host.endswith(".jiejing.shop")
+        # The operations console is a single security boundary, not a wildcard
+        # tenant surface. Tests that call the backend directly must send this
+        # exact Host header as an explicit fixture.
+        return host == "ops.jiejing.shop"
+
+    def _require_operations_console_request(self, label: str = "operations console endpoint") -> bool:
+        if self._is_operations_console_request():
+            return True
+        self._send_error(HTTPStatus.FORBIDDEN, f"{label} is only available from the operations console")
+        return False
 
     def _check_auth_rate_limit(self, action: str, body: dict[str, Any]) -> bool:
         client_ip = self._client_ip_for_rate_limit()
@@ -8581,12 +12700,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             ("post-publish", "post-publish cockpit evidence and cleanup boundary", ["GET /post-publish/cockpit"]),
             (
                 "billing",
-                "checkout, portal, billing test events and manual beta payment orders",
+                "merchant checkout and manual beta payment orders; rehearsals stay in ops",
                 [
                     "POST /billing/checkout-session",
-                    "POST /billing/test-event",
                     "POST /billing/manual-beta/orders",
-                    "POST /billing/wechat-pay/zero-charge-rehearsal",
+                    "POST /owner/billing/test-event",
+                    "POST /owner/billing/provider-rehearsal",
+                    "POST /owner/billing/wechat-pay/zero-charge-rehearsal",
                 ],
             ),
             (
@@ -8752,8 +12872,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         quota = plan.get("quota_contract") if isinstance(plan.get("quota_contract"), dict) else {}
         return {
             "contract_version": _safe_bounded_text(plan.get("contract_version"), 128),
-            "billing_ready_for_private_beta": plan.get("billing_ready_for_private_beta") is True,
-            "billing_ready_for_paid_launch": public_checkout_active,
             "provider": {
                 "provider": "wechat_pay_native",
                 "checkout_mode": "native_qr",
@@ -8784,23 +12902,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 ),
             },
             "mainland_payment": mainland_payment,
-            "merchant_launch_path": _merchant_safe_launch_path(
-                plan.get("merchant_launch_path"),
-                mainland_payment=mainland_payment,
-                quota_enabled=quota.get("enabled") is True,
-                public_checkout_active=public_checkout_active,
-            ),
-            "paid_launch_blockers": [] if public_checkout_active else [mainland_payment["next_blocker"]],
-            "billing_test_rehearsal_summary": _merchant_safe_rehearsal_summary(
-                plan.get("billing_test_rehearsal_summary")
-            ),
-            "subscription_quota_shutdown_closure": _merchant_safe_shutdown_summary(
-                plan.get("subscription_quota_shutdown_closure")
-            ),
-            "billing_incident_runbook": _merchant_safe_incident_runbook(plan.get("billing_incident_runbook")),
-            "customer_billing_trust_packet": _merchant_safe_trust_packet(
-                plan.get("customer_billing_trust_packet")
-            ),
             "confirmation_boundary": {
                 "billing_changes_need_owner_or_admin": True,
                 "real_platform_writes_not_included_in_any_current_plan": True,
@@ -8816,7 +12917,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "frontend_can_grant_entitlement": False,
             "frontend_can_grant_quota": False,
             "customer_visible": True,
-            "internal_launch_evidence_visible": False,
             "secret_exposed": False,
         }
 
@@ -8868,17 +12968,27 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         legacy_grandfathered = activation is None
         expires_at = activated_at + timedelta(days=duration_days) if activated_at else None
         trial_expired = bool(expires_at and now >= expires_at)
-        used = 0
+        task_used = 0
         for task in self.repository.list_tasks(company_id=identity["company_id"]):
             task_created_at = _parse_utc_datetime(task.get("created_at"))
             if activated_at and (task_created_at is None or task_created_at < activated_at):
                 continue
             if legacy_grandfathered and str(task.get("created_at") or "")[:7] != now.strftime("%Y-%m"):
                 continue
-            if str(task.get("task_type") or "") != "merchant_ceo_chat":
-                continue
+            task_type = str(task.get("task_type") or "")
             task_input = task.get("input") if isinstance(task.get("input"), dict) else {}
             task_output = task.get("output") if isinstance(task.get("output"), dict) else {}
+            if task_type == "listing_draft_generation":
+                platform_used = task_input.get("model_usage_owner") == "jiejing_platform_trial"
+                usage_consumed = (
+                    task_output.get("usage_consumed") is True
+                    or int(task_output.get("model_request_count") or 0) > 0
+                )
+                if platform_used and usage_consumed:
+                    task_used += 1
+                continue
+            if task_type != "merchant_ceo_chat":
+                continue
             chat = task_output.get("ai_ceo_chat") if isinstance(task_output.get("ai_ceo_chat"), dict) else {}
             model_client = chat.get("model_client") if isinstance(chat.get("model_client"), dict) else {}
             platform_used = (
@@ -8890,7 +13000,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 )
             )
             if platform_used:
-                used += 1
+                usage_consumed = (
+                    task_output.get("usage_consumed") is True
+                    or int(task_output.get("model_request_count") or 0) > 0
+                )
+                if usage_consumed:
+                    task_used += 1
+        period_anchor = (
+            f"legacy-month:{now.strftime('%Y-%m')}"
+            if legacy_grandfathered
+            else f"activated-trial:{activated_at.isoformat() if activated_at else 'not-activated'}"
+        )
+        period_key = hashlib.sha256(
+            f"platform-model-trial-v1|{identity['company_id']}|{period_anchor}".encode("utf-8")
+        ).hexdigest()
+        reservation_usage = self.repository.platform_model_trial_reservation_usage(
+            company_id=identity["company_id"],
+            period_key=period_key,
+        )
+        used = max(task_used, int(reservation_usage.get("reservation_used") or 0))
         if activation is None:
             activation_status = "grandfathered_active"
             activation_allowed = True
@@ -8930,11 +13058,96 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 )
             ),
             "unlimited_when_limit_zero": limit <= 0,
-            "quota_source": "backend_task_audit_and_activation_window",
+            "quota_source": "backend_model_task_audit_and_atomic_reservations",
             "account_space_id_present": bool(identity.get("company_id")),
             "requires_merchant_byok_or_plan_upgrade_when_exhausted": True,
             "secret_exposed": False,
         }
+
+    def _reserve_platform_model_trial(
+        self,
+        *,
+        identity: dict[str, Any],
+        route_scope: str,
+    ) -> dict[str, Any]:
+        """Reserve one shared platform-funded action immediately before model entry."""
+
+        quota = self._platform_model_trial_quota(identity=identity)
+        if quota.get("allowed") is not True:
+            return {
+                "allowed": False,
+                "quota": quota,
+                "reservation_created": False,
+                "secret_exposed": False,
+            }
+        limit = max(0, int(quota.get("trial_limit") or 0))
+        if limit <= 0:
+            return {
+                "allowed": True,
+                "quota": quota,
+                "reservation_created": False,
+                "unlimited": True,
+                "secret_exposed": False,
+            }
+        period_anchor = (
+            f"legacy-month:{quota.get('period') or ''}"
+            if quota.get("legacy_grandfathered") is True
+            else f"activated-trial:{quota.get('trial_started_at') or 'not-activated'}"
+        )
+        period_key = hashlib.sha256(
+            f"platform-model-trial-v1|{identity['company_id']}|{period_anchor}".encode("utf-8")
+        ).hexdigest()
+        reservation = self.repository.reserve_platform_model_trial_slot(
+            company_id=identity["company_id"],
+            period_key=period_key,
+            historical_used=int(quota.get("used") or 0),
+            limit=limit,
+            route_scope=route_scope,
+        )
+        refreshed_quota = self._platform_model_trial_quota(identity=identity)
+        reservation_allowed = reservation.get("allowed") is True
+        return {
+            "allowed": reservation_allowed,
+            # A successful response preserves the existing "quota before this
+            # action" contract.  A loser receives the refreshed hard-stop
+            # snapshot that includes the winning request's durable slot.
+            "quota": quota if reservation_allowed else refreshed_quota,
+            "reservation_created": reservation.get("reservation_created") is True,
+            "reservation_id": str(reservation.get("reservation_id") or ""),
+            "slot_number": int(reservation.get("slot_number") or 0),
+            "storage": "shared_database",
+            "secret_exposed": False,
+        }
+
+    def _settle_platform_model_trial_reservation(
+        self,
+        *,
+        identity: dict[str, Any],
+        reservation: dict[str, Any] | None,
+        request_count: int,
+    ) -> dict[str, Any]:
+        reservation_record = reservation if isinstance(reservation, dict) else {}
+        reservation_id = str(reservation_record.get("reservation_id") or "")
+        if not reservation_id:
+            return {
+                "settled": True,
+                "status": "unmetered",
+                "provider_request_count": max(0, int(request_count or 0)),
+                "secret_exposed": False,
+            }
+        try:
+            return self.repository.settle_platform_model_trial_reservation(
+                company_id=identity["company_id"],
+                reservation_id=reservation_id,
+                request_count=request_count,
+            )
+        except Exception:
+            return {
+                "settled": False,
+                "status": "settlement_failed",
+                "provider_request_count": max(0, int(request_count or 0)),
+                "secret_exposed": False,
+            }
 
     def _platform_trial_activation_for_registration(
         self,
@@ -9002,7 +13215,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             decision_reason=reason,
         )
 
-    def _require_quota(self, identity: dict[str, Any], action_unit: str) -> bool:
+    def _require_quota(
+        self,
+        identity: dict[str, Any],
+        action_unit: str,
+        *,
+        on_block: Callable[[dict[str, Any]], None] | None = None,
+        extra_response: dict[str, Any] | None = None,
+        send_response: bool = True,
+    ) -> bool:
         evaluation = evaluate_quota_action(
             self.settings,
             self.repository,
@@ -9022,16 +13243,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if evaluation.get("allowed") is True:
                 return True
             evaluation = {**evaluation, "private_beta_entitlement_recovery": recovery}
-        self._send_json(
-            {
-                "error": "quota exhausted",
-                "status": int(HTTPStatus.PAYMENT_REQUIRED),
-                "quota": evaluation,
-                "real_platform_writes_enabled": False,
-                "secret_exposed": False,
-            },
-            status=HTTPStatus.PAYMENT_REQUIRED,
-        )
+        if on_block is not None:
+            on_block(evaluation)
+        if send_response:
+            self._send_json(
+                {
+                    "error": "quota exhausted",
+                    "status": int(HTTPStatus.PAYMENT_REQUIRED),
+                    "quota": evaluation,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                    **(extra_response if isinstance(extra_response, dict) else {}),
+                },
+                status=HTTPStatus.PAYMENT_REQUIRED,
+            )
         return False
 
     def _recover_missing_private_beta_entitlement(self, *, identity: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
@@ -9142,7 +13367,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         copied["metadata"] = metadata
         return copied
 
-    def _resolve_model_client_for_store(self, *, identity: dict[str, Any], store_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    def _resolve_model_client_for_store(
+        self,
+        *,
+        identity: dict[str, Any],
+        store_id: str,
+        body: dict[str, Any],
+        task_scope: str = "model_value_rehearsal",
+    ) -> dict[str, Any]:
+        turn_plan = body.get("ai_ceo_turn_plan") if isinstance(body.get("ai_ceo_turn_plan"), dict) else {}
+        model_tier = str(turn_plan.get("model_tier") or "fast").strip().lower()
+        if model_tier not in {"fast", "thinking", "pro"}:
+            model_tier = "fast"
         requested_secret_ref = str(body.get("model_secret_ref") or "").strip()
         use_byok = body.get("use_merchant_byok") is not False
         if not requested_secret_ref and not use_byok:
@@ -9264,7 +13500,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         resolved = resolver.resolve_secret(
             secret_ref=selected,
             requested_by="model_provider_client",
-            task_scope="model_value_rehearsal",
+            task_scope=task_scope,
             allowed_purposes=[MODEL_SECRET_PURPOSE],
         )
         if not resolved.get("ok"):
@@ -9305,6 +13541,29 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "secret_ref": selected.get("secret_ref"),
                 "secret_exposed": False,
             }
+        setattr(model_client, "jiejing_model_tier", model_tier)
+        setattr(
+            model_client,
+            "jiejing_reasoning_mode",
+            "thinking" if definition.provider_key == "deepseek" and model_tier in {"thinking", "pro"} else "disabled",
+        )
+        if (
+            definition.provider_key == "deepseek"
+            and getattr(model_client, "jiejing_reasoning_mode", "") == "thinking"
+            and urlparse(getattr(model_client, "endpoint", "")).netloc.lower() == "api.deepseek.com"
+        ):
+            # This is not a provider/model failover. An exhausted answer with
+            # no body or an incomplete structure may use this isolated client
+            # once, with the identical BYOK and no recursive continuation.
+            direct_client = build_model_client_from_byok_secret(
+                provider_key=definition.provider_key,
+                api_key=str(resolved.get("secret_value") or ""),
+                model=model_client.model,
+                base_url=model_client.endpoint.removesuffix("/chat/completions"),
+            )
+            direct_client.jiejing_model_tier = model_tier
+            direct_client.jiejing_reasoning_mode = "disabled"
+            model_client.jiejing_empty_answer_model_client = direct_client
         return {
             "status": "resolved",
             "mode": selected_mode,
@@ -9312,6 +13571,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "provider_label": definition.label,
             "api_style": definition.api_style,
             "model": getattr(model_client, "model", "") or metadata.get("model") or definition.default_model,
+            "model_tier": model_tier,
+            "reasoning_mode": getattr(model_client, "jiejing_reasoning_mode", "disabled"),
+            "complexity_upgrade": model_tier != "fast",
             "endpoint_host": urlparse(getattr(model_client, "endpoint", "") or "").netloc,
             "secret_ref": selected.get("secret_ref"),
             "secret_ref_scope": selected_scope,
@@ -9324,6 +13586,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         }
 
     def _resolve_platform_default_model_client(self, *, body: dict[str, Any]) -> dict[str, Any]:
+        turn_plan = body.get("ai_ceo_turn_plan") if isinstance(body.get("ai_ceo_turn_plan"), dict) else {}
+        model_tier = str(turn_plan.get("model_tier") or "fast").strip().lower()
+        if model_tier not in {"fast", "thinking", "pro"}:
+            model_tier = "fast"
         provider_key = (
             os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_PROVIDER")
             or os.environ.get("JIEJING_MODEL_PROVIDER")
@@ -9369,7 +13635,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             or (os.environ.get("JIEJING_MODEL") or "").strip()
             or definition.default_model
         )
-        model = platform_default_serving_model(provider=definition.provider_key, configured_model=configured_model)
+        serving_model = platform_default_serving_model(provider=definition.provider_key, configured_model=configured_model)
+        model = platform_model_for_tier(
+            provider=definition.provider_key,
+            configured_model=configured_model,
+            serving_model=serving_model,
+            model_tier=model_tier,
+        )
         base_url = normalize_model_api_base_url(
             provider_key=definition.provider_key,
             base_url=(
@@ -9406,6 +13678,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             }
         fallback_model = (
             os.environ.get("JIEJING_AI_CEO_PLATFORM_FALLBACK_MODEL")
+            or (serving_model if model_tier == "pro" and serving_model != model else "")
             or (configured_model if configured_model != model else "")
         ).strip()
         if fallback_model and fallback_model != model:
@@ -9416,6 +13689,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     model=fallback_model,
                     base_url=base_url,
                 )
+                setattr(fallback_model_client, "jiejing_model_tier", "fast")
+                setattr(fallback_model_client, "jiejing_reasoning_mode", "disabled")
                 setattr(model_client, "jiejing_fallback_model_client", fallback_model_client)
             except ValueError:
                 fallback_model = ""
@@ -9429,6 +13704,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "model": model,
                 "secret_exposed": False,
             }
+        setattr(model_client, "jiejing_model_tier", model_tier)
+        setattr(
+            model_client,
+            "jiejing_reasoning_mode",
+            "thinking" if definition.provider_key == "deepseek" and model_tier in {"thinking", "pro"} else "disabled",
+        )
         return {
             "status": "resolved",
             "mode": "platform_managed_default",
@@ -9436,6 +13717,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "provider_label": definition.label,
             "api_style": definition.api_style,
             "model": getattr(model_client, "model", "") or model,
+            "serving_model": serving_model,
+            "model_tier": model_tier,
+            "reasoning_mode": getattr(model_client, "jiejing_reasoning_mode", "disabled"),
+            "complexity_upgrade": model_tier != "fast",
             "configured_model": configured_model,
             "fallback_model": fallback_model,
             "fallback_policy": "platform_default_transient_failover" if fallback_model else "disabled",
@@ -9489,6 +13774,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "secret_exposed": False,
             }
         selected_status = str(selected.get("status") or "")
+        if model_secret_storage_recovery_required(selected):
+            return {
+                "error": "此前保存的 AI 连接目前无法从安全存储读取，需要先恢复连接。",
+                "verified": False,
+                "requires_api_key_reentry": False,
+                "can_retry_verification": False,
+                "blocked_by": ["model_secret_storage_recovery_required"],
+                "model_settings": public_model_settings_from_secret_refs(refs),
+                "secret_exposed": False,
+            }
         storage_ready = selected_status in READY_MODEL_SECRET_STATUSES or selected_status == "stored_unverified"
         if not storage_ready:
             return {
@@ -9689,7 +13984,30 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK, headers: list[tuple[str, str]] | None = None) -> None:
         merchant_safe_data = _merchant_safe_replaceable_media_provider(data)
-        body = json.dumps(merchant_safe_data, ensure_ascii=False, indent=2, default=json_default).encode("utf-8")
+        self._write_json(merchant_safe_data, status=status, headers=headers)
+
+    def _send_checkpoint_json(self, data: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
+        # Checkpoints are a validated, secret-rejected merchant-text DTO, not provider metadata.
+        # Preserve their exact immutable receipt; retain normal provider projection on source reports.
+        safe = dict(data)
+        for report_key in ("current_base_report", "validated_generation_report", "current_product_fact_report"):
+            base = data.get(report_key)
+            if not isinstance(base, dict):
+                continue
+            projected = _merchant_safe_replaceable_media_provider(base)
+            for key in ("report_id", "task_id", "company_id", "store_id"):
+                if key in base:
+                    projected[key] = base[key]
+            body = base.get("report") if isinstance(base.get("report"), dict) else {}
+            project_identity = body.get("listing_project_identity")
+            if isinstance(project_identity, dict):
+                projected["report"]["listing_project_identity"] = {
+                    key: project_identity[key] for key in ("key", "source_report_id", "candidate_id")}
+            safe[report_key] = projected
+        self._write_json(safe, status=status)
+
+    def _write_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK, headers: list[tuple[str, str]] | None = None) -> None:
+        body = json.dumps(data, ensure_ascii=False, indent=2, default=json_default).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "application/json; charset=utf-8")
         self.send_header("content-length", str(len(body)))
@@ -10237,6 +14555,57 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         }
 
 
+def _publish_evidence_error_status(
+    error: PublishSourceRightsEvidenceError,
+    *,
+    revalidation: bool = False,
+) -> HTTPStatus:
+    if revalidation:
+        return HTTPStatus.CONFLICT
+    if error.code == "publish_evidence_reference_invalid":
+        return HTTPStatus.BAD_REQUEST
+    if error.code == "publish_evidence_reference_not_found":
+        return HTTPStatus.NOT_FOUND
+    if error.code in {"publish_evidence_reference_not_unique", "publish_evidence_scope_mismatch"}:
+        return HTTPStatus.CONFLICT
+    return HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def _revalidate_confirmation_publish_evidence(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    confirmation: dict[str, Any],
+) -> dict[str, Any]:
+    """Re-resolve the approved server snapshot before every eBay boundary."""
+
+    if str(confirmation.get("action_type") or "") not in {"publish_listing", "save_ebay_listing_draft"}:
+        return {}
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}
+    identity = item.get("listing_project_identity") if isinstance(item.get("listing_project_identity"), dict) else {}
+    stored = payload.get("publish_evidence") if isinstance(payload.get("publish_evidence"), dict) else {}
+    manifest = payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), dict) else {}
+    validate_publish_source_rights_evidence(
+        stored,
+        company_id=company_id,
+        store_id=str(confirmation.get("store_id") or ""),
+        listing_project_identity=identity,
+        asset_manifest=manifest,
+    )
+    fresh = resolve_publish_source_rights_evidence(
+        repository,
+        company_id=company_id,
+        store_id=str(confirmation.get("store_id") or ""),
+        listing_project_identity=identity,
+        asset_manifest=manifest,
+        evidence_refs=stored.get("refs") if isinstance(stored.get("refs"), dict) else {},
+    )
+    if str(fresh.get("fingerprint") or "") != str(stored.get("fingerprint") or ""):
+        raise PublishSourceRightsEvidenceError("publish_evidence_changed", "authoritative_evidence_fingerprint_changed")
+    return fresh
+
+
 def _execution_payload_from_context(
     *,
     repository: SaaSRepository,
@@ -10257,6 +14626,394 @@ def _execution_payload_from_context(
     # may carry transport metadata (for example idempotency), but may never
     # replace SKU, price, title, policy, store, cleanup target or other facts.
     return _deep_merge({}, confirmation_payload)
+
+
+def _controlled_existing_draft_publish_context(
+    *,
+    execution_results: list[dict[str, Any]],
+    confirmations: list[dict[str, Any]],
+    company_id: str,
+    store_id: str,
+    offer_id: str,
+    sku: str,
+    execution_id: str,
+) -> dict[str, Any]:
+    """Bind a public-publish confirmation to one proven unpublished offer.
+
+    The publish payload is recovered from the already executed draft-save
+    confirmation.  Browser form values cannot replace that approved snapshot,
+    and the caller cannot select another store, SKU, execution or offer.
+    """
+
+    expected = {
+        "company_id": str(company_id or "").strip(),
+        "store_id": str(store_id or "").strip(),
+        "offer_id": str(offer_id or "").strip(),
+        "sku": str(sku or "").strip(),
+        "execution_id": str(execution_id or "").strip(),
+    }
+    if not all(expected.values()):
+        return {"status": "controlled_publish_binding_incomplete", "secret_exposed": False}
+    matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    confirmations_by_id = {
+        str(item.get("confirmation_id") or "").strip(): item
+        for item in confirmations
+        if isinstance(item, dict) and str(item.get("confirmation_id") or "").strip()
+    }
+    for execution in execution_results:
+        if not isinstance(execution, dict):
+            continue
+        if str(execution.get("execution_id") or "").strip() != expected["execution_id"]:
+            continue
+        if str(execution.get("action_type") or "") != "save_ebay_listing_draft":
+            continue
+        if str(execution.get("status") or "") != "saved_to_ebay_draft":
+            continue
+        result = execution.get("result") if isinstance(execution.get("result"), dict) else {}
+        platform = result.get("platform_result") if isinstance(result.get("platform_result"), dict) else {}
+        if not (
+            str(result.get("status") or "") == "saved_to_ebay_draft"
+            and str(platform.get("offer_id") or platform.get("offerId") or "").strip() == expected["offer_id"]
+            and str(platform.get("offer_status") or "").strip().upper() == "UNPUBLISHED"
+            and str(platform.get("sku") or "").strip() == expected["sku"]
+            and platform.get("writes_to_ebay") is True
+            and platform.get("published_to_ebay") is False
+            and platform.get("public_listing_created") is False
+            and result.get("secret_exposed") is False
+        ):
+            continue
+        confirmation_id = str(execution.get("confirmation_id") or "").strip()
+        confirmation = confirmations_by_id.get(confirmation_id) or {}
+        item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+        payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}
+        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        if not (
+            str(confirmation.get("company_id") or "").strip() == expected["company_id"]
+            and str(confirmation.get("store_id") or "").strip() == expected["store_id"]
+            and str(confirmation.get("action_type") or "") == "save_ebay_listing_draft"
+            and str(confirmation.get("status") or "") == "executed"
+            and str(listing.get("sku") or "").strip() == expected["sku"]
+            and item.get("secret_exposed") is False
+            and payload.get("secret_exposed") is False
+        ):
+            continue
+        matches.append((execution, confirmation))
+    if len(matches) != 1:
+        return {
+            "status": "controlled_publish_exact_draft_not_found" if not matches else "controlled_publish_draft_not_unique",
+            "secret_exposed": False,
+        }
+
+    execution, confirmation = matches[0]
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    payload = _deep_merge({}, item.get("publish_payload") or {})
+    payload["source"] = "merchant_existing_ebay_draft_publish_intake"
+    payload["existing_ebay_draft"] = {
+        "offer_id": expected["offer_id"],
+        "sku": expected["sku"],
+        "source_execution_id": expected["execution_id"],
+        "source_confirmation_id": str(confirmation.get("confirmation_id") or ""),
+        "offer_status": "UNPUBLISHED",
+        "public_listing_created": False,
+        "secret_exposed": False,
+    }
+    payload["secret_exposed"] = False
+    return {
+        "status": "ready",
+        "offer_id": expected["offer_id"],
+        "sku": expected["sku"],
+        "source_execution_id": expected["execution_id"],
+        "source_confirmation_id": str(confirmation.get("confirmation_id") or ""),
+        "listing_project_identity": _deep_merge({}, item.get("listing_project_identity") or {}),
+        "publish_payload": payload,
+        "secret_exposed": False,
+    }
+
+
+def _matching_controlled_existing_draft_publish_confirmations(
+    *,
+    confirmations: list[dict[str, Any]],
+    company_id: str,
+    store_id: str,
+    controlled_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return exact confirmation attempts for one saved Offer binding."""
+
+    expected = {
+        "company_id": str(company_id or "").strip(),
+        "store_id": str(store_id or "").strip(),
+        "offer_id": str(controlled_context.get("offer_id") or "").strip(),
+        "sku": str(controlled_context.get("sku") or "").strip(),
+        "source_execution_id": str(controlled_context.get("source_execution_id") or "").strip(),
+        "source_confirmation_id": str(controlled_context.get("source_confirmation_id") or "").strip(),
+    }
+    matches: list[dict[str, Any]] = []
+    for confirmation in confirmations:
+        if not isinstance(confirmation, dict):
+            continue
+        item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+        draft = item.get("existing_ebay_draft") if isinstance(item.get("existing_ebay_draft"), dict) else {}
+        if (
+            str(confirmation.get("company_id") or "").strip() == expected["company_id"]
+            and str(confirmation.get("store_id") or "").strip() == expected["store_id"]
+            and str(confirmation.get("action_type") or "") == "publish_listing"
+            and str(item.get("source") or "") == "merchant_existing_ebay_draft_publish_intake"
+            and item.get("controlled_existing_draft_publish") is True
+            and str(draft.get("offer_id") or "").strip() == expected["offer_id"]
+            and str(draft.get("sku") or "").strip() == expected["sku"]
+            and str(draft.get("source_execution_id") or "").strip() == expected["source_execution_id"]
+            and str(draft.get("source_confirmation_id") or "").strip() == expected["source_confirmation_id"]
+            and draft.get("secret_exposed") is False
+            and item.get("secret_exposed") is False
+        ):
+            matches.append(confirmation)
+    return matches
+
+
+_CONTROLLED_EXISTING_DRAFT_DISCLOSED_FACT_GAPS = {
+    "supplier_facts.package_weight_g",
+    "supplier_facts.package_dimensions_cm",
+    "supplier_facts.material",
+    "finance_review.net_profit_money",
+}
+
+
+def _controlled_existing_draft_publish_preflight(
+    request: ExecutionRequest,
+    *,
+    require_confirmation: bool,
+) -> dict[str, Any]:
+    """Validate publishing one already-saved Offer without inventing facts.
+
+    A saved eBay Offer has already crossed the inventory-item and offer-create
+    boundary.  The controlled publish lane therefore keeps every buyer-facing,
+    account, policy, asset, idempotency and exact Offer/SKU field blocking, but
+    reports unclaimed supplier packaging/material facts and internal profit
+    analysis as explicit merchant warnings.  Those values are never fabricated
+    merely to make a public-publish rehearsal turn green.
+    """
+
+    generic = ExecutionService(demo_mode=False).preflight(request)
+    payload = request.payload if isinstance(request.payload, dict) else {}
+    listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+    draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
+    supplier = payload.get("supplier_facts") if isinstance(payload.get("supplier_facts"), dict) else {}
+    finance = payload.get("finance_review") if isinstance(payload.get("finance_review"), dict) else {}
+    package_dimensions = (
+        supplier.get("package_dimensions_cm")
+        if isinstance(supplier.get("package_dimensions_cm"), dict)
+        else {}
+    )
+    net_profit = finance.get("net_profit_money") if isinstance(finance.get("net_profit_money"), dict) else {}
+
+    def positive_number(value: Any) -> bool:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        return 0 < number < 1_000_000_000
+
+    semantic_disclosed_gaps: set[str] = set()
+    if not positive_number(supplier.get("package_weight_g")):
+        semantic_disclosed_gaps.add("supplier_facts.package_weight_g")
+    if not all(positive_number(package_dimensions.get(axis)) for axis in ("length", "width", "height")):
+        semantic_disclosed_gaps.add("supplier_facts.package_dimensions_cm")
+    if not str(supplier.get("material") or "").strip():
+        semantic_disclosed_gaps.add("supplier_facts.material")
+    if not (
+        positive_number(net_profit.get("value"))
+        and str(net_profit.get("currency") or "").strip()
+    ):
+        semantic_disclosed_gaps.add("finance_review.net_profit_money")
+
+    def disclosed_gap_key(field: Any) -> str | None:
+        normalized = str(field or "")
+        return next(
+            (
+                allowed
+                for allowed in _CONTROLLED_EXISTING_DRAFT_DISCLOSED_FACT_GAPS
+                if normalized == allowed or normalized.startswith(f"{allowed}.")
+            ),
+            None,
+        )
+
+    allowed_missing = set(_CONTROLLED_EXISTING_DRAFT_DISCLOSED_FACT_GAPS)
+    if not require_confirmation:
+        allowed_missing.add("confirmation_record")
+    disclosed = sorted(
+        semantic_disclosed_gaps
+        | {
+            canonical
+            for field in generic.get("missing_fields") or []
+            if (canonical := disclosed_gap_key(field))
+        }
+    )
+    missing = [
+        field
+        for field in generic.get("missing_fields") or []
+        if field not in allowed_missing and disclosed_gap_key(field) is None
+    ]
+    issues = [
+        issue
+        for issue in generic.get("issues") or []
+        if isinstance(issue, dict)
+        and str(issue.get("key") or "") not in allowed_missing
+        and disclosed_gap_key(issue.get("key")) is None
+    ]
+
+    exact_requirements = {
+        "controlled.source": str(payload.get("source") or "").strip()
+        == "merchant_existing_ebay_draft_publish_intake",
+        "controlled.platform": str(request.platform or "").strip().lower() == "ebay",
+        "existing_ebay_draft.offer_id": bool(str(draft.get("offer_id") or "").strip()),
+        "existing_ebay_draft.sku": bool(str(draft.get("sku") or "").strip()),
+        "existing_ebay_draft.source_execution_id": bool(str(draft.get("source_execution_id") or "").strip()),
+        "existing_ebay_draft.source_confirmation_id": bool(str(draft.get("source_confirmation_id") or "").strip()),
+        "existing_ebay_draft.offer_status": str(draft.get("offer_status") or "").strip().upper() == "UNPUBLISHED",
+        "existing_ebay_draft.public_listing_created": draft.get("public_listing_created") is False,
+        "existing_ebay_draft.sku_matches_listing": bool(str(listing.get("sku") or "").strip())
+        and str(draft.get("sku") or "").strip() == str(listing.get("sku") or "").strip(),
+        "payload.secret_exposed": payload.get("secret_exposed") is False,
+        "existing_ebay_draft.secret_exposed": draft.get("secret_exposed") is False,
+    }
+    for field, ready in exact_requirements.items():
+        if not ready and field not in missing:
+            missing.append(field)
+            issues.append(
+                {
+                    "key": field,
+                    "message": "The exact existing eBay draft binding is incomplete or inconsistent.",
+                    "severity": "blocking",
+                }
+            )
+    status = "blocked_controlled_existing_draft_publish" if missing or issues else (
+        "ready_for_platform_adapter" if require_confirmation else "ready_for_confirmation"
+    )
+    warning_issues = [
+        {
+            "key": field,
+            "message": "This fact remains unknown and is not claimed in the buyer-facing Listing payload.",
+            "severity": "warning",
+        }
+        for field in disclosed
+    ]
+    return {
+        **generic,
+        "preflight": "jiejing-controlled-existing-draft-publish-preflight",
+        "preflight_version": "2026-08-26.1",
+        "status": status,
+        "missing_fields": sorted(set(missing)),
+        "issues": issues + warning_issues,
+        "confirmation_record_present": bool(request.confirmation_id and request.confirmed_by and request.confirmed_at),
+        "controlled_existing_draft_publish": True,
+        "creates_public_listing": True,
+        "requires_publish_offer_call": True,
+        "recreates_inventory_item": False,
+        "creates_second_offer": False,
+        "disclosed_missing_facts": disclosed,
+        "merchant_warning_required": bool(disclosed),
+        "real_execution_allowed": False,
+        "secret_exposed": False,
+    }
+
+
+def _controlled_existing_draft_publish_readiness(
+    *,
+    preflight: dict[str, Any],
+    general_preflight: dict[str, Any],
+) -> dict[str, Any]:
+    missing = list(preflight.get("missing_fields") or [])
+    disclosed = list(preflight.get("disclosed_missing_facts") or [])
+    ready_for_confirmation = preflight.get("status") == "ready_for_confirmation"
+    ready_for_platform_adapter = preflight.get("status") == "ready_for_platform_adapter"
+    readiness_status = (
+        "ready_for_platform_adapter"
+        if ready_for_platform_adapter
+        else "ready_for_confirmation"
+        if ready_for_confirmation
+        else "blocked_controlled_existing_draft_publish"
+    )
+    return {
+        "contract_version": "2026-08-26-controlled-existing-draft-publish-readiness-v1",
+        "status": readiness_status,
+        "ready_for_confirmation": ready_for_confirmation,
+        "ready_for_platform_adapter": ready_for_platform_adapter,
+        "blocking_check_count": len(missing),
+        "warning_count": len(disclosed),
+        "checks": [
+            {
+                "key": "exact_existing_offer_binding",
+                "status": "passed" if not missing else "blocked",
+                "blocking": bool(missing),
+                "missing_fields": missing,
+            },
+            {
+                "key": "disclosed_non_buyer_facts",
+                "status": "warning" if disclosed else "passed",
+                "blocking": False,
+                "missing_fields": disclosed,
+            },
+            {
+                "key": "merchant_action_confirmation",
+                "status": "passed" if ready_for_platform_adapter else "pending",
+                "blocking": False,
+                "next_action": (
+                    "The exact merchant approval is present; publishOffer may run once."
+                    if ready_for_platform_adapter
+                    else "The merchant must explicitly approve this exact Offer before publishOffer is called."
+                ),
+            },
+        ],
+        "controlled_existing_draft_publish": True,
+        "creates_public_listing": True,
+        "requires_publish_offer_call": True,
+        "creates_second_offer": False,
+        "general_listing_preflight_status": str(general_preflight.get("status") or ""),
+        "disclosed_missing_facts": disclosed,
+        "secret_exposed": False,
+    }
+
+
+def _is_domestic_billing_refund_confirmation(confirmation: dict[str, Any]) -> bool:
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    order_id = str(item.get("order_id") or "").strip()
+    return bool(
+        order_id
+        and confirmation.get("action_type") == "refund"
+        and confirmation.get("store_id") is None
+        and confirmation.get("task_id") is None
+        and str(confirmation.get("runtime_run_id") or "") == f"billing_refund:{order_id}"
+        and str(item.get("source") or "") == "domestic_billing_refund_review"
+        and str(item.get("scope") or "") == "account"
+        and item.get("full_refund_only") is True
+        and item.get("moves_money") is True
+        and item.get("approval_does_not_execute") is True
+        and item.get("provider_call_pending") is True
+    )
+
+
+def _is_controlled_existing_draft_publish_confirmation(confirmation: dict[str, Any]) -> bool:
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    draft = item.get("existing_ebay_draft") if isinstance(item.get("existing_ebay_draft"), dict) else {}
+    payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}
+    payload_draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
+    listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+    return bool(
+        confirmation.get("action_type") == "publish_listing"
+        and item.get("source") == "merchant_existing_ebay_draft_publish_intake"
+        and item.get("controlled_existing_draft_publish") is True
+        and item.get("creates_public_listing") is True
+        and item.get("requires_publish_offer_call") is True
+        and str(draft.get("offer_id") or "").strip()
+        and str(draft.get("offer_id") or "").strip() == str(payload_draft.get("offer_id") or "").strip()
+        and str(draft.get("sku") or "").strip()
+        and str(draft.get("sku") or "").strip() == str(listing.get("sku") or "").strip()
+        and str(draft.get("source_execution_id") or "").strip()
+        and str(draft.get("source_confirmation_id") or "").strip()
+        and draft.get("offer_status") == "UNPUBLISHED"
+        and draft.get("public_listing_created") is False
+        and item.get("secret_exposed") is False
+    )
 
 
 def _draft_publish_payload_sha256(payload: dict[str, Any]) -> str:
@@ -10384,7 +15141,7 @@ def _publish_confirmation_payload_from_body(
         "condition": _safe_publish_condition(listing_in.get("condition")),
         "price": {
             "value": _safe_publish_decimal(price_in.get("value")),
-            "currency": _safe_publish_text(price_in.get("currency") or "USD", limit=8) or "USD",
+            "currency": _safe_publish_text(price_in.get("currency", "USD"), limit=8).upper(),
         },
         "quantity": _safe_publish_int(listing_in.get("quantity")),
         "item_specifics": _clean_publish_text_map(item_specifics_in, key_limit=80, value_limit=180),
@@ -10414,16 +15171,36 @@ def _publish_confirmation_payload_from_body(
             url = str(item.get("url") or item.get("src") or "").strip()
             asset_type = _safe_publish_text(item.get("asset_type") or "image", limit=40)
             role = _safe_publish_text(item.get("role") or "gallery", limit=40)
+            asset_id = _safe_publish_text(item.get("asset_id"), limit=120)
         else:
             continue
-        assets.append({"asset_type": asset_type, "role": role, "url": url, "source": "merchant_publish_confirmation_intake"})
+        assets.append(
+            {
+                **({"asset_id": asset_id} if isinstance(item, dict) and asset_id else {}),
+                "asset_type": asset_type,
+                "role": role,
+                "url": url,
+            }
+        )
     finance = {
         "procurement_cost_money": _safe_publish_money(finance_in.get("procurement_cost_money")),
         "shipping_cost_money": _safe_publish_money(finance_in.get("shipping_cost_money")),
+        "ebay_fee_money": _safe_publish_money(finance_in.get("ebay_fee_money")),
         "ad_budget_money": _safe_publish_money(finance_in.get("ad_budget_money")),
+        "return_risk_reserve_money": _safe_publish_money(finance_in.get("return_risk_reserve_money")),
+        "exchange_rate": _safe_publish_decimal(finance_in.get("exchange_rate"), places=8),
+        "exchange_rate_basis": "sale_currency_per_cost_currency" if finance_in.get("exchange_rate_basis") == "sale_currency_per_cost_currency" else "",
         "net_profit_money": _safe_publish_money(finance_in.get("net_profit_money")),
         "gross_margin_percent": _safe_publish_decimal(finance_in.get("gross_margin_percent")),
     }
+    normalized_finance = {}
+    for key, value in finance.items():
+        raw = finance_in.get(key)
+        raw_value = raw.get("value", raw) if isinstance(raw, dict) else raw
+        # Retain a safe invalid marker when an estimate was supplied but could
+        # not be parsed. Otherwise invalid input becomes an optional omission.
+        if value not in ("", None, {}, []) or raw_value not in (None, ""):
+            normalized_finance[key] = value
     return {
         "source": "merchant_listing_publish_intake",
         "marketplace_id": listing["marketplace_id"],
@@ -10431,7 +15208,7 @@ def _publish_confirmation_payload_from_body(
         "business_policies": {key: value for key, value in business_policies.items() if value},
         "supplier_facts": {key: value for key, value in supplier.items() if value not in ("", None, {}, [])},
         "asset_manifest": {"assets": assets},
-        "finance_review": {key: value for key, value in finance.items() if value not in ("", None, {}, [])},
+        "finance_review": normalized_finance,
         "regulatory": _clean_publish_text_map(regulatory_in, key_limit=80, value_limit=240),
         "publish_payload_inferred": False,
         "secret_exposed": False,
@@ -10458,25 +15235,16 @@ def _safe_publish_condition(value: Any) -> str:
     return text if text in {"NEW", "USED", "LIKE_NEW", "VERY_GOOD", "GOOD", "ACCEPTABLE"} else "NEW"
 
 
-def _safe_publish_decimal(value: Any) -> str:
-    try:
-        text = str(value if value is not None else "").strip()
-        if not text:
-            return ""
-        return f"{float(text):.2f}".rstrip("0").rstrip(".")
-    except (TypeError, ValueError):
-        return ""
+def _safe_publish_decimal(value: Any, *, places: int = 2) -> str:
+    number = finite_publish_number(value)
+    return f"{number:.{places}f}".rstrip("0").rstrip(".") if number is not None else ""
 
 
 def _safe_publish_int(value: Any) -> int | None:
-    try:
-        text = str(value if value is not None else "").strip()
-        if not text:
-            return None
-        number = int(float(text))
-        return number if number >= 0 else None
-    except (TypeError, ValueError):
+    number = finite_publish_number(value)
+    if number is None or number < 0 or not number.is_integer() or number > 9007199254740991:
         return None
+    return int(number)
 
 
 def _safe_publish_money(value: Any) -> dict[str, str] | None:
@@ -10485,7 +15253,7 @@ def _safe_publish_money(value: Any) -> dict[str, str] | None:
     amount = _safe_publish_decimal(value.get("value"))
     if not amount:
         return None
-    return {"value": amount, "currency": _safe_publish_text(value.get("currency") or "USD", limit=8) or "USD"}
+    return {"value": amount, "currency": _safe_publish_text(value.get("currency"), limit=8).upper()}
 
 
 def _clean_publish_text_map(value: Any, *, key_limit: int = 80, value_limit: int = 240) -> dict[str, str]:
@@ -10907,7 +15675,21 @@ def _redact_secret_like(value: Any) -> Any:
         out: dict[str, Any] = {}
         for key, item in value.items():
             lower = str(key).lower()
-            if any(marker in lower for marker in ("secret", "token", "password", "api_key", "apikey", "refresh")):
+            if isinstance(item, bool) or lower in {
+                "cached_tokens",
+                "completion_tokens",
+                "input_tokens",
+                "model_max_output_tokens",
+                "output_tokens",
+                "prompt_tokens",
+                "reasoning_tokens",
+                "total_tokens",
+                "model_secret_resolution",
+                "model_secret_ref_scope",
+                "secret_ref_scope",
+            }:
+                out[key] = _redact_secret_like(item)
+            elif any(marker in lower for marker in ("secret", "token", "password", "api_key", "apikey", "refresh")):
                 out[key] = "[REDACTED]"
             else:
                 out[key] = _redact_secret_like(item)

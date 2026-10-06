@@ -26,6 +26,8 @@ DEFAULT_SUMMARY = ROOT / "output" / "jiejing-infrastructure-stage-gate" / "sqlit
 TABLE_ORDER = (
     "companies",
     "users",
+    "platform_trial_activations",
+    "platform_model_trial_reservations",
     "user_refresh_sessions",
     "user_refresh_token_history",
     "user_sessions",
@@ -43,6 +45,8 @@ TABLE_ORDER = (
     "media_asset_jobs",
     "task_steps",
     "reports",
+    "listing_draft_edit_heads",
+    "listing_draft_edit_revisions",
     "confirmations",
     "execution_results",
     "audit_logs",
@@ -69,6 +73,7 @@ JSON_COLUMNS = {
     "turn_json",
     "step_json",
     "report_json",
+    "receipt_json",
     "item_json",
     "result_json",
     "audit_json",
@@ -209,7 +214,7 @@ def _table_insert_sql(*, table: str, columns: list[str], rows: list[sqlite3.Row]
 def _sql_header(*, sqlite_path: Path, schema_path: Path) -> list[str]:
     return [
         "-- Jiejing SaaS SQLite -> PostgreSQL migration rehearsal.",
-        "-- Apply after jiejing_saas/migrations/001_initial_schema_postgres.sql in an isolated Postgres instance.",
+        "-- Apply every registered PostgreSQL migration before this import in an isolated Postgres instance.",
         "-- This file may contain hashed credentials and tenant records from the source database.",
         "-- Do not commit or share generated import SQL.",
         f"-- source_sqlite={sqlite_path}",

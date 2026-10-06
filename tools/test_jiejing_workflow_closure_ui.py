@@ -16,11 +16,25 @@ def main() -> int:
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
     app_html = (ROOT / "app.html").read_text(encoding="utf-8")
 
+    require(app_js, 'data-listing-mode="single"', "single-product workspace mode navigation")
+    require(app_js, 'data-listing-mode="bulk"', "bulk workspace mode navigation")
+    require(app_js, 'data-listing-mode="recent"', "recent-task workspace mode navigation")
+    require(app_js, 'aria-current="page"', "active workspace mode semantics")
+    require(app_js, "function renderSaasRecentProductTasks", "saved product-workflow task projection")
+    require(app_js, "data-recent-product-task-type", "recent task type is observable to the browser contract")
+    require(app_js, "saasListingDraftFromReport", "recent task resumes the existing Listing draft")
+
     for needle, label in [
-        ('status.live_image_generation_enabled === true', "live image readiness signal"),
+        ('capability.live_image_generation_enabled === true', "live image readiness signal"),
         ("素材清单实际返回 ${deliveredCount} 个结果", "actual manifest result count"),
         ('job.status !== "approved_for_listing"', "review gate before Listing writeback"),
         ("approveLatestSaasMediaAssetJobForListingDraft", "persisted merchant media review"),
+        ("readSaasMediaReviewEvidenceFromActiveModal", "click-time media review evidence collection"),
+        ('assetModal.dataset.mediaReviewJobId = mediaJobId', "review modal job binding"),
+        ('if (!evidence || evidence.media_job_id !== mediaJobId)', "review submission rejects missing or stale evidence"),
+        ('fact_consistency_confirmed: evidence.fact_consistency_confirmed', "fact confirmation comes from checked review evidence"),
+        ('commercial_rights_confirmed: evidence.commercial_rights_confirmed', "rights confirmation comes from checked review evidence"),
+        ('platform_rules_checked: evidence.platform_rules_checked', "platform confirmation comes from checked review evidence"),
         ('state.saasActiveMediaPreviewKey === "script"', "script-only preview handling"),
         ("视频文件尚未生成", "honest video state"),
         ("parseSaasBulkManualCandidates", "manual bulk candidate parser"),
@@ -40,6 +54,18 @@ def main() -> int:
     require(app_js, "const videoRequested = [6, 10].includes(videoDurationSeconds);", "video request requires an explicit supported duration")
     require(app_js, "if (/不生成视频/.test(String(value))) return 0;", "no-video selection prevents provider spend")
     require(app_js, "video_generation_requested: videoRequested", "video request reaches backend provider job")
+
+    approval_start = app_js.index("async function approveLatestSaasMediaAssetJobForListingDraft")
+    approval_end = app_js.index("async function retrySaasMediaAssetJob", approval_start)
+    approval_block = app_js[approval_start:approval_end]
+    for forbidden in [
+        "fact_consistency_confirmed: true",
+        "commercial_rights_confirmed: true",
+        "platform_rules_checked: true",
+        "motion_and_usage_consistency_confirmed: true",
+    ]:
+        if forbidden in approval_block:
+            raise AssertionError(f"media review approval must not hardcode merchant evidence: {forbidden}")
 
     public_accept_start = app_js.index('if (action === "accept-candidates")')
     public_accept_end = app_js.index("state.bulkApprovedCount = state.batchPreviewCount", public_accept_start)

@@ -17,6 +17,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "jiejing-owner-launch-control-access-test"
 REQUEST_TIMEOUT_SECONDS = 30
+OPS_HOST = "ops.jiejing.shop"
 
 
 def fail(message: str) -> int:
@@ -49,6 +50,25 @@ def main() -> int:
         return fail(f"platform allowlisted admin permissions should mark platform admin: {platform_admin['permissions_body']}")
     if platform_admin["owner_status"] != 200 or platform_admin["production_status"] != 200 or platform_admin["ledger_status"] != 200:
         return fail(f"platform allowlisted admin should receive 200: {platform_admin}")
+    if any(status != 403 for status in platform_admin["non_ops_owner_statuses"].values()):
+        return fail(
+            "platform admin must not access owner routes through app or localhost hosts: "
+            f"{platform_admin['non_ops_owner_statuses']}"
+        )
+    if any(status != 403 for status in platform_admin["lookalike_ops_owner_statuses"].values()):
+        return fail(
+            "production-like owner routes must reject lookalike ops subdomains: "
+            f"{platform_admin['lookalike_ops_owner_statuses']}"
+        )
+    readiness = platform_admin["admin_app_readiness_body"].get("readiness") or {}
+    if platform_admin["admin_app_readiness_status"] != 200:
+        return fail(f"platform admin merchant readiness request failed: {platform_admin['admin_app_readiness_status']}")
+    if (
+        readiness.get("detail_scope") != "public_summary"
+        or readiness.get("authenticated_summary") is not True
+        or readiness.get("secret_exposed") is not False
+    ):
+        return fail(f"platform admin must receive merchant-safe readiness on app host: {readiness}")
     legacy_keys = {
         "owner_billing_domain",
         "owner_billing_provider",
@@ -163,9 +183,9 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
         if not token:
             raise RuntimeError(f"registration did not return token: {registered}")
         permissions = _fetch_json_or_error(f"{base}/permissions/me", token=token)
-        owner = _fetch_json_or_error(f"{base}/owner/launch-control", token=token)
-        production = _fetch_json_or_error(f"{base}/owner/production-release-gate", token=token)
-        ledger = _fetch_json_or_error(f"{base}/owner/production-evidence-ledger", token=token)
+        owner = _fetch_json_or_error(f"{base}/owner/launch-control", token=token, host=OPS_HOST)
+        production = _fetch_json_or_error(f"{base}/owner/production-release-gate", token=token, host=OPS_HOST)
+        ledger = _fetch_json_or_error(f"{base}/owner/production-evidence-ledger", token=token, host=OPS_HOST)
         protected_routes = {
             "owner_billing_domain": "/owner/billing-domain-cutover-rehearsal",
             "owner_billing_provider": "/owner/billing-provider-evidence-register",
@@ -193,7 +213,7 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
             "provider_job_contracts": "/provider-job-contracts",
         }
         anonymous_legacy = {
-            key: _fetch_json_or_error(f"{base}{protected_routes[key]}")["status"]
+            key: _fetch_json_or_error(f"{base}{protected_routes[key]}", host=OPS_HOST)["status"]
             for key in (
                 "owner_billing_domain",
                 "owner_billing_provider",
@@ -201,7 +221,31 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
                 "legacy_commercial_billing_provider",
             )
         }
-        protected = {key: _fetch_json_or_error(f"{base}{route}", token=token) for key, route in protected_routes.items()}
+        protected = {
+            key: _fetch_json_or_error(f"{base}{route}", token=token, host=OPS_HOST)
+            for key, route in protected_routes.items()
+        }
+        owner_routes = {
+            "launch_control": "/owner/launch-control",
+            "production_release_gate": "/owner/production-release-gate",
+            "production_evidence_ledger": "/owner/production-evidence-ledger",
+            **{key: route for key, route in protected_routes.items() if route.startswith("/owner/")},
+        }
+        non_ops_owner_statuses = {
+            f"{host_label}:{key}": _fetch_json_or_error(f"{base}{route}", token=token, host=host)["status"]
+            for host_label, host in (("app", "app.jiejing.shop"), ("localhost", ""))
+            for key, route in owner_routes.items()
+        }
+        lookalike_ops_owner_statuses = {
+            f"{host}:{key}": _fetch_json_or_error(f"{base}{route}", token=token, host=host)["status"]
+            for host in ("ops.preview.jiejing.shop", "ops.evil.jiejing.shop")
+            for key, route in owner_routes.items()
+        }
+        admin_app_readiness = _fetch_json_or_error(
+            f"{base}/readiness/product-saas",
+            token=token,
+            host="app.jiejing.shop",
+        )
         return {
             "owner_status": owner["status"],
             "owner_body": owner["body"],
@@ -214,6 +258,10 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
             "protected_launch_statuses": {key: value["status"] for key, value in protected.items()},
             "protected_launch_bodies": {key: value["body"] for key, value in protected.items()},
             "anonymous_legacy_statuses": anonymous_legacy,
+            "non_ops_owner_statuses": non_ops_owner_statuses,
+            "lookalike_ops_owner_statuses": lookalike_ops_owner_statuses,
+            "admin_app_readiness_status": admin_app_readiness["status"],
+            "admin_app_readiness_body": admin_app_readiness["body"],
         }
     finally:
         process.terminate()
@@ -245,10 +293,12 @@ def _post_json(url: str, body: dict[str, Any], *, token: str = "") -> dict[str, 
         return json.loads(response.read().decode("utf-8"))
 
 
-def _fetch_json_or_error(url: str, *, token: str = "") -> dict[str, Any]:
+def _fetch_json_or_error(url: str, *, token: str = "", host: str = "") -> dict[str, Any]:
     headers = {"accept": "application/json"}
     if token:
         headers["authorization"] = f"Bearer {token}"
+    if host:
+        headers["host"] = host
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:

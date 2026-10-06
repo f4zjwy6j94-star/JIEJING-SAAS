@@ -66,10 +66,20 @@ def _post_status(base_url: str, path: str, payload: dict[str, Any], token: str) 
         return int(exc.code), json.loads(raw) if raw else {}
 
 
-def _publish_payload() -> dict[str, Any]:
+def _publish_payload(
+    *,
+    listing_project_identity: dict[str, str],
+    product_fact_report_id: str,
+    image_url: str = "https://example.com/smoke.jpg",
+) -> dict[str, Any]:
     return {
         "workflow_scope": "new_ebay_account_low_risk_smoke",
         "idempotency_key": "new-account-smoke-publish-http-v1",
+        "listing_project_identity": dict(listing_project_identity),
+        "publish_evidence_refs": {
+            "product_fact_report_id": product_fact_report_id,
+            "media_job_id": "",
+        },
         "listing": {
             "sku": "SMOKE-001",
             "title": "New account smoke widget",
@@ -93,7 +103,7 @@ def _publish_payload() -> dict[str, Any]:
             "material": "plastic",
             "item_location": "US",
         },
-        "asset_manifest": {"assets": [{"url": "https://example.com/smoke.jpg"}]},
+        "asset_manifest": {"assets": [{"url": image_url}]},
         "finance_review": {"net_profit_money": {"value": "0.25", "currency": "USD"}},
     }
 
@@ -441,6 +451,127 @@ def main() -> int:
             user_id=user["user_id"],
             payload={"platform": "ebay", "store_name": "current new account", "marketplace": "EBAY_US"},
         )
+        listing_project_identity = {
+            "key": "listing-project-new-account-http-chain",
+            "source_report_id": "market-report-new-account-http-chain",
+            "candidate_id": "candidate-new-account-http-chain",
+        }
+        product_fact_task = repo.create_task(
+            company_id=user["default_company_id"],
+            store_id=store["store_id"],
+            user_id=user["user_id"],
+            task_type="merchant_product_facts",
+            title="Authoritative publish evidence fixture",
+            input_data={"listing_project_identity": listing_project_identity},
+        )
+        product_fact_report = repo.save_merchant_product_fact_report(
+            task=product_fact_task,
+            listing_project_identity=listing_project_identity,
+            packet={
+                "source": "authenticated_merchant_request",
+                "source_mode": "merchant_owned_product",
+                "simulation_only": False,
+                "product_name": "New account smoke widget",
+                "merchant_confirmed_facts": {
+                    "merchant_owned_product_confirmed": True,
+                    "image_rights_confirmed": True,
+                },
+                "source_records": [
+                    {
+                        "type": "merchant_product_image",
+                        "url": "https://example.com/smoke.jpg",
+                        "rights_status": "merchant_confirmed",
+                    },
+                    {
+                        "type": "merchant_product_image",
+                        "url": "https://example.com/ordinary.jpg",
+                        "rights_status": "merchant_confirmed",
+                    },
+                ],
+                "unknown_facts": [],
+                "secret_exposed": False,
+            },
+        )
+        revocation_project_identity = {
+            "key": "listing-project-evidence-revocation-http",
+            "source_report_id": "market-report-evidence-revocation-v1",
+            "candidate_id": "candidate-evidence-revocation-v1",
+        }
+        revocation_fact_task = repo.create_task(
+            company_id=user["default_company_id"],
+            store_id=store["store_id"],
+            user_id=user["user_id"],
+            task_type="merchant_product_facts",
+            title="Evidence revocation positive checkpoint",
+            input_data={"listing_project_identity": revocation_project_identity},
+        )
+        revocation_fact_report = repo.save_merchant_product_fact_report(
+            task=revocation_fact_task,
+            listing_project_identity=revocation_project_identity,
+            packet={
+                "source": "authenticated_merchant_request",
+                "source_mode": "merchant_owned_product",
+                "simulation_only": False,
+                "product_name": "Evidence revocation widget",
+                "merchant_confirmed_facts": {
+                    "merchant_owned_product_confirmed": True,
+                    "image_rights_confirmed": True,
+                },
+                "source_records": [
+                    {
+                        "type": "merchant_product_image",
+                        "url": "https://example.com/revocation.jpg",
+                        "rights_status": "merchant_confirmed",
+                    }
+                ],
+                "unknown_facts": [],
+                "secret_exposed": False,
+            },
+        )
+        claim_window_project_identity = {
+            "key": "listing-project-claim-window-http",
+            "source_report_id": "market-report-claim-window-v1",
+            "candidate_id": "candidate-claim-window-v1",
+        }
+        claim_window_fact_task = repo.create_task(
+            company_id=user["default_company_id"],
+            store_id=store["store_id"],
+            user_id=user["user_id"],
+            task_type="merchant_product_facts",
+            title="Claim-window positive checkpoint",
+            input_data={"listing_project_identity": claim_window_project_identity},
+        )
+        claim_window_fact_report = repo.save_merchant_product_fact_report(
+            task=claim_window_fact_task,
+            listing_project_identity=claim_window_project_identity,
+            packet={
+                "source": "authenticated_merchant_request",
+                "source_mode": "merchant_owned_product",
+                "simulation_only": False,
+                "product_name": "Claim-window widget",
+                "merchant_confirmed_facts": {
+                    "merchant_owned_product_confirmed": True,
+                    "image_rights_confirmed": True,
+                },
+                "source_records": [
+                    {
+                        "type": "merchant_product_image",
+                        "url": "https://example.com/claim-window.jpg",
+                        "rights_status": "merchant_confirmed",
+                    }
+                ],
+                "unknown_facts": [],
+                "secret_exposed": False,
+            },
+        )
+
+        def publish_payload(*, image_url: str = "https://example.com/smoke.jpg") -> dict[str, Any]:
+            return _publish_payload(
+                listing_project_identity=listing_project_identity,
+                product_fact_report_id=product_fact_report["report_id"],
+                image_url=image_url,
+            )
+
         settings = SaaSSettings.from_env(
             db_path=root / "saas.sqlite",
             runtime_db_path=root / "runtime.sqlite",
@@ -505,20 +636,212 @@ def main() -> int:
             email=restricted_user["email"],
         )
         try:
+            ordinary_body = publish_payload(image_url="https://example.com/ordinary.jpg")
+            ordinary_body.pop("workflow_scope", None)
+            ordinary_body["listing"] = {
+                **ordinary_body["listing"],
+                "sku": "ORDINARY-001",
+                "title": "Ordinary listing",
+            }
             ordinary = _post(
                 base_url,
                 f"/stores/{store['store_id']}/publish-confirmation",
-                {"listing": {"sku": "ORDINARY-001", "title": "Ordinary listing"}},
+                ordinary_body,
                 token,
             )["confirmation"]
             ordinary_item = ordinary.get("item") if isinstance(ordinary.get("item"), dict) else {}
             if ordinary_item.get("source") == "new_ebay_account_low_risk_smoke":
                 return fail("ordinary publish confirmation must never impersonate the new-account smoke contract")
 
+            revocation_body = _publish_payload(
+                listing_project_identity=revocation_project_identity,
+                product_fact_report_id=revocation_fact_report["report_id"],
+                image_url="https://example.com/revocation.jpg",
+            )
+            revocation_body.pop("workflow_scope", None)
+            revocation_body["listing"] = {
+                **revocation_body["listing"],
+                "sku": "EVIDENCE-REVOCATION-001",
+                "title": "Evidence revocation widget",
+            }
+            revocation_confirmation = _post(
+                base_url,
+                f"/stores/{store['store_id']}/publish-confirmation",
+                revocation_body,
+                token,
+            )["confirmation"]
+            _post(
+                base_url,
+                f"/confirmations/{revocation_confirmation['confirmation_id']}/decision",
+                {"decision": "approve", "note": "Approve before normal fact-checkpoint revocation."},
+                token,
+            )
+            revoked_identity_metadata = {
+                **revocation_project_identity,
+                "source_report_id": "market-report-evidence-revocation-v2",
+                "candidate_id": "candidate-evidence-revocation-v2",
+            }
+            revoked_fact_task = repo.create_task(
+                company_id=user["default_company_id"],
+                store_id=store["store_id"],
+                user_id=user["user_id"],
+                task_type="merchant_product_facts",
+                title="Evidence revocation negative checkpoint",
+                input_data={"listing_project_identity": revoked_identity_metadata},
+            )
+            repo.save_merchant_product_fact_report(
+                task=revoked_fact_task,
+                listing_project_identity=revoked_identity_metadata,
+                packet={
+                    "source": "authenticated_merchant_request",
+                    "source_mode": "source_missing",
+                    "simulation_only": False,
+                    "product_name": "Evidence revocation widget",
+                    "merchant_confirmed_facts": {
+                        "merchant_owned_product_confirmed": False,
+                        "image_rights_confirmed": False,
+                    },
+                    "source_records": [
+                        {
+                            "type": "merchant_product_image",
+                            "url": "https://example.com/revocation.jpg",
+                            "rights_status": "pending",
+                        }
+                    ],
+                    "unknown_facts": ["merchant_owned_product_confirmed", "image_rights_confirmed"],
+                    "secret_exposed": False,
+                },
+            )
+            preflight_status, revoked_preflight = _post_status(
+                base_url,
+                f"/confirmations/{revocation_confirmation['confirmation_id']}/preflight",
+                {},
+                token,
+            )
+            FakeWriteAdapter.reset_control()
+            revocation_terminal = repo.get_confirmation(
+                company_id=user["default_company_id"],
+                confirmation_id=revocation_confirmation["confirmation_id"],
+            ) or {}
+            if (
+                preflight_status != 409
+                or revoked_preflight.get("error") != "publish_evidence_changed"
+                or FakeWriteAdapter.publish_call_count != 0
+                or revocation_terminal.get("status") != "needs_revision"
+            ):
+                return fail(
+                    "a newer negative product-fact checkpoint must expire preflight with zero adapter calls: "
+                    f"{preflight_status} {revoked_preflight} "
+                    f"calls={FakeWriteAdapter.publish_call_count} terminal={revocation_terminal.get('status')}"
+                )
+
+            claim_window_body = _publish_payload(
+                listing_project_identity=claim_window_project_identity,
+                product_fact_report_id=claim_window_fact_report["report_id"],
+                image_url="https://example.com/claim-window.jpg",
+            )
+            claim_window_body.pop("workflow_scope", None)
+            claim_window_body["listing"] = {
+                **claim_window_body["listing"],
+                "sku": "CLAIM-WINDOW-001",
+                "title": "Claim-window widget",
+            }
+            claim_window_confirmation = _post(
+                base_url,
+                f"/stores/{store['store_id']}/publish-confirmation",
+                claim_window_body,
+                token,
+            )["confirmation"]
+            _post(
+                base_url,
+                f"/confirmations/{claim_window_confirmation['confirmation_id']}/decision",
+                {"decision": "approve", "note": "Approve before claim-window revocation regression."},
+                token,
+            )
+            original_revalidate = api_server._revalidate_confirmation_publish_evidence
+            claim_window_hook = {"armed": True}
+
+            def revalidate_then_revoke(repository: Any, *, company_id: str, confirmation: dict[str, Any]) -> dict[str, Any]:
+                fresh = original_revalidate(
+                    repository,
+                    company_id=company_id,
+                    confirmation=confirmation,
+                )
+                if (
+                    claim_window_hook["armed"]
+                    and confirmation.get("confirmation_id") == claim_window_confirmation["confirmation_id"]
+                ):
+                    claim_window_hook["armed"] = False
+                    negative_task = repo.create_task(
+                        company_id=user["default_company_id"],
+                        store_id=store["store_id"],
+                        user_id=user["user_id"],
+                        task_type="merchant_product_facts",
+                        title="Claim-window negative checkpoint",
+                        input_data={"listing_project_identity": claim_window_project_identity},
+                    )
+                    repo.save_merchant_product_fact_report(
+                        task=negative_task,
+                        listing_project_identity={
+                            **claim_window_project_identity,
+                            "source_report_id": "market-report-claim-window-v2",
+                            "candidate_id": "candidate-claim-window-v2",
+                        },
+                        packet={
+                            "source": "authenticated_merchant_request",
+                            "source_mode": "source_missing",
+                            "simulation_only": False,
+                            "product_name": "Claim-window widget",
+                            "merchant_confirmed_facts": {
+                                "merchant_owned_product_confirmed": False,
+                                "image_rights_confirmed": False,
+                            },
+                            "source_records": [
+                                {
+                                    "type": "merchant_product_image",
+                                    "url": "https://example.com/claim-window.jpg",
+                                    "rights_status": "pending",
+                                }
+                            ],
+                            "unknown_facts": ["merchant_owned_product_confirmed", "image_rights_confirmed"],
+                            "secret_exposed": False,
+                        },
+                    )
+                return fresh
+
+            FakeWriteAdapter.reset_control()
+            api_server._revalidate_confirmation_publish_evidence = revalidate_then_revoke
+            try:
+                claim_window_status, claim_window_execute = _post_status(
+                    base_url,
+                    f"/confirmations/{claim_window_confirmation['confirmation_id']}/execute",
+                    {"idempotency_key": "claim-window-revocation-must-not-write"},
+                    token,
+                )
+            finally:
+                api_server._revalidate_confirmation_publish_evidence = original_revalidate
+            claim_window_terminal = repo.get_confirmation(
+                company_id=user["default_company_id"],
+                confirmation_id=claim_window_confirmation["confirmation_id"],
+            ) or {}
+            if (
+                claim_window_status != 409
+                or claim_window_execute.get("error") != "publish_evidence_changed"
+                or claim_window_execute.get("external_execution_claim_restored") is not True
+                or claim_window_execute.get("real_platform_write_attempted") is not False
+                or FakeWriteAdapter.publish_call_count != 0
+                or claim_window_terminal.get("status") != "needs_revision"
+            ):
+                return fail(
+                    "claim-window evidence revocation must restore to needs_revision before any adapter call: "
+                    f"{claim_window_status} {claim_window_execute} calls={FakeWriteAdapter.publish_call_count} "
+                    f"terminal={claim_window_terminal.get('status')}"
+                )
+
             smoke_response = _post(
                 base_url,
                 f"/stores/{store['store_id']}/publish-confirmation",
-                _publish_payload(),
+                publish_payload(),
                 token,
             )
             smoke = smoke_response["confirmation"]
@@ -533,7 +856,10 @@ def main() -> int:
             if any(item.get(key) != value for key, value in expected.items()):
                 return fail("explicit smoke publish confirmation must persist the server-bound contract fields")
             if item.get("publish_health_ready") is not True:
-                return fail("explicit smoke producer must persist publish-health readiness from the server preflight")
+                return fail(
+                    "explicit smoke producer must persist publish-health readiness from the server preflight: "
+                    f"{item.get('publish_readiness')}"
+                )
 
             approved_publish = _post(
                 base_url,
@@ -682,7 +1008,7 @@ def main() -> int:
                         (json.dumps(original_item, ensure_ascii=False), smoke["confirmation_id"]),
                     )
 
-            ordinary_complete_body = _publish_payload()
+            ordinary_complete_body = publish_payload()
             ordinary_complete_body.pop("workflow_scope", None)
             ordinary_complete_body["idempotency_key"] = "ordinary-publish-intake-v1"
             ordinary_complete_body["listing"] = {
@@ -748,7 +1074,7 @@ def main() -> int:
                 return fail("successful claimed ordinary cleanup must atomically reach executed")
 
             FakeWriteAdapter.reset_control()
-            concurrent_body = _publish_payload()
+            concurrent_body = publish_payload()
             concurrent_body["idempotency_key"] = "concurrent-publish-intake-v1"
             concurrent_body["listing"] = {
                 **concurrent_body["listing"],
@@ -791,7 +1117,7 @@ def main() -> int:
                 return fail("concurrent publish execute must persist exactly one execution result")
 
             FakeWriteAdapter.reset_control()
-            failing_body = _publish_payload()
+            failing_body = publish_payload()
             failing_body["idempotency_key"] = "failed-publish-intake-v1"
             failing_body["listing"] = {
                 **failing_body["listing"],
@@ -836,7 +1162,7 @@ def main() -> int:
                 return fail("an uncertain external publish must never be retried automatically")
 
             FakeWriteAdapter.reset_control()
-            cleanup_source_body = _publish_payload()
+            cleanup_source_body = publish_payload()
             cleanup_source_body["idempotency_key"] = "concurrent-cleanup-source-v1"
             cleanup_source_body["listing"] = {
                 **cleanup_source_body["listing"],
@@ -912,7 +1238,7 @@ def main() -> int:
 
             settings.requested_real_platform_writes = False
             settings.ebay_write_live_enabled = False
-            approval_guard_body = _publish_payload()
+            approval_guard_body = publish_payload()
             approval_guard_body.pop("workflow_scope", None)
             approval_guard_body["listing"] = {
                 **approval_guard_body["listing"],
@@ -937,7 +1263,7 @@ def main() -> int:
             if approval_status != 403 or approval_after.get("status") != "pending":
                 return fail("a role without approve_high_risk must not approve an eBay draft write")
 
-            execute_guard_body = _publish_payload()
+            execute_guard_body = publish_payload()
             execute_guard_body.pop("workflow_scope", None)
             execute_guard_body["listing"] = {
                 **execute_guard_body["listing"],
@@ -973,7 +1299,7 @@ def main() -> int:
             ):
                 return fail("a role without execute_confirmed_action must not execute an approved eBay draft write")
 
-            crash_recovery_body = _publish_payload()
+            crash_recovery_body = publish_payload()
             crash_recovery_body.pop("workflow_scope", None)
             crash_recovery_body["listing"] = {
                 **crash_recovery_body["listing"],
@@ -1062,7 +1388,7 @@ def main() -> int:
                 return fail("the abandoned prewrite capability must remain invalid after HTTP recovery")
 
             FakeWriteAdapter.reset_control()
-            draft_body = _publish_payload()
+            draft_body = publish_payload()
             draft_body.pop("workflow_scope", None)
             draft_body["listing"] = {
                 **draft_body["listing"],
@@ -1142,7 +1468,7 @@ def main() -> int:
                 return fail("draft execution body must not override the approved payload snapshot")
 
             FakeWriteAdapter.reset_control()
-            prewrite_body = _publish_payload()
+            prewrite_body = publish_payload()
             prewrite_body.pop("workflow_scope", None)
             prewrite_body["listing"] = {
                 **prewrite_body["listing"],
@@ -1194,7 +1520,7 @@ def main() -> int:
                 return fail("a safely aborted prewrite failure must permit exactly one fresh claimed retry")
 
             FakeWriteAdapter.reset_control()
-            uncertain_body = _publish_payload()
+            uncertain_body = publish_payload()
             uncertain_body.pop("workflow_scope", None)
             uncertain_body["listing"] = {
                 **uncertain_body["listing"],

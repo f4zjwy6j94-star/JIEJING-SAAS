@@ -9,12 +9,17 @@
     costs: "AI 与素材成本",
     workflows: "任务与工作流",
     feedback: "产品反馈",
+    launch: "上线与发布",
+    payment: "支付验收",
+    backup: "备份与恢复",
+    runtime: "运行与安全",
     reliability: "系统可靠性",
     audit: "安全与审计",
     settings: "内部设置",
   };
 
   const DETAIL_VIEWS = new Set(["traffic", "merchants", "transactions", "costs", "workflows", "feedback", "audit"]);
+  const OWNER_CONTROL_VIEWS = new Set(["launch", "payment", "backup", "runtime"]);
   const OPS_BROWSER_SESSION_REFRESH_LOCK = "jiejing-browser-session-refresh-v1";
   const OPS_BROWSER_SESSION_REFRESH_TIMEOUT_MS = 10000;
   let opsBrowserSessionRefreshPromise = null;
@@ -26,6 +31,14 @@
     loading: false,
     identity: null,
     manualLogout: false,
+    ownerLaunchControl: null,
+    refundReviews: [],
+    billingTestEvent: null,
+    billingProviderRehearsal: null,
+    wechatZeroChargeRehearsal: null,
+    saasBillingTestEventAttempted: false,
+    saasBillingProviderRehearsalAttempted: false,
+    saasWechatZeroChargeRehearsalAttempted: false,
   };
 
   const elements = {
@@ -238,6 +251,7 @@
   function expireOpsSession(status) {
     state.overview = null;
     state.details.clear();
+    state.refundReviews = [];
     state.identity = null;
     state.loading = false;
     elements.identity.textContent = "";
@@ -323,6 +337,7 @@
     try { await api("/auth/logout", { method: "POST", timeoutMs: 6000 }); } catch (_) { /* local state still clears */ }
     state.overview = null;
     state.details.clear();
+    state.refundReviews = [];
     state.identity = null;
     setScreen("login");
   }
@@ -459,6 +474,9 @@
 
   function renderTraffic(detail) {
     const summary = detail.summary || {};
+    const performance = detail.performance || {};
+    const pageP75 = performance.page_load?.p75 || {};
+    const settingsP75 = performance.settings_module?.p75 || {};
     const headers = [
       { key: "page_key", label: "页面" },
       { key: "visitors", label: "访客", number: true, render: (r) => formatNumber(r.visitors) },
@@ -466,7 +484,7 @@
       { key: "page_views", label: "浏览", number: true, render: (r) => formatNumber(r.page_views) },
       { key: "signup_completed", label: "完成注册", number: true, render: (r) => formatNumber(r.signup_completed) },
     ];
-    return `<div class="ops-metrics">${metric("访客", formatNumber(summary.visitors), `${state.period} 天`)}${metric("会话", formatNumber(summary.sessions), "随机会话标识去重")}${metric("页面浏览", formatNumber(summary.page_views), "不存完整 URL")}${metric("访问转注册", `${Number(summary.visitor_to_signup_percent || 0).toFixed(1)}%`, "完成注册访客 / 访客")}</div>${detailPanel("页面表现", "只展示允许列表页面的聚合数据。", "", table(headers, detail.items || []), detail)}`;
+    return `<div class="ops-metrics">${metric("访客", formatNumber(summary.visitors), `${state.period} 天`)}${metric("会话", formatNumber(summary.sessions), "随机会话标识去重")}${metric("页面浏览", formatNumber(summary.page_views), "不存完整 URL")}${metric("访问转注册", `${Number(summary.visitor_to_signup_percent || 0).toFixed(1)}%`, "完成注册访客 / 访客")}${metric("首屏体验 P75", pageP75.lcp_ms == null ? "暂无样本" : `${formatNumber(pageP75.lcp_ms)} ms`, `${formatNumber(performance.page_load?.sample_count)} 个匿名样本`)}${metric("设置模块 P75", settingsP75.duration_ms == null ? "暂无样本" : `${formatNumber(settingsP75.duration_ms)} ms`, `${formatNumber(performance.settings_module?.sample_count)} 个匿名样本`)}</div>${detailPanel("页面表现", "只展示允许列表页面的聚合数据。", "", table(headers, detail.items || []), detail)}`;
   }
 
   function renderMerchants(detail) {
@@ -494,7 +512,18 @@
       { key: "payment_channel", label: "支付渠道", render: (r) => escapeHtml(r.payment_channel === "domestic_payment" ? "国内支付" : "境外支付") },
       { key: "created_at", label: "创建时间", render: (r) => formatDate(r.created_at) },
     ];
-    return detailPanel("平台交易", "这里只统计捷境订阅和素材额度，不包含商家的电商平台 GMV。", filters, table(headers, detail.items || []), detail);
+    return renderRefundReviews() + detailPanel("平台交易", "这里只统计捷境订阅和素材额度，不包含商家的电商平台 GMV。", filters, table(headers, detail.items || []), detail);
+  }
+
+  function renderRefundReviews() {
+    const rows = Array.isArray(state.refundReviews) ? state.refundReviews : [];
+    return `<section class="ops-panel" aria-label="SaaS 退款审核"><h2>退款审核与执行</h2><p>先核对付款、权益和实际用量并填写审核理由。批准不会立即退款；执行时再次确认具体订单和金额。</p>${rows.length ? rows.map((row, index) => `<article class="ops-panel" data-refund-row="${index}"><h3>${escapeHtml(row.order_id)} · ${formatMoney(row.amount_minor, row.currency)}</h3><p>商家公司：${escapeHtml(row.company_id)} · ${escapeHtml(statusLabel(row.status))}</p><p>申请原因：${escapeHtml(row.refund_reason || "未提供")}</p>${renderRefundUsageEvidence(row)}<p>审核结果：${escapeHtml(statusLabel(row.confirmation_status))} · ${escapeHtml(row.review_reason || "等待运营核对")}</p>${row.status === "refund_review_requested" && row.confirmation_status !== "rejected" ? `${row.platform_review_verified ? `<button type="button" data-refund-action="execute" data-refund-index="${index}">确认金额并执行退款</button>` : `<label>审核理由（10–500 字）<textarea data-refund-reason="${index}" minlength="10" maxlength="500" rows="3"></textarea></label><button type="button" data-refund-action="approve" data-refund-index="${index}">批准退款</button><button type="button" data-refund-action="reject" data-refund-index="${index}">拒绝退款</button>`}` : ""}${["refund_processing", "refund_failed"].includes(row.status) ? `<button type="button" data-refund-action="query" data-refund-index="${index}">核对退款状态</button>` : ""}</article>`).join("") : '<p class="ops-empty">当前没有退款申请。</p>'}</section>`;
+  }
+
+  function renderRefundUsageEvidence(row) {
+    const evidence = row.review_evidence || {};
+    if (!evidence.available) return "<p>付款时间或用量证据不完整，请先核对付款记录。</p>";
+    return `<dl><dt>付款时间</dt><dd>${formatDate(row.paid_at)}</dd><dt>当前权益</dt><dd>${escapeHtml(statusLabel(evidence.current_subscription_status))} · ${evidence.current_entitlement_active ? "生效" : "未生效"} · 截止 ${formatDate(evidence.current_entitlement_until)}</dd><dt>付款后账号用量</dt><dd>平台模型 ${formatNumber(evidence.platform_model_request_count)} 次 / 全部模型 ${formatNumber(evidence.all_model_request_count)} 次；素材已消耗 ${formatNumber(evidence.settled_media_points)} 点；供应商记录 ${formatNumber(evidence.provider_operation_count)} 条。</dd></dl><p>以上为该商家付款后的账号合计，可能包含其他套餐；未逐单分摊，零记录不等于已经证明没有使用。</p>`;
   }
 
   function renderCosts(detail) {
@@ -634,6 +663,254 @@
     elements.content.innerHTML = `<section class="ops-panel"><div class="ops-section-head"><div><h2>后台边界</h2><p>经营数据只读，反馈处理只更新内部状态；高风险命令仍由确认中心和人工审批控制。</p></div>${pill("ready", "内部账号")}</div><dl class="ops-definition-list"><dt>统计范围</dt><dd>${escapeHtml(overview.data_quality?.scope || "商家账号与商业交易")}</dd><dt>商家导航</dt><dd>不显示运营后台入口</dd><dt>供应商显示</dt><dd>中性能力名称，不展示供应商品牌或密钥</dd><dt>流量隐私</dt><dd>不存 IP、完整 URL、查询参数、User-Agent 或浏览器指纹</dd><dt>商家内容</dt><dd>任务下钻不显示对话、商品、客户或原始模型内容</dd><dt>资金与平台写入</dt><dd>本后台不直接执行付款、退款、eBay 发布、改价、库存、广告、采购或政策修改</dd><dt>成本覆盖</dt><dd>${overview.unit_economics?.cost_coverage_complete ? "当前时间范围覆盖完整" : "当前仍有缺失项，不显示确定毛利"}</dd><dt>版本</dt><dd>${escapeHtml(overview.contract_version || "-")}</dd></dl></section>`;
   }
 
+  function opsPanels() {
+    return window.JiejingOpsPanels || null;
+  }
+
+  function ownerLaunchArtifact(key) {
+    const control = state.ownerLaunchControl && typeof state.ownerLaunchControl === "object" ? state.ownerLaunchControl : {};
+    const value = control[key];
+    return value && typeof value === "object" ? value : {};
+  }
+
+  async function refreshSaasOwnerLaunchControl(options = {}) {
+    const payload = await api("/owner/launch-control", { timeoutMs: 15000 });
+    const control = payload.owner_launch_control;
+    if (!control || control.secret_exposed !== false) throw new Error("上线证据安全合同未通过");
+    state.ownerLaunchControl = control;
+    if (options.render !== false) renderCurrentView();
+    return control;
+  }
+
+  function merchantSafeWechatZeroChargeRehearsal(value) {
+    const source = value && typeof value === "object" ? value : {};
+    return {
+      status: String(source.status || "unknown").slice(0, 80),
+      reason: String(source.reason || "").slice(0, 240),
+      evidence_recorded: source.evidence_recorded === true,
+      calls_external_payment_api: source.calls_external_payment_api === true,
+      creates_real_order: source.creates_real_order === true,
+      triggers_real_charge: source.triggers_real_charge === true,
+      triggers_real_refund: source.triggers_real_refund === true,
+      secret_exposed: source.secret_exposed === true,
+    };
+  }
+
+  function merchantSafeBillingAcceptanceResult(value, blockedStatus) {
+    const source = value && typeof value === "object" ? value : {};
+    return {
+      ok: source.ok === true,
+      status: String(source.status || (source.ok === true ? "ready" : blockedStatus)).slice(0, 80),
+      reason: String(source.reason || source.message || "").slice(0, 240),
+      evidence_recorded: source.evidence_recorded === true,
+      calls_external_payment_api: source.calls_external_payment_api === true,
+      creates_real_order: source.creates_real_order === true,
+      creates_real_checkout_session: source.creates_real_checkout_session === true,
+      triggers_real_charge: source.triggers_real_charge === true,
+      triggers_real_refund: source.triggers_real_refund === true,
+      secret_exposed: source.secret_exposed === true,
+    };
+  }
+
+  function assertSafeBillingAcceptanceResult(result) {
+    if (
+      result.secret_exposed ||
+      result.calls_external_payment_api ||
+      result.creates_real_order ||
+      result.creates_real_checkout_session ||
+      result.triggers_real_charge ||
+      result.triggers_real_refund
+    ) throw new Error("支付验收安全合同未通过");
+  }
+
+  async function runSaasBillingTestEvent() {
+    if (state.saasBillingTestEventAttempted) return;
+    state.saasBillingTestEventAttempted = true;
+    renderCurrentView();
+    try {
+      const payload = await api("/owner/billing/test-event", {
+        method: "POST",
+        body: { action: "activate", plan_key: "starter" },
+        timeoutMs: 15000,
+      });
+      const result = merchantSafeBillingAcceptanceResult(payload.billing_test_event, "billing_test_event_blocked");
+      assertSafeBillingAcceptanceResult(result);
+      state.billingTestEvent = result;
+      showAlert("");
+    } catch (error) {
+      state.billingTestEvent = { status: "blocked", reason: error.message || "计费状态事件未完成", secret_exposed: false };
+      showAlert("计费状态事件未完成；系统不会自动重试。");
+    }
+    renderCurrentView();
+  }
+
+  async function runSaasBillingProviderRehearsal() {
+    if (state.saasBillingProviderRehearsalAttempted) return;
+    state.saasBillingProviderRehearsalAttempted = true;
+    renderCurrentView();
+    try {
+      const payload = await api("/owner/billing/provider-rehearsal", {
+        method: "POST",
+        body: { action: "activate", plan_key: "starter" },
+        timeoutMs: 15000,
+      });
+      const result = merchantSafeBillingAcceptanceResult(payload.billing_provider_rehearsal, "billing_provider_rehearsal_blocked");
+      assertSafeBillingAcceptanceResult(result);
+      state.billingProviderRehearsal = result;
+      showAlert("");
+    } catch (error) {
+      state.billingProviderRehearsal = { status: "blocked", reason: error.message || "支付提供方演练未完成", secret_exposed: false };
+      showAlert("支付提供方演练未完成；系统不会自动重试。");
+    }
+    renderCurrentView();
+  }
+
+  async function runSaasWechatZeroChargeRehearsal() {
+    if (state.saasWechatZeroChargeRehearsalAttempted) return;
+    state.saasWechatZeroChargeRehearsalAttempted = true;
+    renderCurrentView();
+    try {
+      const payload = await api("/owner/billing/wechat-pay/zero-charge-rehearsal", {
+        method: "POST",
+        body: { exact_confirmation: "RUN WECHAT ZERO CHARGE REHEARSAL" },
+        timeoutMs: 15000,
+      });
+      const result = merchantSafeWechatZeroChargeRehearsal(payload.wechat_pay_zero_charge_rehearsal);
+      if (result.secret_exposed || result.calls_external_payment_api || result.creates_real_order || result.triggers_real_charge || result.triggers_real_refund) {
+        throw new Error("支付验收安全合同未通过");
+      }
+      state.wechatZeroChargeRehearsal = result;
+      showAlert("");
+    } catch (error) {
+      state.wechatZeroChargeRehearsal = { status: "blocked", reason: error.message || "验收未完成", secret_exposed: false };
+      showAlert("支付验收未完成；系统不会自动重试。");
+    }
+    renderCurrentView();
+  }
+
+  async function copySafeOpsPayload(payload, successCopy) {
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    elements.dataStatus.textContent = successCopy;
+  }
+
+  function downloadSafeOpsPayload(payload, filename) {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  function copySaasOwnerReviewPacket() {
+    return copySafeOpsPayload(opsPanels().buildSaasOwnerReviewPacketDownloadPayload(ownerLaunchArtifact("owner_review_packet")), "复核摘要已复制");
+  }
+
+  function downloadSaasOwnerReviewPacket() {
+    downloadSafeOpsPayload(opsPanels().buildSaasOwnerReviewPacketDownloadPayload(ownerLaunchArtifact("owner_review_packet")), "jiejing-owner-review.json");
+  }
+
+  function copySaasLaunchRehearsalAudit() {
+    return copySafeOpsPayload(opsPanels().buildSaasLaunchRehearsalAuditDownloadPayload(ownerLaunchArtifact("launch_rehearsal_audit_packet")), "演练摘要已复制");
+  }
+
+  function downloadSaasLaunchRehearsalAudit() {
+    downloadSafeOpsPayload(opsPanels().buildSaasLaunchRehearsalAuditDownloadPayload(ownerLaunchArtifact("launch_rehearsal_audit_packet")), "jiejing-launch-audit.json");
+  }
+
+  function copySaasReleaseHistory() {
+    return copySafeOpsPayload(opsPanels().buildSaasReleaseHistoryDownloadPayload(ownerLaunchArtifact("release_history")), "发布历史已复制");
+  }
+
+  function downloadSaasReleaseHistory() {
+    downloadSafeOpsPayload(opsPanels().buildSaasReleaseHistoryDownloadPayload(ownerLaunchArtifact("release_history")), "jiejing-release-history.json");
+  }
+
+  function copySaasContinuityHandoff() {
+    return copySafeOpsPayload(opsPanels().buildSaasContinuityHandoffDownloadPayload(ownerLaunchArtifact("continuity_handoff_digest")), "交接摘要已复制");
+  }
+
+  function downloadSaasContinuityHandoff() {
+    downloadSafeOpsPayload(opsPanels().buildSaasContinuityHandoffDownloadPayload(ownerLaunchArtifact("continuity_handoff_digest")), "jiejing-continuity-handoff.json");
+  }
+
+  function copySaasCutoverDecisionChecklist() {
+    return copySafeOpsPayload(opsPanels().buildSaasCutoverDecisionChecklistDownloadPayload(ownerLaunchArtifact("cutover_decision_checklist")), "切换清单已复制");
+  }
+
+  function downloadSaasCutoverDecisionChecklist() {
+    downloadSafeOpsPayload(opsPanels().buildSaasCutoverDecisionChecklistDownloadPayload(ownerLaunchArtifact("cutover_decision_checklist")), "jiejing-cutover-decision-checklist.json");
+  }
+
+  function copySaasFinalLaunchRehearsalRecord() {
+    return copySafeOpsPayload(opsPanels().buildSaasFinalLaunchRehearsalRecordDownloadPayload(ownerLaunchArtifact("final_launch_rehearsal_execution_record")), "最终演练已复制");
+  }
+
+  function downloadSaasFinalLaunchRehearsalRecord() {
+    downloadSafeOpsPayload(opsPanels().buildSaasFinalLaunchRehearsalRecordDownloadPayload(ownerLaunchArtifact("final_launch_rehearsal_execution_record")), "jiejing-final-launch-rehearsal.json");
+  }
+
+  function copySaasOwnerPaidLaunchDossier() {
+    return copySafeOpsPayload(opsPanels().buildSaasOwnerPaidLaunchDossierDownloadPayload(ownerLaunchArtifact("owner_paid_launch_approval_dossier")), "收费上线档案已复制");
+  }
+
+  function downloadSaasOwnerPaidLaunchDossier() {
+    downloadSafeOpsPayload(opsPanels().buildSaasOwnerPaidLaunchDossierDownloadPayload(ownerLaunchArtifact("owner_paid_launch_approval_dossier")), "jiejing-paid-launch-dossier.json");
+  }
+
+  function copySaasPrelaunchAcceptanceReport() {
+    return copySafeOpsPayload(opsPanels().buildSaasPrelaunchAcceptanceReportDownloadPayload(ownerLaunchArtifact("prelaunch_acceptance_report")), "上线验收报告已复制");
+  }
+
+  function downloadSaasPrelaunchAcceptanceReport() {
+    downloadSafeOpsPayload(opsPanels().buildSaasPrelaunchAcceptanceReportDownloadPayload(ownerLaunchArtifact("prelaunch_acceptance_report")), "jiejing-prelaunch-acceptance-report.json");
+  }
+
+  function renderOwnerOpsView(view) {
+    const panels = opsPanels();
+    if (!panels) {
+      elements.content.innerHTML = '<div class="ops-empty">运营组件尚未加载，请刷新页面。</div>';
+      return;
+    }
+    if (view === "launch") elements.content.innerHTML = panels.renderOwnerLaunchControlPanel(state.ownerLaunchControl);
+    if (view === "payment") elements.content.innerHTML = panels.renderPaymentAcceptancePanel({
+      testEvent: state.billingTestEvent,
+      provider: state.billingProviderRehearsal,
+      wechat: state.wechatZeroChargeRehearsal,
+      testEventAttempted: state.saasBillingTestEventAttempted,
+      providerAttempted: state.saasBillingProviderRehearsalAttempted,
+      wechatAttempted: state.saasWechatZeroChargeRehearsalAttempted,
+    });
+    if (view === "backup") elements.content.innerHTML = panels.renderBackupRecoveryPanel(state.ownerLaunchControl);
+    if (view === "runtime") elements.content.innerHTML = panels.renderRuntimeSecurityPanel(state.ownerLaunchControl);
+    bindOwnerOpsControls();
+  }
+
+  function bindOwnerOpsControls() {
+    elements.content.querySelectorAll("[data-ops-action]").forEach((button) => button.addEventListener("click", async () => {
+      const action = button.dataset.opsAction;
+      if (action === "refresh-owner-launch-control") await refreshSaasOwnerLaunchControl();
+      if (action === "billing-test-event") await runSaasBillingTestEvent();
+      if (action === "billing-provider-rehearsal") await runSaasBillingProviderRehearsal();
+      if (action === "wechat-zero-charge-rehearsal") await runSaasWechatZeroChargeRehearsal();
+      if (action === "copy-owner-review-packet") await copySaasOwnerReviewPacket();
+      if (action === "download-owner-review-packet") downloadSaasOwnerReviewPacket();
+      if (action === "copy-launch-rehearsal-audit") await copySaasLaunchRehearsalAudit();
+      if (action === "download-launch-rehearsal-audit") downloadSaasLaunchRehearsalAudit();
+      if (action === "copy-release-history") await copySaasReleaseHistory();
+      if (action === "download-release-history") downloadSaasReleaseHistory();
+      if (action === "copy-continuity-handoff") await copySaasContinuityHandoff();
+      if (action === "download-continuity-handoff") downloadSaasContinuityHandoff();
+      if (action === "copy-cutover-decision-checklist") await copySaasCutoverDecisionChecklist();
+      if (action === "download-cutover-decision-checklist") downloadSaasCutoverDecisionChecklist();
+      if (action === "copy-final-launch-rehearsal-record") await copySaasFinalLaunchRehearsalRecord();
+      if (action === "download-final-launch-rehearsal-record") downloadSaasFinalLaunchRehearsalRecord();
+      if (action === "copy-owner-paid-launch-dossier") await copySaasOwnerPaidLaunchDossier();
+      if (action === "download-owner-paid-launch-dossier") downloadSaasOwnerPaidLaunchDossier();
+      if (action === "copy-prelaunch-acceptance-report") await copySaasPrelaunchAcceptanceReport();
+      if (action === "download-prelaunch-acceptance-report") downloadSaasPrelaunchAcceptanceReport();
+    }));
+  }
+
   function renderDetail(view) {
     const detail = state.details.get(view);
     if (!detail) { showSkeleton(); return; }
@@ -646,6 +923,7 @@
     elements.title.textContent = VIEW_TITLES[state.view] || "经营总览";
     elements.nav.querySelectorAll("button[data-view]").forEach((button) => button.classList.toggle("is-active", button.dataset.view === state.view));
     if (state.view === "overview") renderOverview();
+    else if (["launch", "payment", "backup", "runtime"].includes(state.view)) renderOwnerOpsView(state.view);
     else if (state.view === "reliability") renderReliability();
     else if (state.view === "settings") renderSettings();
     else renderDetail(state.view);
@@ -670,6 +948,11 @@
     detail.filters = filters;
     if (append && existing) detail.items = [...(existing.items || []), ...(detail.items || [])];
     state.details.set(view, detail);
+    if (view === "transactions") {
+      const refunds = await api("/owner/billing/domestic/refunds");
+      if (refunds.secret_exposed !== false || !Array.isArray(refunds.refund_reviews)) throw new Error("退款申请暂时无法读取");
+      state.refundReviews = refunds.refund_reviews;
+    }
   }
 
   async function refreshAll() {
@@ -681,6 +964,7 @@
       await loadOverview(true);
       state.details.clear();
       if (DETAIL_VIEWS.has(state.view)) await loadDetail(state.view);
+      if (OWNER_CONTROL_VIEWS.has(state.view)) await refreshSaasOwnerLaunchControl({ render: false });
       renderCurrentView();
       elements.updatedAt.textContent = `更新于 ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date())}`;
       setLoading(false, "真实数据已更新");
@@ -709,10 +993,52 @@
       }
       setLoading(false, "真实数据已更新");
     }
+    if (OWNER_CONTROL_VIEWS.has(view) && !state.ownerLaunchControl) {
+      setLoading(true, "正在读取上线证据");
+      showSkeleton();
+      try {
+        await refreshSaasOwnerLaunchControl({ render: false });
+        setLoading(false, "上线证据已更新");
+      } catch (error) {
+        showAlert(error.message || "上线证据读取失败");
+        setLoading(false, "上线证据读取失败");
+      }
+    }
     renderCurrentView();
   }
 
   function bindDetailControls() {
+    elements.content.querySelectorAll("[data-refund-action]").forEach((button) => button.addEventListener("click", async () => {
+      if (state.loading) return;
+      const row = state.refundReviews[Number(button.dataset.refundIndex)];
+      const action = button.dataset.refundAction;
+      if (!row || !["approve", "reject", "execute", "query"].includes(action)) return;
+      const body = { company_id: row.company_id };
+      let operation = action;
+      if (["approve", "reject"].includes(action)) {
+        const reason = elements.content.querySelector(`[data-refund-reason="${button.dataset.refundIndex}"]`)?.value.trim() || "";
+        if (reason.length < 10 || reason.length > 500) { showAlert("请填写 10–500 字审核理由，说明付款、权益与用量核对结果。"); return; }
+        Object.assign(body, { decision: action, review_reason: reason });
+        operation = "review";
+      }
+      if (action === "execute") {
+        if (!window.confirm(`确认退款 ${formatMoney(row.amount_minor, row.currency)}？\n商家：${row.company_id}\n订单：${row.order_id}\n审核理由：${row.review_reason}\n提交微信支付后可能立即退款，不能撤销。`)) return;
+        body.exact_confirmation = row.execution_confirmation;
+      }
+      setLoading(true, action === "execute" ? "正在提交已审核退款" : "正在更新退款申请");
+      button.disabled = true;
+      try {
+        await api(`/owner/billing/domestic/refunds/${encodeURIComponent(row.order_id)}/${operation}`, { method: "POST", body });
+        await loadDetail("transactions", state.details.get("transactions")?.filters || {});
+        showAlert("");
+        renderCurrentView();
+      } catch (error) {
+        showAlert(`${error.message || "退款操作未完成"}。不会自动重复提交资金动作，请核对最新状态。`);
+      } finally {
+        setLoading(false, "退款信息已更新");
+        button.disabled = false;
+      }
+    }));
     elements.content.querySelectorAll("[data-filter]").forEach((control) => {
       control.addEventListener("change", async () => {
         if (state.loading) return;

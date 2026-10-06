@@ -70,6 +70,19 @@ def _health(
 
 
 def main() -> int:
+    homepage_samples = _homepage_progress_samples()
+    for sample in homepage_samples:
+        try:
+            normalized = normalize_merchant_onboarding_progress(sample["payload"])
+        except MerchantOnboardingValidationError as exc:
+            return fail(f"homepage {sample['path']}/{sample['step']} cannot be saved: {exc}")
+        if normalized["current_step_key"] != sample["step"]:
+            return fail("homepage onboarding step changed during normalization")
+        if sample["restored_path"] != sample["path"]:
+            return fail(f"saved homepage {sample['path']} resumed as {sample['restored_path']}")
+        if sample["restored_payload"]["current_step_key"] != sample["step"]:
+            return fail("homepage reload did not preserve the saved onboarding step")
+
     default = build_merchant_onboarding_read_model()
     if default.get("effective_stage") != "seller_registration_required":
         return fail(f"new seller default should start at official registration: {default}")
@@ -227,6 +240,49 @@ def main() -> int:
 
     print("PASS jiejing_merchant_onboarding_state")
     return 0
+
+
+def _homepage_progress_samples() -> list[dict[str, object]]:
+    """Exercise the shipped homepage serializer, not a copied trial payload."""
+    script = r'''
+const fs = require('node:fs');
+const vm = require('node:vm');
+const html = fs.readFileSync('index.html', 'utf8');
+function between(start, end) {
+  const a = html.indexOf(start), b = html.indexOf(end, a);
+  if(a < 0 || b <= a) throw new Error('homepage test seam missing');
+  return html.slice(a, b);
+}
+const declarations = between('const guideData = {', 'let guideAnswers =');
+const routes = between('const publicPathKeys =', 'let entryMerchantOnboarding =');
+const serializer = between('function entryGuideChoiceCode(', 'async function loadEntryMerchantOnboarding(');
+const context = { JSON };
+vm.createContext(context);
+const result = vm.runInContext(declarations + routes + serializer + `
+let activePath, activeGuideStep, guideAnswers, entryMerchantOnboarding = null;
+const samples = [];
+for (const path of publicPathKeys) {
+  for (let i = 0; i < guideData[path].steps.length; i++) {
+    activePath = path;
+    guideAnswers = {...guideData[path].answers};
+    entryMerchantOnboarding = null;
+    activeGuideStep = i;
+    const payload = entryGuideProgressPayload({workMode: 'draft_only'});
+    applyEntryMerchantOnboarding({progress: {...payload, version: 1}});
+    samples.push({path, step: guideData[path].steps[i].key,
+      payload, restored_path: activePath,
+      restored_payload: entryGuideProgressPayload({workMode: 'draft_only'})});
+  }
+}
+JSON.stringify(samples);
+`, context);
+process.stdout.write(result);
+'''
+    completed = subprocess.run(
+        ["node", "-e", script], cwd=ROOT, capture_output=True, text=True,
+        encoding="utf-8", check=True, timeout=15,
+    )
+    return json.loads(completed.stdout)
 
 
 def _test_repository_behavior() -> str:
@@ -533,6 +589,36 @@ def _test_http_behavior() -> str:
             )
             if invalid_status != 400:
                 return f"unsafe onboarding input should return 400, got {invalid_status}"
+
+            # The exact free-entry payload produced by index.html must work for
+            # a brand-new tenant without connecting eBay or granting writes.
+            trial_sample = next(item for item in _homepage_progress_samples() if item["path"] == "trial")
+            trial_status, trial_saved = _request_json(
+                f"{base_url}/merchant-onboarding/primary-ebay/progress",
+                method="POST", token=second_token, body=trial_sample["payload"],
+            )
+            trial_model = trial_saved.get("merchant_onboarding", {})
+            if trial_status != 200 or trial_model.get("progress", {}).get("current_step_key") != "trialStart":
+                return f"actual homepage trial payload failed over HTTP: {trial_status} {trial_saved}"
+            if trial_model.get("progress", {}).get("version") != 1:
+                return "new trial progress must be saved exactly once"
+            if trial_model.get("draft_work_allowed") is not True or any(
+                trial_model.get(key) is not False for key in (
+                    "connection_current", "real_publish_allowed", "publish_preflight_available",
+                    "triggers_oauth", "triggers_read_only_sync", "triggers_real_charge", "triggers_real_platform_write",
+                )
+            ):
+                return "trial entry must not inflate eBay readiness or trigger external actions"
+            reload_status, trial_reloaded = _request_json(
+                f"{base_url}/merchant-onboarding/primary-ebay", token=second_token,
+            )
+            if reload_status != 200 or trial_reloaded.get("merchant_onboarding", {}).get("progress") != trial_model.get("progress"):
+                return "free-entry onboarding changed after reloading"
+            first_status, first_reloaded = _request_json(
+                f"{base_url}/merchant-onboarding/primary-ebay", token=first_token,
+            )
+            if first_status != 200 or first_reloaded.get("merchant_onboarding", {}).get("progress") != saved_model.get("progress"):
+                return "free-entry onboarding affected the other merchant"
         finally:
             process.terminate()
             try:

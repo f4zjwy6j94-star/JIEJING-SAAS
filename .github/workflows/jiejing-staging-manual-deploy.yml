@@ -28,7 +28,7 @@ jobs:
   preflight:
     name: Preflight guardrails
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       JIEJING_SAAS_SESSION_SECRET: ci-session-secret-not-real-change-me-32
       JIEJING_SAAS_ENV: local_dev

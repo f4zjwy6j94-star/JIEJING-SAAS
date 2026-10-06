@@ -331,6 +331,13 @@ async function showAccountSettings(page) {
   await page.locator('[data-saas-settings-tab="account"]:visible').waitFor({ state: "visible", timeout: 5000 });
   await page.locator('[data-saas-settings-tab="account"]:visible').click();
   await page.waitForTimeout(100);
+  // Follow the merchant's visible path; connection controls live in store details.
+  const storeDetails = page.locator('[data-saas-account-disclosure="store"]');
+  await storeDetails.waitFor({ state: "visible", timeout: 5000 });
+  if (await storeDetails.getAttribute("open") === null) {
+    await storeDetails.locator(":scope > summary").click();
+  }
+  await storeDetails.locator('[data-saas-action="plan-ebay-draft-oauth"]').waitFor({ state: "visible", timeout: 5000 });
 }
 
 async function openPage(context, base, consoleErrors) {
@@ -412,14 +419,15 @@ async function main() {
     const page = await openPage(context, base, consoleErrors);
     const draftButton = page.locator('[data-saas-action="plan-ebay-draft-oauth"]:visible').first();
     confirmationReadDelayMs = 700;
-    const intakeRequest = page.waitForRequest(
-      (request) =>
-        request.method() === "POST" &&
-        new URL(request.url()).pathname === `/stores/${store.store_id}/ebay-oauth/unpublished-draft-confirmation`,
-      { timeout: 5000 },
-    );
-    await draftButton.click();
-    await intakeRequest;
+    await Promise.all([
+      page.waitForRequest(
+        (request) =>
+          request.method() === "POST" &&
+          new URL(request.url()).pathname === `/stores/${store.store_id}/ebay-oauth/unpublished-draft-confirmation`,
+        { timeout: 5000 },
+      ),
+      draftButton.click(),
+    ]);
     await page.waitForFunction(
       () => typeof state !== "undefined" && state.saasLoading === false,
       null,

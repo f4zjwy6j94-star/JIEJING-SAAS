@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -91,10 +92,11 @@ def main() -> int:
                 "blockedInternalPath",
                 "path /.git* /.github* /deploy* /tools* /docs* /tests* /jiejing_saas* /jiejing_runtime* /schemas* /output* /private*",
                 "blockedInternalFile",
-                'respond "Not found" 404',
             ]:
                 if marker not in content:
                     return fail(f"{path.name} should hard-block internal source paths: {marker}")
+            if not re.search(r'respond(?:\s+@[\w-]+)?\s+"Not found"\s+404', content):
+                return fail(f"{path.name} should hard-block internal source paths with a 404 response")
         if path.name == "Caddyfile.public-staging.systemd":
             for marker in [
                 "jiejing.shop {",

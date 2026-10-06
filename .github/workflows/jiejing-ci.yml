@@ -83,14 +83,18 @@ jobs:
           python tools/test_jiejing_vault_sealed_paper_ceremony.py
           python tools/test_jiejing_staging_deploy_channel_contract.py
           python tools/test_jiejing_production_deploy_channel.py
+          python tools/test_jiejing_production_ops_consolidation.py
           python tools/test_jiejing_staging_patch_apply_contract.py
           python tools/test_jiejing_agents_md_guardrails.py
           python tools/test_jiejing_github_actions_deploy_guardrails.py
           python tools/test_jiejing_github_runner_doctor_guardrails.py
+          python tools/test_jiejing_production_evidence_auto_refresh_guardrails.py
 
       - name: Frontend contract regressions
         run: |
           python tools/test_jiejing_frontend_staging_config.py
           python tools/test_jiejing_session_restore_and_ebay_ops_ui.py
+          node --test tools/test_jiejing_auth_reveal_boundary.js
           python tools/test_jiejing_saas_clean_settings_and_listing_ui.py
+          python tools/test_jiejing_settings_account_workspace_ui.py
           python tools/test_jiejing_frontend_settings_module_split.py

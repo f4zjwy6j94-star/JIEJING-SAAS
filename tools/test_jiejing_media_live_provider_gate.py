@@ -89,6 +89,7 @@ def media_job_body(*, live_requested: bool = True, video_requested: bool = True)
             },
             "product_facts": {
                 "product": "foldable silicone drying mat",
+                "allowed_claims": ["merchant-confirmed foldable silicone drying mat"],
                 "forbidden_claims": ["medical"],
                 "supplier_facts": {"material": "silicone", "package_dimensions_cm": {"length": 30, "width": 8, "height": 8}},
                 "target_marketplace_rules": {"platform": "ebay", "marketplace": "EBAY_US"},
@@ -104,6 +105,7 @@ def media_job_body(*, live_requested: bool = True, video_requested: bool = True)
             "generation_tier": "high_quality",
             "quality_mode": "fidelity_first",
             "live_provider_requested": live_requested,
+            "commercial_rights_confirmed": True,
             "media_provider": "fal",
         },
         "run_mode": "local_worker_now",
@@ -125,6 +127,51 @@ def main() -> int:
     original_adapter = runner_module.MediaGenerationAdapter
     try:
         runner_module.MediaGenerationAdapter = FakeMediaGenerationAdapter
+        explicit_openai_body = media_job_body(video_requested=False)
+        explicit_openai_body["inputs"]["media_provider"] = "openai"
+        calls_before_openai = len(FakeMediaGenerationAdapter.configs)
+        with patched_env(
+            JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true",
+            JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false",
+            JIEJING_IMAGE_GENERATION_ENDPOINT="",
+        ):
+            explicit_openai = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_openai_blocked",
+                job_id="job_openai_blocked",
+                job_body=explicit_openai_body,
+            )
+        if explicit_openai.get("status") != "blocked_live_media_provider":
+            raise AssertionError(f"OpenAI local-artifact output must fail before provider spend: {explicit_openai}")
+        if "media_provider_https_artifact_delivery_not_configured" not in explicit_openai.get("missing_inputs", []):
+            raise AssertionError("OpenAI pre-call blocker must name the missing HTTPS artifact publisher")
+        if len(FakeMediaGenerationAdapter.configs) != calls_before_openai:
+            raise AssertionError("OpenAI must not be called before durable tenant-scoped HTTPS delivery exists")
+
+        env_openai_body = media_job_body(video_requested=False)
+        env_openai_body["inputs"].pop("media_provider", None)
+        calls_before_env_openai = len(FakeMediaGenerationAdapter.configs)
+        with patched_env(
+            JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true",
+            JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false",
+            JIEJING_MEDIA_GENERATION_PROVIDER="openai-images",
+            JIEJING_IMAGE_GENERATION_ENDPOINT="",
+        ):
+            env_openai = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_env_openai_blocked",
+                job_id="job_env_openai_blocked",
+                job_body=env_openai_body,
+            )
+        if env_openai.get("status") != "blocked_live_media_provider":
+            raise AssertionError(f"environment-selected OpenAI must also fail before provider spend: {env_openai}")
+        if len(FakeMediaGenerationAdapter.configs) != calls_before_env_openai:
+            raise AssertionError("environment-selected OpenAI must not call the provider")
+
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
             live = ProviderJobRunner().run(
                 company_id="co_test",
@@ -159,11 +206,90 @@ def main() -> int:
             raise AssertionError(f"appearance video must not invent product operation: {live_config.video_prompt}")
         if "Locked facts that must not be changed or invented" not in live_config.image_prompt:
             raise AssertionError("grounded image prompt must preserve immutable product facts")
+        if "Remove the reference photo's added graphic overlays" in live_config.image_prompt:
+            raise AssertionError("overlay removal must require the explicit no-text output rule")
+
+        main_image_body = media_job_body(video_requested=False)
+        main_image_body["inputs"]["image_count"] = 1
+        main_image_body["inputs"]["scene_types"] = ["white_background"]
+        main_image_body["inputs"]["creative_job_spec"]["text_rule"] = "no_text_no_numbers_no_certifications"
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
+            main_image = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_main_image_prop_cleanup",
+                job_id="job_main_image_prop_cleanup",
+                job_body=main_image_body,
+            )
+        if main_image.get("status") != "completed_live_media_provider":
+            raise AssertionError(f"single eBay main image should remain executable: {main_image}")
+        main_image_prompt = FakeMediaGenerationAdapter.configs[-1].image_prompt
+        if "Exclude removable display props and photography supports" not in main_image_prompt:
+            raise AssertionError("eBay main-image prompt must exclude unconfirmed tables, trays, pedestals and scales")
+        if "incense cones, incense sticks, fragrances, oils, and other burnable consumables" not in main_image_prompt:
+            raise AssertionError("eBay main-image prompt must exclude unconfirmed incense cones and other consumables")
+        if "explicitly confirmed as included with the shipped product" not in main_image_prompt:
+            raise AssertionError("main-image accessory cleanup must preserve only confirmed shipped contents")
+        if "Keep any base that is structurally part of the product" not in main_image_prompt:
+            raise AssertionError("main-image prop cleanup must preserve a structural product base")
+        for required in (
+            "Remove the reference photo's added graphic overlays",
+            "supplier photography watermarks",
+            "Keep physical engravings, capacity markings and brand marks on the actual product unchanged",
+            "retain every included piece exactly once",
+        ):
+            if required not in main_image_prompt:
+                raise AssertionError(f"authorized no-text source editing lost its cleanup/physical-mark boundary: {required}")
+        main_image_body["inputs"]["image_prompt"] = "Keep the eight-piece set in one clean arrangement."
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
+            ProviderJobRunner().run(company_id="co_test", store_id="store_test", user_id="user_test",
+                task_id="task_custom_source_cleanup", job_id="job_custom_source_cleanup", job_body=main_image_body)
+        custom_prompt = FakeMediaGenerationAdapter.configs[-1].image_prompt
+        if ("Keep the eight-piece set" not in custom_prompt
+                or "supplier photography watermarks" not in custom_prompt
+                or "physical engravings" not in custom_prompt):
+            raise AssertionError("a custom image brief must not bypass the source cleanup/physical-mark boundary")
+
+        quality_alias_body = media_job_body(video_requested=False)
+        quality_alias_body["inputs"].pop("generation_tier", None)
+        quality_alias_body["inputs"]["creative_job_spec"].pop("generation_tier", None)
+        quality_alias_body["inputs"]["image_quality"] = "high"
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
+            quality_alias = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_quality_alias",
+                job_id="job_quality_alias",
+                job_body=quality_alias_body,
+            )
+        if quality_alias.get("status") != "completed_live_media_provider":
+            raise AssertionError(f"normalized quality alias should remain executable: {quality_alias}")
+        if FakeMediaGenerationAdapter.configs[-1].image_quality != "high":
+            raise AssertionError("quote and provider execution must share the normalized high-quality tier")
 
         concept_body = media_job_body(video_requested=False)
         concept_body["inputs"]["product_facts"].pop("reference_images", None)
         concept_body["inputs"].pop("reference_image_url", None)
         concept_body["inputs"]["creative_job_spec"]["output_safety_mode"] = "concept_reference_only"
+        concept_body["inputs"]["creative_job_spec"]["output_type"] = "只做 eBay 主图：白底 / 干净背景 / 主体清晰"
+        concept_body["inputs"]["image_count"] = 1
+        concept_body["inputs"]["scene_types"] = ["white_background"]
+        concept_body["inputs"]["commercial_rights_confirmed"] = False
+        missing_concept_acceptance = ProviderJobRunner().run(
+            company_id="co_test",
+            store_id="store_test",
+            user_id="user_test",
+            task_id="task_test_concept_unaccepted",
+            job_id="job_test_concept_unaccepted",
+            job_body=concept_body,
+        )
+        if "concept_only_usage_acceptance" not in missing_concept_acceptance.get("missing_inputs", []):
+            raise AssertionError("source-free concept generation must fail closed until its usage boundary is accepted")
+        if missing_concept_acceptance.get("safety", {}).get("live_provider_called") is not False:
+            raise AssertionError("missing concept acceptance must block before a billable provider call")
+        concept_body["inputs"]["concept_only_accepted"] = True
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
             concept = ProviderJobRunner().run(
                 company_id="co_test",
@@ -178,8 +304,24 @@ def main() -> int:
             raise AssertionError(f"ungrounded generation must remain concept-only: {concept_manifest}")
         if concept_manifest[0].get("listing_use_status") != "concept_only_not_eligible_for_listing":
             raise AssertionError("concept-only media must never be Listing eligible")
+        concept_packet = concept.get("output_packet", {})
+        if concept_packet.get("product_fact_gate", {}).get("missing_fact_keys"):
+            raise AssertionError(
+                f"the deliberate source-free concept contract must not spend provider quota and then fail postflight: {concept_packet}"
+            )
+        if concept_packet.get("asset_review", {}).get("status") != "waiting_for_human_asset_review":
+            raise AssertionError("a returned concept asset must settle as generated while remaining permanently non-Listing")
         if "No text, letters, numbers" not in FakeMediaGenerationAdapter.configs[-1].image_prompt:
             raise AssertionError("concept generation prompt must prohibit text and unsupported labels")
+        concept_prompt = FakeMediaGenerationAdapter.configs[-1].image_prompt
+        for required_primary_image_constraint in (
+            "exactly one coherent single-view product composition",
+            "Do not create a collage, contact sheet, comparison grid, multi-panel layout",
+        ):
+            if required_primary_image_constraint not in concept_prompt:
+                raise AssertionError(
+                    f"single eBay main-image generation must forbid contact sheets and multi-angle panels: {concept_prompt}"
+                )
 
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
             image_only = ProviderJobRunner().run(

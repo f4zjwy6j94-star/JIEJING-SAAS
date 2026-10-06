@@ -1,0 +1,279 @@
+拼嘚项目 → 捷境项目：共享资源与部署边界回传
+日期：2026年10月6日，时区 Asia/Shanghai
+用途：由经营者手动转交，双方对齐资源；不构成部署、迁移、开放网络或资金操作授权。
+
+证据口径
+【本次核验】读取拼嘚源码、Git、状态和执行报告；通过腾讯云控制台执行一次限定于拼嘚配置摘要、systemd状态、监听及资源统计的只读命令，03:09:18成功；读取现有实例、证书、Cloudflare页面，并查询拼嘚域名公开DNS。
+【历史证据】已保存的开发、部署、恢复和微信审核回执。本次阅读这些回执，不等于重新执行了其中的测试。
+【对方提供】捷境2026年10月6日约02:03的交接，接受为对应时间的记录，没有重新验收捷境。
+【待确认】缺乏当前证据的项目明确保留，不推断通过。
+本轮未部署、改配置、重启、迁移、查询业务数据或执行支付；未进入捷境源码修改、未使用捷境SSH私钥、未向其他聊天发消息。腾讯云只读命令产生正常的执行审计记录。
+
+一、正式名称、定位和阶段
+正式名称：拼嘚，工程标识 pindd。微信AppID：wx60a04b12ba758953。
+定位：照片生成拼豆图纸、色号和材料用量统计、编辑、保存、打印导出；后续扩展私人云作品、经审核的公开作品、免费使用或付费解锁、作者收益。
+顺序：微信优先，抖音后置。H5是开发验收入口，当前不是独立运营网站。
+技术结构：uni-app/Vue3/TypeScript客户端；纯TypeScript图纸计算核心；Node私人API；独立PostgreSQL。作者和交易模块另有本地SQLite实现，尚未部署成真实商业服务。
+制图目前是本机图片取样、颜色映射和矩阵计算，不依赖调用大模型生成图片。不能把开发时使用AI工具与产品必须购买模型服务混为一谈。
+当前分三层：微信免费工具0.1.77已有代码审核通过证据；云端private-118是内部联调；商业社区和资金系统仍在本地开发验收阶段。未确认公众正式可用。
+
+二、已完成、正在做、未完成和进度
+已完成的免费工具范围：照片制图、图纸编辑、格数及色卡标识、每色色号与颗数、总颗数、拼豆进度、本机作品、JSON备份恢复、PNG/PDF导出、6份自制离线图纸。
+当前材料统计来自实际非空格子，不把画布面积当豆数。默认MARD221社区参考色卡；实际使用色数与色卡候选数不同。限制96种颜色不等于适配某个96色商品套装，准确套装清单仍待核实，不能要求所有用户逐色录入才能制图。
+云端已完成：独立Node/PG、私人数据服务、TLS、资源限额、合成作品保存和重启保留，以及限定范围的备份恢复验证。
+本地已有：私人身份和作品同步客户端，作者投稿审核、免费目录、模拟订单、权益、私有交付、退款、对账与作者账本。上述本地功能不能算已向公众开放。
+目标业务链：生成或导入 → 私人作品 → 作者主动选择公开及免费/付费 → 权利与质量审核 → 目录展示 → 按有效权益交付 → 账目记录。
+必须付款后使用应称“付费解锁”；自愿打赏不得阻断原本免费的使用权。2/5/10元为候选档位，最终价格、分成、退款及结算规则尚未落定。真实收款、作者提现和收入均未启用。
+外部图纸截图的网格/色号自动识别尚未完整实现；JSON恢复和普通照片重新制图不能冒充精确还原外部图纸。
+当前阻塞：正式微信身份安全接入、request合法域名及端口核验、受限外网联调、真实账号及跨设备云保存、当前备案/发布证据、商业规则与真实支付资格、生产备份及运维收口。依赖安全审计仍有待处理项，不能宣称全部安全验收通过。
+固定完整商业进度仍为47/100，涵盖历史约定的双平台商业范围；不是微信工具单端完成率。原50项记录为40项限定范围PASS、5项BLOCKED、5项NOT_RUN。本轮资源核对不虚增工程分数，也不据此另编微信百分比。
+
+三、源码、Git和需要保留的修改
+实际独立Git仓库：
+C:\Users\57249\Documents\Codex\2026-09-29\dd-agents-md-00-start-here\outputs\pindd
+父级聊天工作区不是另一个产品源码根目录。
+续接入口：仓库AGENTS.md、00_START_HERE.md、state/project_state.json、state/delivery_progress.json和最新执行报告。旧文档中的早期未部署描述必须结合最新报告判断。
+【本次核验】分支 main。
+HEAD：c38eb13547ed968c7cf79f224e13bce22bd85002
+Git tree：2127d904c493c11a1f0cdf64f5e1be7059642fea
+最近工程提交：1ca5ba98fbd308cbfb7c69584b9f0ccd0e116a99。
+HEAD在该工程提交之后增加交接文档，不是一次新后端部署。
+未提交状态，核对前后相同，必须保留：
+  D  assets/brand/pindd-avatar-butterfly.png
+  ?? docs/execution/iteration-17/native/fixtures/pin.png
+不得擅自恢复头像、删除pin.png、git reset --hard、git clean或整体打包脏目录。
+本轮未改源码、状态、分数或Git提交。新增的安全核对附件仅存D盘独立证据目录。
+
+四、开发、测试、部署、回滚入口
+主要代码：apps/miniapp、apps/review-console、packages/pattern-core、packages/palettes、packages/project-store、packages/pattern-export、packages/private-sync、services/api。
+本地开发：npm run dev:h5、npm run dev:review-console；本地业务服务入口npm run dev:catalog。
+验证入口：npm run typecheck、按变更选择tests中的测试；PG、部署、恢复集成测试各有独立脚本。不能把会建测试库的集成测试当作线上只读健康检查运行。
+微信构建：npm run build:wechat；私人账号预览为build:wechat-account-preview / build:wechat-private-preview。生成包不代表已上传、提审或发布。
+后台构建：npm run build:wechat-private-deployment，必须指定新的独立输出目录和release ID。生成backend.cjs、controller.cjs、release.json；manifest记录文件SHA256，不附带密钥或数据。
+当前云端版本：/opt/pindd/releases/private-118。
+目前部署通过腾讯云自有控制台上传/命令流程，校验候选包、配置、存储、权限和健康后，只切换拼嘚API相关ExecStart路径。不能套用捷境Compose部署入口。
+实际服务由systemd管理，不可同时启动controller.cjs抢占同一数据目录。
+回退原则：只回退经校验且兼容的代码/配置，不回滚业务数据库、身份密钥或删除记录。
+历史保留：private-104包、原内部证书、/etc/pindd/staging/runtime-before-certificate-bLKNYIt2.json。
+第118轮切换带失败回退逻辑，但云端失败分支没有实际触发演练，不能冒充云端故障回退已验收。
+现有数据库已初始化，不得再跑首次建库、seed或首次删除记录初始化。未来结构升级须另外评估，不能靠重建数据修复启动。
+
+五、浏览器及标签归属
+【本次核验】Codex内置浏览器ID 2；拼嘚当前会话内26为腾讯云实例，34为拼嘚证书，21/22为微信后台，另有本地开发页面。
+Chrome当前ID 4，Profile为ZONGSHU；Cloudflare jiejing.shop DNS页标签ID 1331223847。“🔐 拼嘚证书”标签组名称来自此前交接记录，本轮未改组名或关闭标签。
+捷境提供的Chrome ID 3不是固定身份；浏览器ID、标签ID会变化，不可写死。
+不同Codex会话可能有相同标签编号，不能把拼嘚的22与捷境交接中的22默认视为同一个页面。
+操作前先按浏览器、会话、标题和网址识别；不导航、刷新、关闭另一项目正在使用的页面。
+本次没有操作捷境业务页面、OAuth或用户数据；当前原生桌面API不可用，浏览器核对使用cua接口。标签存在不保证登录长期有效。
+
+六、云服务器身份
+【本次核验】是同一台43.129.169.223，不是另买一台服务器。
+腾讯云Lighthouse实例：lhins-gcoi2yb3，名称jiejing-production-hk。
+地域：中国香港；可用区：香港一区。
+公网IPv4：43.129.169.223；私网IPv4：10.5.4.7。
+控制台规格：2核、4GB、70GB SSD、30Mbps峰值带宽、2048GB/月流量。
+控制台系统：Ubuntu Server 24.04 LTS；24.04.4补丁版本来自既有记录，本次未重新读取os-release。
+没有使用旧服务器43.129.205.244；不对旧机退订、恢复或清理作新判断。
+
+七、应用服务、身份、目录、监听及启动
+【本次核验】
+1. pindd-staging.service：active/running，PID3277265。
+   用户/组：pindd-staging；工作目录：/var/lib/pindd/staging。
+   Node：/opt/pindd/node/bin/node；代码：/opt/pindd/releases/private-118/backend.cjs。
+   通过--serve读取/etc/pindd/staging/runtime.json；实际监听127.0.0.1:8443。
+   主单元：/etc/systemd/system/pindd-staging.service。
+   drop-in：internal-only.conf、resources.conf、release-118.conf。
+   当前启动时间：2026-10-06 02:27:51。看主单元里的旧版本文本不能替代读取有效drop-in。
+2. pindd-postgres-staging.service：active/running，PID2657436。
+   用户/组：pindd-postgres；工作目录：/var/lib/pindd/postgres-staging。
+   程序：/opt/pindd/postgres/usr/lib/postgresql/17/bin/postgres。
+   数据：/var/lib/pindd/postgres-staging/data。
+   配置：/etc/pindd/postgres-staging/postgresql.conf；实际监听127.0.0.1:55432。
+   主单元：/etc/systemd/system/pindd-postgres-staging.service；resources.conf控制资源。
+   当前启动时间：2026-10-05 10:35:45。
+3. systemd-journald@pindd-staging.service：active/running，专用日志命名空间。
+   未设置普通业务User，Group为systemd-journal；属于系统日志服务，不是第三个业务API。
+4. pindd.slice：active，拼嘚服务总资源组。
+5. var-lib-pindd.mount：active/mounted，挂载专用存储镜像到/var/lib/pindd。
+API依赖存储和PG就绪；维护顺序是先停API再维护PG，恢复先确认PG就绪再启API，仅用于后续获准的维护。本轮未执行启停。
+
+八、确切网址与子域名
+已配置API origin：https://pindd-api.jiejing.shop:8443。
+这是内部服务的域名/TLS身份配置，不代表现在公网可访问。
+本轮未发现该名字的业务A、AAAA或CNAME记录；API实际只监听回环。
+拼嘚当前没有已验证的公网网页、社区网址或用户云作品入口。
+本地localhost页面是开发验收工具，不是线上站点。
+拼嘚不占用根域、app、ops、pilot，也不使用捷境支付/eBay回调路径。
+
+九、DNS、Cloudflare代理和实际链路
+【本次核验】Cloudflare jiejing.shop页面显示5条记录：原有根域/app/ops/pilot的4条A记录指向43.129.169.223，均为“已代理”；拼嘚只有_dnsauth.pindd-api的TXT证书验证记录，为“仅DNS”。验证值不转交。
+公开DoH对pindd-api.jiejing.shop查询A/AAAA/CNAME均为Status=0、Answer=null，即无对应答案，不把它写成已配置公网解析，也不误写成已查到源站IP。
+当前实际链路：
+  主机内授权测试进程 → 回环127.0.0.1:8443，使用pindd-api.jiejing.shop校验证书/Host → Node私人API → TLS连接127.0.0.1:55432 → 拼嘚专用PG。
+  删除记录另外写入拼嘚自己的SQLite文件。
+公网到该API的完整转发链路尚未建立：没有已交付的DNS入口、Cloudflare业务代理、Caddy反代或隧道链路。
+证书验证TXT不是业务转发，也不能因为根域走Cloudflare就认定拼嘚API已走Cloudflare。
+
+十、是否依赖捷境Caddy，配置是否持久化
+拼嘚自己的已交付架构不使用捷境Caddy，不占宿主80/443，不加入捷境Docker网络，也没有由拼嘚部署的Caddy运行时动态路由。
+当前拼嘚入口配置持久化在自己的runtime.json和systemd drop-in，TLS由Node直接提供。
+本次没有读取捷境完整Caddy运行时配置或替捷境做全机代理审计；“本项目未安装/依赖路由”不等于证明其他操作者绝对没有加过代理。
+因此，目前没有一条拼嘚已登记、仅存在于Caddy内存、会随edge重建丢失的业务路由；但也不能据此授权无协调地重建共享edge或重启整机。
+后续如果决定共用Caddy，必须先共同确定持久配置归属、增量合并、发布锁和回滚方式。现在不合并。
+捷境Cloudflare-only源站限制与拼嘚历史直接8443联调候选存在潜在兼容问题，须先联合核对，不能直接开防火墙解决。
+
+十一、TLS管理、证书位置和续期
+【本次核验】腾讯云证书ID bLKNYIt2，域名pindd-api.jiejing.shop，状态已签发，TrustAsia C1 DV Free，RSA/SHA256，到期2027-01-03 23:59:59北京时间。
+实际runtime引用：
+  /etc/pindd/staging/certificates-bLKNYIt2/pindd-api.jiejing.shop_bundle.pem
+  /etc/pindd/staging/certificates-bLKNYIt2/pindd-api.jiejing.shop.key
+以上仅交接路径，不交接私钥内容。上传暂存目录为/etc/pindd/tls-incoming-bLKNYIt2。
+【历史证据】第118轮验证了证书配对、服务用户目录0700/文件0600、Node默认信任根下的TLS1.2/1.3握手、域名和精确叶证书指纹；错误Host/转发头被拒绝。
+续期尚未自动化验收。目前是腾讯云证书申请、DNS验证、受控安装和换版流程；没有接入捷境Caddy ACME，也不能借用或覆盖其证书卷。
+换证涉及配置引用、精确证书指纹及服务就绪验证，不是只替换一个文件即可宣称续期完成。
+
+十二、数据库类型和地址
+【本次核验】当前私人API的targetManifest为/etc/pindd/staging/cloud-preflight.json。
+其目标为host=127.0.0.1、port=55432、database=pindd_private_staging。
+这是腾讯云服务器内自管的独立PostgreSQL集群，没有腾讯云托管数据库实例ID；它依赖上述Lighthouse主机和磁盘。
+版本17.11来自安装和部署回执，本次确认运行的17系列专用二进制路径，未另起进程读取版本。
+TLS启用，最低TLS1.2；PG自己的证书位于/etc/pindd/postgres-staging/server.crt及server.key，不与API域名证书混用。
+不是把拼嘚表放进postgres-p2r6dxhh，也不是借用捷境数据库账号。
+
+十三、database、schema、role与权限边界
+【本次配置核验】database：pindd_private_staging；运行role：pindd_runtime_staging；迁移role：pindd_migrate_staging。
+【源码及历史权限验收】schema：pindd_private；集群管理role：pindd_cluster_admin；8张私人业务表。应用运行身份与迁移权限分开，运行服务不能读取迁移凭据，不能承担建库/改表/TRUNCATE/授权工作。
+配置目录分为/etc/pindd/staging、/etc/pindd/migration、/etc/pindd/postgres-staging；API和PG为不同Linux用户，Linux用户与PG角色是两层概念。
+隔离恢复库：pindd_private_recovery105；对应独立migration/runtime角色，不能当作闲置库删除。
+【历史证据】已验证拼嘚主库与恢复库之间的角色访问限制及身份/删除记录绑定，不等于验证了捷境托管实例的全部ACL。
+是否能访问捷境业务表：当前拼嘚应用目标库和正常代码通路不包含捷境业务表，当前API还受非回环网络拒绝限制；本次没有登录捷境数据库或读取它的角色授权，所以“双方所有账号权限互斥已认证”仍待共同确认。
+本次没有输出密码、完整连接串、用户作品或会话数据。
+
+十四、55432用途，以及是否同时连接托管PG
+127.0.0.1:55432就是拼嘚私人作品/身份/会话/幂等及事件等数据所用的专用PG，不是SSH转发或捷境托管PG的代理端口。
+当前运行配置只有上述一个PG目标；未配置postgres-p2r6dxhh或其连接地址。
+API有效网络限制为拒绝所有IPv4/IPv6，仅允许127.0.0.0/8及::1，因此不能据旧计划称它当前正在调用远端托管PG。
+本次API已建立TCP连接快照为空，符合空闲连接可能关闭的情况；不能仅靠这个空快照证明全部历史连接去向。
+结论限于已核对的当前私人服务：使用本机PG，没有发现同时连接捷境托管PG的配置。全主机/全部运维身份的跨项目权限认证仍未做。
+
+十五、编排、网络、卷与定时任务
+拼嘚没有Docker Compose project、Docker网络或Docker持久化卷；不得使用捷境project name deploy及其内部网络/卷。
+当前systemd清单见第七节；本次API、PG、日志、slice和mount均为static；API及PG的Restart=no。
+项目未完成整机重启后的自动恢复验收，不能把active/running等同生产自愈。static也不能单独证明不会被其他依赖拉起，需以完整启动关系核对。
+本次systemctl list-timers --all未发现命名含pindd的定时任务；没有已验收的拼嘚证书自动续期和周期备份调度。
+【本次本地核验】Codex自动化“拼嘚持续开发与上线准备”，ID automation，状态PAUSED，未重启。
+它与捷境production-evidence-refresh.timer是两回事；不要暂停或改动捷境的证据刷新任务。
+
+十六、目录、数据、日志、备份及保留
+代码和工具：/opt/pindd/node、/opt/pindd/postgres、/opt/pindd/releases。
+上传候选：/opt/pindd/incoming-private-118；代码上传与证书、数据分开放置。
+存储镜像：/var/lib/pindd-storage/staging.ext4，预分配4GiB；不是另购的云硬盘。
+【本次核验】/dev/loop0挂载至/var/lib/pindd，ext4，nosuid/nodev/noexec。
+API数据及锁：/var/lib/pindd/staging/work/runtime。
+独立删除记录：/var/lib/pindd/staging/work/privacy/deletion.sqlite。
+PG物理数据：/var/lib/pindd/postgres-staging/data。
+日志：/var/lib/pindd/journal/<machine-id>.pindd-staging；源配置为32MiB总目标、单文件8MiB、7天保留及速率限制。不是整个项目数据的删除策略。
+服务自己的/tmp和/var/tmp各有16MiB限制；不得清理宿主全局临时目录。
+当前未接通公网图片上传/CDN；原始照片主要在用户本机处理。作者附件及商业服务的本地存储不等于已上线COS媒体库。
+历史云端备份/恢复工作目录：/var/lib/pindd/staging/work/postgres-backup-*、postgres-restore-*，保留其恢复链和证据，不能通配符删除。
+主机外恢复资料：%LOCALAPPDATA%\Pindd\Recovery\staging-107；接收方受限材料在项目work/offhost-receiver-107。不得附送解密材料或把它们加入普通交接包。
+历史恢复验证包含PG备份、身份绑定和独立删除记录重放；防止旧备份恢复已删除作品/账号是恢复流程的一部分。
+当前没有已验收的连续异地备份、PITR、生产RPO/RTO或备份告警。单次合成资料恢复成功不能替代这些能力。
+绝对不能擅自清理：存储镜像、挂载内容、PG目录、identity.key、删除记录、迁移/运行秘密目录、证书及回退配置、恢复105库、107主机外恢复资料、尚未确认可退役的旧release。
+同样不能清理捷境的旧日期release/private/Vault目录、staging命名云资源或匿名卷。
+
+十七、资源预算、实际快照与峰值边界
+【本次有效systemd限额】
+  API：CPU 0.5核；MemoryHigh 320MiB、Max 384MiB；TasksMax 64。
+  PG：CPU 0.4核；MemoryHigh 384MiB、Max 448MiB；TasksMax 32。
+  专用日志：CPU 0.1核；MemoryMax 64MiB；TasksMax 16。
+  拼嘚总组：CPU 0.75核；MemoryHigh 768MiB、Max 896MiB；TasksMax 128；禁止组内swap。
+子服务限额之和高于父组限额，运行时仍受父组约束，不是承诺可同时占满所有子限额。
+【03:09只读快照】API内存约19.5MiB，PG约35.9MiB，整个拼嘚组约73.1MiB。
+cgroup已记录的MemoryPeak：API约36.8MiB、PG约60.6MiB、总组约200.1MiB；这是各自cgroup统计期峰值，不是生产压力测试峰值，也不保证时间窗口相同。
+宿主MemAvailable约2.12GiB；根分区可用约23.11GiB；拼嘚挂载卷可用约3.77GiB。4GiB镜像已经占用根盘空间，不能重复算成额外免费容量。
+PG实际配置max_connections=12；应用池源码max=4，迁移池max=1。4是该进程池上限，不是整个主机连接数上限，也不是捷境的每进程8连接预算。
+PG shared_buffers=32MB、work_mem=2MB，禁用并行查询，保留fsync/full_page_writes/synchronous_commit。
+实际PG总活跃连接峰值、CPU/IO高峰、双项目部署叠加负载、真实并发容量未验收。
+本地磁盘本轮读取：C约1.61GiB可用，D214.45GiB、E260.47GiB、F314.66GiB。大产物优先D/E/F，不搬走或删掉两个项目源码和恢复资料。
+
+十八、共用、独占及潜在冲突
+确认共用：腾讯云账号体系、同一Lighthouse、CPU/内存/物理磁盘/内核/网络、jiejing.shop的Cloudflare Zone，以及操作者电脑和部分浏览器环境。
+拼嘚独占：pindd-api子域名及其证书验证记录、拼嘚服务和系统用户、专用PG集群/库/角色、8443和55432回环监听、/opt/pindd、/etc/pindd、/var/lib/pindd、存储镜像及自己的恢复资料。
+未共用：捷境托管PG、COS、CLS、Vault、队列、Docker网络/卷、登录Cookie、会话签名密钥、支付商户能力和业务表。此结论指拼嘚已交付架构，不替代对方全部权限清单的认证。
+捷境不得擅改上述拼嘚专属资源；拼嘚同样不得改捷境的deploy编排、app/ops/pilot、80/443、托管PG、Vault或回调。
+重要新发现：拼嘚API/PG有效InaccessiblePaths包含/opt/jiejing和/srv/jiejing，但没有显式包含对方现在的/opt/jiejing-production。
+ProtectSystem=strict主要约束写入，不能代替读取权限隔离；这不证明发生过泄露，但说明不能宣称两项目文件边界已完整验收。须共同核对真实路径、目录权限和服务命名空间访问边界后再决定修正。
+API仅允许回环不等于隔离所有本机服务；PG的systemd IPAddressDeny本次为空，监听回环/HBA与进程网络限制不能混为一谈。
+共同风险还有：整机重启、根盘耗尽、管理员权限、部署瞬时CPU/IO、DNS/TLS/防火墙变更和备份恢复。资源限额不等于独立主机故障域。
+控制台当前“主机安全”显示“风险”；本轮未展开事件，没有证据判断归属、严重程度或是否已处理，应由双方共同核实，不能推断已经入侵。
+
+十九、近期变更计划及本轮停止点
+本轮只交接和对齐，不启动任何下述变更。
+下一步仅共同确认域名/入口归属、是否共用Caddy及持久化、数据库权限、端口、目录、维护窗口/锁、备份与续费。
+对齐完成后的原开发方向：核验微信request合法域名和8443接受性；安全配置真实微信服务凭据；确定精确联调来源和有效期；再评估业务DNS、受限入口和真机云保存。
+已有schema5受限HTTPS候选，但当前运行仍是schema4，不能按候选文档自动开放公网。
+是否改走443、是否增量接入Caddy、是否使用Cloudflare代理仍待共同决策；当前直接TCP来源限制/拒绝转发头的实现不能未经适配套到代理后面。
+没有本轮数据库迁移、合库、真实支付、公开社区上线或抖音扩展计划；也没有续费购买授权。
+
+二十、健康、验收证据和未验证事项
+【本次直接确认】API/PG/挂载/日志正常运行；有效版本private-118；runtime schema4；微信登录DISABLED；绑定回环；实际PG目标为专用本机库；限额、证书引用、DNS及到期信息如上。
+【历史最近健康证据】2026-10-06 02:30:12实际API的/ready在TLS1.2/1.3和Node默认信任根下返回READY，productionReady=false；错误Host/转发头403。本次没有重新运行该健康探针，不能把进程active当新的数据库就绪结果。
+第118轮：7项TLS回归和18项PG部署回归PASS；2项Windows平台不运行；类型检查和后台构建PASS。只重启拼嘚API，PG及捷境7个容器的前后标识/启动状态保持，数据摘要和删除记录保持。这是当次部署证据，不是本轮重做全部验收。
+第106/107轮：独立恢复库、删除重放、主机外接收恢复等限定范围验证通过，使用合成资料。没有真实客户恢复或长期灾备SLA证明。
+微信0.1.77：2026-10-04 00:22:16提审、08:14:53代码审核通过；经营者随后以备案审核中截图纠正了“已发布”口头反馈。最后明确备案/发布记录仍待后续确认，本次没有重新查询微信后台。
+未验证：公众入口、微信合法域名端口、正式微信身份、跨设备云作品、真实资金/作者收益、整机自启恢复、连续备份、全部跨项目权限和联合高峰容量。
+本次安全证据目录：
+D:\Codex-Verification\pindd-cross-project-handoff-20261006\
+  collect-pindd-readonly.sh
+  readonly-inventory.safe.json
+  console-and-dns.safe.json
+  PINDD_RETURN_HANDOFF_20261006.txt
+以下路径相对拼嘚源码根：
+  docs/execution/ITERATION_118_CLOUD_DOMAIN_TLS.md
+  docs/execution/iteration-118/cloud-activation.json
+  docs/execution/iteration-118/active-domain-verification.json
+  docs/execution/iteration-118/command-results.json
+  docs/execution/iteration-106/cloud-postflight.json
+  docs/execution/iteration-107/offhost-restore-receipt.json
+  docs/execution/iteration-84/code-review-approval.json
+  docs/execution/iteration-84/filing-observation.json
+  docs/execution/iteration-84/release-current-observation.json
+  docs/handoffs/PINDD_TO_JIEJING_HANDOFF_20261006.md
+旧完整交接作为架构背景；涉及本轮新核验或冲突处，以本回传的证据范围为准。
+
+二十一、到期与续费
+【本次控制台核验】Lighthouse到期2026-10-22 11:21:49，自动续费选项已勾选；没有取得本轮实际续费支付凭据，不写“已续费成功”。
+拼嘚本机PG没有单独腾讯云托管PG续费订单，但随共享服务器和磁盘依赖而受影响。
+【对方提供】postgres-p2r6dxhh最后可读到期2026-10-03 10:38:13；本轮没有登录该实例重新查账，不断言已停用、已续费或可忽略。请捷境提供更新的安全状态回执。
+拼嘚TLS证书到期2027-01-03 23:59:59，证书续期不等于服务器续费。没有自动续期成功证据。
+本轮未购买、续费、退款或退订任何资源。
+
+二十二、与捷境交接的差异、补充和纠正
+1. “同一主机、8443和55432两服务在运行”与本次一致。
+2. “是否共用托管DB待确认”现在可补充：当前拼嘚API明确使用自己本机的pindd_private_staging/55432；未配置捷境托管PG。全部跨项目权限认证仍待确认，不能扩大这个结论。
+3. “拼嘚可能存在动态Caddy/隧道入口”在拼嘚交付记录中没有对应部署；本次DNS无业务解析、API回环。没有已交付公网链路，但本轮未替捷境导出运行时Caddy做全局排除。
+4. 捷境02:03交接早于拼嘚02:27:51切到private-118，以及02:30TLS验收；这是时间先后差异，不是对方记录错误。现在应保留release-118.conf及新证书引用。
+5. 旧拼嘚交接将文件/权限“独立”概括得较宽。本次确认专用用户/数据库/目录存在，但实际捷境路径没有被显式写入InaccessiblePaths，需收窄为“独立配置已落地，完整跨项目访问隔离未验收”。
+6. 捷境当前名称为“捷境”；拼嘚旧文件中的“捷径”按历史用字理解，不据名称另建项目。
+7. 捷境8/8、274/274及收费readiness属于其交接时点和软件清单。拼嘚不拿自己的47分或历史旧记录否定捷境，也不把捷境100%套用到拼嘚。
+8. 拼嘚早期文档中的旧托管PG TLS/接入问题是历史观察，不构成本次判断捷境生产健康的证据；未针对当前捷境重新测试。
+9. Chrome当前ID已由对方记录3变为4；本地C盘余量由对方约1.66GiB变为本轮约1.61GiB。ID和余量不能作为长期常量。
+10. 本次宿主到期日与捷境记录一致，并补充观察到自动续费已勾选；付款是否完成仍未知。
+
+二十三、双方共同确认事项，按风险排序
+高优先级——开始任何共享变更前：
+A. 真实文件边界：/opt/jiejing-production及旧private/Vault目录的归属、权限和拼嘚服务可见性；不能只核对旧名字。双方仅提供权限元数据，不交换密钥和客户内容。
+B. 入口与持久化：pindd-api归拼嘚；app/ops/pilot/根域归捷境。确定未来是否经过Cloudflare/Caddy、配置由谁维护、如何持久化和回退；同时核对源站Cloudflare-only防火墙与微信端口要求。
+C. 部署互斥：捷境两个维护锁不会自动约束拼嘚，拼嘚自身运行锁也不能替代宿主维护锁。先制定协调和维护时间，避免edge重建、宿主重启和拼嘚换版同时发生。
+D. 数据权限和恢复边界：双方确认各自host/database/schema/role及有效权限摘要；不共享账号、会话密钥或Cookie Domain，不做共享数据库整体回退来恢复单项目。
+高优先级——接真实用户前：
+E. 拼嘚自动启动/异常恢复、证书续期、周期异地备份、身份及删除记录保留、恢复演练与告警责任人。当前内部服务和一次恢复演练不能直接升级为生产承诺。
+F. 共享主机安全“风险”提示的实际事件和处置归属；未经核对不归罪于任一项目，也不代替对方改安全配置。
+中优先级——容量与持续运营：
+G. 联合CPU/内存/磁盘/IO和数据库连接预算，部署瞬时峰值及容量告警；4GiB拼嘚镜像属于同一根盘，不能误当独立故障域。
+H. 服务器及捷境托管PG最新续费回执、自动续费责任；拼嘚证书到期前的续期安排。当前不擅自付款。
+I. 备份目录、旧版本和恢复库的保留清单及退役条件；任何全局Docker清理、卷删除、旧目录清理都不在授权内。
+J. 统一当前证据索引、浏览器标签归属和版本命名，区分微信0.1.77、云端private-118、仓库HEAD与捷境生产commit，避免串包。
+
+本次交接到此。下一步仅做上述映射和冲突对齐；所有待确认项保留原状，不自动部署、改DNS、改Caddy、迁移数据库或重新开发捷境。

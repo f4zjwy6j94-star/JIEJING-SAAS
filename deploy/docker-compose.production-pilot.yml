@@ -19,6 +19,13 @@ services:
       jiejing-vault-token-renewer:
         condition: service_healthy
     environment:
+      JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED: "false"
+      JIEJING_PRODUCTION_CONTROLLED_DRAFT_BOOT_ALLOWED: "true"
+      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"
+      JIEJING_EBAY_WRITE_LIVE: "false"
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: "true"
+      JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE: "true"
+      JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "controlled_existing_draft_publish"
       JIEJING_PUBLIC_BASE_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_PUBLIC_APP_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_STABLE_DOMAIN: "${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
@@ -29,13 +36,16 @@ services:
       JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}/billing/domestic/wechat-pay/refund-notify"
       JIEJING_TURNSTILE_ALLOWED_HOSTNAMES: "${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_VAULT_TOKEN_FILE: "/run/secrets/jiejing-vault-token"
+      JIEJING_RUNTIME_EVIDENCE_FILE: "/run/jiejing-production-evidence/current.json"
     volumes:
       - jiejing_production_data:/data
       - jiejing_production_media:/var/lib/jiejing/media-assets
+      - /opt/jiejing-production/runtime-evidence:/run/jiejing-production-evidence:ro
       - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     networks:
       - jiejing_app
       - jiejing_secrets
+      - jiejing_ops
     expose:
       - "8788"
     restart: unless-stopped
@@ -58,6 +68,13 @@ services:
     env_file:
       - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-saas.production.env
     environment:
+      JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED: "false"
+      JIEJING_PRODUCTION_CONTROLLED_DRAFT_BOOT_ALLOWED: "true"
+      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"
+      JIEJING_EBAY_WRITE_LIVE: "false"
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: "true"
+      JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE: "true"
+      JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "controlled_existing_draft_publish"
       JIEJING_PUBLIC_BASE_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_PUBLIC_APP_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_STABLE_DOMAIN: "${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
@@ -68,9 +85,11 @@ services:
       JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}/billing/domestic/wechat-pay/refund-notify"
       JIEJING_TURNSTILE_ALLOWED_HOSTNAMES: "${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_VAULT_TOKEN_FILE: "/run/secrets/jiejing-vault-token"
+      JIEJING_RUNTIME_EVIDENCE_FILE: "/run/jiejing-production-evidence/current.json"
     volumes:
       - jiejing_production_data:/data
       - jiejing_production_media:/var/lib/jiejing/media-assets
+      - /opt/jiejing-production/runtime-evidence:/run/jiejing-production-evidence:ro
       - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     networks:
       - jiejing_app
@@ -216,16 +235,48 @@ services:
     logging: *jiejing-logging
     restart: unless-stopped
 
+  jiejing-ops-frontend:
+    image: nginx:1.30.4-alpine@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
+    depends_on:
+      - jiejing-saas
+    expose:
+      - "80"
+    networks:
+      - jiejing_ops
+    volumes:
+      - ../ops.html:/usr/share/nginx/html/ops.html:ro
+      - ../ops.js:/usr/share/nginx/html/ops.js:ro
+      - ../ops.css:/usr/share/nginx/html/ops.css:ro
+      - ../assets/jiejing-logo-mark.svg:/usr/share/nginx/html/assets/jiejing-logo-mark.svg:ro
+      - ../assets/jiejing-app-icon.svg:/usr/share/nginx/html/assets/jiejing-app-icon.svg:ro
+      - ../assets/jiejing-ops-panels.js:/usr/share/nginx/html/assets/jiejing-ops-panels.js:ro
+      - ./nginx.ops.production.conf:/etc/nginx/conf.d/default.conf:ro
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:rw,noexec,nosuid,nodev,size=8m
+      - /var/run:rw,noexec,nosuid,nodev,size=1m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header=Host: ops.jiejing.shop", "http://127.0.0.1/ops.html"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    logging: *jiejing-logging
+    restart: unless-stopped
+
   jiejing-edge:
     image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     depends_on:
       - jiejing-frontend
       - jiejing-saas
+      - jiejing-ops-frontend
     ports:
       - "80:80"
       - "443:443"
     networks:
       - jiejing_app
+      - jiejing_ops
     environment:
       JIEJING_PRODUCTION_HOST: "${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_ACME_EMAIL: "${JIEJING_ACME_EMAIL:?set the production ACME contact}"
@@ -245,5 +296,7 @@ volumes:
 
 networks:
   jiejing_app:
+  jiejing_ops:
+    internal: true
   jiejing_secrets:
     internal: true

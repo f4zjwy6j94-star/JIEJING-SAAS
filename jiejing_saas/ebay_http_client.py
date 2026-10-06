@@ -573,19 +573,29 @@ def _fold_resource_payload(
             payload["return_policy_count"] = len(response.get("returnPolicies", []) or [])
     elif resource_key == "store_profile":
         payload["marketplace_id"] = context.get("marketplace_id")
-        payload["seller_account_status"] = (
-            "registration_completed"
-            if response.get("sellerRegistrationCompleted") is True
-            else "registration_incomplete"
-            if response.get("sellerRegistrationCompleted") is False
-            else response.get("status")
-        )
-        selling_limit = response.get("sellingLimit") if isinstance(response.get("sellingLimit"), dict) else {}
-        if selling_limit:
-            payload["selling_limits"] = _redact_live_payload(selling_limit)
-        else:
-            payload["selling_limits"] = response.get("selling_limit") or response.get("limits")
-        payload["policy_setup_status"] = response.get("sellerBusinessType") or response.get("sellingPolicyProfile")
+        if path.endswith("/privilege"):
+            payload["seller_account_status"] = (
+                "registration_completed"
+                if response.get("sellerRegistrationCompleted") is True
+                else "registration_incomplete"
+                if response.get("sellerRegistrationCompleted") is False
+                else response.get("status")
+            )
+            selling_limit = response.get("sellingLimit") if isinstance(response.get("sellingLimit"), dict) else {}
+            if selling_limit:
+                payload["selling_limits"] = _redact_live_payload(selling_limit)
+            else:
+                payload["selling_limits"] = response.get("selling_limit") or response.get("limits")
+            payload["policy_setup_status"] = response.get("sellerBusinessType") or response.get("sellingPolicyProfile")
+        elif path.endswith("/kyc"):
+            checks = _safe_kyc_checks(response)
+            payload["kyc_check_status"] = "verification_required" if checks else "clear"
+            payload["kyc_check_count"] = len(checks)
+            payload["kyc_checks"] = checks
+            if checks:
+                payload["verification_status"] = "verification_required"
+                if _kyc_mentions_payout_hold(checks):
+                    payload["payout_status"] = "payout_hold"
     elif resource_key == "inventory_and_offers":
         if "inventory_item" in path:
             inventory_items = response.get("inventoryItems") if isinstance(response.get("inventoryItems"), list) else []
@@ -767,6 +777,43 @@ def _redact_live_payload(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact_live_payload(item) for item in value]
     return value
+
+
+def _safe_kyc_checks(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep actionable eBay KYC evidence without persisting remedy URLs or PII."""
+
+    raw_checks = response.get("kycChecks") if isinstance(response.get("kycChecks"), list) else []
+    checks: list[dict[str, Any]] = []
+    for raw in raw_checks[:10]:
+        if not isinstance(raw, dict):
+            continue
+        check = {
+            "data_required": str(raw.get("dataRequired") or "").strip()[:80],
+            "alert": str(raw.get("alert") or "").strip()[:240],
+            "detail": str(raw.get("detailMessage") or "").strip()[:480],
+            "due_date": str(raw.get("dueDate") or "").strip()[:80],
+            "remedy_available": bool(raw.get("remedyUrl")),
+        }
+        checks.append({key: value for key, value in check.items() if value not in ("", None)})
+    return checks
+
+
+def _kyc_mentions_payout_hold(checks: list[dict[str, Any]]) -> bool:
+    text = " ".join(
+        f"{check.get('alert', '')} {check.get('detail', '')}" for check in checks
+    ).lower()
+    return any(
+        marker in text
+        for marker in (
+            "payout hold",
+            "payouts are on hold",
+            "funds on hold",
+            "发放款项",
+            "發放款項",
+            "款项冻结",
+            "款項凍結",
+        )
+    )
 
 
 def _safe_headers(headers: dict[str, str]) -> dict[str, str]:

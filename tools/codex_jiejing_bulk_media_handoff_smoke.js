@@ -1,11 +1,15 @@
 #!/usr/bin/env node
-/* ASCII-only no-write smoke for Bulk -> Listing -> Media -> Listing handoff. */
+/* Isolated-account smoke for Bulk -> Listing -> Media -> Listing handoff.
+   It requires a dedicated local fixture backend and creates account/task/media
+   state, so production is always forbidden. An environment 404 is setup failure,
+   not an A-scheme product RED. */
 
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
+const { assertSafeMutationBase } = require("./jiejing_browser_smoke_mutation_guard");
 
-const base = process.env.JIEJING_TEST_BASE || "https://app.jiejing.shop";
+const base = process.env.JIEJING_TEST_BASE || "http://127.0.0.1:8788";
 const browserChannel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
 const localStaticRoot = process.env.JIEJING_LOCAL_STATIC_ROOT ? path.resolve(process.env.JIEJING_LOCAL_STATIC_ROOT) : "";
 const viewportWidth = Number(process.env.JIEJING_SMOKE_VIEWPORT_WIDTH || 1440);
@@ -63,16 +67,15 @@ async function makeSession() {
   const token = registered.json.token;
   const user = registered.json.user || {};
   const company = registered.json.company || {};
-  const activatedBilling = await api("/billing/test-event", {
-    token,
-    method: "POST",
-    body: {
-      plan_key: "operator",
-      action: "activate",
-    },
-  });
-  if (!activatedBilling.ok) {
-    fail(`billing test activation failed: ${activatedBilling.status}`, { body: activatedBilling.json });
+  const trialActivation = registered.json.platform_trial_activation;
+  const platformTrialActivation = {
+    present: Boolean(trialActivation && typeof trialActivation === "object"),
+    status: String(trialActivation?.status || ""),
+    platform_trial_allowed: trialActivation?.platform_trial_allowed === true,
+    secret_exposed: trialActivation?.secret_exposed === true,
+  };
+  if (platformTrialActivation.secret_exposed) {
+    fail("registration trial metadata exposed a secret");
   }
   const created = await api("/stores", {
     token,
@@ -96,6 +99,7 @@ async function makeSession() {
     email,
     userId: user.user_id || "",
     companyId: company.company_id || user.default_company_id || "",
+    platformTrialActivation,
     store: created.json.store || {},
   };
 }
@@ -126,7 +130,39 @@ function contentTypeFor(filePath) {
   return "application/octet-stream";
 }
 
-async function setupContext(browser, session, appHtml) {
+function buildFrontendMediaFixtureJob(jobSpec = {}, assetUrl = "", storeId = "") {
+  const mediaJobId = `media-fixture-${Date.now()}`;
+  const now = new Date().toISOString();
+  return {
+    media_job_id: mediaJobId,
+    store_id: storeId,
+    idempotency_key: String(jobSpec.idempotency_key || mediaJobId),
+    status: "waiting_review",
+    job: { job_spec: jobSpec },
+    live_provider_called: true,
+    spend_now_allowed: false,
+    secret_exposed: false,
+    fixture_only: true,
+    external_provider_called: false,
+    asset_manifest_validation: { status: "manifest_ready" },
+    asset_manifest: [
+      {
+        asset_id: `${mediaJobId}-image-1`,
+        asset_type: "product_image",
+        url: assetUrl,
+        url_or_file_path: assetUrl,
+        dimensions: "720x720",
+        commercial_use_status: "needs_review",
+        fact_review_status: "needs_review",
+        listing_use_status: "not_ready_for_listing_until_review",
+      },
+    ],
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+async function setupContext(browser, session, appHtml, mediaFixtureState, controlledSourcePath) {
   const context = await browser.newContext({ viewport: { width: viewportWidth, height: viewportHeight }, deviceScaleFactor: 1 });
   const baseUrl = new URL(base);
   await context.addCookies([
@@ -150,6 +186,78 @@ async function setupContext(browser, session, appHtml) {
   );
   if (localStaticRoot) {
     await context.route(`${base}/**`, (route) => {
+      const request = route.request();
+      const requestUrl = new URL(request.url());
+      const method = request.method();
+      const fulfillJson = (status, payload) =>
+        route.fulfill({
+          status,
+          contentType: "application/json; charset=utf-8",
+          headers: { "cache-control": "no-store" },
+          body: JSON.stringify(payload),
+        });
+      if (requestUrl.pathname === "/__jiejing-smoke__/controlled-media.png") {
+        if (!fs.existsSync(controlledSourcePath)) return route.fulfill({ status: 404, body: "fixture not ready" });
+        return route.fulfill({ status: 200, contentType: "image/png", body: fs.readFileSync(controlledSourcePath) });
+      }
+      if (method === "POST" && /\/stores\/[^/]+\/provider-jobs\/queue$/.test(requestUrl.pathname)) {
+        const jobSpec = request.postDataJSON() || {};
+        mediaFixtureState.job = buildFrontendMediaFixtureJob(
+          jobSpec,
+          `${base}/__jiejing-smoke__/controlled-media.png`,
+          session.store.store_id,
+        );
+        mediaFixtureState.requests.push({ method, path: requestUrl.pathname, fixture: "queue" });
+        return fulfillJson(200, { media_asset_job: mediaFixtureState.job, fixture_only: true });
+      }
+      if (method === "POST" && /\/media-asset-jobs\/[^/]+\/review$/.test(requestUrl.pathname)) {
+        if (!mediaFixtureState.job) return fulfillJson(404, { error: "fixture media job missing" });
+        const reviewedAt = new Date().toISOString();
+        mediaFixtureState.job = {
+          ...mediaFixtureState.job,
+          status: "approved_for_listing",
+          merchant_review: {
+            contract_version: "2026-07-11-media-review-v2",
+            decision: "approve_for_listing_draft",
+            confirmations: {
+              fact_consistency_confirmed: true,
+              commercial_rights_confirmed: true,
+              platform_rules_checked: true,
+              motion_and_usage_consistency_confirmed: true,
+            },
+            reviewed_by: "fixture-merchant",
+            listing_draft_only: true,
+            triggers_real_platform_write: false,
+            secret_exposed: false,
+          },
+          asset_review: {
+            status: "approved_for_listing_draft",
+            listing_use_status: "approved_for_listing_draft",
+            reviewed_at: reviewedAt,
+            fixture_only: true,
+          },
+          asset_manifest: mediaFixtureState.job.asset_manifest.map((asset) => ({
+            ...asset,
+            commercial_use_status: "confirmed_by_merchant",
+            fact_review_status: "confirmed_by_merchant",
+            listing_use_status: "approved_for_listing_draft",
+            review_status: "approved_for_listing_draft",
+          })),
+          updated_at: reviewedAt,
+        };
+        mediaFixtureState.requests.push({ method, path: requestUrl.pathname, fixture: "review" });
+        return fulfillJson(200, { media_asset_job: mediaFixtureState.job, fixture_only: true });
+      }
+      if (method === "GET" && /\/media-asset-jobs\/[^/]+$/.test(requestUrl.pathname)) {
+        mediaFixtureState.requests.push({ method, path: requestUrl.pathname, fixture: "job" });
+        return mediaFixtureState.job
+          ? fulfillJson(200, { media_asset_job: mediaFixtureState.job, fixture_only: true })
+          : fulfillJson(404, { error: "fixture media job missing" });
+      }
+      if (method === "GET" && /\/stores\/[^/]+\/media-asset-jobs$/.test(requestUrl.pathname)) {
+        mediaFixtureState.requests.push({ method, path: requestUrl.pathname, fixture: "list" });
+        return fulfillJson(200, { media_asset_jobs: mediaFixtureState.job ? [mediaFixtureState.job] : [], fixture_only: true });
+      }
       const filePath = localStaticPath(route.request().url());
       if (!filePath || !fs.existsSync(filePath)) {
         route.continue();
@@ -210,6 +318,7 @@ async function waitForReady(page, selector, timeoutMs = 60000) {
 }
 
 async function main() {
+  assertSafeMutationBase(base);
   smokeStage = "creating_safe_test_account";
   const session = await makeSession();
   smokeStage = "loading_workbench";
@@ -220,8 +329,15 @@ async function main() {
     fail(`app html fetch failed: ${appHtmlResponse.status}`);
   }
   const appHtml = await appHtmlResponse.text();
+  const sourceFixturePath = path.join(outDir, "controlled-merchant-source.png");
+  const mediaFixtureState = { job: null, requests: [] };
+  const mediaFixtureApi = () => ({
+    ok: true,
+    status: 200,
+    json: { media_asset_jobs: mediaFixtureState.job ? [mediaFixtureState.job] : [], fixture_only: true },
+  });
   const browser = await chromium.launch({ channel: browserChannel, headless: true, timeout: 60000 });
-  const context = await setupContext(browser, session, appHtml);
+  const context = await setupContext(browser, session, appHtml, mediaFixtureState, sourceFixturePath);
   const page = await context.newPage();
   page.setDefaultTimeout(45000);
 
@@ -229,12 +345,16 @@ async function main() {
   const requestFailures = [];
   const badResponses = [];
   const forbiddenRequests = [];
+  const workflowMutationRequests = [];
   const screenshotFailures = [];
   page.on("pageerror", (error) => pageErrors.push(String(error.message || error).slice(0, 500)));
   page.on("request", (request) => {
     const url = request.url();
+    if (request.method() !== "GET" && /\/tasks(?:[/?]|$)|\/reports(?:[/?]|$)|\/merchant-ceo(?:[/?]|$)/i.test(url)) {
+      workflowMutationRequests.push({ method: request.method(), url });
+    }
     if (
-      /signin\.ebay|auth\.ebay|ebay\.com\/signin|\/oauth\/authorize|\/oauth\/callback|stripe\.com|paypal\.com|checkout\.stripe\.com|\/billing\/checkout-session|\/billing\/provider-rehearsal|\/ebay\/publish|\/ads\/|\/refund|\/procurement|\/inventory\/write/i.test(
+      /signin\.ebay|auth\.ebay|ebay\.com\/signin|\/oauth\/authorize|\/oauth\/callback|stripe\.com|paypal\.com|checkout\.stripe\.com|\/billing\/test-event|\/billing\/checkout-session|\/billing\/provider-rehearsal|\/ebay\/publish|\/ads\/|\/refund|\/procurement|\/inventory\/write/i.test(
         url,
       )
     ) {
@@ -284,12 +404,17 @@ async function main() {
   const bulkInitial = await page.evaluate(() => {
     const root = document.querySelector("#view-bulk.is-active");
     const text = root?.innerText || "";
+    const listingModes = Array.from(root?.querySelectorAll("[data-listing-mode]") || []);
     const riskyActionLabels = Array.from(root?.querySelectorAll("button:not([disabled]), a[href]") || [])
       .map((item) => (item.textContent || "").replace(/\s+/g, " ").trim())
       .filter((label) => /(直接发布|一键发布|上传到 eBay|发布到 eBay)/.test(label) && !/(不|不会|确认单|体检)/.test(label));
     return {
       visible: Boolean(root && root.offsetParent !== null),
       has_generate_button: Boolean(root?.querySelector('[data-bulk-action="generate-candidates"]')),
+      listing_mode_order: listingModes.map((item) => item.dataset.listingMode),
+      bulk_mode_active: listingModes.filter((item) => item.getAttribute("aria-current") === "page").map((item) => item.dataset.listingMode),
+      product_primary_nav_active: document.querySelector('.nav-item[data-view="product"]')?.classList.contains("is-active") === true,
+      bulk_primary_nav_count: document.querySelectorAll('.nav-item[data-view="bulk"]').length,
       has_direct_publish_button: riskyActionLabels.length > 0,
       has_safety_copy: text.includes("不会自动执行"),
       preview: text.trim().slice(0, 240),
@@ -374,10 +499,13 @@ async function main() {
     const root = document.querySelector("#view-product.is-active");
     const active = state.saasListingComposerDraft || {};
     const text = root?.innerText || "";
+    const listingModes = Array.from(root?.querySelectorAll("[data-listing-mode]") || []);
     const riskyActionLabels = Array.from(root?.querySelectorAll("button:not([disabled]), a[href]") || [])
       .map((item) => (item.textContent || "").replace(/\s+/g, " ").trim())
       .filter((label) => /(直接发布|一键发布|上传到 eBay|发布到 eBay)/.test(label) && !/(不|不会|确认单|体检)/.test(label));
     return {
+      listing_mode_order: listingModes.map((item) => item.dataset.listingMode),
+      single_mode_active: listingModes.filter((item) => item.getAttribute("aria-current") === "page").map((item) => item.dataset.listingMode),
       active_listing_draft: state.activeListingDraft || "",
       active_media_draft: state.activeMediaDraft || "",
       active_title_cn: active?.product || active?.title || "",
@@ -394,6 +522,164 @@ async function main() {
       preview: text.trim().slice(0, 240),
     };
   });
+  const bulkProductFixture = await page.evaluate(() => ({
+    composer: JSON.parse(JSON.stringify(state.saasListingComposerDraft || {})),
+    active_listing_draft: state.activeListingDraft || "",
+    active_media_draft: state.activeMediaDraft || "",
+    listing_source_mode: state.saasListingSourceMode || "",
+    source_handoff_status: state.sourceHandoffStatus || "",
+  }));
+
+  const recentFixture = await page.evaluate(() => {
+    const stamp = Date.now();
+    const reportId = `report-recent-existing-${stamp}`;
+    const productTaskId = `task-recent-product-${stamp}`;
+    const noReportTaskId = `task-recent-no-report-${stamp}`;
+    const unrelatedTaskId = `task-recent-service-${stamp}`;
+    const storeId = activeSaasStore()?.store_id || "";
+    const companyId = state.saasCompany?.company_id || state.saasIdentity?.company_id || "";
+    const projectIdentity = { key: `listing-project-recent-${stamp}`, source_report_id: reportId, candidate_id: `candidate-${stamp}` };
+    const report = {
+      report_id: reportId,
+      task_id: productTaskId,
+      report_type: "listing.package",
+      store_id: storeId,
+      company_id: companyId,
+      status: "completed",
+      created_at: new Date(stamp - 1000).toISOString(),
+      listing_project_identity: projectIdentity,
+      report: {
+        title: "Existing saved travel organizer",
+        summary: "Existing report fixture for resume-only browser validation.",
+        listing_project_identity: projectIdentity,
+      },
+    };
+    const productTask = {
+      task_id: productTaskId,
+      task_type: "listing_draft_generation",
+      store_id: storeId,
+      company_id: companyId,
+      listing_project_identity: projectIdentity,
+      title: "Existing saved travel organizer",
+      status: "blocked_facts",
+      source_report_id: reportId,
+      report_id: reportId,
+      updated_at: new Date(stamp).toISOString(),
+    };
+    const noReportTask = {
+      task_id: noReportTaskId,
+      task_type: "merchant_product_facts",
+      store_id: storeId,
+      company_id: companyId,
+      title: "Existing task waiting for product facts",
+      status: "completed_with_blocks",
+      missing_fields: ["package_dimensions"],
+      updated_at: new Date(stamp + 2).toISOString(),
+    };
+    const unrelatedTask = {
+      task_id: unrelatedTaskId,
+      task_type: "customer_service",
+      store_id: storeId,
+      company_id: companyId,
+      title: "Must not appear in recent products",
+      status: "open",
+      updated_at: new Date(stamp + 1).toISOString(),
+    };
+    state.saasTasks = [unrelatedTask, noReportTask, productTask, ...(Array.isArray(state.saasTasks) ? state.saasTasks : [])];
+    state.saasReports = [report, ...(Array.isArray(state.saasReports) ? state.saasReports : [])];
+    renderProductListingCenter();
+    return {
+      report_id: reportId,
+      product_task_id: productTaskId,
+      no_report_task_id: noReportTaskId,
+      unrelated_task_id: unrelatedTaskId,
+      task_count: state.saasTasks.length,
+      report_count: state.saasReports.length,
+    };
+  });
+  const recentMutationRequestStart = workflowMutationRequests.length;
+  await page.click('#view-product.is-active [data-listing-mode="recent"]');
+  await page.waitForSelector(
+    `#view-product.is-active [data-recent-product-task-id="${recentFixture.product_task_id}"]`,
+    { timeout: 20000 },
+  );
+  const recentList = await page.evaluate(() => ({
+    task_ids: Array.from(document.querySelectorAll("#view-product.is-active [data-recent-product-task-id]")).map(
+      (item) => item.dataset.recentProductTaskId,
+    ),
+    task_types: Array.from(document.querySelectorAll("#view-product.is-active [data-recent-product-task-type]")).map(
+      (item) => item.dataset.recentProductTaskType,
+    ),
+  }));
+  await page.click(
+    `#view-product.is-active [data-continue-recent-product-task="${recentFixture.no_report_task_id}"]`,
+  );
+  await page.waitForFunction(
+    (taskId) => state.view === "cockpit" && state.aiCeoExplicitTaskContext?.taskId === taskId,
+    recentFixture.no_report_task_id,
+    { timeout: 20000 },
+  );
+  const recentNoReportContext = await page.evaluate(() => ({
+    task_id: state.aiCeoExplicitTaskContext?.taskId || "",
+    title: state.aiCeoExplicitTaskContext?.title || "",
+    missing_facts: state.aiCeoExplicitTaskContext?.missingFacts || [],
+  }));
+  await page.click('#view-cockpit.is-active [data-global-flow-view="product"][data-global-flow-key="recent"]');
+  await page.waitForSelector(
+    `#view-product.is-active [data-open-recent-product-task="${recentFixture.product_task_id}"]`,
+    { timeout: 20000 },
+  );
+  await page.click(
+    `#view-product.is-active [data-open-recent-product-task="${recentFixture.product_task_id}"]`,
+  );
+  await page.waitForFunction(
+    ({ reportId }) =>
+      state.saasListingComposerDraft?.source_report_id === reportId &&
+      state.saasListingSourceMode === "recent_product_task" &&
+      state.view === "product",
+    { reportId: recentFixture.report_id },
+    { timeout: 20000 },
+  );
+  const recentResume = await page.evaluate(() => ({
+    source_report_id: state.saasListingComposerDraft?.source_report_id || "",
+    listing_project_key: saasCurrentListingProjectIdentity(state.saasListingComposerDraft)?.key || "",
+    source_mode: state.saasListingSourceMode || "",
+    route_view: new URL(window.location.href).searchParams.get("view") || "",
+    task_count: Array.isArray(state.saasTasks) ? state.saasTasks.length : -1,
+    report_count: Array.isArray(state.saasReports) ? state.saasReports.length : -1,
+    active_mode: document.querySelector('#view-product.is-active [data-listing-mode][aria-current="page"]')?.dataset.listingMode || "",
+  }));
+  await page.waitForTimeout(750);
+  const recentMutationRequests = workflowMutationRequests.slice(recentMutationRequestStart);
+
+  const bulkReturnMutationRequestStart = workflowMutationRequests.length;
+  await page.evaluate((fixture) => {
+    state.saasListingComposerDraft = JSON.parse(JSON.stringify(fixture.composer || {}));
+    state.activeListingDraft = fixture.active_listing_draft || "";
+    state.activeMediaDraft = fixture.active_media_draft || "";
+    state.saasListingSourceMode = fixture.listing_source_mode || "bulk_handoff";
+    state.sourceHandoffStatus = fixture.source_handoff_status || "sent";
+    state.saasActiveListingMode = "single";
+    state.mediaTaskEntry = "project";
+    saveSaasProtectedStateSnapshot();
+    setView("product");
+    renderProductListingCenter();
+  }, bulkProductFixture);
+  await page.waitForFunction(
+    (expectedProduct) =>
+      state.view === "product" &&
+      state.saasListingComposerDraft?.source_type === "bulk_handoff" &&
+      state.saasListingComposerDraft?.product === expectedProduct,
+    acceptanceProduct,
+    { timeout: 20000 },
+  );
+  const bulkReturn = await page.evaluate(() => ({
+    product: state.saasListingComposerDraft?.product || "",
+    source_type: state.saasListingComposerDraft?.source_type || "",
+    active_media_draft: state.activeMediaDraft || "",
+    active_mode: document.querySelector('#view-product.is-active [data-listing-mode][aria-current="page"]')?.dataset.listingMode || "",
+  }));
+  const bulkReturnMutationRequests = workflowMutationRequests.slice(bulkReturnMutationRequestStart);
 
   await page.evaluate(() => {
     document.querySelector('#view-product.is-active [data-saas-action="open-media"], #view-product.is-active [data-product-action="media"]')?.click();
@@ -432,7 +718,6 @@ async function main() {
   });
 
   smokeStage = "uploading_grounded_media_source";
-  const sourceFixturePath = path.join(outDir, "controlled-merchant-source.png");
   const fixturePage = await context.newPage();
   await fixturePage.setViewportSize({ width: 720, height: 720 });
   await fixturePage.setContent(
@@ -476,6 +761,18 @@ async function main() {
     }
     document.querySelector("#view-media.is-active #mediaGenerateImagesDraft")?.click();
   }, { includeVideo });
+  await page.waitForSelector("#mediaAcceptanceModal:not([hidden]) #mediaAcceptanceConfirm", { timeout: 10000 });
+  const mediaGenerationAcceptance = await page.evaluate(() => {
+    const modal = document.querySelector("#mediaAcceptanceModal:not([hidden])");
+    const text = modal?.innerText || "";
+    return {
+      visible: Boolean(modal),
+      confirms_rights: text.includes("商业使用") || text.includes("图片权利"),
+      preserves_draft_boundary: text.includes("不会自动发布") && text.includes("不会") && text.includes("eBay"),
+      confirm_label: document.querySelector("#mediaAcceptanceConfirm")?.textContent?.trim() || "",
+    };
+  });
+  await page.locator("#mediaAcceptanceModal:not([hidden]) #mediaAcceptanceConfirm").click();
   smokeStage = "generating_media_assets";
   await page.waitForFunction(
     () => ["submitted", "generated", "done"].includes(state.mediaGenerationStatus) && (document.querySelector("#mediaProductionStatus")?.textContent || "").length > 0,
@@ -498,9 +795,7 @@ async function main() {
       { timeout: assetWaitTimeout },
     )
     .catch(() => {});
-  let mediaJobsApi = await api(`/stores/${encodeURIComponent(session.store.store_id)}/media-asset-jobs?limit=8`, {
-    token: session.token,
-  });
+  let mediaJobsApi = mediaFixtureApi();
   let backendMediaJobs = Array.isArray(mediaJobsApi.json?.media_asset_jobs) ? mediaJobsApi.json.media_asset_jobs : [];
   let latestBackendMediaJob = backendMediaJobs[0] || {};
   let backendMediaJob = {
@@ -514,9 +809,11 @@ async function main() {
       ? latestBackendMediaJob.asset_manifest.map((asset) => String(asset?.asset_type || ""))
       : [],
     validation_status: latestBackendMediaJob.asset_manifest_validation?.status || "",
-    live_provider_called: latestBackendMediaJob.live_provider_called,
+    ui_contract_assets_returned: latestBackendMediaJob.live_provider_called === true,
     spend_now_allowed: latestBackendMediaJob.spend_now_allowed,
     secret_exposed: latestBackendMediaJob.secret_exposed,
+    fixture_only: latestBackendMediaJob.fixture_only === true,
+    external_provider_called: latestBackendMediaJob.external_provider_called === true,
   };
   await page
     .screenshot({ path: path.join(outDir, "05-media-generated-assets.png"), fullPage: true, timeout: 15000 })
@@ -641,9 +938,7 @@ async function main() {
     null,
     { timeout: 30000 },
   );
-  mediaJobsApi = await api(`/stores/${encodeURIComponent(session.store.store_id)}/media-asset-jobs?limit=8`, {
-    token: session.token,
-  });
+  mediaJobsApi = mediaFixtureApi();
   backendMediaJobs = Array.isArray(mediaJobsApi.json?.media_asset_jobs) ? mediaJobsApi.json.media_asset_jobs : [];
   latestBackendMediaJob = backendMediaJobs[0] || {};
   backendMediaJob = {
@@ -657,11 +952,64 @@ async function main() {
       ? latestBackendMediaJob.asset_manifest.map((asset) => String(asset?.asset_type || ""))
       : [],
     validation_status: latestBackendMediaJob.asset_manifest_validation?.status || "",
-    live_provider_called: latestBackendMediaJob.live_provider_called,
+    ui_contract_assets_returned: latestBackendMediaJob.live_provider_called === true,
     spend_now_allowed: latestBackendMediaJob.spend_now_allowed,
     secret_exposed: latestBackendMediaJob.secret_exposed,
+    fixture_only: latestBackendMediaJob.fixture_only === true,
+    external_provider_called: latestBackendMediaJob.external_provider_called === true,
   };
 
+  smokeStage = "reloading_approved_media_audit";
+  await page.reload({ waitUntil: "commit", timeout: 90000 });
+  await page.waitForSelector("body", { timeout: 30000 });
+  await page.waitForLoadState("networkidle", { timeout: 45000 }).catch(() => {});
+  await page.waitForFunction(
+    () =>
+      document.documentElement.classList.contains("app-ready") &&
+      !document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]") &&
+      typeof setView === "function",
+    null,
+    { timeout: 90000 },
+  );
+  await page.evaluate(() => setView("media"));
+  await waitForReady(page, "#view-media.is-active");
+  await page.waitForFunction(
+    () => {
+      const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+      const button = document.querySelector("#view-media.is-active #mediaConfirmDraft");
+      return job?.status === "approved_for_listing" && button?.disabled === false && button?.dataset?.mediaWritebackGate === "revalidation_required";
+    },
+    null,
+    { timeout: 30000 },
+  );
+  const approvedMediaAfterReload = await page.evaluate(() => {
+    const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+    const gate = saasApprovedMediaWritebackGate(job);
+    let snapshot = null;
+    try {
+      snapshot = JSON.parse(localStorage.getItem(saasProtectedSnapshotStorageKey()) || "null");
+    } catch (_error) {
+      snapshot = null;
+    }
+    const snapshotJob = Array.isArray(snapshot?.media_asset_jobs)
+      ? snapshot.media_asset_jobs.find((item) => item?.media_job_id === job?.media_job_id)
+      : null;
+    const button = document.querySelector("#view-media.is-active #mediaConfirmDraft");
+    return {
+      media_job_id: job?.media_job_id || "",
+      status: job?.status || "",
+      gate_allowed: gate.allowed === true,
+      gate_reason: gate.reason || "",
+      button_disabled: Boolean(button?.disabled),
+      button_gate: button?.dataset?.mediaWritebackGate || "",
+      source_upload_present: Boolean(state.saasMediaSourceUpload),
+      merchant_review_decision: job?.merchant_review?.decision || "",
+      commercial_rights_confirmed: job?.merchant_review?.confirmations?.commercial_rights_confirmed === true,
+      snapshot_merchant_review_decision: snapshotJob?.merchant_review?.decision || "",
+    };
+  });
+
+  const mediaWritebackRevalidationRequestStart = mediaFixtureState.requests.length;
   const mediaWritebackClick = await page.evaluate(() => {
     const button = document.querySelector("#view-media.is-active #mediaConfirmDraft");
     const before = {
@@ -751,6 +1099,9 @@ async function main() {
     }));
     fail("approved media was not written back to Listing after reload", { mediaWritebackWaitError, mediaWritebackDebug });
   }
+  const mediaWritebackRevalidationRequests = mediaFixtureState.requests
+    .slice(mediaWritebackRevalidationRequestStart)
+    .filter((item) => item.method === "GET" && item.fixture === "job");
   await page
     .screenshot({ path: path.join(outDir, "06-product-after-media-writeback.png"), fullPage: true, timeout: 15000 })
     .catch((error) => screenshotFailures.push({ view: "product-after-media-writeback", error: String(error.message || error).slice(0, 300) }));
@@ -774,7 +1125,15 @@ async function main() {
 
   const [healthApi, readinessApi] = await Promise.all([api("/health"), api("/readiness/product-saas")]);
   const checks = {
-    bulk_initial_visible_and_safe: bulkInitial.visible && bulkInitial.has_generate_button && bulkInitial.has_safety_copy && !bulkInitial.has_direct_publish_button,
+    bulk_initial_visible_and_safe:
+      bulkInitial.visible &&
+      bulkInitial.has_generate_button &&
+      bulkInitial.has_safety_copy &&
+      !bulkInitial.has_direct_publish_button &&
+      JSON.stringify(bulkInitial.listing_mode_order) === JSON.stringify(["single", "bulk", "recent"]) &&
+      JSON.stringify(bulkInitial.bulk_mode_active) === JSON.stringify(["bulk"]) &&
+      bulkInitial.product_primary_nav_active === true &&
+      bulkInitial.bulk_primary_nav_count === 0,
     bulk_candidates_generated: bulkGenerated.preview_count > 0 && bulkGenerated.has_accept_button && bulkGenerated.has_grouping_copy && bulkGenerated.has_safety_copy,
     bulk_handoff_reaches_listing:
       productAfterBulk.source_type === "bulk_handoff" &&
@@ -784,7 +1143,36 @@ async function main() {
       productAfterBulk.logistics.includes("Yiwu") &&
       productAfterBulk.handoff_status === "sent" &&
       productAfterBulk.title_is_not_generic_ai_ceo_report &&
-      productAfterBulk.has_media_button,
+      productAfterBulk.has_media_button &&
+      JSON.stringify(productAfterBulk.listing_mode_order) === JSON.stringify(["single", "bulk", "recent"]) &&
+      JSON.stringify(productAfterBulk.single_mode_active) === JSON.stringify(["single"]),
+    recent_filters_real_product_workflow_tasks:
+      recentList.task_ids.includes(recentFixture.product_task_id) &&
+      !recentList.task_ids.includes(recentFixture.unrelated_task_id) &&
+      recentList.task_types.length === recentList.task_ids.length &&
+      recentList.task_types[recentList.task_ids.indexOf(recentFixture.product_task_id)] === "listing_draft_generation" &&
+      recentList.task_types[recentList.task_ids.indexOf(recentFixture.no_report_task_id)] === "merchant_product_facts" &&
+      recentList.task_types.every((taskType) => ["product_workflow", "listing_draft_generation", "merchant_product_facts", "merchant_ceo_chat"].includes(taskType)),
+    recent_resumes_existing_identity_without_rerun:
+      recentResume.source_report_id === recentFixture.report_id &&
+      recentResume.listing_project_key.startsWith("listing-project-recent-") &&
+      recentResume.source_mode === "recent_product_task" &&
+      recentResume.route_view === "product" &&
+      recentResume.task_count === recentFixture.task_count &&
+      recentResume.report_count === recentFixture.report_count &&
+      recentResume.active_mode === "single" &&
+      recentMutationRequests.length === 0,
+    recent_no_report_binds_explicit_context_without_rerun:
+      recentNoReportContext.task_id === recentFixture.no_report_task_id &&
+      Boolean(recentNoReportContext.title) &&
+      recentNoReportContext.missing_facts.includes("包装尺寸") &&
+      recentMutationRequests.length === 0,
+    bulk_return_restores_original_product_without_rerun:
+      bulkReturn.product === acceptanceProduct &&
+      bulkReturn.source_type === "bulk_handoff" &&
+      bulkReturn.active_media_draft.startsWith("saas-bulk-") &&
+      bulkReturn.active_mode === "single" &&
+      bulkReturnMutationRequests.length === 0,
     media_opens_same_bulk_draft:
       mediaOpened.active_media_draft.startsWith("listing-project-") &&
       mediaOpened.active_media_draft === mediaOpened.listing_project_key &&
@@ -803,19 +1191,39 @@ async function main() {
       sourceUpload.provider_reference_ready === true &&
       sourceUpload.source_url_retained === false &&
       sourceUpload.secret_exposed === false,
+    media_generation_acceptance_is_explicit_and_safe:
+      mediaGenerationAcceptance.visible &&
+      mediaGenerationAcceptance.confirms_rights &&
+      mediaGenerationAcceptance.preserves_draft_boundary &&
+      mediaGenerationAcceptance.confirm_label.includes("确认"),
     media_generation_creates_reviewable_assets:
       ["submitted", "generated", "done"].includes(mediaGenerated.media_generation_status) &&
       mediaGenerated.has_review_copy &&
       mediaGenerated.has_no_direct_publish_button,
-    media_generation_created_backend_asset_job:
+    media_generation_created_reviewable_frontend_fixture:
       backendMediaJob.ok &&
       backendMediaJob.count >= 1 &&
       backendMediaJob.job_status === "approved_for_listing" &&
       backendMediaJob.manifest_count > 0 &&
       backendMediaJob.validation_status === "manifest_ready" &&
-      backendMediaJob.live_provider_called === true &&
+      backendMediaJob.ui_contract_assets_returned === true &&
+      backendMediaJob.fixture_only === true &&
+      backendMediaJob.external_provider_called === false &&
       backendMediaJob.spend_now_allowed === false &&
       backendMediaJob.secret_exposed === false,
+    approved_media_audit_survives_reload_and_unlocks_same_draft:
+      approvedMediaAfterReload.status === "approved_for_listing" &&
+      approvedMediaAfterReload.gate_allowed === true &&
+      approvedMediaAfterReload.gate_reason === "approved_for_listing_draft" &&
+      approvedMediaAfterReload.button_disabled === false &&
+      approvedMediaAfterReload.button_gate === "revalidation_required" &&
+      approvedMediaAfterReload.source_upload_present === false &&
+      approvedMediaAfterReload.merchant_review_decision === "approve_for_listing_draft" &&
+      approvedMediaAfterReload.commercial_rights_confirmed === true &&
+      approvedMediaAfterReload.snapshot_merchant_review_decision === "approve_for_listing_draft",
+    media_writeback_revalidates_authoritative_backend_job:
+      mediaWritebackRevalidationRequests.length === 1 &&
+      mediaWritebackRevalidationRequests[0].path === `/media-asset-jobs/${approvedMediaAfterReload.media_job_id}`,
     media_job_survives_reload_for_same_listing:
       Boolean(mediaBeforeReload.media_job_id) &&
       mediaAfterReload.media_job_id === mediaBeforeReload.media_job_id &&
@@ -837,6 +1245,12 @@ async function main() {
       readinessApi.ok &&
       readinessApi.json?.readiness?.production_ready === false && readinessApi.json?.readiness?.can_accept_real_customers === false,
     no_forbidden_requests: forbiddenRequests.length === 0,
+    no_paid_or_external_media_call:
+      mediaFixtureState.requests.some((item) => item.fixture === "queue") &&
+      mediaFixtureState.requests.some((item) => item.fixture === "review") &&
+      backendMediaJob.fixture_only === true &&
+      backendMediaJob.external_provider_called === false,
+    registration_trial_metadata_safe: session.platformTrialActivation.secret_exposed === false,
     no_secret_exposed:
       !JSON.stringify({ bulkInitial, bulkGenerated, productAfterBulk, mediaOpened, mediaGenerated, mediaBeforeReload, mediaAfterReload, backendMediaJob, productAfterMedia })
         .toLowerCase()
@@ -853,17 +1267,29 @@ async function main() {
     session: {
       email_masked: session.email.replace(/^(.{2}).*(@.*)$/, "$1***$2"),
       store_id: session.store.store_id,
+      platform_trial_activation: session.platformTrialActivation,
     },
     checks,
     bulkInitial,
     bulkGenerated,
     productAfterBulk,
+    recentFixture,
+    recentList,
+    recentNoReportContext,
+    recentResume,
+    recentMutationRequests,
+    bulkReturn,
+    bulkReturnMutationRequests,
     mediaOpened,
     sourceUpload,
+    mediaGenerationAcceptance,
     mediaGenerated,
     mediaBeforeReload,
     mediaAfterReload,
+    approvedMediaAfterReload,
+    mediaWritebackRevalidationRequests,
     backendMediaJob,
+    mediaFixtureRequests: mediaFixtureState.requests,
     productAfterMedia,
     api: {
       real_platform_writes_enabled: healthApi.json?.real_platform_writes_enabled,
@@ -897,19 +1323,21 @@ async function main() {
   console.log(JSON.stringify(result, null, 2));
 }
 
-main().catch((error) => {
-  console.error(
-    JSON.stringify(
-      {
-        ok: false,
-        message: error.message,
-        stage: smokeStage,
-        details: error.details || {},
-        outDir,
-      },
-      null,
-      2,
-    ),
-  );
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(
+      JSON.stringify(
+        {
+          ok: false,
+          message: error.message,
+          stage: smokeStage,
+          details: error.details || {},
+          outDir,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  });
+}

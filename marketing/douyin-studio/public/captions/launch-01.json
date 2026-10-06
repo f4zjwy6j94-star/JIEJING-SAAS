@@ -1,0 +1,51 @@
+[
+  {
+    "text": "做一条 eBay Listing，到底要整理多少字段？",
+    "startMs": 0,
+    "endMs": 3200,
+    "timestampMs": null,
+    "confidence": 1
+  },
+  {
+    "text": "商品名称、SKU、品牌和状态要确认。",
+    "startMs": 3200,
+    "endMs": 8800,
+    "timestampMs": null,
+    "confidence": 1
+  },
+  {
+    "text": "材质、尺寸、重量和产地不能混着填。",
+    "startMs": 8800,
+    "endMs": 14500,
+    "timestampMs": null,
+    "confidence": 1
+  },
+  {
+    "text": "成本、售价、库存、发货地和图片权利也要核对。",
+    "startMs": 14500,
+    "endMs": 20150,
+    "timestampMs": null,
+    "confidence": 1
+  },
+  {
+    "text": "捷境先整理资料，再生成商家可以核对的 Listing 草稿。",
+    "startMs": 20150,
+    "endMs": 25800,
+    "timestampMs": null,
+    "confidence": 1
+  },
+  {
+    "text": "缺少的事实不会乱猜，关键动作仍由商家确认。",
+    "startMs": 25800,
+    "endMs": 31500,
+    "timestampMs": null,
+    "confidence": 1
+  },
+  {
+    "text": "当前支持 eBay，评论或私信‘内测’。",
+    "startMs": 31500,
+    "endMs": 37500,
+    "timestampMs": null,
+    "confidence": 1
+  }
+]

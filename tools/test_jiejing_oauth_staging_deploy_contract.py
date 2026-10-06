@@ -8,6 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+import jiejing_precloud_deployment_gate as gate
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,8 +44,17 @@ def main() -> int:
     ):
         if marker not in precloud:
             return fail(f"precloud gate must permanently include the controlled-draft regression: {marker}")
-    if 'timeout=300 if key.startswith("browser_") else 180' not in precloud:
-        return fail("browser OAuth gates need a bounded timeout that accommodates the full attack matrix")
+    # Verify the actual subprocess budget, not one spelling of the conditional.
+    command = [sys.executable, "-c", "pass"]
+    for key, expected in (("browser_read_only_oauth_confirmation", 300),
+                          ("browser_unpublished_draft_oauth", 300),
+                          ("fixture_non_browser", 180)):
+        with patch.object(gate.subprocess, "run",
+                return_value=subprocess.CompletedProcess(command, 0, "", "")) as run:
+            result = gate._run_check(key, command)
+            if (run.call_count != 1 or run.call_args.kwargs.get("timeout") != expected
+                    or result.get("pass") is not True):
+                return fail("browser OAuth gates need a bounded timeout that accommodates the full attack matrix")
 
     env_file_contract = """    env_file:
       - ../../private/tencent-managed.env

@@ -29,13 +29,36 @@ def function_scope(source: str, name: str) -> str:
     return source[start:end]
 
 
+def assert_public_service_message_boundary(app_js: str) -> None:
+    public_service = function_scope(app_js, "renderSaasServiceCenter")
+    require(
+        public_service,
+        "连接店铺后可查看官方订单；买家消息暂未接入，当前可整理回复草稿并由你审核。",
+        "honest order access and buyer-message capability boundary",
+    )
+    if "连接店铺后自动接收订单与买家消息" in public_service:
+        raise AssertionError("connecting a store must not promise unavailable buyer-message ingestion")
+
+
 def main() -> None:
     app_js = APP_JS.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
 
-    activity_scope = function_scope(app_js, "renderSaasActivityCenter")
+    activity_scope = (
+        function_scope(app_js, "renderSaasHistoricalProjectArchive")
+        + function_scope(app_js, "saasMerchantProjectWorkRecordItems")
+        + function_scope(app_js, "saasMerchantWorkRecordStatusLabel")
+        + function_scope(app_js, "renderSaasMerchantWorkRecordIndex")
+        + function_scope(app_js, "renderSaasActivityCenter")
+    )
     confirm_scope = function_scope(app_js, "renderSaasConfirmPanel")
     service_scope = function_scope(app_js, "renderSaasServiceCenter")
+    service_scope = (
+        function_scope(app_js, "saasServiceTraceStateLabel")
+        + function_scope(app_js, "saasServiceTraceRecords")
+        + function_scope(app_js, "renderSaasServiceTrace")
+        + service_scope
+    )
     settings_scope = (
         function_scope(app_js, "renderSaasSettingsReadableMap")
         + function_scope(app_js, "renderSaasSettingsGeneralPanel")
@@ -51,81 +74,102 @@ def main() -> None:
         + function_scope(app_js, "renderSaasSettingsCleanLayout")
         + function_scope(app_js, "saasSettingsTabDefinitions")
         + function_scope(app_js, "renderSaasCoreModuleDiagnosticsPanel")
-        + function_scope(app_js, "renderSaasQueueHealthPanel")
     )
 
     for marker in [
-        "AI CEO 已经产出的经营报告",
-        "授权、来源、模型连接和发布复盘已经归到设置",
-        "汇报页保留市场结论",
+        "默认只显示当前项目的报告、确认和平台结果",
+        "完整工作留痕",
+        "merchant_project_work_record_index_v1",
+        "同名商品和旧演示记录不会自动混入",
+        "AI 已回复",
+        "待审核",
+        "受阻，等待处理",
         "saas-activity-simple-list",
-        "没有报告时不展示旧演示记录",
+        "历史项目归档",
     ]:
         require(activity_scope, marker, "AI CEO report center simplified surface")
 
+    if "${escapeHtml(item.status)}" in activity_scope:
+        raise AssertionError("AI CEO work records must not expose raw backend status codes")
+
     for marker in [
-        "只让你处理真正要拍板的事",
-        "没有重要动作时，这里保持安静",
-        "AI 继续整理草稿、素材和报告",
-        "发布、付款、退款、广告和客服承诺必须等你点头",
-        "这里只做三种选择",
+        "核对本次操作的对象、内容与影响",
+        "批准不代表已执行",
+        "对话、报告、Listing 版本和素材记录保留在对应业务页面",
+        "发布、付款、退款、广告、客服承诺",
+        "继续处理商品",
         "saas-confirm-action-model",
         "saas-confirm-card-decision",
         "saas-confirm-safety-detail",
-        "你没点头前不会执行",
-        "为什么停住",
+        "未确认不会执行",
+        "操作影响与执行条件",
     ]:
         require(confirm_scope, marker, "decision center simplified surface")
 
     for marker in [
         "service_order_plain_workbench_v2",
+        "customer_service_trace_v1",
         "今日客服与订单",
-        "客服、物流和售后放在一页",
-        "订单与消息",
-        "回复草稿",
+        "依据商品资料和订单状态准备回复",
+        "订单快照",
+        "买家原消息",
+        "AI 建议",
+        "商家已修改",
+        "已发送",
+        "演练记录",
+        "只有平台确认发送成功",
+        "买家消息暂未接入",
         "确认事项",
-        "当前没有待处理内容",
-        "不造假",
-        "没有订单就保持安静",
-        "只引用已知事实",
-        "承诺停住",
-        "退款、补偿、重发、地址修改、明确到货日和敏感承诺进决策中心",
-        "当前重点",
+        "尚无订单数据",
+        "订单以最近一次同步为准，不代表当前待回复数量。",
+        "草稿不会自动发送。",
+        "发送前请核对商品事实、订单情况与承诺。",
+        "退款、补偿、重发、地址修改、明确到货日和敏感承诺需单独确认。",
+        "退款、补偿、重发、地址修改、明确到货日和敏感承诺会进入确认中心。",
+        "下一步",
         "连接 eBay 店铺",
     ]:
         require(service_scope, marker, "service and orders simplified surface")
 
+    if "待回复、催单、售前问题优先整理" in service_scope:
+        raise AssertionError("orders must not be presented as buyer messages")
+
+    assert_public_service_message_boundary(app_js)
+
     for marker in [
-        "普通商家只看 5 个入口",
+        "5 项设置，集中管理",
         "账号与店铺",
         "店铺数据",
         "AI 与素材",
         "团队权限",
-        "订阅与安全",
+        "套餐与付款",
         "什么时候需要打开设置",
-        "只显示商家需要知道的设置",
-        "不展示技术排查和部署细节",
+        "在这里管理账号、店铺数据、AI、团队权限、套餐与付款",
+        "商品和订单工作回到对应工作台继续",
         "账号边界",
         "AI 边界",
         "数据边界",
         "权限边界",
-        "主理人高级区",
         "隐私和安全边界",
-        "主理人上线排查",
-        "运行可靠性",
         "data-saas-settings-map-tab",
+        "凭证安全",
+        "保存后不回显",
+        "资料真实性",
+        "缺少的内容保持待补",
+        "普通聊天不进长期经营记忆",
+    ]:
+        require(settings_scope, marker, "settings readable map")
+
+    for forbidden in [
+        "主理人高级区",
+        "主理人上线排查",
         "生产队列",
         "worker heartbeat",
         "dead_letter",
         "stale_running_count",
-        "凭证安全",
-        "保存后不回显",
-        "不造假",
-        "不用旧商品旧素材冒充",
-        "普通聊天不进长期经营记忆",
-        "只给主理人管理员",
     ]:
-        require(settings_scope, marker, "settings readable map")
+        if forbidden in settings_scope:
+            raise AssertionError(f"merchant settings still contains operations-only marker: {forbidden}")
 
     for style_marker in [
         "saas-readable-page-head",

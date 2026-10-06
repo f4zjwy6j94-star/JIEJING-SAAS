@@ -109,6 +109,19 @@ def main() -> int:
     if "innerHTML = merchantOnboarding" in app_text:
         return fail("backend onboarding values must not be inserted as unescaped HTML")
 
+    account_tab_start = app_text.index('id: "account",', app_text.index("function saasSettingsTabDefinitions"))
+    account_tab_end = app_text.index('id: "model",', account_tab_start)
+    account_tab = app_text[account_tab_start:account_tab_end]
+    if "renderSaasSettingsAccountWorkspace(ctx, options)" not in account_tab:
+        return fail("account settings must render its account and store workspace")
+    workspace_start = app_text.index("function renderSaasSettingsAccountWorkspace")
+    workspace_end = app_text.index("\nfunction ", workspace_start + 1)
+    account_workspace = app_text[workspace_start:workspace_end]
+    if "renderSaasAccountHealthPanel()" not in account_workspace:
+        return fail("account settings must render the detailed account-health incident and recovery guidance")
+    if "renderSaasMerchantOnboardingPanel({ compact: true, accountWorkspace: true })" not in account_workspace:
+        return fail("account workspace must keep its compact onboarding next action visible")
+
     print("PASS jiejing_merchant_onboarding_frontend")
     return 0
 

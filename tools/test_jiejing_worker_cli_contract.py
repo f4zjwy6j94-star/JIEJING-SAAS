@@ -185,8 +185,12 @@ def main() -> int:
         release_export.wait(timeout=5)
         return True
 
+    # Match _build_worker: schema setup completes before the queue loop starts.
+    # The responsiveness assertion must measure monitoring, not cold database DDL.
+    background_repository = SaaSRepository(OUT / "provider-monitor-background.sqlite")
+    background_repository.initialize()
     background_scheduler = ProviderMonitoringScheduler(
-        repository=SaaSRepository(OUT / "provider-monitor-background.sqlite"),
+        repository=background_repository,
         environment="test",
         exporter=slow_exporter,
         enabled=True,
@@ -332,6 +336,8 @@ def main() -> int:
         "ProviderMonitoringScheduler(",
         "provider_monitoring.tick()",
         "provider_monitoring.shutdown()",
+        "MediaSourceAssetStore(",
+        "media_source_asset_store=media_source_assets",
     ):
         if marker not in worker_source:
             return fail(f"worker loop is missing passive monitoring background wiring: {marker}")

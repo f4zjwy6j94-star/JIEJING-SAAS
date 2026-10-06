@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -28,6 +29,61 @@ OUT = ROOT / "output" / "jiejing-saas-backend" / "write-adapter-test"
 def fail(message: str) -> int:
     print(f"FAIL {message}")
     return 1
+
+
+def attach_publish_evidence(
+    payload: dict[str, object],
+    *,
+    company_id: str = "company_test",
+    store_id: str = "store_test",
+    project_key: str = "listing-project-write-adapter-test",
+) -> None:
+    report_id = "report_write_adapter_test"
+    payload["listing_project_identity"] = {
+        "key": project_key,
+        "source_report_id": report_id,
+        "candidate_id": "candidate_write_adapter_test",
+    }
+    manifest = payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), dict) else {}
+    raw_assets = manifest.get("assets") if isinstance(manifest.get("assets"), list) else []
+    covered_assets = []
+    for item in raw_assets:
+        asset = item if isinstance(item, dict) else {}
+        url = str(asset.get("url") or asset.get("url_or_file_path") or "")
+        covered_assets.append(
+            {
+                "asset_id": str(asset.get("asset_id") or ""),
+                "url_sha256": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+                "evidence_type": "merchant_product_fact_report",
+                "evidence_id": report_id,
+            }
+        )
+    evidence = {
+        "contract_version": "2026-08-31-publish-source-rights-evidence-v1",
+        "status": "ready",
+        "server_resolved": True,
+        "scope": {"company_id": company_id, "store_id": store_id, "listing_project_key": project_key},
+        "refs": {"product_fact_report_id": report_id, "media_job_id": ""},
+        "product_source": {
+            "status": "verified",
+            "source_mode": "merchant_owned_product",
+            "evidence_type": "merchant_product_fact_report",
+            "evidence_id": report_id,
+        },
+        "image_rights": {
+            "status": "verified",
+            "required_asset_count": len(covered_assets),
+            "covered_asset_count": len(covered_assets),
+            "coverage_complete": True,
+            "assets": covered_assets,
+        },
+        "secret_exposed": False,
+    }
+    evidence["fingerprint"] = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    evidence["resolved_at"] = "2026-08-31T00:00:00Z"
+    payload["publish_evidence"] = evidence
 
 
 def main() -> int:
@@ -105,6 +161,7 @@ def main() -> int:
             "finance_review": {"net_profit_money": {"value": "6.50", "currency": "USD"}},
         },
     )
+    attach_publish_evidence(request.payload)
     preflight = ExecutionService(demo_mode=False).preflight(request)
     if preflight.get("status") != "ready_for_platform_adapter":
         return fail(f"publish preflight should be ready: {preflight}")
@@ -124,6 +181,7 @@ def main() -> int:
     readiness_keys = {item.get("key") for item in readiness.get("checks", [])}
     for required_check in {
         "item_specifics_quality",
+        "buyer_copy_fact_boundary",
         "ip_vero_and_claims",
         "gpsr_regulatory_fields",
         "profit_and_fee_sanity",
@@ -302,6 +360,61 @@ def main() -> int:
         if http_request.full_url.endswith("/publish"):
             return 200, {"content-type": "application/json"}, json.dumps({"listingId": "listing_123"}).encode("utf-8")
         return 500, {"content-type": "application/json"}, b"{}"
+
+    unsafe_direct_payload = deepcopy(request.payload)
+    unsafe_direct_payload["listing"]["title"] = "Foldable iPad Stand"
+    unsafe_direct_request = ExecutionRequest(
+        action_type="publish_listing",
+        task_id="task_publish_unsafe_compatibility",
+        user_id="user_test",
+        company_id="company_test",
+        store_id="store_test",
+        platform="ebay",
+        confirmation_id="confirm_publish_unsafe_compatibility",
+        confirmed_by="user_test",
+        confirmed_at="2026-05-22T00:00:00+00:00",
+        idempotency_key="publish-test-unsafe-compatibility",
+        payload=unsafe_direct_payload,
+    )
+    unsafe_direct_result = EbayWriteHttpAdapter(settings, transport=transport).publish_listing(
+        request=unsafe_direct_request,
+        preflight=preflight,
+        connections=[
+            {
+                "platform": "ebay",
+                "connection_type": "oauth",
+                "status": "publish_authorized",
+                "scopes": ["https://api.ebay.com/oauth/api_scope/sell.inventory"],
+                "secret_ref": "secret_ref_publish",
+            }
+        ],
+        secret_refs=[{"provider": "ebay", "purpose": "ebay_refresh_token", "secret_ref": "secret_ref_publish"}],
+        marketplace_id="EBAY_US",
+    )
+    if unsafe_direct_result.get("status") != "buyer_copy_fact_boundary_blocked" or calls:
+        return fail(f"publish adapter must block unverified compatibility before token or eBay HTTP: {unsafe_direct_result}, calls={calls}")
+
+    unsafe_draft_request = ExecutionRequest(
+        action_type="save_ebay_listing_draft",
+        task_id="task_draft_unsafe_compatibility",
+        user_id="user_test",
+        company_id="company_test",
+        store_id="store_test",
+        platform="ebay",
+        confirmation_id="confirm_draft_unsafe_compatibility",
+        confirmed_by="user_test",
+        confirmed_at="2026-05-22T00:00:00+00:00",
+        idempotency_key="draft-test-unsafe-compatibility",
+        payload=unsafe_direct_payload,
+    )
+    unsafe_draft_result = EbayWriteHttpAdapter(settings, transport=transport).prepare_listing_draft(
+        request=unsafe_draft_request,
+        preflight=preflight,
+        credential_boundary={},
+        marketplace_id="EBAY_US",
+    )
+    if unsafe_draft_result.get("status") != "buyer_copy_fact_boundary_blocked" or calls:
+        return fail(f"draft adapter must block unverified compatibility before credential or eBay HTTP: {unsafe_draft_result}, calls={calls}")
 
     result = EbayWriteHttpAdapter(settings, transport=transport).publish_listing(
         request=request,

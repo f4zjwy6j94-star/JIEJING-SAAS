@@ -4,12 +4,20 @@
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import subprocess
 from pathlib import Path
+
+try:
+    from jiejing_release_gate_evidence import canonical_checks, load_release_checks
+except ModuleNotFoundError:
+    from tools.jiejing_release_gate_evidence import canonical_checks, load_release_checks
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
+CI_WORKFLOW = WORKFLOW_DIR / "jiejing-ci.yml"
 DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "jiejing-staging-manual-deploy.yml"
 ROLLBACK_WORKFLOW = ROOT / ".github" / "workflows" / "jiejing-staging-manual-rollback.yml"
 DEPLOY_SCRIPT = ROOT / "deploy" / "github-actions" / "jiejing-staging-deploy.sh"
@@ -37,8 +45,66 @@ def extract_shell_function(text: str, name: str) -> str:
     return text[start:end]
 
 
+def has_bounded_preflight_budget(workflow: str) -> bool:
+    job = re.search(
+        r"(?ms)^  preflight:[ \t]*\n(.*?)(?=^  [\w-]+:[ \t]*$|\Z)",
+        workflow,
+    )
+    if job is None:
+        return False
+    budgets = re.findall(r"(?m)^    timeout-minutes:[ \t]*([^\n]+)$", job.group(1))
+    return len(budgets) == 1 and re.fullmatch(r"45[ \t]*(?:#.*)?", budgets[0]) is not None
+
+
+def python_script_path(command: list[str]) -> str:
+    if len(command) < 2 or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", command[0]):
+        return ""
+    if command[1] in {"-c", "-m"}:
+        return ""
+    script = next((arg for arg in command[1:] if not arg.startswith("-")), "")
+    return script if re.fullmatch(r"tools/[\w./-]+\.py", script) else ""
+
+
+def ci_python_scripts(workflow: str) -> set[str]:
+    """Inspect run values, excluding names, comments and unrelated YAML values."""
+    scripts: set[str] = set()
+    lines = workflow.splitlines()
+    for index, line in enumerate(lines):
+        match = re.fullmatch(r"( +)(- )?run:[ \t]*(.*)", line)
+        if match is None:
+            continue
+        command = match.group(3)
+        if command.startswith(("'", '"')):
+            scalar = shlex.split(command, comments=True)
+            if len(scalar) != 1:
+                raise ValueError("unsupported quoted CI run value")
+            command = scalar[0]
+        if re.fullmatch(r"[|>][-+]?(?:[ \t]+#.*)?", command):
+            indentation = len(match.group(1)) + len(match.group(2) or "")
+            body = []
+            for following in lines[index + 1:]:
+                if following.strip() and len(following) - len(following.lstrip()) <= indentation:
+                    break
+                body.append(following.strip())
+            command = (" " if command.startswith(">") else "\n").join(body)
+        for command_line in command.replace("\\\n", " ").splitlines():
+            script = python_script_path(shlex.split(command_line, comments=True))
+            if script:
+                scripts.add(script)
+    return scripts
+
+
+def missing_ci_gate_scripts(workflow: str, checks) -> set[str]:
+    ci_scripts = ci_python_scripts(workflow)
+    if not ci_scripts:
+        raise ValueError("ordinary CI has no recognized Python script run commands")
+    gate_scripts = {python_script_path(item["command"]) for item in canonical_checks(checks, ROOT)}
+    return ci_scripts - gate_scripts
+
+
 def main() -> int:
     try:
+        ci_workflow = read(CI_WORKFLOW)
         deploy_workflow = read(DEPLOY_WORKFLOW)
         rollback_workflow = read(ROLLBACK_WORKFLOW)
         deploy_script = read(DEPLOY_SCRIPT)
@@ -46,6 +112,59 @@ def main() -> int:
         runbook = read(RUNBOOK)
     except FileNotFoundError as exc:
         return fail(f"missing deploy guardrail file: {exc}")
+
+    ci_fixture = """jobs:
+  checks:
+    steps:
+      - name: python tools/decoy_name.py
+        run: python tools/inline.py
+      - run: |
+          # python tools/decoy_comment.py
+          python3 tools/block.py
+      - run: >
+          python
+          tools/folded.py
+      - run: "python -u tools/quoted.py"
+      - run: python -m py_compile app.py
+        env:
+          HINT: python tools/decoy_env.py
+"""
+    fixture_scripts = {"tools/inline.py", "tools/block.py", "tools/folded.py", "tools/quoted.py"}
+    if ci_python_scripts(ci_fixture) != fixture_scripts:
+        return fail("ordinary CI script parser must inspect only actual Python run commands")
+    fixture_checks = [(script, ["python", script]) for script in sorted(fixture_scripts | {"tools/local_only.py"})]
+    if missing_ci_gate_scripts(ci_fixture, fixture_checks):
+        return fail("ordinary CI coverage must allow additional local checks")
+    for removed in fixture_scripts:
+        reduced = [check for check in fixture_checks if check[0] != removed]
+        if missing_ci_gate_scripts(ci_fixture, reduced) != {removed}:
+            return fail("ordinary CI missing-script counterexample escaped the gate coverage guard")
+    wrong_interpreter = [(key, ["node", *command[1:]]) for key, command in fixture_checks]
+    if missing_ci_gate_scripts(ci_fixture, wrong_interpreter) != fixture_scripts:
+        return fail("non-Python gate commands must not satisfy ordinary CI Python coverage")
+    try:
+        missing_ci = missing_ci_gate_scripts(ci_workflow, load_release_checks(ROOT))
+    except (ValueError, FileNotFoundError) as exc:
+        return fail(f"ordinary CI gate coverage unavailable: {exc}")
+    if missing_ci:
+        return fail("ordinary CI Python scripts missing from precloud CHECKS: " + ",".join(sorted(missing_ci)))
+
+    budget_fixture = "jobs:\n  preflight:\n    timeout-minutes: 45\n  other-job:\n    timeout-minutes: 12\n"
+    if not has_bounded_preflight_budget(budget_fixture):
+        return fail("preflight budget guard must not require every job to use the same timeout")
+    for counterexample in (
+        budget_fixture.replace("timeout-minutes: 45", "timeout-minutes: 25"),
+        budget_fixture.replace("timeout-minutes: 45", "timeout-minutes: 0"),
+        budget_fixture.replace("timeout-minutes: 45", "timeout-minutes: 60"),
+        budget_fixture.replace("    timeout-minutes: 45\n", ""),
+        budget_fixture.replace("  preflight:", "  unrelated-job:"),
+        budget_fixture.replace("    timeout-minutes: 45\n", "    timeout-minutes: 45\n    timeout-minutes: 25\n"),
+        budget_fixture.replace("    timeout-minutes: 45", "    steps:\n      - timeout-minutes: 45"),
+    ):
+        if has_bounded_preflight_budget(counterexample):
+            return fail("preflight budget counterexample escaped the guard")
+    if not has_bounded_preflight_budget(deploy_workflow):
+        return fail("manual-deploy preflight must have its approved 45-minute job budget")
 
     required_deploy_workflow = [
         "workflow_dispatch:",

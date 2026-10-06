@@ -45,7 +45,9 @@ def media_job_body() -> dict:
             },
             "product_facts": {
                 "product": "foldable silicone drying mat",
+                "allowed_claims": ["merchant-confirmed foldable silicone drying mat"],
                 "forbidden_claims": ["medical"],
+                "reference_images": ["https://merchant-source.example.test/silicone-drying-mat.png"],
                 "supplier_facts": {
                     "material": "silicone",
                     "package_dimensions_cm": {"length": 30, "width": 8, "height": 8},
@@ -56,6 +58,7 @@ def media_job_body() -> dict:
             "image_sizes": ["1:1"],
             "scene_types": ["white_background"],
             "video_script": "No video generation requested; retain a short Listing video script placeholder only.",
+            "commercial_rights_confirmed": True,
             "live_provider_requested": True,
             "media_provider": "provider_neutral",
         },
@@ -131,13 +134,12 @@ def main() -> int:
                     job_id="job_test",
                     job_body=media_job_body(),
                 )
-                if live.get("status") != "completed_live_media_provider":
-                    raise AssertionError(f"provider-neutral media job should resolve to configured OpenAI provider: {live}")
-                packet = live.get("output_packet") if isinstance(live.get("output_packet"), dict) else {}
-                if packet.get("asset_manifest_validation", {}).get("status") != "manifest_ready":
-                    raise AssertionError(f"OpenAI live media result should produce a valid AssetManifest: {packet}")
-                if live.get("safety", {}).get("live_provider_called") is not True:
-                    raise AssertionError("OpenAI media job should mark live provider called")
+                if live.get("status") != "blocked_live_media_provider":
+                    raise AssertionError(f"provider job must block OpenAI until durable HTTPS publishing exists: {live}")
+                if "media_provider_https_artifact_delivery_not_configured" not in live.get("missing_inputs", []):
+                    raise AssertionError("OpenAI provider gate must name the missing durable HTTPS publisher")
+                if live.get("safety", {}).get("live_provider_called") is not False:
+                    raise AssertionError("OpenAI provider job must stop before a second live call")
                 if "unit-test-openai-secret" in json.dumps(live, ensure_ascii=False):
                     raise AssertionError("OpenAI media provider output leaked the credential")
     finally:

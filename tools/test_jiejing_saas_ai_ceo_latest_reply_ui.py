@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -16,9 +17,46 @@ def fail(message: str) -> int:
     return 1
 
 
+def top_level_function(source: str, name: str) -> str:
+    start = source.index(f"function {name}")
+    next_function = re.search(r"^(?:async\s+)?function\s+", source[start + 1 :], re.M)
+    end = len(source) if next_function is None else start + 1 + next_function.start()
+    return source[start:end]
+
+
 def main() -> int:
     app = APP.read_text(encoding="utf-8")
     css = CSS.read_text(encoding="utf-8")
+
+    adaptive_markers = [
+        "function saasAiCeoTaskContextState",
+        "function renderSaasAiCeoTaskContextMarkup",
+        'data-ai-ceo-task-context="adaptive_task_context_v1"',
+        "data-ai-ceo-task-context-state",
+        "data-ai-ceo-task-context-toggle",
+        "data-ai-ceo-task-context-summary",
+        "data-ai-ceo-task-context-detail",
+        "data-ai-ceo-task-next-action",
+        "aiCeoTaskContextMode",
+        "aiCeoTaskContextExpanded",
+        "plain_consultation",
+        "active_product_task",
+        "explicit_project_entry",
+        "collapsed",
+    ]
+    for marker in adaptive_markers:
+        if marker not in app:
+            return fail(f"missing adaptive AI CEO task-context contract: {marker}")
+
+    for retired in ("mountSaasMerchantProjectStatusStrip", "renderSaasMerchantProjectStatusStrip"):
+        if retired in app:
+            return fail(f"legacy project strip must not return to any workbench page: {retired}")
+
+    task_context_markup = top_level_function(app, "renderSaasAiCeoTaskContextMarkup")
+    if task_context_markup.count("data-ai-ceo-task-next-action") != 1:
+        return fail("AI CEO task context must expose exactly one next action")
+    if "data-ai-ceo-task-context-toggle" not in task_context_markup or "aria-expanded" not in task_context_markup:
+        return fail("AI CEO task context toggle must publish its expanded state")
 
     required_app = [
         "const jiejingTrustedHtmlBlockedPattern = /<script\\b",
@@ -29,7 +67,7 @@ def main() -> int:
         'trustedJiejingHtml(renderSaasCeoRoutingTaskCard(command), "ai_ceo.route_task_card")',
         'trustedJiejingHtml(renderSaasAiCeoLatestReplyMarkup(latest), "ai_ceo.latest_reply")',
         "replaceJiejingTrustedHtml(consoleNode, trustedJiejingHtml(renderSaasCeoCommandConsole",
-        'trustedJiejingHtml(renderSaasAiCeoChatTurnMarkup({ assistant_text: productizeJiejingProductCopy(text) }), "ai_ceo.chat_turn.assistant_only")',
+        'trustedJiejingHtml(renderSaasAiCeoChatTurnMarkup({ assistant_text: merchantConversationText(text) }), "ai_ceo.chat_turn.assistant_only")',
         '"ai_ceo.chat_turn.user_and_assistant"',
         '"ai_ceo.chat_turn.recovery_and_detail"',
         '"ai_ceo.chat_turn.pending_status"',
@@ -46,7 +84,7 @@ def main() -> int:
         "shouldPreserveActiveCeoThread",
         '"ai_ceo.thread.preserve_on_auth"',
         "function clearSaasSessionFromStorage(options = {})",
-        "clearSaasSessionFromStorage({ preserveCeoThread: true })",
+        "clearSaasSessionFromStorage({ preserveCeoThread: true, preservePendingListingGeneration: true })",
         "activeCeoThreadBeforeRefresh",
         "shouldPreserveActiveCeoState",
         "activeCeoThreadAtCoreApply",
@@ -64,7 +102,9 @@ def main() -> int:
         "function saasAiCeoMerchantSafeFailureText",
         "function saasAiCeoProductizedAnswerText",
         "捷境后端接口",
-        "const answer = saasAiCeoProductizedAnswerText(chat?.answer || \"\", chat?.status || \"\")",
+        "const rawAnswer = saasAiCeoProductizedAnswerText(chat?.answer || \"\", chat?.status || \"\")",
+        "const dependencyBlockedWithoutUsage =",
+        "本次未调用模型、未消耗次数、未生成草稿。",
         "const safeText = saasAiCeoProductizedAnswerText(text || \"AI CEO 暂时没有返回可展示内容。\", status)",
         "function renderSaasAiCeoRecoveryHintMarkup",
         "merchant_safe_ai_recovery_v1",
@@ -91,7 +131,7 @@ def main() -> int:
         "saas-ai-ceo-thinking-dot",
         "function ensureCeoAssistantAnswerBody",
         "function saasAiCeoConversationHistoryForRequest",
-        "conversation_history: saasAiCeoConversationHistoryForRequest()",
+        "conversation_history: options.suppressConversationHistory === true ? [] : saasAiCeoConversationHistoryForRequest()",
         "不消耗捷境试用额度",
         "正在使用账号自己的 AI",
         "当前对话优先使用账号自己的 AI",
@@ -113,6 +153,8 @@ def main() -> int:
         'const primaryKey = isAccountBlock ? "account" : "model";',
         'const primaryLabel = isAccountBlock ? "去账号与店铺" : "去 AI 与素材";',
         "function renderSaasAiCeoLatestReplyMarkup",
+        'target="_blank" rel="noopener noreferrer"',
+        '/\\[([^\\]]+?)\\]\\((https:\\/\\/[^\\s)]+)\\)/g',
         'id="ceoChat"',
         "updateSaasAiCeoLatestReply({",
         "function renderSaasAiCeoChatTurnMarkup",
@@ -142,14 +184,13 @@ def main() -> int:
         "素材目标已带入",
         "客服订单目标已带入",
         "高风险动作已拦住",
-        "AI CEO 路由确认",
         "我理解",
         "推荐去",
         "安全边界",
         "只整理草稿，真实动作仍确认",
         "先确认，未点头不执行",
-        '<details class="saas-ceo-route-closure"',
-        "查看处理步骤",
+        'data-ai-ceo-route-task-card="ai_ceo_route_task_card_v2"',
+        "saas-ceo-routing-summary",
         "function renderSaasAiCeoSourceRecordsMarkup",
         "function normalizeSaasAiCeoWorkRecords",
         "function normalizeSaasAiCeoConfirmationItems",
@@ -160,7 +201,6 @@ def main() -> int:
         "function isSaasAiCeoPlainConsultationTurn",
         "function shouldRecordSaasCeoCommandSourceRecord",
         "saas-ai-ceo-work-detail",
-        "查看工作详情",
         "source_records",
         "work_records",
         "confirmation_items",
@@ -198,32 +238,6 @@ def main() -> int:
         "正在处理...",
         "这是一条旧消息：当时没有保存可展示回复。",
         "external_data_source_required",
-        "function renderSaasAiCeoFirstRunHandoff",
-        "first_run_ai_ceo_handoff_v1",
-        "first_day_ai_ceo_path_v2",
-        'data-does-not-trigger-real-write="true"',
-        "首日只做一条主线：先说目标，再看 AI CEO 带你去哪",
-        "点一句只会填入输入框",
-        "我还没接 eBay，先用资料跑草稿",
-        "function renderSaasMerchantLaunchReadinessPath",
-        "merchant_launch_readiness_path_v1",
-        "正式经营准备",
-        "没有完成店铺连接和正式收款前，也可以先把商品经营链路准备好",
-        "先用 AI CEO",
-        "沉淀商品项目",
-        "补店铺与收款",
-        "确认后再执行",
-        "我还没接 eBay，先帮我规划上线前能做什么",
-        "first_day_one_task_focus_v1",
-        "现在只做一件事",
-        "把手上的商品、链接、图片或订单问题发给 AI CEO",
-        "有商品想上架",
-        "只有图片或链接",
-        "不知道下一步",
-        "saas-ai-ceo-one-task-option",
-        'data-ceo-prompt="${escapeHtml(prompt)}"',
-        "我只有图片或链接，先帮我整理商品资料",
-        "我不知道下一步该做什么，帮我判断",
     ]
     for needle in required_app:
         if needle not in app:
@@ -255,22 +269,11 @@ def main() -> int:
         "min-height: 0;",
         "2026-06-24 AI CEO minimal routing v2",
         ".saas-ai-ceo-input-hint",
-        ".saas-ai-ceo-one-task-focus",
-        ".saas-ai-ceo-one-task-grid",
-        ".saas-ai-ceo-one-task-option",
-        ".saas-ai-ceo-launch-readiness-path",
-        ".saas-ai-ceo-launch-readiness-grid",
-        ".saas-ai-ceo-launch-readiness-actions",
         ".saas-ceo-routing-main",
         ".saas-ceo-routing-why",
-        ".saas-ceo-route-closure summary",
         ".saas-module-ai-goal-strip",
         ".saas-module-ai-goal-steps",
         "box-shadow: 0 14px 34px rgba(22, 50, 44, 0.08)",
-        ".saas-ai-ceo-first-run-handoff",
-        ".saas-ai-ceo-first-day-path",
-        ".saas-ai-ceo-first-run-actions",
-        "2026-06-26 mobile AI CEO handoff polish",
         ".saas-ai-ceo-thread .message.ai > span",
         ".saas-ai-ceo-thread .message.ai .saas-ai-ceo-pending-status span",
         "border-radius: 999px;",

@@ -315,6 +315,11 @@ class OpenAICompatibleModelClient(ModelClient):
             "max_tokens": token_budget,
             "stream": stream_enabled,
         }
+        # The backend planner selects this attribute from task complexity. It
+        # is never accepted from the browser as an authoritative override.
+        if urlparse(self.endpoint).netloc.lower() == "api.deepseek.com":
+            reasoning_mode = str(getattr(self, "jiejing_reasoning_mode", "disabled") or "disabled").lower()
+            payload["thinking"] = {"type": "enabled" if reasoning_mode == "thinking" else "disabled"}
         if stream_enabled:
             payload["stream_options"] = {"include_usage": True}
         request = urllib.request.Request(

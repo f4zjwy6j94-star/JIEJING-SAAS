@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas import SaaSRepository, SaaSSettings, build_product_readiness  # noqa: E402
 from jiejing_saas.database_plan import CRITICAL_INDEXES, CRITICAL_TABLES  # noqa: E402
-from jiejing_saas.infrastructure_drivers import build_infrastructure_driver_status  # noqa: E402
+from jiejing_saas.infrastructure_drivers import POSTGRES_MIGRATION_MANIFEST, build_infrastructure_driver_status  # noqa: E402
 from jiejing_sqlite_to_postgres_rehearsal import generate_rehearsal  # noqa: E402
 
 
@@ -197,14 +197,21 @@ def _check_runtime_driver_dependency_shape() -> dict[str, Any]:
 
 
 def _check_postgres_migration_shape() -> dict[str, Any]:
-    path = ROOT / "jiejing_saas" / "migrations" / "001_initial_schema_postgres.sql"
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    migration_root = ROOT / "jiejing_saas" / "migrations"
+    migration_paths = [spec.path for spec in POSTGRES_MIGRATION_MANIFEST]
+    text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in migration_paths
+        if path.exists()
+    )
     missing_tables = [table for table in CRITICAL_TABLES if f"create table if not exists {table}" not in text]
     missing_indexes = [index for index in CRITICAL_INDEXES if f"create index if not exists {index}" not in text]
     return {
         "key": "postgres_migration_shape",
-        "pass": not missing_tables and not missing_indexes,
-        "path": str(path.relative_to(ROOT)),
+        "pass": all(path.exists() for path in migration_paths) and not missing_tables and not missing_indexes,
+        "path": str(migration_root.relative_to(ROOT)),
+        "migration_paths": [str(path.relative_to(ROOT)) for path in migration_paths],
+        "missing_migration_files": [str(path.relative_to(ROOT)) for path in migration_paths if not path.exists()],
         "missing_tables": missing_tables,
         "missing_indexes": missing_indexes,
     }

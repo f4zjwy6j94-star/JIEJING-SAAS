@@ -23,29 +23,29 @@ def main() -> int:
     readiness = (ROOT / "jiejing_saas" / "readiness.py").read_text(encoding="utf-8")
 
     public_path_buttons = re.findall(r'<button class="path-card[^>]*data-path="([^"]+)"', index)
-    if public_path_buttons != ["opened", "multi", "trial"]:
-        return fail(f"public entry must be opened/multi/trial only: {public_path_buttons}")
+    if public_path_buttons != ["trial", "opened", "multi"]:
+        return fail(f"public entry must present free/single/multi only: {public_path_buttons}")
 
     public_plan_buttons = re.findall(
         r'<button class="path-card[^>]*data-path="([^"]+)"[^>]*data-plan="([^"]+)"',
         index,
     )
-    if public_plan_buttons != [("opened", "single"), ("multi", "multi"), ("trial", "free")]:
+    if public_plan_buttons != [("trial", "free"), ("opened", "single"), ("multi", "multi")]:
         return fail(f"public path and pricing choices must be merged: {public_plan_buttons}")
     if 'class="price-card' in index:
         return fail("public homepage must not repeat the three choices in a second pricing grid")
 
     hero_cta_match = re.search(
-        r'document\.querySelector\("#heroLogin"\)\?\.addEventListener\("click",\s*\(\)\s*=>\s*\{(.*?)\n\s*\}\);',
+        r'document\.querySelector\("#heroWorkbenchLogin"\)\?\.addEventListener\("click",\s*\(\)\s*=>\s*\{(.*?)\n\s*\}\);',
         index,
         flags=re.DOTALL,
     )
     if not hero_cta_match:
-        return fail("merchant first-draft CTA click handler is missing")
+        return fail("AI CEO workspace CTA click handler is missing")
     hero_cta_body = hero_cta_match.group(1)
-    for marker in ['setPath("trial")', 'setPlan("free")', "openRealSaasEntry()"]:
+    for marker in ["openWorkbenchOrAuth()"]:
         if marker not in hero_cta_body:
-            return fail(f"merchant first-draft CTA must preserve free trial intent: {marker}")
+            return fail(f"AI CEO workspace CTA must preserve the session-aware entry path: {marker}")
 
     plan_data_start = index.find("const planData = {")
     plan_data_end = index.find("const guideData = {", plan_data_start)
@@ -73,7 +73,8 @@ def main() -> int:
         return fail("free trial must not reuse the paid store-connection guide")
     for marker in [
         "merchant_blank_trial_entry_v1",
-        'if (key === "trial")',
+        "guideData.trial = {",
+        'key === "trial"',
         'finishGuideAndOpenWorkspace("draft_only")',
         "progress?.preferences_saved",
         "markSaasOnboardingCompleted()",
@@ -86,7 +87,7 @@ def main() -> int:
     for marker in [
         "¥0 / 7 天",
         "20 次捷境托管 AI",
-        "不绑卡、不自动扣费",
+        "不绑卡、不自动续费",
         'const publicPathKeys = ["opened", "multi", "trial"]',
         'target.searchParams.set("settings", "billing")',
         'target.searchParams.set("plan", activePlan)',
@@ -105,7 +106,7 @@ def main() -> int:
         'PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT = 20',
         'PLATFORM_MODEL_TRIAL_DEFAULT_DURATION_DAYS = 7',
         '"platform_default_model_trial_expired"',
-        '"quota_source": "backend_task_audit_and_activation_window"',
+        '"quota_source": "backend_model_task_audit_and_atomic_reservations"',
         '"trial_quota_scope": "account_trial_window"',
         '"trial_request_limit": _strict_nonnegative_int(platform_model.get("trial_request_limit"))',
         '"trial_duration_days": _strict_nonnegative_int(platform_model.get("trial_duration_days"))',
@@ -116,8 +117,8 @@ def main() -> int:
     billing_plan = (ROOT / "jiejing_saas" / "billing_plan.py").read_text(encoding="utf-8")
     for marker in [
         '"label": "免费体验",\n        "intended_user": "first-time merchant validating one safe operating workflow",\n        "amount_minor": 0,\n        "currency": "CNY",\n        "duration_days": 7,',
-        '"label": "单店版"',
-        '"label": "多店铺版"',
+        '"label": "有店铺"',
+        '"label": "多店铺"',
         '"amount_minor": 9900',
         '"amount_minor": 19900',
     ]:

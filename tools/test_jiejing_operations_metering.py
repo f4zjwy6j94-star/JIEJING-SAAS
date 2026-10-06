@@ -208,6 +208,22 @@ def main() -> int:
     assert reliability["p75_duration_ms"] >= 0
     assert "prompt" not in reliability and "response" not in reliability
 
+    primary_with_fallback = UsageClient()
+    primary_with_fallback.jiejing_fallback_model_client = UsageClient()
+    failover_meter = MeteredModelClient(primary_with_fallback)
+    failover_meter.generate_text(system_prompt="not stored", user_prompt="not stored")
+    failover_meter.jiejing_fallback_model_client.generate_text(
+        system_prompt="not stored",
+        user_prompt="not stored",
+    )
+    assert failover_meter.usage_summary() == {
+        "request_count": 2,
+        "input_tokens": 200,
+        "output_tokens": 40,
+        "total_tokens": 240,
+    }
+    assert failover_meter.reliability_summary()["request_count"] == 2
+
     streamed_client = MeteredModelClient(StreamingUsageClient())
     forwarded_fragments = []
     streamed_client.generate_text(

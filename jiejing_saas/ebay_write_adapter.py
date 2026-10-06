@@ -19,9 +19,16 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from jiejing_runtime.execution_preflight import finite_publish_number, publish_procurement_cost_in_sale_currency, validate_publish_evidence, validate_publish_input_values
+
 from .config import SaaSSettings
 from .ebay_http_client import EbayReadOnlyHttpClient, HttpTransport, _urlopen_transport
 from .ebay_oauth import UNPUBLISHED_DRAFT_SCOPES
+from .listing_draft_generation import (
+    _COMPATIBILITY_ASPECT_KEY_PATTERN,
+    _UNVERIFIED_DEVICE_PRODUCT_TYPE_PATTERN,
+    _contains_unverified_compatibility,
+)
 
 
 WRITE_ACTIONS = [
@@ -44,6 +51,7 @@ WRITE_ACTIONS = [
             "business_policies.payment_policy_id",
             "business_policies.return_policy_id",
             "asset_manifest.assets",
+            "publish_evidence",
             "confirmation_record",
             "idempotency_key",
         ],
@@ -73,6 +81,7 @@ WRITE_ACTIONS = [
             "supplier_facts.package_weight_g",
             "supplier_facts.package_dimensions_cm",
             "asset_manifest.assets",
+            "publish_evidence",
             "finance_review.net_profit_money",
             "idempotency_key",
         ],
@@ -158,6 +167,7 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
     requested_enabled = bool(settings.requested_real_platform_writes)
     live_enabled = bool(settings.effective_real_platform_writes_enabled)
     draft_live_enabled = bool(settings.effective_ebay_draft_save_enabled)
+    controlled_publish_enabled = bool(settings.effective_ebay_controlled_publish_enabled)
     blockers = []
     if not requested_enabled:
         blockers.append("JIEJING_ENABLE_REAL_PLATFORM_WRITES")
@@ -175,14 +185,17 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         "enabled": live_enabled,
         "real_platform_writes_enabled": live_enabled,
         "draft_save_live_enabled": draft_live_enabled,
+        "controlled_existing_draft_publish_enabled": controlled_publish_enabled,
         "requested_enabled": requested_enabled,
-        "writes_supported": live_enabled or draft_live_enabled,
-        "contract_only": not (live_enabled or draft_live_enabled),
+        "writes_supported": live_enabled or draft_live_enabled or controlled_publish_enabled,
+        "contract_only": not (live_enabled or draft_live_enabled or controlled_publish_enabled),
         "blocked_by": blockers,
         "actions": WRITE_ACTIONS,
         "live_actions_supported": (
             ["save_ebay_listing_draft", "publish_listing"]
             if live_enabled
+            else ["save_ebay_listing_draft", "publish_listing"]
+            if controlled_publish_enabled
             else ["save_ebay_listing_draft"]
             if draft_live_enabled
             else []
@@ -200,6 +213,7 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         "required_chain": [
             "approved_confirmation",
             "execution_preflight_passed",
+            "server_resolved_publish_source_rights_evidence",
             "vault_resolved_token_backend_only",
             "queued_execution_job",
             "idempotency_key",
@@ -217,6 +231,7 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
             "sandbox_first": True,
             "single_publish_only": True,
             "real_write_enabled": live_enabled,
+            "controlled_existing_draft_publish_enabled": controlled_publish_enabled,
         },
         "next_engineering_steps": [
             "Reauthorize the seller with the eBay sell.inventory write scope.",
@@ -234,6 +249,10 @@ def build_publish_readiness(
     preflight: dict[str, Any] | None = None,
     latest_execution_results: list[dict[str, Any]] | None = None,
     recent_confirmations: list[dict[str, Any]] | None = None,
+    expected_company_id: str | None = None,
+    expected_store_id: str | None = None,
+    expected_listing_project_key: str | None = None,
+    read_only: bool = False,
 ) -> dict[str, Any]:
     """Build a merchant-visible readiness checklist without calling eBay."""
 
@@ -245,7 +264,17 @@ def build_publish_readiness(
     assets = payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), dict) else {}
     preflight_issues = [item for item in preflight.get("issues", []) if isinstance(item, dict)]
     missing = [str(item) for item in preflight.get("missing_fields", []) if str(item).strip()]
+    if read_only:
+        missing = [item for item in missing if item not in {"confirmation_record", "idempotency_key"}]
+    value_issues = validate_publish_input_values(payload)
     checks: list[dict[str, Any]] = []
+
+    if read_only:
+        simulated = payload.get("simulation_only") is True
+        _add_check(checks, key="readonly_execution_boundary", label="执行与确认边界",
+                   status="blocked" if simulated else "needs_attention", blocking=simulated,
+                   summary="当前为模拟资料，不能创建 eBay 执行确认单。" if simulated else "本次仅检查资料；正式执行仍需创建并批准确认单。",
+                   details={"read_only": True, "simulation_only": simulated, "real_execution_allowed": False})
 
     account_health = _account_health_readiness(payload=payload, preflight_issues=preflight_issues, missing_fields=missing)
     _add_check(
@@ -263,7 +292,7 @@ def build_publish_readiness(
         key="field_completeness",
         label="发布字段完整度",
         status="blocked" if missing else "passed",
-        summary="缺少真实发布字段，不能交给 eBay。" if missing else "必填字段已齐，可以进入平台适配器。",
+        summary="缺少真实发布字段，不能交给 eBay。" if missing else "必填字段已填写，仍需通过数值、来源和账号检查。",
         blocking=bool(missing),
         details={"missing_fields": missing, "required_fields": preflight.get("required_fields") or []},
     )
@@ -272,17 +301,19 @@ def build_publish_readiness(
     _add_check(
         checks,
         key="category_match",
-        label="eBay 类目校验",
-        status="blocked" if category_blockers else ("passed" if listing.get("category_id") else "needs_attention"),
+        label="eBay 类目资料",
+        status="blocked" if category_blockers or not listing.get("category_id") else ("needs_attention" if read_only else "passed"),
         summary=(
             str(category_blockers[0].get("message") or "类目和商品不匹配。")
             if category_blockers
-            else f"类目 {listing.get('category_id')} / {listing.get('category_leaf') or 'leaf pending'} 已进入预检。"
+            else f"已填写类目 {listing.get('category_id')}；本次未向 eBay 核实类目有效性、商品匹配和类目属性要求。"
             if listing.get("category_id")
             else "还没有可发布的 eBay 类目。"
         ),
         blocking=bool(category_blockers or not listing.get("category_id")),
-        details={"category_id": listing.get("category_id"), "category_leaf": listing.get("category_leaf") or listing.get("leaf_category")},
+        details={"category_id": listing.get("category_id"), "category_leaf": listing.get("category_leaf") or listing.get("leaf_category"),
+                 "verification_level": "local_input_only", "platform_verified": False,
+                 "next_action": "正式发布前核对当前站点的叶子类目及该类目必填属性；更换类目后重新核对。"},
     )
 
     policy_missing = [
@@ -294,10 +325,12 @@ def build_publish_readiness(
         checks,
         key="business_policies",
         label="店铺政策",
-        status="blocked" if policy_missing else "passed",
-        summary="缺少发货/付款/退货政策，eBay 发布会失败。" if policy_missing else "已带入发货、付款、退货政策。",
+        status="blocked" if policy_missing else ("needs_attention" if read_only else "passed"),
+        summary="缺少发货/付款/退货政策，eBay 发布会失败。" if policy_missing else "已填写三项政策编号；本次未向 eBay 核实政策是否仍有效且属于当前店铺。",
         blocking=bool(policy_missing),
-        details={"missing_fields": [f"business_policies.{field}" for field in policy_missing]},
+        details={"missing_fields": [f"business_policies.{field}" for field in policy_missing],
+                 "verification_level": "local_input_only", "platform_verified": False,
+                 "next_action": "在店铺设置核对发货、付款和退货政策；编号已填写不代表平台已接受。"},
     )
 
     location_key = str(listing.get("merchant_location_key") or "").strip()
@@ -305,10 +338,11 @@ def build_publish_readiness(
         checks,
         key="inventory_location",
         label="库存位置",
-        status="passed" if location_key else "blocked",
-        summary=f"库存位置 {location_key} 已准备。" if location_key else "缺少 merchant_location_key，需要先建 eBay inventory location。",
+        status=("needs_attention" if read_only else "passed") if location_key else "blocked",
+        summary=f"已填写库存位置 {location_key}；本次未向 eBay 核实位置是否有效或启用。" if location_key else "缺少库存位置编号，需要先在当前 eBay 店铺配置库存位置。",
         blocking=not bool(location_key),
-        details={"merchant_location_key": location_key},
+        details={"merchant_location_key": location_key, "verification_level": "local_input_only", "platform_verified": False,
+                 "next_action": "核对当前店铺的库存位置与实际履约地点，不以供应商发货地替代。"},
     )
 
     dimensions = supplier.get("package_dimensions_cm") if isinstance(supplier.get("package_dimensions_cm"), dict) else {}
@@ -322,14 +356,19 @@ def build_publish_readiness(
         package_missing.append("supplier_facts.material")
     if not str(supplier.get("item_location") or "").strip():
         package_missing.append("supplier_facts.item_location")
+    package_missing = list(dict.fromkeys(package_missing + [
+        issue["key"] for issue in value_issues if issue["key"].startswith("supplier_facts.")
+    ]))
     _add_check(
         checks,
         key="package_facts",
         label="规格和发货地",
         status="blocked" if package_missing else "passed",
-        summary="缺少重量、尺寸、材质或发货地，不能真实发布。" if package_missing else "重量、尺寸、材质和发货地已齐。",
+        summary="重量、尺寸、材质或发货地缺失或无效，请先修正。" if package_missing else "重量、尺寸、材质和发货地已齐。",
         blocking=bool(package_missing),
-        details={"missing_fields": package_missing},
+        details={"missing_fields": package_missing, "validation_issues": [
+            issue for issue in value_issues if issue["key"].startswith("supplier_facts.")
+        ]},
     )
 
     urls = _image_urls(assets.get("assets"))
@@ -339,14 +378,51 @@ def build_publish_readiness(
         checks,
         key="asset_reachability",
         label="图片资产",
-        status="blocked" if not urls else ("needs_attention" if invalid_count else "passed"),
+        status="blocked" if not urls else ("needs_attention" if invalid_count or read_only else "passed"),
         summary=(
             "缺少可上传给 eBay 的图片 URL。"
             if not urls
-            else f"{len(urls)} 张图片可用，{invalid_count} 个资产不是 http/https URL。"
+            else f"{len(urls) - invalid_count} 个图片地址符合 http/https 格式，{invalid_count} 个格式无效；本次未验证图片可下载或被 eBay 接受。"
         ),
         blocking=not bool(urls),
-        details={"image_url_count": len(urls), "invalid_asset_count": invalid_count},
+        details={"image_url_count": len(urls), "invalid_asset_count": invalid_count,
+                 "verification_level": "local_input_only", "platform_verified": False,
+                 "next_action": "在素材预览确认图片可加载；正式发布还需平台校验地址与图片规范。"},
+    )
+
+    evidence = payload.get("publish_evidence") if isinstance(payload.get("publish_evidence"), dict) else {}
+    evidence_scope = evidence.get("scope") if isinstance(evidence.get("scope"), dict) else {}
+    identity = payload.get("listing_project_identity") if isinstance(payload.get("listing_project_identity"), dict) else {}
+    evidence_review = validate_publish_evidence(
+        payload,
+        company_id=expected_company_id or str(evidence_scope.get("company_id") or ""),
+        store_id=expected_store_id or str(evidence_scope.get("store_id") or ""),
+        listing_project_key=(
+            expected_listing_project_key
+            or str(identity.get("key") or payload.get("listing_project_key") or evidence_scope.get("listing_project_key") or "")
+        ),
+    )
+    evidence_issues = evidence_review.get("issues") if isinstance(evidence_review.get("issues"), list) else []
+    evidence_ready = evidence_review.get("ready") is True
+    _add_check(
+        checks,
+        key="publish_source_rights_evidence",
+        label="商品来源与图片权利",
+        status="passed" if evidence_ready else "blocked",
+        summary=(
+            "商品来源和全部发布图片的权利证据已由捷境后端核验。"
+            if evidence_ready
+            else "缺少后端核验的商品来源或图片权利证据，不能保存 eBay 草稿或正式发布。"
+        ),
+        blocking=not evidence_ready,
+        details={
+            "contract_version": evidence_review.get("contract_version"),
+            "required_asset_count": evidence_review.get("required_asset_count"),
+            "covered_asset_count": evidence_review.get("covered_asset_count"),
+            "issues": evidence_issues,
+            "server_resolved": evidence.get("server_resolved") is True,
+            "secret_exposed": False,
+        },
     )
 
     duplicate_findings = _duplicate_product_findings(
@@ -397,6 +473,20 @@ def build_publish_readiness(
             " ".join(str(value) for value in item_specifics.values()),
         ]
     )
+    buyer_copy_findings = _buyer_copy_fact_boundary_findings(listing)
+    _add_check(
+        checks,
+        key="buyer_copy_fact_boundary",
+        label="买家文案事实边界",
+        status="blocked" if buyer_copy_findings.get("blocking_terms") else "passed",
+        summary=(
+            "标题、描述或 Item specifics 含未经商品事实确认的设备兼容性/适配尺寸，不能进入 eBay 写入。"
+            if buyer_copy_findings.get("blocking_terms")
+            else "未发现未经确认的设备兼容性或适配尺寸表述。"
+        ),
+        blocking=bool(buyer_copy_findings.get("blocking_terms")),
+        details=buyer_copy_findings,
+    )
     ip_findings = _ip_and_prohibited_findings(text_blob=text_blob, brand=str(item_specifics.get("Brand") or item_specifics.get("brand") or ""))
     _add_check(
         checks,
@@ -438,15 +528,20 @@ def build_publish_readiness(
     )
 
     price = listing.get("price") if isinstance(listing.get("price"), dict) else {"value": listing.get("price"), "currency": "USD"}
+    sale_currency = str(price.get("currency", "USD") or "").strip().upper()
     unit_price = _float(price.get("value"))
     quantity = _int(listing.get("quantity"))
-    exposure = round(unit_price * quantity, 2) if unit_price is not None and quantity is not None else None
+    exposure = _float(round(unit_price * quantity, 2)) if unit_price is not None and quantity is not None else None
     prior_limit_error = _latest_platform_error(latest_execution_results or [], sku=str(listing.get("sku") or ""))
     price_status = "needs_attention"
     price_summary = "价格或库存数量不完整，不能计算额度占用。"
-    if unit_price is not None and quantity is not None:
+    price_issues = [issue for issue in value_issues if issue["key"].startswith(("listing.price", "listing.quantity"))]
+    if unit_price is not None and quantity is not None and not price_issues:
         price_status = "passed"
-        price_summary = f"本次发布预计占用 {price.get('currency') or 'USD'} {exposure:.2f} 的刊登额度。"
+        price_summary = f"本次发布预计占用 {sale_currency} {exposure:.2f} 的刊登额度。"
+    if price_issues:
+        price_status = "blocked"
+        price_summary = "售价或库存数量无效，请按提示修正后重新检查。"
     if prior_limit_error:
         price_status = "blocked"
         price_summary = "最近一次发布触发 eBay 卖家刊登额度限制；需要降价、降数量或提升额度后再发。"
@@ -456,13 +551,14 @@ def build_publish_readiness(
         label="价格 x 库存额度",
         status=price_status,
         summary=price_summary,
-        blocking=bool(prior_limit_error or unit_price is None or quantity is None),
+        blocking=bool(prior_limit_error or unit_price is None or quantity is None or price_issues),
         details={
             "unit_price": unit_price,
-            "currency": price.get("currency") or "USD",
+            "currency": sale_currency,
             "quantity": quantity,
             "estimated_listing_amount": exposure,
             "last_platform_error": prior_limit_error or {},
+            "validation_issues": price_issues,
         },
     )
 
@@ -480,9 +576,7 @@ def build_publish_readiness(
     net_profit = _money_float(finance.get("net_profit_money"))
     if net_profit is None:
         net_profit = _float(finance.get("net_profit"))
-    procurement_cost = _money_float(finance.get("procurement_cost_money"))
-    if procurement_cost is None:
-        procurement_cost = _float(finance.get("procurement_cost"))
+    procurement_cost = publish_procurement_cost_in_sale_currency(finance, sale_currency)
     shipping_cost = _money_float(finance.get("shipping_cost_money"))
     if shipping_cost is None:
         shipping_cost = _float(finance.get("shipping_cost"))
@@ -496,9 +590,28 @@ def build_publish_readiness(
         return_risk_reserve=return_risk_reserve,
     )
     profit_blocking = net_profit is None and procurement_cost is None
-    effective_profit = net_profit if net_profit is not None else calculated_profit
+    # A merchant-entered total cannot overrule a loss in the complete costs.
+    effective_profit = calculated_profit if calculated_profit is not None else net_profit
     if effective_profit is not None and effective_profit < 0:
         profit_blocking = True
+    profit_issues = [issue for issue in value_issues if issue["key"].startswith("finance_review.")]
+    profit_issues.extend(issue for issue in value_issues if issue["key"] == "listing.price.currency")
+    profit_blocking = profit_blocking or bool(profit_issues)
+    calculation_input_prefixes = tuple(f"finance_review.{key}" for key in (
+        "procurement_cost", "shipping_cost", "ebay_fee", "ad_budget",
+        "return_risk_reserve", "exchange_rate",
+    ))
+    invalid_calculation_input = any(issue["key"].startswith(calculation_input_prefixes) for issue in profit_issues)
+    invalid_calculation_input = invalid_calculation_input or any(issue["key"] in ("listing.price.value", "listing.price.currency") for issue in value_issues)
+    if invalid_calculation_input:
+        # Invalid amounts/currencies cannot support a displayed profit. A real
+        # loss from valid costs is still useful evidence and must stay visible.
+        calculated_profit = None
+        effective_profit = None
+    elif profit_issues:
+        # A wrong declared total cannot replace a valid calculation, including
+        # a loss. Without complete costs it cannot be used as a fallback either.
+        effective_profit = calculated_profit
     missing_profit_inputs = [
         key
         for key, value in {
@@ -522,6 +635,8 @@ def build_publish_readiness(
             if net_profit is None and procurement_cost is None
             else "净利润为负，发布前必须改价、降成本或暂停。"
             if effective_profit is not None and effective_profit < 0
+            else "费用或净利润不一致，请按检查结果重新核对。"
+            if profit_issues
             else "利润大脑已带入售价、采购、eBay fee、广告、物流、退货风险和汇率口径。"
             if not missing_profit_inputs
             else "利润大脑已启动，但还缺 " + "、".join(missing_profit_inputs) + "，只能进入人工复核。"
@@ -529,9 +644,13 @@ def build_publish_readiness(
         blocking=profit_blocking,
         details={
             "net_profit": net_profit,
+            "unit_price": unit_price,
             "calculated_contribution_profit": calculated_profit,
             "effective_profit": effective_profit,
             "procurement_cost": procurement_cost,
+            "calculation_currency": sale_currency,
+            "procurement_source_money": finance.get("procurement_cost_money"),
+            "exchange_rate_basis": finance.get("exchange_rate_basis"),
             "ebay_fee": ebay_fee,
             "ad_budget": ad_budget,
             "shipping_cost": shipping_cost,
@@ -539,6 +658,7 @@ def build_publish_readiness(
             "exchange_rate": exchange_rate,
             "gross_margin_percent": margin,
             "missing_profit_inputs": missing_profit_inputs,
+            "validation_issues": profit_issues,
         },
     )
 
@@ -564,13 +684,14 @@ def build_publish_readiness(
     failure_knowledge = _failure_knowledge_base(latest_execution_results or [], sku=str(listing.get("sku") or ""))
     traffic_light_report = _publish_health_traffic_light_report(checks, preflight=preflight)
     return {
-        "status": "blocked_missing_facts" if blocking_checks else "ready_for_execution",
+        "status": "checked_read_only" if read_only else "blocked_missing_facts" if blocking_checks else "ready_for_execution",
+        "read_only": read_only,
         "action_type": "publish_listing",
         "checks": checks,
         "traffic_light_report": traffic_light_report,
         "backend_evidence_packet": _publish_readiness_evidence_packet(checks, preflight=preflight),
         "blocking_check_count": len(blocking_checks),
-        "ready_for_platform_adapter": not blocking_checks and preflight.get("status") == "ready_for_platform_adapter",
+        "ready_for_platform_adapter": not read_only and not blocking_checks and preflight.get("status") == "ready_for_platform_adapter",
         "retry_rule": "Do not retry after timeout/502 until publish recovery confirms no published offer exists.",
         "post_publish_cockpit_plan": post_publish_cockpit_plan,
         "failure_knowledge_base": failure_knowledge,
@@ -973,6 +1094,22 @@ class EbayWriteHttpAdapter:
             return _blocked("unsupported_write_action", ["only_publish_listing_supported"])
         if preflight.get("status") != "ready_for_platform_adapter":
             return _blocked("preflight_not_ready", preflight.get("missing_fields") or ["execution_preflight_not_ready"], preflight=preflight)
+        evidence_review = _request_publish_evidence_review(request)
+        if evidence_review.get("ready") is not True:
+            return _blocked(
+                "publish_evidence_not_ready",
+                _publish_evidence_blockers(evidence_review),
+                preflight=preflight,
+            )
+        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        buyer_copy_findings = _buyer_copy_fact_boundary_findings(listing)
+        if buyer_copy_findings.get("blocking_terms"):
+            return _blocked(
+                "buyer_copy_fact_boundary_blocked",
+                buyer_copy_findings["blocking_terms"],
+                preflight=preflight,
+            )
 
         connection = _find_publish_connection(connections)
         if not connection:
@@ -987,8 +1124,6 @@ class EbayWriteHttpAdapter:
         if not token.get("ok"):
             return _blocked("token_resolution_failed", token.get("blocked_by") or ["access_token_unavailable"], preflight=preflight)
 
-        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
-        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
         sku = str(listing.get("sku") or "").strip()
         base_url = _base_url(self.settings)
         inventory_body = _inventory_item_body(payload)
@@ -1072,6 +1207,214 @@ class EbayWriteHttpAdapter:
             "secret_exposed": False,
         }
 
+    def publish_existing_listing_draft(
+        self,
+        *,
+        request: Any,
+        preflight: dict[str, Any],
+        credential_boundary: dict[str, Any],
+        marketplace_id: str,
+        expected_offer_id: str,
+    ) -> dict[str, Any]:
+        """Publish one exact, already saved eBay Offer without recreating it."""
+
+        if not self.settings.effective_ebay_controlled_publish_enabled:
+            return _blocked(
+                "controlled_existing_draft_publish_disabled",
+                ["JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE"],
+            )
+        if str(getattr(request, "action_type", "") or "") != "publish_listing":
+            return _blocked("unsupported_write_action", ["only_publish_listing_supported"])
+        if preflight.get("status") != "ready_for_platform_adapter":
+            return _blocked(
+                "preflight_not_ready",
+                preflight.get("missing_fields") or ["execution_preflight_not_ready"],
+                preflight=preflight,
+            )
+        evidence_review = _request_publish_evidence_review(request)
+        if evidence_review.get("ready") is not True:
+            return _blocked(
+                "publish_evidence_not_ready",
+                _publish_evidence_blockers(evidence_review),
+                preflight=preflight,
+            )
+        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
+        sku = str(listing.get("sku") or "").strip()
+        expected_offer_id = str(expected_offer_id or "").strip()
+        if not (
+            sku
+            and expected_offer_id
+            and str(draft.get("offer_id") or "").strip() == expected_offer_id
+            and str(draft.get("sku") or "").strip() == sku
+            and str(draft.get("offer_status") or "").strip().upper() == "UNPUBLISHED"
+            and draft.get("public_listing_created") is False
+            and str(draft.get("source_execution_id") or "").strip()
+            and str(draft.get("source_confirmation_id") or "").strip()
+        ):
+            return _write_result(
+                "controlled_publish_binding_invalid",
+                "The approved confirmation is not bound to one exact unpublished eBay draft.",
+                [],
+                preflight=preflight,
+            )
+        credential = _validated_unpublished_draft_credential_boundary(
+            credential_boundary=credential_boundary,
+            company_id=str(getattr(request, "company_id", "") or ""),
+            store_id=str(getattr(request, "store_id", "") or ""),
+        )
+        if not credential:
+            return _blocked(
+                "controlled_publish_credential_boundary_blocked",
+                ["exact_unique_unpublished_draft_connection_and_secret_required"],
+                preflight=preflight,
+            )
+        connection = credential["connection"]
+        secret_ref_id = str(connection["secret_ref"])
+        token = self._resolve_access_token(
+            secret_ref_id=secret_ref_id,
+            company_id=str(getattr(request, "company_id", "") or ""),
+            store_id=str(getattr(request, "store_id", "") or ""),
+        )
+        if not token.get("ok"):
+            return _blocked(
+                "token_resolution_failed",
+                token.get("blocked_by") or ["access_token_unavailable"],
+                preflight=preflight,
+            )
+
+        access_token = str(token["access_token"])
+        base_url = _base_url(self.settings)
+        steps: list[dict[str, Any]] = []
+        kyc_path = "/sell/account/v1/kyc"
+        kyc_result = self._get_json(
+            url=f"{base_url}{kyc_path}",
+            access_token=access_token,
+            marketplace_id=marketplace_id,
+        )
+        steps.append(_step_summary("inspect_account_kyc", kyc_path, kyc_result))
+        if kyc_result.get("status") != "ok":
+            return _write_result(
+                "controlled_publish_account_verification_inspection_failed",
+                "The current eBay account verification state could not be checked, so publishOffer was not called.",
+                steps,
+                preflight=preflight,
+            )
+        kyc_json = kyc_result.get("json") if isinstance(kyc_result.get("json"), dict) else {}
+        kyc_checks = _safe_ebay_kyc_checks(kyc_json)
+        if kyc_checks:
+            return _write_result(
+                "controlled_publish_account_verification_required",
+                "eBay still has an account verification or KYC action item; publishOffer was not called.",
+                steps,
+                preflight=preflight,
+                platform_result={
+                    "account_verification_status": "verification_required",
+                    "kyc_check_count": len(kyc_checks),
+                    "kyc_checks": kyc_checks,
+                    "published_to_ebay": False,
+                    "raw_response_stored": False,
+                    "secret_exposed": False,
+                },
+            )
+        offers_path = f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku, safe='')}"
+        offers_result = self._get_json(
+            url=f"{base_url}{offers_path}",
+            access_token=access_token,
+            marketplace_id=marketplace_id,
+        )
+        offers_result = _normalize_missing_offer_inspection(offers_result)
+        steps.append(_step_summary("inspect_existing_offer", offers_path, offers_result))
+        if offers_result.get("status") != "ok":
+            return _write_result(
+                "controlled_publish_offer_inspection_failed",
+                "The existing eBay draft could not be checked, so publishOffer was not called.",
+                steps,
+                preflight=preflight,
+            )
+        offers_json = offers_result.get("json") if isinstance(offers_result.get("json"), dict) else {}
+        offers = offers_json.get("offers") if isinstance(offers_json.get("offers"), list) else []
+        published_offer = _published_offer(offers)
+        if published_offer:
+            return _write_result(
+                "controlled_publish_already_public",
+                "The SKU already has a public eBay listing; the controlled publish stopped.",
+                steps,
+                preflight=preflight,
+            )
+        target_marketplace = str(marketplace_id or "").strip().upper()
+        unpublished = []
+        for raw in offers:
+            candidate = _unpublished_offer([raw], marketplace_id=marketplace_id)
+            if not candidate:
+                continue
+            candidate_marketplace = str(candidate.get("marketplace_id") or "").strip().upper()
+            if target_marketplace and candidate_marketplace and candidate_marketplace != target_marketplace:
+                continue
+            unpublished.append(candidate)
+        exact = [item for item in unpublished if str(item.get("offer_id") or "").strip() == expected_offer_id]
+        if len(unpublished) != 1 or len(exact) != 1:
+            return _write_result(
+                "controlled_publish_offer_mismatch",
+                "The current eBay draft no longer matches the approved Offer ID; publishOffer was not called.",
+                steps,
+                preflight=preflight,
+            )
+
+        publish_path = f"/sell/inventory/v1/offer/{urllib.parse.quote(expected_offer_id, safe='')}/publish"
+        publish_result = self._send_json(
+            method="POST",
+            url=f"{base_url}{publish_path}",
+            access_token=access_token,
+            marketplace_id=marketplace_id,
+            body={},
+        )
+        steps.append(_step_summary("publish_existing_offer", publish_path, publish_result))
+        if publish_result.get("status") != "ok":
+            return _write_result(
+                "blocked_platform_error",
+                "eBay publishOffer failed for the approved existing draft.",
+                steps,
+                preflight=preflight,
+            )
+        publish_json = publish_result.get("json") if isinstance(publish_result.get("json"), dict) else {}
+        listing_id = str(publish_json.get("listingId") or publish_json.get("listing_id") or "").strip()
+        audit = _audit(
+            request=request,
+            preflight=preflight,
+            real_execution={
+                "published_to_ebay": True,
+                "procurement_paid": False,
+                "refund_executed": False,
+                "ad_budget_changed": False,
+                "store_policy_changed": False,
+            },
+            platform_result={
+                "offer_id": expected_offer_id,
+                "listing_id": listing_id,
+                "marketplace_id": marketplace_id,
+                "sku": sku,
+                "published_existing_offer": True,
+                "source_execution_id": str(draft.get("source_execution_id") or ""),
+                "source_confirmation_id": str(draft.get("source_confirmation_id") or ""),
+                "token_source": token.get("source"),
+                "access_token_returned_to_frontend": False,
+                "access_token_returned_to_runtime": False,
+                "raw_response_stored": False,
+            },
+        )
+        return {
+            "status": "published_to_ebay",
+            "action_type": "publish_listing",
+            "task_id": getattr(request, "task_id", ""),
+            "message": "The confirmed existing eBay draft was published without creating another offer.",
+            "steps": steps,
+            "platform_result": audit["platform_result"],
+            "audit": audit,
+            "secret_exposed": False,
+        }
+
     def save_listing_draft(
         self,
         *,
@@ -1117,6 +1460,22 @@ class EbayWriteHttpAdapter:
                 preflight.get("missing_fields") or ["execution_preflight_not_ready"],
                 preflight=preflight,
             )
+        evidence_review = _request_publish_evidence_review(request)
+        if evidence_review.get("ready") is not True:
+            return _draft_blocked(
+                "draft_publish_evidence_not_ready",
+                _publish_evidence_blockers(evidence_review),
+                preflight=preflight,
+            )
+        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        buyer_copy_findings = _buyer_copy_fact_boundary_findings(listing)
+        if buyer_copy_findings.get("blocking_terms"):
+            return _draft_blocked(
+                "buyer_copy_fact_boundary_blocked",
+                buyer_copy_findings["blocking_terms"],
+                preflight=preflight,
+            )
 
         credential = _validated_unpublished_draft_credential_boundary(
             credential_boundary=credential_boundary,
@@ -1140,8 +1499,6 @@ class EbayWriteHttpAdapter:
         if not token.get("ok"):
             return _draft_blocked("token_resolution_failed", token.get("blocked_by") or ["access_token_unavailable"], preflight=preflight)
 
-        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
-        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
         sku = str(listing.get("sku") or "").strip()
         inventory_body = _inventory_item_body(payload)
         offer_body = _offer_body(payload, marketplace_id=marketplace_id)
@@ -1437,6 +1794,7 @@ class EbayWriteHttpAdapter:
 
         payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
         listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
         sku = str(listing.get("sku") or "").strip()
         if not sku:
             return _recovery_result("blocked_missing_sku", sku="", checks=[], safe_to_retry=False)
@@ -1477,6 +1835,20 @@ class EbayWriteHttpAdapter:
         offers_json = offers_result.get("json") if isinstance(offers_result.get("json"), dict) else {}
         offers = offers_json.get("offers") if isinstance(offers_json.get("offers"), list) else []
         published = _published_offer(offers)
+        expected_offer_id = str(draft.get("offer_id") or "").strip()
+        unpublished = [
+            candidate
+            for raw in offers
+            if (candidate := _unpublished_offer([raw], marketplace_id=marketplace_id))
+        ]
+        exact_unpublished = next(
+            (
+                candidate
+                for candidate in unpublished
+                if expected_offer_id and str(candidate.get("offer_id") or "") == expected_offer_id
+            ),
+            {},
+        )
         checks = [
             _step_summary("inspect_inventory_item", item_path, item_result),
             _step_summary("inspect_offers_by_sku", offers_path, offers_result),
@@ -1485,8 +1857,17 @@ class EbayWriteHttpAdapter:
         has_offers = bool(offers)
         has_published_offer = bool(published)
         safe_to_retry = not inventory_found and not has_offers
+        safe_to_request_fresh_confirmation = bool(
+            inventory_found
+            and not has_published_offer
+            and len(offers) == 1
+            and len(unpublished) == 1
+            and exact_unpublished
+        )
         if has_published_offer:
             recommended_action = "backfill_execution_record"
+        elif safe_to_request_fresh_confirmation:
+            recommended_action = "request_fresh_exact_offer_confirmation"
         elif has_offers:
             recommended_action = "manual_review_existing_offer"
         elif safe_to_retry:
@@ -1500,7 +1881,9 @@ class EbayWriteHttpAdapter:
             "inventory_item_found": inventory_found,
             "offer_count": len(offers),
             "published_offer": published,
+            "exact_unpublished_offer": exact_unpublished,
             "safe_to_retry_publish": safe_to_retry,
+            "safe_to_request_fresh_confirmation": safe_to_request_fresh_confirmation,
             "recommended_action": recommended_action,
             "checks": checks,
             "cleanup_plan": _cleanup_plan(sku=sku, published_offer=published, offer_count=len(offers), inventory_found=inventory_found),
@@ -2124,19 +2507,14 @@ def _image_urls(value: Any) -> list[str]:
 
 
 def _int(value: Any) -> int | None:
-    try:
-        if isinstance(value, str) and any(marker in value for marker in ("-", "~", "to")):
-            return None
-        return int(float(str(value).strip()))
-    except (TypeError, ValueError):
+    number = finite_publish_number(value)
+    if number is None or number < 0 or not number.is_integer() or number > 9007199254740991:
         return None
+    return int(number)
 
 
 def _float(value: Any) -> float | None:
-    try:
-        return float(str(value).strip())
-    except (TypeError, ValueError):
-        return None
+    return finite_publish_number(value)
 
 
 def _money_float(value: Any) -> float | None:
@@ -2157,7 +2535,7 @@ def _calculated_contribution_profit(
     values = [unit_price, procurement_cost, shipping_cost, ebay_fee, ad_budget, return_risk_reserve]
     if any(value is None for value in values):
         return None
-    return round(float(unit_price or 0) - float(procurement_cost or 0) - float(shipping_cost or 0) - float(ebay_fee or 0) - float(ad_budget or 0) - float(return_risk_reserve or 0), 2)
+    return _float(round(float(unit_price or 0) - float(procurement_cost or 0) - float(shipping_cost or 0) - float(ebay_fee or 0) - float(ad_budget or 0) - float(return_risk_reserve or 0), 2))
 
 
 def _duplicate_product_findings(
@@ -2172,10 +2550,23 @@ def _duplicate_product_findings(
     current_title = _normalized_text(listing.get("title"))
     current_images = {_normalized_url(url) for url in _image_urls(assets.get("assets"))}
     current_images.discard("")
+    existing_draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
+    source_execution_id = str(existing_draft.get("source_execution_id") or "").strip()
+    source_confirmation_id = str(existing_draft.get("source_confirmation_id") or "").strip()
+    source_draft_binding_valid = bool(
+        source_execution_id
+        and source_confirmation_id
+        and str(existing_draft.get("offer_id") or "").strip()
+        and _normalized_key(existing_draft.get("sku")) == current_sku
+        and str(existing_draft.get("offer_status") or "").strip().upper() == "UNPUBLISHED"
+        and existing_draft.get("public_listing_created") is False
+    )
     blocking_matches: list[dict[str, Any]] = []
     review_matches: list[dict[str, Any]] = []
 
     for record in recent_confirmations[:50]:
+        if source_draft_binding_valid and str(record.get("confirmation_id") or "").strip() == source_confirmation_id:
+            continue
         item = record.get("item") if isinstance(record.get("item"), dict) else {}
         previous_payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}
         previous_listing = previous_payload.get("listing") if isinstance(previous_payload.get("listing"), dict) else {}
@@ -2194,6 +2585,8 @@ def _duplicate_product_findings(
             review_matches.append({"match_type": "similar_title", "source": "confirmation", "source_id": source_id})
 
     for record in latest_execution_results[:50]:
+        if source_draft_binding_valid and str(record.get("execution_id") or "").strip() == source_execution_id:
+            continue
         result = record.get("result") if isinstance(record.get("result"), dict) else record
         platform = result.get("platform_result") if isinstance(result.get("platform_result"), dict) else {}
         previous_sku = _normalized_key(platform.get("sku"))
@@ -2283,6 +2676,43 @@ def _similar_text(left: str, right: str) -> bool:
     return len(left_terms & right_terms) / max(1, len(left_terms | right_terms)) >= 0.72
 
 
+def _buyer_copy_fact_boundary_findings(listing: dict[str, Any]) -> dict[str, Any]:
+    listing = listing if isinstance(listing, dict) else {}
+    blocking_terms: list[str] = []
+    checked_fields: list[str] = []
+    for field in ("title", "description_html", "description"):
+        text = _plain_text(listing.get(field))
+        if not text:
+            continue
+        checked_fields.append(f"listing.{field}")
+        if _contains_unverified_compatibility(text):
+            blocking_terms.append(f"listing.{field}:unverified_compatibility")
+
+    item_specifics = listing.get("item_specifics") if isinstance(listing.get("item_specifics"), dict) else {}
+    for raw_key, raw_value in item_specifics.items():
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        checked_fields.append(f"listing.item_specifics.{key}")
+        values = raw_value if isinstance(raw_value, list) else [raw_value]
+        if _COMPATIBILITY_ASPECT_KEY_PATTERN.search(key):
+            blocking_terms.append(f"listing.item_specifics.{key}:unverified_compatibility_key")
+            continue
+        if any(
+            _contains_unverified_compatibility(value)
+            or _UNVERIFIED_DEVICE_PRODUCT_TYPE_PATTERN.search(str(value or ""))
+            for value in values
+        ):
+            blocking_terms.append(f"listing.item_specifics.{key}:unverified_compatibility_value")
+
+    return {
+        "blocking_terms": sorted(set(blocking_terms)),
+        "checked_fields": checked_fields,
+        "policy": "Compatibility and device-fit claims require authoritative product facts before eBay draft or publish.",
+        "secret_exposed": False,
+    }
+
+
 def _ip_and_prohibited_findings(*, text_blob: str, brand: str) -> dict[str, Any]:
     text = str(text_blob or "").lower()
     brand_text = str(brand or "").strip().lower()
@@ -2309,7 +2739,7 @@ def _ip_and_prohibited_findings(*, text_blob: str, brand: str) -> dict[str, Any]
         "prescription",
         "medical cure",
     ]
-    detected_brands = [term for term in watched_brands if re.search(rf"\b{re.escape(term)}\b", text)]
+    detected_brands = [term for term in watched_brands if _brand_reference_present(term=term, text=text)]
     detected_prohibited = [term for term in prohibited_terms if term in text]
     unbranded = brand_text in {"", "unbranded", "generic", "no brand"}
     blocking_terms = list(detected_prohibited)
@@ -2324,6 +2754,23 @@ def _ip_and_prohibited_findings(*, text_blob: str, brand: str) -> dict[str, Any]
         "brand": brand,
         "policy": "Use own text/images, verify brand rights, and only use compatibility wording when truthful and necessary.",
     }
+
+
+def _brand_reference_present(*, term: str, text: str) -> bool:
+    term = str(term or "").casefold().strip()
+    text = str(text or "").casefold()
+    if term != "apple":
+        return re.search(rf"\b{re.escape(term)}\b", text) is not None
+    # "Apple" is also an ordinary fruit/color word.  Remove only narrow,
+    # explicit non-brand phrases; any remaining standalone Apple mention still
+    # enters the normal IP/VeRO review path.
+    non_brand_removed = re.sub(
+        r"\bapple(?:[-\s]+(?:green|corers?|shaped|fruit|orchard|slicers?|peelers?))\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.search(r"\bapple\b", non_brand_removed) is not None
 
 
 def _gpsr_required(payload: dict[str, Any], *, listing: dict[str, Any]) -> bool:
@@ -2454,6 +2901,7 @@ def _publish_check_source_records(key: str, details: dict[str, Any]) -> list[dic
         "asset_reachability": ["merchant_input", "public_asset_urls"],
         "new_product_duplicate_guard": ["confirmation_history", "execution_results"],
         "item_specifics_quality": ["merchant_input", "ebay_category_rules"],
+        "buyer_copy_fact_boundary": ["policy_screening", "merchant_input"],
         "ip_vero_and_claims": ["policy_screening", "merchant_input"],
         "gpsr_regulatory_fields": ["regulatory_screening", "merchant_input"],
         "price_quantity_exposure": ["finance_records", "merchant_input"],
@@ -2504,6 +2952,7 @@ def _publish_check_fix_action(key: str, *, blocking: bool) -> dict[str, Any]:
         "asset_reachability": ("focus-publish-intake", "Replace or upload assets", "product.assets"),
         "new_product_duplicate_guard": ("focus-publish-intake", "Use fresh SKU and assets", "product.publish_intake"),
         "item_specifics_quality": ("focus-publish-intake", "Complete item specifics", "product.publish_intake"),
+        "buyer_copy_fact_boundary": ("focus-publish-intake", "Remove unverified compatibility claims", "product.listing_copy"),
         "ip_vero_and_claims": ("focus-publish-intake", "Remove IP or policy risk", "product.policy_review"),
         "gpsr_regulatory_fields": ("focus-publish-intake", "Add regulatory fields", "product.regulatory"),
         "price_quantity_exposure": ("focus-publish-intake", "Review price and quantity", "product.finance"),
@@ -2721,6 +3170,30 @@ def _cleanup_plan(*, sku: str, published_offer: dict[str, Any], offer_count: int
     }
 
 
+def _request_publish_evidence_review(request: Any) -> dict[str, Any]:
+    payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+    identity = payload.get("listing_project_identity") if isinstance(payload.get("listing_project_identity"), dict) else {}
+    listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+    listing_project_key = str(
+        identity.get("key")
+        or payload.get("listing_project_key")
+        or listing.get("listing_project_key")
+        or ""
+    ).strip()
+    return validate_publish_evidence(
+        payload,
+        company_id=str(getattr(request, "company_id", "") or ""),
+        store_id=str(getattr(request, "store_id", "") or ""),
+        listing_project_key=listing_project_key,
+    )
+
+
+def _publish_evidence_blockers(review: dict[str, Any]) -> list[str]:
+    issues = review.get("issues") if isinstance(review.get("issues"), list) else []
+    blockers = [str(item.get("key") or "") for item in issues if isinstance(item, dict) and str(item.get("key") or "").strip()]
+    return blockers or ["publish_evidence_not_ready"]
+
+
 def _blocked(status: str, blockers: list[Any], *, preflight: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "status": status,
@@ -2819,12 +3292,21 @@ def _cleanup_write_result(
     }
 
 
-def _write_result(status: str, message: str, steps: list[dict[str, Any]], *, preflight: dict[str, Any]) -> dict[str, Any]:
+def _write_result(
+    status: str,
+    message: str,
+    steps: list[dict[str, Any]],
+    *,
+    preflight: dict[str, Any],
+    platform_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    safe_platform_result = platform_result or {}
     return {
         "status": status,
         "action_type": "publish_listing",
         "message": message,
         "steps": steps,
+        "platform_result": safe_platform_result,
         "audit": {
             "preflight": preflight,
             "real_execution": {
@@ -2837,9 +3319,27 @@ def _write_result(status: str, message: str, steps: list[dict[str, Any]], *, pre
             "access_token_returned_to_frontend": False,
             "access_token_returned_to_runtime": False,
             "raw_response_stored": False,
+            "platform_result": safe_platform_result,
         },
         "secret_exposed": False,
     }
+
+
+def _safe_ebay_kyc_checks(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_checks = payload.get("kycChecks") if isinstance(payload.get("kycChecks"), list) else []
+    checks: list[dict[str, Any]] = []
+    for raw in raw_checks[:10]:
+        if not isinstance(raw, dict):
+            continue
+        safe = {
+            "data_required": str(raw.get("dataRequired") or "").strip()[:80],
+            "alert": str(raw.get("alert") or "").strip()[:240],
+            "detail": str(raw.get("detailMessage") or "").strip()[:480],
+            "due_date": str(raw.get("dueDate") or "").strip()[:80],
+            "remedy_available": bool(raw.get("remedyUrl")),
+        }
+        checks.append({key: value for key, value in safe.items() if value not in ("", None)})
+    return checks
 
 
 def _draft_write_result(

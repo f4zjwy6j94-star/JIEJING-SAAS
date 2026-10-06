@@ -18,6 +18,7 @@ from .operations_metering import (
     build_provider_monitoring_aggregate_event,
 )
 from .repository import SaaSRepository
+from .runtime_evidence import RuntimeEvidenceError, read_runtime_evidence
 
 
 CLS_PROBE_MAX_AGE_HOURS = 24.0
@@ -219,10 +220,17 @@ def upload_provider_monitoring_aggregate_to_cls(
     access_key: str,
     client_factory: Any = None,
     message_factory: Any = None,
+    probe_marker: str | None = None,
 ) -> bool:
     """Upload one allowlisted aggregate through Tencent CloudAPI UploadLog."""
 
     if set(event) != PROVIDER_MONITOR_AGGREGATE_KEYS or event.get("event_type") != PROVIDER_MONITOR_EVENT_TYPE:
+        return False
+    if probe_marker is not None and (
+        event.get("probe") is not True
+        or not isinstance(probe_marker, str)
+        or not re.fullmatch(r"jiejing-provider-probe-[0-9a-f]{32}", probe_marker)
+    ):
         return False
     if not re.fullmatch(r"[a-z0-9-]{3,64}", str(region or "")) or not all(
         str(value or "").strip() for value in (topic_id, access_id, access_key)
@@ -237,6 +245,8 @@ def upload_provider_monitoring_aggregate_to_cls(
             message_factory = LogGroupList
         packet = message_factory()
         group = packet.logGroupList.add()
+        if probe_marker is not None:
+            group.filename = probe_marker
         log = group.logs.add()
         log.time = int(time.time() * 1_000_000)
         for key in sorted(PROVIDER_MONITOR_AGGREGATE_KEYS):
@@ -381,9 +391,19 @@ def build_monitoring_status(
     pending_confirmations = int(queue_counts.get("pending", 0))
     failed_jobs = int(queue_counts.get("failed", 0))
     safe_access_log_enabled = _safe_access_log_enabled(settings)
-    cls_target = _cls_monitoring_target_status(now_utc=now_utc)
+    evidence_unavailable = False
+    try:
+        evidence = read_runtime_evidence()
+    except RuntimeEvidenceError:
+        evidence, evidence_unavailable = {}, True
+    cls_target = _cls_monitoring_target_status(now_utc=now_utc, runtime_evidence=evidence)
     runbook = _runbook_status()
-    provider_observability = _provider_observability_status(repository, now_utc=now_utc)
+    provider_observability = _provider_observability_status(repository, now_utc=now_utc, runtime_evidence=evidence)
+    if evidence_unavailable:
+        cls_target["target_ready"] = cls_target["control_plane_ready"] = False
+        cls_target["blocked_by"].append("runtime_evidence_unavailable")
+        provider_observability["ready"] = False
+        provider_observability["blocked_by"].append("runtime_evidence_unavailable")
     blockers = _monitoring_blockers(settings, safe_access_log_enabled, cls_target, runbook, provider_observability)
     return {
         "contract_version": "2026-05-18-tencent-cls-monitoring-boundary",
@@ -469,7 +489,9 @@ def _provider_observability_status(
     repository: SaaSRepository,
     *,
     now_utc: datetime | None = None,
+    runtime_evidence: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    evidence = read_runtime_evidence() if runtime_evidence is None else runtime_evidence
     metrics_enabled = _env_bool("JIEJING_PROVIDER_METRICS_ENABLED")
     legacy_latency_flag = _env_bool("JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED")
     legacy_cost_flag = _env_bool("JIEJING_PROVIDER_COST_ALERTS_CONFIGURED")
@@ -508,12 +530,12 @@ def _provider_observability_status(
         evidence_now,
     )
     latency_alarm_evidence = _timestamp_evidence_status(
-        str(os.environ.get("JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT") or "").strip(),
+        evidence.get("JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT", "").strip(),
         alarm_max_age_days * 24.0,
         evidence_now,
     )
     cost_alarm_evidence = _timestamp_evidence_status(
-        str(os.environ.get("JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT") or "").strip(),
+        evidence.get("JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT", "").strip(),
         alarm_max_age_days * 24.0,
         evidence_now,
     )
@@ -545,13 +567,13 @@ def _provider_observability_status(
     _append_evidence_blocker(
         blocked_by,
         prefix="provider_latency_alarm_verification",
-        raw_value=str(os.environ.get("JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT") or ""),
+        raw_value=evidence.get("JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT", ""),
         evidence=latency_alarm_evidence,
     )
     _append_evidence_blocker(
         blocked_by,
         prefix="provider_cost_alarm_verification",
-        raw_value=str(os.environ.get("JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT") or ""),
+        raw_value=evidence.get("JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT", ""),
         evidence=cost_alarm_evidence,
     )
     return {
@@ -632,16 +654,17 @@ def _runbook_status() -> dict[str, Any]:
     }
 
 
-def _cls_monitoring_target_status(*, now_utc: datetime | None = None) -> dict[str, Any]:
+def _cls_monitoring_target_status(*, now_utc: datetime | None = None, runtime_evidence: dict[str, str] | None = None) -> dict[str, Any]:
+    evidence = read_runtime_evidence() if runtime_evidence is None else runtime_evidence
     enabled = _env_bool("JIEJING_CLS_ENABLED")
     region = os.environ.get("JIEJING_CLS_REGION") or os.environ.get("JIEJING_TENCENT_REGION") or "ap-guangzhou"
     logset_id = os.environ.get("JIEJING_CLS_LOGSET_ID") or os.environ.get("JIEJING_CLS_LOGSET") or ""
     topic_id = os.environ.get("JIEJING_CLS_TOPIC_ID") or os.environ.get("JIEJING_CLS_TOPIC") or ""
     alert_policy_configured = _env_bool("JIEJING_CLS_ALERT_POLICY_CONFIGURED")
-    live_probe_at = os.environ.get("JIEJING_CLS_LIVE_PROBE_LAST_AT", "").strip()
+    live_probe_at = evidence.get("JIEJING_CLS_LIVE_PROBE_LAST_AT", "").strip()
     live_probe_required = _env_bool("JIEJING_CLS_LIVE_PROBE_REQUIRED")
-    ingestion_probe_passed = _env_bool("JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED")
-    ingestion_probe_at = os.environ.get("JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT", "").strip()
+    ingestion_probe_passed = evidence.get("JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED", "").strip().lower() in {"1", "true", "yes", "on"}
+    ingestion_probe_at = evidence.get("JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT", "").strip()
     probe_max_age_hours = _env_positive_float("JIEJING_CLS_PROBE_MAX_AGE_HOURS", CLS_PROBE_MAX_AGE_HOURS)
     evidence_now = now_utc or datetime.now(timezone.utc)
     live_evidence = _timestamp_evidence_status(live_probe_at, probe_max_age_hours, evidence_now)

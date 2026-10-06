@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .permissions import has_permission
-from .repository import SaaSRepository
+from .repository import SaaSRepository, _parse_explicit_timezone_iso_datetime
 from .media_credits import media_credit_pack_terms, media_credit_purchase_enabled, revoke_plan_media_points
 from .operations_metering import sanitize_provider_telemetry
 
@@ -30,19 +30,13 @@ DOMESTIC_PLAN_TERMS: dict[str, dict[str, Any]] = {
         "amount_minor": 9900,
         "currency": "CNY",
         "duration_days": 30,
-        "display_name": "捷境基础版 30 天",
+        "display_name": "捷境有店铺 30 天",
     },
     "operator": {
         "amount_minor": 19900,
         "currency": "CNY",
         "duration_days": 30,
-        "display_name": "捷境运营版 30 天",
-    },
-    "team": {
-        "amount_minor": 29900,
-        "currency": "CNY",
-        "duration_days": 30,
-        "display_name": "捷境团队版 30 天",
+        "display_name": "捷境多店铺 30 天",
     },
 }
 CONTROLLED_WECHAT_PAY_ACCEPTANCE_APPROVAL = "I_APPROVE_ONE_CNY_REAL_WECHAT_PAY_ORDER"
@@ -353,7 +347,7 @@ def _open_domestic_billing_checkout(
             "purchase_type": purchase_type,
             "media_points": media_points,
             "expires_at": order.get("expires_at"),
-            "display_name": str(order_payload.get("display_name") or "捷境基础版 30 天"),
+            "display_name": str(order_payload.get("display_name") or "捷境套餐 30 天"),
             "duplicate_request": True,
             "calls_external_payment_api": False,
             "triggers_real_charge": False,
@@ -398,7 +392,7 @@ def _open_domestic_billing_checkout(
         "purchase_type": purchase_type,
         "media_points": media_points,
         "expires_at": order.get("expires_at"),
-        "display_name": str(order_payload.get("display_name") or "捷境基础版 30 天"),
+        "display_name": str(order_payload.get("display_name") or "捷境套餐 30 天"),
         "duplicate_request": False,
         "calls_external_payment_api": True,
         "triggers_real_charge": False,
@@ -413,7 +407,7 @@ def merchant_domestic_billing_order(order: dict[str, Any], *, include_checkout: 
     payload = order.get("order") if isinstance(order.get("order"), dict) else {}
     status = str(order.get("status") or "").strip()
     checkout_expired = _is_checkout_expired(order.get("expires_at"))
-    display_name = str(order.get("display_name") or payload.get("display_name") or "捷境基础版 30 天").strip()
+    display_name = str(order.get("display_name") or payload.get("display_name") or "捷境套餐 30 天").strip()
     purchase_type = str(order.get("purchase_type") or payload.get("purchase_type") or "subscription").strip().lower()
     safe = {
         "ok": order.get("ok") is True or bool(order.get("order_id")),
@@ -811,6 +805,8 @@ def execute_approved_domestic_billing_refund(
     user_id: str,
     order_id: str,
     provider_refund: Callable[..., dict[str, Any]] | None = None,
+    operator_company_id: str = "",
+    internal_admin_emails: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Execute one full refund only after an account-scoped approval."""
 
@@ -820,9 +816,12 @@ def execute_approved_domestic_billing_refund(
         repository,
         company_id=normalized_company,
         order_id=normalized_order,
+        internal_admin_emails=internal_admin_emails,
     )
     if approval.get("ok") is not True:
         return approval
+    if not _platform_refund_operator_authorized(repository, company_id=operator_company_id, user_id=user_id, internal_admin_emails=internal_admin_emails):
+        return _blocked("domestic_refund_execution_requires_platform_internal_admin", http_status=403)
     order = repository.get_domestic_billing_order(company_id=normalized_company, order_id=normalized_order)
     if not order or order.get("provider") not in DOMESTIC_PAYMENT_PROVIDERS:
         return _blocked("domestic_billing_order_not_found", http_status=404)
@@ -837,12 +836,39 @@ def execute_approved_domestic_billing_refund(
             "triggers_real_refund": False,
             "secret_exposed": False,
         }
+    if order.get("status") == "refund_processing":
+        return {
+            "ok": True,
+            "status": "refund_processing",
+            "order_id": normalized_order,
+            "duplicate_request": True,
+            "provider_query_required": True,
+            "confirmation_id": approval.get("confirmation_id"),
+            "calls_external_payment_api": False,
+            "triggers_real_refund": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        }
     if order.get("status") not in {"refund_review_requested", "refund_processing"}:
         return _blocked("domestic_billing_order_not_refundable", http_status=409)
     order_payload = order.get("order") if isinstance(order.get("order"), dict) else {}
     state = order_payload.get("state") if isinstance(order_payload.get("state"), dict) else {}
     purchase_type, media_points = _domestic_order_purchase(order)
     reason = str(state.get("refund_reason_summary") or ("商家素材点退款" if purchase_type == "media_points" else "商家订阅退款"))
+    try:
+        claim = repository.claim_platform_refund_execution(
+            company_id=normalized_company, order_id=normalized_order, confirmation_id=approval["confirmation_id"],
+            reviewer_company_id=approval["reviewer_company_id"], reviewer_user_id=approval["reviewer_user_id"], reviewed_at=approval["reviewed_at"],
+            operator_company_id=operator_company_id, operator_user_id=user_id, internal_admin_emails=internal_admin_emails,
+        )
+    except PermissionError:
+        return _blocked("domestic_refund_execution_requires_platform_internal_admin", http_status=403)
+    except (KeyError, ValueError, RuntimeError):
+        return _blocked("domestic_refund_review_state_conflict", http_status=409)
+    if not claim.get("claimed"):
+        return {"ok": True, "status": claim["status"], "order_id": normalized_order, "duplicate_request": True,
+                "provider_query_required": claim["status"] == "refund_processing", "confirmation_id": approval["confirmation_id"],
+                "calls_external_payment_api": False, "triggers_real_refund": False, "secret_exposed": False}
     refund_reservation: dict[str, Any] | None = None
     if purchase_type == "media_points":
         try:
@@ -858,37 +884,42 @@ def execute_approved_domestic_billing_refund(
                 details={"unused_points_required": True, "purchase_type": "media_points"},
             )
         except ValueError:
+            repository.release_platform_refund_prewrite_claim(company_id=normalized_company, order_id=normalized_order, claim_id=claim["claim_id"], reason="media_points_refund_requires_unused_balance")
             return {
                 **_blocked("media_points_refund_requires_unused_balance", http_status=409),
                 "blocked_by": ["purchased_media_points_already_used_or_reserved"],
             }
         reservation_entry = refund_reservation.get("ledger_entry") if isinstance(refund_reservation, dict) else {}
         if not isinstance(reservation_entry, dict) or reservation_entry.get("status") != "reserved":
+            repository.release_platform_refund_prewrite_claim(company_id=normalized_company, order_id=normalized_order, claim_id=claim["claim_id"], reason="media_points_refund_reservation_unavailable")
             return _blocked("media_points_refund_reservation_unavailable", http_status=409)
     if provider_refund is None:
         from .billing_wechat_pay import request_wechat_pay_refund_from_env
 
         provider_refund = request_wechat_pay_refund_from_env
-    provider_result = _call_and_meter_payment_provider(
-        repository,
-        company_id=normalized_company,
-        user_id=str(user_id or "") or None,
-        order_id=normalized_order,
-        operation="refund_create",
-        provider_call=provider_refund,
-        call_kwargs={"order": order, "reason": reason},
-        success_validator=lambda packet: packet.get("query_authenticated") is True
-        and isinstance(packet.get("provider_response"), dict),
-    )
-    if not isinstance(provider_result, dict) or provider_result.get("ok") is not True:
-        _release_media_refund_reservation(
+    try:
+        provider_result = _call_and_meter_payment_provider(
             repository,
             company_id=normalized_company,
-            order_id=normalized_order,
             user_id=str(user_id or "") or None,
-            reservation=refund_reservation,
+            order_id=normalized_order,
+            operation="refund_create",
+            provider_call=provider_refund,
+            call_kwargs={"order": order, "reason": reason},
+            success_validator=lambda packet: packet.get("query_authenticated") is True
+            and isinstance(packet.get("provider_response"), dict),
         )
-        return provider_result if isinstance(provider_result, dict) else _blocked("wechat_pay_provider_response_invalid", http_status=502)
+    except Exception:
+        # A crashed/unknown response cannot prove that WeChat rejected the request.
+        # Keep the durable claim and reserved points; only query may reconcile it.
+        provider_result = {**_blocked("wechat_pay_refund_result_uncertain", http_status=502), "calls_external_payment_api": True}
+    if not isinstance(provider_result, dict) or provider_result.get("ok") is not True:
+        proven_prewrite_failure = isinstance(provider_result, dict) and provider_result.get("calls_external_payment_api") is False
+        if proven_prewrite_failure:
+            _release_media_refund_reservation(repository, company_id=normalized_company, order_id=normalized_order, user_id=str(user_id or "") or None, reservation=refund_reservation)
+            repository.release_platform_refund_prewrite_claim(company_id=normalized_company, order_id=normalized_order, claim_id=claim["claim_id"], reason="provider_prewrite_blocked")
+        failure = provider_result if isinstance(provider_result, dict) else _blocked("wechat_pay_provider_response_invalid", http_status=502)
+        return {**failure, "provider_query_required": not proven_prewrite_failure, "refund_execution_status": "refund_review_requested" if proven_prewrite_failure else "refund_processing"}
     provider_response = provider_result.get("provider_response") if isinstance(provider_result.get("provider_response"), dict) else {}
     from .billing_wechat_pay import build_wechat_pay_refund_id, reconcile_wechat_pay_refund_result
 
@@ -926,6 +957,7 @@ def query_and_reconcile_domestic_billing_refund(
     company_id: str,
     order_id: str,
     provider_query: Callable[..., dict[str, Any]] | None = None,
+    internal_admin_emails: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Query one owned refund and reconcile only a signed provider response."""
 
@@ -951,6 +983,7 @@ def query_and_reconcile_domestic_billing_refund(
             repository,
             company_id=normalized_company,
             order_id=normalized_order,
+            internal_admin_emails=internal_admin_emails,
         )
         if approval.get("ok") is not True:
             return approval
@@ -992,6 +1025,7 @@ def _approved_domestic_refund_confirmation(
     *,
     company_id: str,
     order_id: str,
+    internal_admin_emails: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     confirmation_id = _domestic_refund_confirmation_id(order_id)
     confirmation = repository.get_confirmation(company_id=company_id, confirmation_id=confirmation_id)
@@ -1030,7 +1064,55 @@ def _approved_domestic_refund_confirmation(
             "confirmation_id": confirmation_id,
             "confirmation_status": str(confirmation.get("status") or "pending"),
         }
-    return {"ok": True, "confirmation_id": confirmation_id, "confirmation_status": "approved"}
+    review = repository.find_latest_audit_log_by_target(
+        company_id=company_id, store_id=None, action_type="billing.domestic_refund.reviewed",
+        target_type="confirmation", target_id=confirmation_id,
+    ) or {}
+    details = review.get("details") if isinstance(review.get("details"), dict) else {}
+    review_instant = _parse_explicit_timezone_iso_datetime(details.get("decided_at"))
+    confirmation_instant = _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at"))
+    if not (
+        review.get("actor_type") == "platform_internal_admin"
+        and review.get("user_id") == confirmation.get("decided_by")
+        and details.get("decision") == "approve" and details.get("review_reason")
+        and details.get("order_id") == order_id
+        and details.get("amount_minor") == int(order.get("amount_minor") or 0)
+        and details.get("currency") == str(order.get("currency") or "").upper()
+        and review_instant is not None and confirmation_instant is not None
+        and review_instant == confirmation_instant
+        and _platform_refund_operator_authorized(repository, company_id=str(details.get("reviewer_company_id") or ""), user_id=str(review.get("user_id") or ""), internal_admin_emails=internal_admin_emails)
+    ):
+        return _blocked("domestic_refund_platform_review_required", http_status=403)
+    return {"ok": True, "confirmation_id": confirmation_id, "confirmation_status": "approved",
+            "reviewer_company_id": str(details["reviewer_company_id"]), "reviewer_user_id": str(review["user_id"]), "reviewed_at": confirmation_instant.isoformat()}
+
+
+def _platform_refund_operator_authorized(repository: SaaSRepository, *, company_id: str, user_id: str, internal_admin_emails: tuple[str, ...]) -> bool:
+    member = repository.get_team_member(company_id=str(company_id or ""), user_id=str(user_id or "")) or {}
+    return bool(member.get("status") == "active" and member.get("role") in {"owner", "admin"}
+                and str(member.get("email") or "").lower() in internal_admin_emails)
+
+
+def platform_refund_review_packet(repository: SaaSRepository, order: dict[str, Any], *, internal_admin_emails: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Allowlisted operations packet binding the displayed money to the exact order."""
+    company_id, order_id = str(order.get("company_id") or ""), str(order.get("order_id") or "")
+    confirmation_id = _domestic_refund_confirmation_id(order_id)
+    confirmation = repository.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+    payload = order.get("order") if isinstance(order.get("order"), dict) else {}
+    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+    amount, currency = int(order.get("amount_minor") or 0), str(order.get("currency") or "").upper()
+    return {
+        "company_id": company_id, "order_id": order_id, "plan_key": str(order.get("plan_key") or ""),
+        "amount_minor": amount, "currency": currency, "status": str(order.get("status") or ""),
+        "paid_at": str(order.get("paid_at") or ""), "confirmation_id": confirmation_id,
+        "confirmation_status": str(confirmation.get("status") or "missing"),
+        "platform_review_verified": _approved_domestic_refund_confirmation(repository, company_id=company_id, order_id=order_id, internal_admin_emails=internal_admin_emails).get("ok") is True,
+        "refund_reason": str(state.get("refund_reason_summary") or "")[:500],
+        "review_reason": str(confirmation.get("decision_note") or "")[:500],
+        "review_evidence": repository.platform_refund_usage_evidence(company_id=company_id, paid_at=str(order.get("paid_at") or "")),
+        "execution_confirmation": f"refund:{company_id}:{order_id}:{amount}:{currency}:{confirmation_id}",
+        "secret_exposed": False,
+    }
 
 
 def _domestic_refund_confirmation_id(order_id: str) -> str:

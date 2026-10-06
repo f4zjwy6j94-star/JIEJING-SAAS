@@ -7,16 +7,24 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import time
 import zipfile
 from pathlib import Path
 from typing import Iterable
+
+try:
+    from jiejing_release_gate_evidence import load_gate_report, load_release_checks, tracked_index_flags_safe
+except ModuleNotFoundError:
+    from tools.jiejing_release_gate_evidence import load_gate_report, load_release_checks, tracked_index_flags_safe
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "jiejing-public-staging-bundle"
 APPLY_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
 BUNDLE_SCOPE_MARKER = "public_staging_patch_whitelist_v1"
+ATOMIC_FRONTEND_FILES = ("index.html", "app.html", "app.js", "styles.css")
+ATOMIC_OPS_FILES = ("ops.html", "ops.js", "ops.css", "assets/jiejing-logo-mark.svg", "assets/jiejing-app-icon.svg", "assets/jiejing-ops-panels.js")
 
 EXCLUDED_PARTS = {
     ".git",
@@ -48,22 +56,41 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="List files without creating a zip")
     args = parser.parse_args()
 
-    files = list(_iter_bundle_files())
+    source_commit = _clean_source_commit()
+    release_gate_proof = load_gate_report(
+        ROOT / "output" / "jiejing-precloud-deployment-gate" / "latest.json",
+        source_commit, _git_value("rev-parse", f"{source_commit}^{{tree}}"),
+        load_release_checks(ROOT), ROOT,
+    )
+    whitelist = _apply_patch_file_list(source_commit)
+    files = list(_iter_bundle_files(whitelist))
+    worktree_fingerprints = _worktree_fingerprints(files)
     leaks = _secret_leak_candidates(files)
     if leaks:
         raise SystemExit("refusing to bundle possible secret files: " + ", ".join(leaks))
+    committed_files = _committed_bundle_files(source_commit, files)
+    files_sha256 = _bundle_file_hashes(committed_files)
+    frontend_files_sha256 = {name: files_sha256[name] for name in ATOMIC_FRONTEND_FILES}
+    ops_files_sha256 = {name: files_sha256[name] for name in ATOMIC_OPS_FILES}
+    _assert_source_unchanged(source_commit)
+    _assert_worktree_fingerprints_unchanged(files, worktree_fingerprints)
 
     manifest = {
         "product": "Jiejing SaaS",
         "bundle": "public_staging",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source_commit": source_commit,
+        "release_gate_proof": release_gate_proof,
         "file_count": len(files),
         "files": [str(path.relative_to(ROOT)).replace("\\", "/") for path in files],
+        "files_sha256": files_sha256,
         "scope": BUNDLE_SCOPE_MARKER,
         "scope_source": str(APPLY_SCRIPT.relative_to(ROOT)).replace("\\", "/"),
         "full_assets_included": False,
         "secret_files_excluded": sorted(EXCLUDED_FILENAMES),
         "real_platform_writes_enabled": False,
+        "frontend_files_sha256": frontend_files_sha256,
+        "ops_files_sha256": ops_files_sha256,
     }
 
     if args.dry_run:
@@ -75,9 +102,11 @@ def main() -> int:
     zip_path = OUT / f"jiejing-public-staging-{stamp}.zip"
     manifest_path = OUT / f"jiejing-public-staging-{stamp}.manifest.json"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in files:
-            arcname = path.relative_to(ROOT).as_posix()
-            zf.write(path, arcname)
+        for arcname, contents in committed_files.items():
+            zf.writestr(arcname, contents)
+    _verify_bundle_files_in_zip(zip_path, files_sha256)
+    _assert_source_unchanged(source_commit)
+    _assert_worktree_fingerprints_unchanged(files, worktree_fingerprints)
     digest = _sha256(zip_path)
     manifest["zip_sha256"] = digest
     manifest["zip_path"] = zip_path.relative_to(ROOT).as_posix()
@@ -91,9 +120,9 @@ def main() -> int:
     return 0
 
 
-def _iter_bundle_files() -> Iterable[Path]:
+def _iter_bundle_files(whitelist: list[str]) -> Iterable[Path]:
     seen: set[Path] = set()
-    for rel in _apply_patch_file_list():
+    for rel in whitelist:
         path = ROOT / rel
         if path in seen:
             continue
@@ -104,16 +133,28 @@ def _iter_bundle_files() -> Iterable[Path]:
         raise FileNotFoundError(f"apply patch whitelist file missing or excluded from repo: {rel}")
 
 
-def _apply_patch_file_list() -> list[str]:
+def _apply_patch_file_list(source_commit: str) -> list[str]:
     """Use the remote apply whitelist as the bundle source of truth."""
 
-    text = APPLY_SCRIPT.read_text(encoding="utf-8")
+    try:
+        text = _git_blob_bytes(
+            source_commit,
+            APPLY_SCRIPT.relative_to(ROOT).as_posix(),
+        ).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("apply patch whitelist blob is not UTF-8") from exc
+    return _parse_apply_patch_file_list(text)
+
+
+def _parse_apply_patch_file_list(text: str) -> list[str]:
     match = re.search(r"^FILES=\(\n(?P<body>.*?)^\)", text, flags=re.MULTILINE | re.DOTALL)
     if not match:
         raise RuntimeError("unable to parse FILES whitelist from deploy/apply-staging-patch.sh")
     files = re.findall(r'^\s+"([^"\n]+)"\s*$', match.group("body"), flags=re.MULTILINE)
     if not files:
         raise RuntimeError("empty FILES whitelist in deploy/apply-staging-patch.sh")
+    if len(files) != len(set(files)):
+        raise RuntimeError("duplicate FILES whitelist entry in deploy/apply-staging-patch.sh")
     unsafe = [item for item in files if item.startswith("/") or ".." in Path(item).parts]
     if unsafe:
         raise RuntimeError("unsafe apply patch whitelist entries: " + ", ".join(unsafe))
@@ -148,6 +189,106 @@ def _secret_leak_candidates(files: list[Path]) -> list[str]:
         if name in EXCLUDED_FILENAMES:
             candidates.append(rel)
     return candidates
+
+
+def _clean_source_commit() -> str:
+    source_commit = _git_value("rev-parse", "HEAD")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise RuntimeError("source commit must be a full lowercase Git SHA-1")
+    dirty = _git_value("status", "--porcelain", "--untracked-files=all")
+    if dirty:
+        raise RuntimeError("refusing to prepare bundle from dirty git worktree")
+    if not tracked_index_flags_safe(ROOT):
+        raise RuntimeError("bundle_source_hidden_tracking_flags")
+    return source_commit
+
+
+def _git_value(*args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=ROOT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("git source identity unavailable")
+    return completed.stdout.strip()
+
+
+def _assert_source_unchanged(expected_commit: str) -> None:
+    if _git_value("rev-parse", "HEAD") != expected_commit:
+        raise RuntimeError("source commit changed during bundle preparation")
+    if _git_value("status", "--porcelain", "--untracked-files=all"):
+        raise RuntimeError("git worktree changed during bundle preparation")
+    if not tracked_index_flags_safe(ROOT):
+        raise RuntimeError("bundle_source_hidden_tracking_flags")
+
+
+def _worktree_fingerprints(files: list[Path]) -> dict[str, tuple[int, int, int, int, int]]:
+    fingerprints: dict[str, tuple[int, int, int, int, int]] = {}
+    for path in files:
+        stat_result = path.stat()
+        fingerprints[path.relative_to(ROOT).as_posix()] = (
+            stat_result.st_dev,
+            stat_result.st_ino,
+            stat_result.st_size,
+            stat_result.st_mtime_ns,
+            stat_result.st_ctime_ns,
+        )
+    return fingerprints
+
+
+def _assert_worktree_fingerprints_unchanged(
+    files: list[Path],
+    expected: dict[str, tuple[int, int, int, int, int]],
+) -> None:
+    if _worktree_fingerprints(files) != expected:
+        raise RuntimeError("whitelist file changed during bundle preparation")
+
+
+def _committed_bundle_files(source_commit: str, files: list[Path]) -> dict[str, bytes]:
+    committed: dict[str, bytes] = {}
+    for path in files:
+        relative = path.relative_to(ROOT).as_posix()
+        committed[relative] = _git_blob_bytes(source_commit, relative)
+    return committed
+
+
+def _git_blob_bytes(source_commit: str, relative_path: str) -> bytes:
+    completed = subprocess.run(
+        ["git", "show", f"{source_commit}:{relative_path}"],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"whitelist file missing from source commit: {relative_path}")
+    return completed.stdout
+
+
+def _bundle_file_hashes(files: dict[str, bytes]) -> dict[str, str]:
+    missing = [name for name in (*ATOMIC_FRONTEND_FILES, *ATOMIC_OPS_FILES) if name not in files]
+    if missing:
+        raise RuntimeError("atomic frontend or ops files missing from bundle whitelist: " + ", ".join(missing))
+    return {name: hashlib.sha256(contents).hexdigest() for name, contents in files.items()}
+
+
+def _verify_bundle_files_in_zip(zip_path: Path, expected: dict[str, str]) -> None:
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        names = archive.namelist()
+        if len(names) != len(set(names)):
+            raise RuntimeError("bundle contains duplicate zip entries")
+        if set(names) != set(expected):
+            raise RuntimeError("bundle entries do not match the reviewed whitelist")
+        for name, expected_digest in expected.items():
+            observed = hashlib.sha256(archive.read(name)).hexdigest()
+            if observed != expected_digest:
+                raise RuntimeError(f"bundle content mismatch: {name}")
 
 
 def _sha256(path: Path) -> str:

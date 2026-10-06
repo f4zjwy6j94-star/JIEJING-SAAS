@@ -68,10 +68,12 @@ def main() -> int:
         live_media_snapshot=snapshot,
     )
     validation = packet.get("asset_manifest_validation", {})
-    if validation.get("status") != "manifest_ready":
-        raise AssertionError(f"downloaded live artifacts still fail AssetManifest validation: {validation}")
-    if packet.get("safety", {}).get("calls_video_provider") is not True:
-        raise AssertionError("revalidated manifest did not retain the real video asset")
+    if validation.get("status") != "blocked_incomplete_manifest":
+        raise AssertionError(f"server-local artifacts must wait for authenticated HTTPS delivery: {validation}")
+    if packet.get("safety", {}).get("calls_video_provider") is not False:
+        raise AssertionError("a server-local proof must not be presented as a merchant-deliverable video")
+    if image.get("file_signature_valid") is not True or video.get("file_signature_valid") is not True:
+        raise AssertionError("controlled provider proof files are no longer locally valid")
     revalidated = {
         "ok": True,
         "acceptance_product": latest.get("acceptance_product"),
@@ -83,6 +85,8 @@ def main() -> int:
         "video_duration_seconds": duration,
         "asset_manifest_validation": validation,
         "asset_review_status": packet.get("asset_review", {}).get("status"),
+        "merchant_delivery_ready": False,
+        "blocked_by": ["authenticated_https_asset_delivery_required"],
         "calls_image_provider": packet.get("safety", {}).get("calls_image_provider"),
         "calls_video_provider": packet.get("safety", {}).get("calls_video_provider"),
         "triggers_real_platform_write": False,

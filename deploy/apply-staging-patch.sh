@@ -34,6 +34,18 @@ FILES=(
   "deploy/staging-vault-init-unseal.sh"
   "deploy/github-actions/jiejing-runner-doctor.sh"
   "deploy/github-actions/jiejing-cls-probe-auto-refresh.sh"
+  "deploy/jiejing-production-evidence-auto-refresh.sh"
+  "jiejing_saas/runtime_evidence.py"
+  "tools/jiejing_runtime_evidence_snapshot.py"
+  "tools/test_jiejing_runtime_evidence.py"
+  "docs/superpowers/specs/2026-09-08-production-evidence-no-restart-design.md"
+  "docs/superpowers/specs/2026-09-08-personal-model-connection-recovery-design.md"
+  "docs/superpowers/specs/2026-09-09-listing-buyer-copy-rewrite-design.md"
+  "docs/superpowers/specs/2026-09-09-listing-generation-result-recovery-design.md"
+  "docs/superpowers/plans/2026-09-09-listing-generation-result-recovery-plan.md"
+  "docs/superpowers/plans/2026-09-08-production-evidence-no-restart-implementation-plan.md"
+  "deploy/systemd/jiejing-production-evidence-refresh.service"
+  "deploy/systemd/jiejing-production-evidence-refresh.timer"
   "tools/jiejing_cls_public_readiness_contract.py"
   "deploy/github-actions/jiejing-staging-deploy.sh"
   "deploy/github-actions/jiejing-staging-rollback.sh"
@@ -47,6 +59,7 @@ FILES=(
   "deploy/jiejing-saas.postgres-localqueue.env.example"
   "deploy/jiejing-staging-runtime-env-resolution-manifest.example.json"
   "deploy/nginx.public-staging.conf"
+  "deploy/nginx.ops.production.conf"
   "deploy/nginx.production.conf"
   "deploy/nginx-security-headers.production.conf"
   "deploy/vault.production.hcl"
@@ -77,6 +90,8 @@ FILES=(
   "docs/JIEJING_SECURITY_BEST_PRACTICES_AUDIT_20260810.md"
   "docs/JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md"
   "docs/JIEJING_PRODUCTION_DEPLOY_RUNBOOK_20260823.md"
+  "docs/superpowers/specs/2026-08-26-production-evidence-auto-refresh-design.md"
+  "docs/superpowers/plans/2026-08-26-production-evidence-auto-refresh-implementation-plan.md"
   "docs/JIEJING_GITHUB_CI_STATUS_20260617.md"
   "docs/JIEJING_FRONTEND_SPLIT_STATUS_20260617.md"
   "docs/JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md"
@@ -115,10 +130,49 @@ FILES=(
   "assets/jiejing-logo-lockup.svg"
   "assets/jiejing-logo-mark.svg"
   "assets/jiejing-first-party-analytics.js"
+  "assets/jiejing-ops-panels.js"
   "assets/jiejing-settings-panels.js"
+  "assets/jiejing-premium-surfaces.css"
+  "assets/homepage-finish.css"
+  "assets/homepage-finish.js"
+  "assets/jiejing-home-entry.css"
+  "assets/homepage-media-data.js"
+  "assets/jiejing-workbench-finish.css"
+  "assets/workbench-demo/index.html"
+  "assets/workbench-demo/workbench.css"
+  "assets/workbench-demo/workbench.js"
+  "assets/workbench-demo/media-data.js"
+  "assets/workbench-demo/workbench-state.js"
+  "assets/jiejing-sans-20260928.woff2"
+  "assets/jiejing-serif-20260928.woff2"
+  "assets/noto-sans-sc-OFL.txt"
+  "assets/noto-serif-sc-OFL.txt"
+  "assets/travel-compression-source.webp"
+  "assets/packing-collection-v6-360.webp"
+  "assets/packing-collection-v6-720.webp"
+  "assets/packing-collection-v6-1080.webp"
+  "assets/packing-collection-v6-1448.webp"
+  "assets/packing-suitcase-v6-360.webp"
+  "assets/packing-suitcase-v6-720.webp"
+  "assets/packing-suitcase-v6-1080.webp"
+  "assets/packing-suitcase-v6-1448.webp"
+  "assets/packing-packing-v6-360.webp"
+  "assets/packing-packing-v6-720.webp"
+  "assets/packing-packing-v6-1080.webp"
+  "assets/packing-packing-v6-1448.webp"
+  "assets/packing-detail-v6-360.webp"
+  "assets/packing-detail-v6-720.webp"
+  "assets/packing-detail-v6-1080.webp"
+  "assets/packing-detail-v6-1448.webp"
+  "assets/travel-compression-main-v2.webp"
+  "assets/travel-compression-scene-v2.webp"
+  "assets/travel-compression-feature-v2.webp"
+  "assets/travel-compression-detail-v2.webp"
+  "assets/travel-compression-video-cover.webp"
   "jiejing_saas/__init__.py"
   "jiejing_saas/account_health.py"
   "jiejing_saas/merchant_onboarding.py"
+  "jiejing_saas/merchant_project_status.py"
   "jiejing_saas/backup_plan.py"
   "jiejing_saas/cos_backup_probe.py"
   "jiejing_saas/billing_checkout.py"
@@ -135,6 +189,15 @@ FILES=(
   "jiejing_saas/billing_wechat_pay.py"
   "jiejing_saas/billing_wechat_pay_rehearsal.py"
   "jiejing_saas/ai_ceo_chat.py"
+  "jiejing_saas/ai_ceo_project_binding.py"
+  "jiejing_saas/ai_ceo_semantic_plan.py"
+  "jiejing_saas/market_quote_evidence.py"
+  "jiejing_saas/timely_evidence.py"
+  "jiejing_saas/listing_draft_generation.py"
+  "jiejing_saas/listing_generation_operations.py"
+  "jiejing_saas/listing_generation_legacy_recovery.py"
+  "jiejing_saas/listing_draft_checkpoint.py"
+  "jiejing_saas/sensitive_text.py"
   "jiejing_saas/commercial_launch_gate.py"
   "jiejing_saas/controlled_bridges.py"
   "jiejing_saas/domain_readiness.py"
@@ -152,6 +215,7 @@ FILES=(
   "jiejing_saas/queue_adapter.py"
   "jiejing_saas/queue_plan.py"
   "jiejing_saas/repository.py"
+  "jiejing_saas/publish_source_rights.py"
   "jiejing_saas/product_feedback.py"
   "jiejing_saas/infrastructure_drivers.py"
   "jiejing_saas/operational_health.py"
@@ -169,7 +233,9 @@ FILES=(
   "jiejing_saas/post_publish_cockpit.py"
   "jiejing_saas/media_asset_pipeline.py"
   "jiejing_saas/media_credits.py"
+  "jiejing_saas/media_credit_activity.py"
   "jiejing_saas/media_source_assets.py"
+  "jiejing_saas/product_vision.py"
   "jiejing_saas/provider_job_runner.py"
   "jiejing_saas/public_search_handoff.py"
   "jiejing_saas/provider_workflow_plan.py"
@@ -206,6 +272,10 @@ FILES=(
   "jiejing_saas/ebay_write_adapter.py"
   "jiejing_saas/workflow_plan.py"
   "jiejing_saas/migrations/001_initial_schema_postgres.sql"
+  "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql"
+  "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql"
+  "jiejing_saas/migrations/004_platform_model_trial_reservations_postgres.sql"
+  "jiejing_saas/migrations/005_listing_draft_edit_checkpoints_postgres.sql"
   "jiejing_runtime/execution.py"
   "jiejing_runtime/execution_preflight.py"
   "jiejing_runtime/__init__.py"
@@ -257,8 +327,11 @@ FILES=(
   "jiejing_runtime/tools_registry.py"
   "jiejing_runtime/workflow_templates.py"
   "tools/jiejing_saas_backend_cli.py"
+  "tools/jiejing_media_controlled_acceptance.py"
+  "tools/jiejing_owner_media_testing.py"
   "tools/jiejing_production_deploy.py"
   "tools/test_jiejing_production_deploy_channel.py"
+  "tools/test_jiejing_production_ops_consolidation.py"
   "tools/jiejing_sqlite_to_postgres_rehearsal.py"
   "tools/jiejing_cost_saver_snapshot.py"
   "tools/jiejing_infra_cutover_rehearsal.py"
@@ -279,6 +352,9 @@ FILES=(
   "tools/jiejing_deploy_frontend_staging_with_key.ps1"
   "tools/jiejing_prepare_stable_deploy_key.ps1"
   "tools/jiejing_prepare_public_staging_bundle.py"
+  "tools/jiejing_release_gate_evidence.py"
+  "tools/test_jiejing_release_gate_evidence.py"
+  "tools/test_jiejing_workflow_entry_feedback.js"
   "tools/jiejing_staging_deploy.py"
   "tools/jiejing_current_state_guard.py"
   "tools/jiejing_external_launch_blocker_gate.py"
@@ -296,6 +372,7 @@ FILES=(
   "tools/test_jiejing_github_actions_deploy_guardrails.py"
   "tools/test_jiejing_github_runner_doctor_guardrails.py"
   "tools/test_jiejing_cls_probe_auto_refresh_guardrails.py"
+  "tools/test_jiejing_production_evidence_auto_refresh_guardrails.py"
   "tools/jiejing_precloud_deployment_gate.py"
   "tools/test_jiejing_current_state_guard.py"
   "tools/test_jiejing_external_launch_blocker_gate.py"
@@ -309,6 +386,63 @@ FILES=(
   "tools/test_jiejing_frontend_staging_config.py"
   "tools/test_jiejing_media_nav_and_state_restore.py"
   "tools/test_jiejing_saas_clean_settings_and_listing_ui.py"
+  "tools/test_jiejing_ai_ceo_open_domain_turn_plan.py"
+  "tools/test_jiejing_ai_ceo_market_quote_boundary.py"
+  "tools/test_jiejing_market_quote_evidence.py"
+  "tools/test_jiejing_public_search_temporal_metadata.py"
+  "tools/test_jiejing_ai_ceo_timely_evidence.py"
+  "tools/test_jiejing_listing_wizard_frontend.js"
+  "tools/codex_jiejing_listing_wizard_browser_smoke.js"
+  "tools/test_jiejing_ai_ceo_product_image_intake.py"
+  "tools/test_jiejing_listing_draft_generation.py"
+  "tools/test_jiejing_listing_buyer_copy_rewrite.py"
+  "tools/test_jiejing_listing_buyer_copy_rewrite_api.py"
+  "tools/test_jiejing_listing_generation_operations.py"
+  "tools/test_jiejing_listing_generation_legacy_recovery.py"
+  "tools/test_jiejing_listing_draft_buyer_copy_quality.py"
+  "tools/test_jiejing_listing_grounding_security.py"
+  "tools/test_jiejing_listing_draft_generation_api.py"
+  "tools/test_jiejing_listing_draft_checkpoint_api.py"
+  "tools/test_jiejing_product_fact_auth_http.py"
+  "tools/test_jiejing_listing_platform_trial_quota.py"
+  "tools/test_jiejing_listing_platform_trial_concurrency.py"
+  "tools/test_jiejing_platform_trial_reservation_lifecycle.py"
+  "tools/test_jiejing_platform_trial_window.py"
+  "tools/test_jiejing_model_connection_save_contract.py"
+  "tools/test_jiejing_postgres_schema_contract.py"
+  "tools/codex_jiejing_listing_ai_generation_browser_smoke.js"
+  "tools/codex_jiejing_homepage_maturity_browser_smoke.js"
+  "tools/test_jiejing_listing_backend_restore.js"
+  "tools/test_jiejing_listing_cloud_checkpoint_frontend.js"
+  "tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js"
+  "tools/test_jiejing_listing_buyer_copy_rewrite_frontend.js"
+  "tools/test_jiejing_listing_session_expiry_recovery.js"
+  "tools/test_jiejing_auth_reveal_boundary.js"
+  "tools/test_jiejing_workbench_boot_recovery.js"
+  "docs/superpowers/specs/2026-09-10-listing-expired-session-resume-design.md"
+  "tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js"
+  "tools/test_jiejing_recent_product_tasks.js"
+  "tools/test_jiejing_listing_product_fact_confirmation_ui.js"
+  "tools/test_jiejing_listing_publish_prefill_truth.js"
+  "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"
+  "tools/test_jiejing_supplier_intake_rehearsal.py"
+  "tools/test_jiejing_phase2_response_boundary_hardening.py"
+  "tools/test_jiejing_ai_ceo_routing_supplier_http_red.py"
+  "tools/test_jiejing_ai_ceo_project_trace.py"
+  "tools/ai_ceo_semantic_test_fixture.py"
+  "tools/test_jiejing_ai_ceo_semantic_dispatch.py"
+  "tools/test_jiejing_ai_ceo_semantic_chat.py"
+  "tools/test_jiejing_ai_ceo_semantic_http.py"
+  "tools/test_jiejing_ai_ceo_semantic_dispatch_frontend.js"
+  "tools/test_jiejing_ai_ceo_bound_product_navigation.js"
+  "tools/test_jiejing_ai_ceo_command_text_fidelity.js"
+  "tools/test_jiejing_media_review_session_preflight.js"
+  "tools/test_jiejing_ai_ceo_simulation_request.py"
+  "tools/test_jiejing_ai_ceo_simulation_request_http.py"
+  "tools/test_jiejing_current_project_archive_ui.py"
+  "tools/test_jiejing_ai_ceo_phase0_red_contracts.py"
+  "tools/test_jiejing_ai_ceo_private_empty_answer.py"
+  "tools/test_jiejing_ai_ceo_product_search_evidence.py"
   "tools/test_jiejing_product_feedback_closure.py"
   "tools/test_jiejing_platform_operations_overview.py"
   "tools/test_jiejing_public_staging_proxy_contract.py"
@@ -349,6 +483,11 @@ FILES=(
   "tools/test_jiejing_tencent_cloud_integrations.py"
   "tools/test_jiejing_managed_infra_readiness_cutover.py"
   "tools/test_jiejing_saas_backend_mvp.py"
+  "tools/test_jiejing_manual_source_new_project_reset.py"
+  "tools/test_jiejing_publish_claim_prewrite_abort.py"
+  "tools/test_jiejing_publish_evidence_preflight.py"
+  "tools/test_jiejing_publish_intake_evidence_refs.py"
+  "tools/test_jiejing_publish_source_rights_evidence.py"
   "tools/test_jiejing_ebay_write_adapter.py"
   "tools/test_jiejing_publish_cleanup_plan.py"
   "tools/test_jiejing_post_publish_cockpit.py"
@@ -364,11 +503,13 @@ FILES=(
   "tools/jiejing_edge_cutover_preflight.py"
   "tools/test_jiejing_staging_patch_apply_contract.py"
   "tools/test_jiejing_saas_ai_ceo_chat_model_boundary.py"
+  "tools/test_jiejing_saas_ai_ceo_latest_reply_ui.py"
   "tools/test_jiejing_saas_ai_ceo_platform_model_fallback.py"
   "tools/test_jiejing_operational_health_readiness.py"
   "tools/test_jiejing_stripe_checkout_portal.py"
   "tools/test_jiejing_queue_recovery_heartbeat.py"
   "tools/test_jiejing_account_health_incident_mode.py"
+  "tools/test_jiejing_account_health_preflight.py"
   "tools/test_jiejing_frontend_settings_module_split.py"
   "tools/test_jiejing_media_asset_pipeline.py"
   "tools/test_jiejing_media_asset_jobs.py"
@@ -390,9 +531,30 @@ FILES=(
   "tools/test_jiejing_expensive_api_rate_limit.py"
   "tools/test_jiejing_platform_trial_activation_guard.py"
   "tools/test_jiejing_registration_challenge_ui.py"
+  "tools/test_jiejing_homepage_auth_boundary.js"
+  "tools/test_jiejing_homepage_session_refresh.js"
+  "tools/test_jiejing_public_design_release.py"
+  "tools/test_jiejing_workbench_finish.py"
+  "tools/codex_jiejing_workbench_finish_browser_smoke.js"
   "tools/test_jiejing_ai_ceo_scroll_retention.py"
   "tools/test_jiejing_ai_ceo_history_pagination.py"
+  "tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js"
   "tools/test_jiejing_billing_quota_guardrail.py"
+  "tools/test_jiejing_team_seat_quota.py"
+  "tools/test_jiejing_refund_operator_authorization.py"
+  "tools/test_jiejing_domestic_billing_refund.py"
+  "tools/test_jiejing_domestic_billing_refund_browser.py"
+  "tools/test_jiejing_domestic_billing_api.py"
+  "tools/test_jiejing_domestic_billing_merchant_ui.py"
+  "tools/test_jiejing_listing_media_writeback_persistence.js"
+  "tools/test_jiejing_domestic_billing_production_completion.py"
+  "tools/test_jiejing_domestic_billing_operations.py"
+  "tools/test_jiejing_media_credit_purchase.py"
+  "tools/test_jiejing_merchant_media_usage.py"
+  "docs/superpowers/specs/2026-09-25-merchant-media-usage-design.md"
+  "docs/superpowers/plans/2026-09-25-merchant-media-usage.md"
+  "docs/superpowers/specs/2026-09-25-cls-probe-readback-design.md"
+  "tools/test_jiejing_wechat_pay_refund_provider.py"
   "tools/test_jiejing_session_revocation.py"
   "tools/test_jiejing_rotating_browser_sessions.py"
   "tools/test_jiejing_rotating_browser_session_http.py"
@@ -416,6 +578,8 @@ FILES=(
 )
 
 PUBLIC_ASSET_RETIREMENTS=(
+  "jiejing_saas/private_answer_capture.py"
+  "tools/test_jiejing_ai_ceo_private_answer_capture.py"
   "assets/demo-cable-organizer.svg"
   "assets/demo-candle-set.svg"
   "assets/demo-jewelry-case.svg"
@@ -534,8 +698,12 @@ done
 python3 -m py_compile \
   jiejing_saas/*.py \
   jiejing_runtime/runtime.py \
+  jiejing_runtime/public_search.py \
   tools/jiejing_saas_backend_cli.py \
+  tools/jiejing_media_controlled_acceptance.py \
+  tools/jiejing_owner_media_testing.py \
   jiejing_saas/database_adapter.py \
+  jiejing_saas/listing_draft_checkpoint.py \
   jiejing_saas/account_health.py \
   jiejing_saas/merchant_onboarding.py \
   jiejing_saas/backup_plan.py \
@@ -553,6 +721,10 @@ python3 -m py_compile \
   jiejing_saas/billing_webhook.py \
   jiejing_saas/billing_wechat_pay.py \
   jiejing_saas/ai_ceo_chat.py \
+  jiejing_saas/ai_ceo_project_binding.py \
+  jiejing_saas/ai_ceo_semantic_plan.py \
+  jiejing_saas/market_quote_evidence.py \
+  jiejing_saas/timely_evidence.py \
   jiejing_saas/commercial_launch_gate.py \
   jiejing_saas/controlled_bridges.py \
   jiejing_saas/domain_readiness.py \
@@ -579,7 +751,10 @@ python3 -m py_compile \
   jiejing_saas/post_publish_cockpit.py \
   jiejing_saas/media_asset_pipeline.py \
   jiejing_saas/media_credits.py \
+  jiejing_saas/media_credit_activity.py \
   jiejing_saas/media_source_assets.py \
+  jiejing_saas/product_vision.py \
+  jiejing_saas/sensitive_text.py \
   jiejing_saas/provider_job_runner.py \
   jiejing_saas/public_search_handoff.py \
   jiejing_saas/provider_workflow_plan.py \
@@ -638,6 +813,8 @@ python3 -m py_compile \
   tools/jiejing_infrastructure_stage_gate.py \
   tools/jiejing_deploy_channel_doctor.py \
   tools/jiejing_prepare_public_staging_bundle.py \
+  tools/jiejing_release_gate_evidence.py \
+  tools/test_jiejing_release_gate_evidence.py \
   tools/jiejing_staging_deploy.py \
   tools/jiejing_current_state_guard.py \
   tools/jiejing_external_launch_blocker_gate.py \
@@ -667,6 +844,29 @@ python3 -m py_compile \
   tools/test_jiejing_frontend_staging_config.py \
   tools/test_jiejing_media_nav_and_state_restore.py \
   tools/test_jiejing_saas_clean_settings_and_listing_ui.py \
+  tools/test_jiejing_ai_ceo_open_domain_turn_plan.py \
+  tools/test_jiejing_listing_draft_generation.py \
+  tools/test_jiejing_listing_buyer_copy_rewrite.py \
+  tools/test_jiejing_listing_buyer_copy_rewrite_api.py \
+  tools/test_jiejing_listing_generation_operations.py \
+  tools/test_jiejing_listing_generation_legacy_recovery.py \
+  tools/test_jiejing_listing_draft_buyer_copy_quality.py \
+  tools/test_jiejing_listing_grounding_security.py \
+  tools/test_jiejing_listing_draft_generation_api.py \
+  tools/test_jiejing_listing_draft_checkpoint_api.py \
+  tools/test_jiejing_product_fact_auth_http.py \
+  tools/test_jiejing_listing_platform_trial_quota.py \
+  tools/test_jiejing_listing_platform_trial_concurrency.py \
+  tools/test_jiejing_platform_trial_reservation_lifecycle.py \
+  tools/test_jiejing_platform_trial_window.py \
+  tools/test_jiejing_postgres_schema_contract.py \
+  tools/test_jiejing_ai_ceo_listing_fact_boundary.py \
+  tools/test_jiejing_supplier_intake_rehearsal.py \
+  tools/test_jiejing_phase2_response_boundary_hardening.py \
+  tools/test_jiejing_ai_ceo_routing_supplier_http_red.py \
+  tools/test_jiejing_ai_ceo_phase0_red_contracts.py \
+  tools/test_jiejing_ai_ceo_private_empty_answer.py \
+  tools/test_jiejing_ai_ceo_product_search_evidence.py \
   tools/test_jiejing_product_feedback_closure.py \
   tools/test_jiejing_platform_operations_overview.py \
   tools/test_jiejing_public_staging_proxy_contract.py \
@@ -716,6 +916,12 @@ python3 -m py_compile \
   tools/jiejing_edge_cutover_preflight.py \
   tools/test_jiejing_staging_patch_apply_contract.py \
   tools/test_jiejing_saas_ai_ceo_chat_model_boundary.py \
+  tools/ai_ceo_semantic_test_fixture.py \
+  tools/test_jiejing_ai_ceo_semantic_dispatch.py \
+  tools/test_jiejing_ai_ceo_semantic_chat.py \
+  tools/test_jiejing_ai_ceo_semantic_http.py \
+  tools/test_jiejing_ai_ceo_simulation_request.py \
+  tools/test_jiejing_ai_ceo_simulation_request_http.py \
   tools/test_jiejing_saas_ai_ceo_platform_model_fallback.py \
   tools/test_jiejing_operational_health_readiness.py \
   tools/test_jiejing_stripe_checkout_portal.py \
@@ -742,9 +948,22 @@ python3 -m py_compile \
   tools/test_jiejing_expensive_api_rate_limit.py \
   tools/test_jiejing_platform_trial_activation_guard.py \
   tools/test_jiejing_registration_challenge_ui.py \
+  tools/test_jiejing_public_design_release.py \
+  tools/test_jiejing_workbench_finish.py \
   tools/test_jiejing_ai_ceo_scroll_retention.py \
   tools/test_jiejing_ai_ceo_history_pagination.py \
   tools/test_jiejing_billing_quota_guardrail.py \
+  tools/test_jiejing_team_seat_quota.py \
+  tools/test_jiejing_refund_operator_authorization.py \
+  tools/test_jiejing_domestic_billing_refund.py \
+  tools/test_jiejing_domestic_billing_refund_browser.py \
+  tools/test_jiejing_domestic_billing_api.py \
+  tools/test_jiejing_domestic_billing_merchant_ui.py \
+  tools/test_jiejing_domestic_billing_production_completion.py \
+  tools/test_jiejing_domestic_billing_operations.py \
+  tools/test_jiejing_media_credit_purchase.py \
+  tools/test_jiejing_merchant_media_usage.py \
+  tools/test_jiejing_wechat_pay_refund_provider.py \
   tools/test_jiejing_session_revocation.py \
   tools/test_jiejing_rotating_browser_sessions.py \
   tools/test_jiejing_rotating_browser_session_http.py \
@@ -763,13 +982,39 @@ python3 -m py_compile \
   tools/test_jiejing_version_bound_release_evidence.py
 
 bash -n deploy/github-actions/jiejing-cls-probe-auto-refresh.sh
+bash -n deploy/jiejing-production-evidence-auto-refresh.sh
 
 NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check app.js
 "$NODE_BIN" --check ops.js
+"$NODE_BIN" --check assets/homepage-finish.js
+"$NODE_BIN" --check assets/homepage-media-data.js
+"$NODE_BIN" --check assets/workbench-demo/workbench.js
+"$NODE_BIN" --check assets/workbench-demo/media-data.js
+"$NODE_BIN" --check assets/workbench-demo/workbench-state.js
 "$NODE_BIN" --check tools/codex_jiejing_operations_console_smoke.js
+"$NODE_BIN" --check tools/test_jiejing_listing_media_writeback_persistence.js
 "$NODE_BIN" --check tools/codex_jiejing_product_feedback_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_rotating_browser_session_smoke.js
+"$NODE_BIN" --check tools/codex_jiejing_listing_ai_generation_browser_smoke.js
+"$NODE_BIN" --check tools/codex_jiejing_homepage_maturity_browser_smoke.js
+"$NODE_BIN" --check tools/codex_jiejing_workbench_finish_browser_smoke.js
+"$NODE_BIN" --check tools/test_jiejing_listing_backend_restore.js
+"$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_frontend.js
+"$NODE_BIN" --check tools/test_jiejing_listing_cloud_checkpoint_http_smoke.js
+"$NODE_BIN" --check tools/test_jiejing_listing_buyer_copy_rewrite_frontend.js
+"$NODE_BIN" --check tools/test_jiejing_listing_session_expiry_recovery.js
+"$NODE_BIN" --check tools/test_jiejing_auth_reveal_boundary.js
+"$NODE_BIN" --check tools/test_jiejing_workbench_boot_recovery.js
+"$NODE_BIN" --check tools/test_jiejing_listing_buyer_copy_rewrite_http_smoke.js
+"$NODE_BIN" --check tools/test_jiejing_recent_product_tasks.js
+"$NODE_BIN" --check tools/test_jiejing_ai_ceo_bound_product_navigation.js
+"$NODE_BIN" --check tools/test_jiejing_ai_ceo_command_text_fidelity.js
+"$NODE_BIN" --check tools/test_jiejing_media_review_session_preflight.js
+"$NODE_BIN" --check tools/codex_jiejing_ai_ceo_history_pagination_browser_smoke.js
+"$NODE_BIN" --check tools/test_jiejing_workflow_entry_feedback.js
+"$NODE_BIN" --check tools/test_jiejing_listing_product_fact_confirmation_ui.js
+"$NODE_BIN" --check tools/test_jiejing_listing_publish_prefill_truth.js
 
 COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"
 if [[ ! -f "$COMPOSE_FILE" ]]; then

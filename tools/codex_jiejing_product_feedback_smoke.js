@@ -15,26 +15,55 @@ const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const outDir = path.join(os.tmpdir(), "jiejing-product-feedback-smoke", stamp);
 fs.mkdirSync(outDir, { recursive: true });
 
+function safeDiagnosticUrl(raw) {
+  try {
+    const url = new URL(raw);
+    if (!/^https?:$/.test(url.protocol)) throw new Error("non-http diagnostic URL");
+    const origin_kind = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ? "local" : "external";
+    let pathname = "/:redacted";
+    if (/^\/(app\.html|index\.html|app\.js|styles\.css|favicon\.ico|product-feedback|me|health|stores|connections|tasks|reports|confirmations|permissions\/me|readiness\/product-saas)$/.test(url.pathname)) {
+      pathname = url.pathname;
+    } else if (/^\/stores\/[^/]+\/listing-drafts\/[^/]+\/checkpoint$/.test(url.pathname)) {
+      pathname = "/stores/:id/listing-drafts/:id/checkpoint";
+    } else {
+      const scoped = url.pathname.match(/^\/stores\/[^/]+\/(media-asset-jobs|ip-risk-screening|product-facts|listing-drafts|merchant-memory)(\/[^/]+)?$/);
+      const record = url.pathname.match(/^\/(reports|tasks|connections|confirmations)\/[^/]+$/);
+      const asset = url.pathname.match(/^\/assets\/.+\.(js|css|svg|png|webp|jpg|jpeg|ico|woff2?)$/i);
+      if (scoped) pathname = `/stores/:id/${scoped[1]}${scoped[2] ? "/:id" : ""}`;
+      else if (record) pathname = `/${record[1]}/:id`;
+      else if (asset) pathname = `/assets/:asset.${asset[1].toLowerCase()}`;
+    }
+    return { origin_kind, pathname };
+  } catch (_error) {
+    return { origin_kind: "unknown", pathname: "/:redacted" };
+  }
+}
+
+function appendBoundedDiagnostic(entries, entry) {
+  if (entries.length === 20) entries.shift();
+  entries.push(entry); // Keep the latest 20, including failures after expected errors.
+}
+
 const accountA = {
   companyId: "company-feedback-smoke-a",
   userId: "user-feedback-smoke-a",
   storeId: "store-feedback-smoke-a",
-  stores: [{ store_id: "store-feedback-smoke-a", platform: "ebay", store_name: "Feedback Smoke Store A", marketplace: "EBAY_US" }],
+  stores: [{ store_id: "store-feedback-smoke-a", company_id: "company-feedback-smoke-a", platform: "ebay", store_name: "Feedback Smoke Store A", marketplace: "EBAY_US" }],
 };
 const accountB = {
   companyId: "company-feedback-smoke-b",
   userId: "user-feedback-smoke-b",
   storeId: "store-feedback-smoke-b1",
   stores: [
-    { store_id: "store-feedback-smoke-b1", platform: "ebay", store_name: "Feedback Smoke Store B1", marketplace: "EBAY_US" },
-    { store_id: "store-feedback-smoke-b2", platform: "ebay", store_name: "Feedback Smoke Store B2", marketplace: "EBAY_UK" },
+    { store_id: "store-feedback-smoke-b1", company_id: "company-feedback-smoke-b", platform: "ebay", store_name: "Feedback Smoke Store B1", marketplace: "EBAY_US" },
+    { store_id: "store-feedback-smoke-b2", company_id: "company-feedback-smoke-b", platform: "ebay", store_name: "Feedback Smoke Store B2", marketplace: "EBAY_UK" },
   ],
 };
 const accountC = {
   companyId: "company-feedback-smoke-c",
   userId: "user-feedback-smoke-c",
   storeId: "store-feedback-smoke-c",
-  stores: [{ store_id: "store-feedback-smoke-c", platform: "ebay", store_name: "Feedback Smoke Store C", marketplace: "EBAY_US" }],
+  stores: [{ store_id: "store-feedback-smoke-c", company_id: "company-feedback-smoke-c", platform: "ebay", store_name: "Feedback Smoke Store C", marketplace: "EBAY_US" }],
 };
 const fixture = {
   mode: "success",
@@ -259,9 +288,29 @@ async function main() {
   const page = await context.newPage();
   const pageErrors = [];
   const consoleErrors = [];
+  const diagnosticStartedAt = performance.now();
+  const diagnostics = { requestFailures: [], consoleLocations: [] };
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("requestfailed", (request) => {
+    const resourceType = request.resourceType();
+    appendBoundedDiagnostic(diagnostics.requestFailures, {
+      time_ms: Math.round(performance.now() - diagnosticStartedAt),
+      method: /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/.test(request.method()) ? request.method() : "other",
+      resource_type: /^(document|stylesheet|image|media|font|script|texttrack|xhr|fetch|eventsource|websocket|manifest|other)$/.test(resourceType) ? resourceType : "other",
+      ...safeDiagnosticUrl(request.url()),
+      error_code: (request.failure()?.errorText || "").match(/\bnet::ERR_[A-Z0-9_]{1,60}\b/)?.[0] || "other",
+    });
+  });
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    const location = message.location();
+    appendBoundedDiagnostic(diagnostics.consoleLocations, {
+      time_ms: Math.round(performance.now() - diagnosticStartedAt),
+      ...safeDiagnosticUrl(location.url), line: location.lineNumber, column: location.columnNumber,
+    });
   });
   await page.addInitScript(
     ({ apiBase, userId, storeId }) => {
@@ -304,19 +353,28 @@ async function main() {
       throw new Error(`online success did not persist one server receipt: ${JSON.stringify(receipts)}`);
     }
 
+    const feedbackStorageBeforePending = await page.evaluate(() => ({
+      outbox: localStorage.getItem("jiejing_saas_product_feedback_outbox_v1"),
+      receipts: localStorage.getItem("jiejing_saas_product_feedback_receipts_v1"),
+    }));
     fixture.meMode = "hang";
     fixture.feedbackRequests = [];
-    await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-    await waitForWorkbench(page);
-    await page.click("#workflowFeedbackToggle");
-    await page.click('[data-workflow-feedback-reason="unclear"]');
-    await page.fill("#workflowFeedbackText", "Cached identity must not establish a feedback scope.");
-    if (!(await page.locator("[data-workflow-feedback-submit]").isDisabled())) {
-      throw new Error("cached /me snapshot enabled product-feedback submit");
-    }
+    await Promise.all([
+      page.waitForRequest((request) => request.method() === "GET" && new URL(request.url()).pathname === "/me", { timeout: 30000 }),
+      page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }),
+    ]);
+    await page.waitForFunction(() => document.documentElement.classList.contains("app-auth-pending")
+      && document.querySelector("#appShell")?.classList.contains("is-hidden")
+      && document.querySelector("#workflowFeedbackShell")?.hidden, null, { timeout: 8000 });
+    await page.waitForTimeout(250);
     if (fixture.feedbackRequests.length !== 0) throw new Error("cached /me snapshot allowed product feedback to send");
-    if ((await currentOutboxItems(page)).some((item) => item.payload.detail.includes("Cached identity"))) {
-      throw new Error("cached /me snapshot allowed product feedback to read or write the scoped outbox");
+    const feedbackStorageWhilePending = await page.evaluate(() => ({
+      outbox: localStorage.getItem("jiejing_saas_product_feedback_outbox_v1"),
+      receipts: localStorage.getItem("jiejing_saas_product_feedback_receipts_v1"),
+    }));
+    if (feedbackStorageWhilePending.outbox !== feedbackStorageBeforePending.outbox
+      || feedbackStorageWhilePending.receipts !== feedbackStorageBeforePending.receipts) {
+      throw new Error("unverified reload changed the retained product-feedback outbox or receipts");
     }
     for (const response of fixture.hangingResponses.splice(0)) response.destroy();
     fixture.meMode = "success";
@@ -369,24 +427,35 @@ async function main() {
     fixture.mode = "unauthorized";
     fixture.feedbackRequests = [];
     await submitFeedback(page, "Keep this feedback local until identity is loaded again.");
-    await waitForFeedbackState(page, "wait_for_live_identity");
+    await page.waitForURL(
+      (url) => url.pathname.endsWith("/index.html") && url.searchParams.get("reason") === "session_expired",
+      { timeout: 8000 },
+    );
     queued = await currentOutboxItems(page);
-    const unauthorizedKey = queued.find((item) => item.payload.detail.includes("identity"))?.idempotency_key;
+    const unauthorizedItem = queued.find((item) => item.payload.detail.includes("identity"));
+    const unauthorizedKey = unauthorizedItem?.idempotency_key;
     if (!unauthorizedKey) throw new Error("401 did not retain the feedback in the authenticated scope");
+    if (unauthorizedItem.delivery_state !== "wait_for_live_identity" || unauthorizedItem.last_error_class !== "unauthorized") {
+      throw new Error(`401 did not persist the live-identity retry boundary: ${JSON.stringify(unauthorizedItem)}`);
+    }
     fixture.mode = "success";
     const unauthorizedRequestCount = fixture.feedbackRequests.length;
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
-    await page.click("[data-workflow-feedback-retry]");
     await page.waitForTimeout(350);
     if (fixture.feedbackRequests.length !== unauthorizedRequestCount) {
-      throw new Error("online/manual retry bypassed the new-live-identity requirement after 401");
+      throw new Error("login page online event bypassed the new-live-identity requirement after 401");
     }
-    await page.evaluate(() => window.JIEJING_TEST_HOOKS.refreshSaasState({ silent: true }));
-    await page.waitForFunction(() => {
+    await page.goto(`${base}/app.html?start=app&onboarded=1&view=cockpit&qa=public-saas`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await waitForWorkbench(page);
+    await page.waitForFunction((key) => {
       const raw = JSON.parse(localStorage.getItem("jiejing_saas_product_feedback_outbox_v1") || "{}");
-      return Object.values(raw).every((items) => !Array.isArray(items) || !items.some((item) => item.idempotency_key));
-    }, null, { timeout: 15000 });
+      return Object.values(raw).every((items) => !Array.isArray(items) || !items.some((item) => item.idempotency_key === key));
+    }, unauthorizedKey, { timeout: 15000 });
     if (fixture.feedbackRequests.at(-1)?.idempotency_key !== unauthorizedKey) throw new Error("identity reload did not retry the 401 item with the same key");
+    if (fixture.feedbackRequests.length !== unauthorizedRequestCount + 1) throw new Error("identity reload retried the 401 item more than once");
 
     for (const [mode, detail] of [
       ["rate_limited", "Rate limited feedback should remain local."],
@@ -751,6 +820,8 @@ async function main() {
 
     await page.screenshot({ path: path.join(outDir, "desktop-product-feedback.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => setView("connect"));
+    await page.waitForSelector("#view-connect.is-active #workflowFeedbackToggle, #view-connect.is-active", { timeout: 10000 });
     await page.click("#workflowFeedbackToggle");
     const mobileActionBox = await page.locator("[data-workflow-feedback-submit]").boundingBox();
     if (!mobileActionBox || mobileActionBox.y < 0 || mobileActionBox.y + mobileActionBox.height > 844) {
@@ -761,7 +832,7 @@ async function main() {
       (message) => !/Failed to load resource: (the server responded with a status of (400|401|409|429|503)|net::ERR_EMPTY_RESPONSE)/i.test(message),
     );
     if (pageErrors.length || unexpectedConsoleErrors.length) {
-      throw new Error(`browser errors: ${JSON.stringify({ pageErrors, unexpectedConsoleErrors })}`);
+      throw new Error(`browser errors: ${JSON.stringify({ pageErrors, unexpectedConsoleErrors, diagnostics })}`);
     }
     console.log(`PASS codex_jiejing_product_feedback_smoke ${outDir}`);
   } finally {

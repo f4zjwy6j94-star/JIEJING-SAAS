@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import sys
 import time
 import urllib.error
@@ -13,6 +14,17 @@ from playwright.sync_api import sync_playwright
 
 
 LEGACY_MARKERS = ("旅行压缩收纳袋", "第一条商品自动化板")
+STATIC_FILES = {
+    "app.html",
+    "index.html",
+    "app.js",
+    "styles.css",
+    "privacy.html",
+    "terms.html",
+    "refund-policy.html",
+    "support.html",
+    "risk-disclosure.html",
+}
 
 
 def api_json(base_url: str, path: str, *, token: str = "", method: str = "GET", body=None) -> dict:
@@ -56,15 +68,6 @@ def make_smoke_session(base_url: str) -> dict:
     token = registered["json"].get("token") or ""
     user = registered["json"].get("user") or {}
     company = registered["json"].get("company") or {}
-    billing = api_json(
-        base_url,
-        "/billing/test-event",
-        token=token,
-        method="POST",
-        body={"plan_key": "operator", "action": "activate"},
-    )
-    if not billing["ok"]:
-        raise RuntimeError(f"billing test activation failed: {billing['status']} {json.dumps(billing['json'])[:300]}")
     created = api_json(
         base_url,
         "/stores",
@@ -98,7 +101,17 @@ def main() -> int:
     )
     parser.add_argument(
         "--url",
-        default="http://127.0.0.1:8787/app.html?start=app&view=cockpit&onboarded=1",
+        default="https://app.jiejing.shop/app.html?start=app&view=cockpit&onboarded=1",
+    )
+    parser.add_argument(
+        "--local-static-root",
+        default=str(Path(__file__).resolve().parent.parent),
+        help="Serve public-host frontend requests from this local worktree without contacting production.",
+    )
+    parser.add_argument(
+        "--backend-base",
+        default="",
+        help="Explicit backend base for --auth-smoke-session. Omit for the read-only public-login smoke.",
     )
     parser.add_argument("--delay-ms", type=int, default=2500)
     parser.add_argument(
@@ -124,19 +137,45 @@ def main() -> int:
 
     delayed = {"value": False}
     console_logs: list[dict[str, str]] = []
-    base_url = urllib.parse.urljoin(args.url, "/")
-    session = make_smoke_session(base_url) if args.auth_smoke_session else None
+    page_origin = urllib.parse.urljoin(args.url, "/")
+    static_root = Path(args.local_static_root).resolve()
+    backend_base = args.backend_base.strip().rstrip("/")
+    if args.auth_smoke_session and not backend_base:
+        raise RuntimeError("--auth-smoke-session requires an explicit --backend-base")
+    session = make_smoke_session(backend_base) if args.auth_smoke_session else None
 
-    def delay_app_js(route):
-        delayed["value"] = True
-        time.sleep(args.delay_ms / 1000)
-        route.continue_()
+    def serve_local_frontend(route, *, block_app_js: bool = False):
+        request_url = urllib.parse.urlparse(route.request.url)
+        relative_path = urllib.parse.unquote(request_url.path).lstrip("/") or "index.html"
+        if relative_path not in STATIC_FILES and not relative_path.startswith("assets/"):
+            route.fulfill(status=204, body=b"")
+            return
+        file_path = (static_root / relative_path).resolve()
+        try:
+            file_path.relative_to(static_root)
+        except ValueError:
+            route.abort()
+            return
+        if not file_path.is_file():
+            route.abort()
+            return
+        if relative_path == "app.js" and block_app_js:
+            delayed["value"] = True
+            route.fulfill(status=200, content_type="text/javascript; charset=utf-8", body=b"")
+            return
+        mime_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        route.fulfill(
+            status=200,
+            content_type=f"{mime_type}; charset=utf-8" if mime_type.startswith("text/") else mime_type,
+            headers={"cache-control": "no-store"},
+            body=file_path.read_bytes(),
+        )
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 1280, "height": 900})
         if session:
-            host = urllib.parse.urlparse(base_url).hostname or ""
+            host = urllib.parse.urlparse(page_origin).hostname or ""
             context.add_cookies(
                 [
                     {
@@ -145,7 +184,7 @@ def main() -> int:
                         "domain": host,
                         "path": "/",
                         "httpOnly": True,
-                        "secure": base_url.startswith("https://"),
+                        "secure": page_origin.startswith("https://"),
                         "sameSite": "Lax",
                     }
                 ]
@@ -161,7 +200,7 @@ def main() -> int:
                 """
             )
         if session:
-            session_payload = json.dumps({**session, "base": base_url.rstrip("/")})
+            session_payload = json.dumps({**session, "base": backend_base})
             context.add_init_script(
                 """
                 (() => {
@@ -179,6 +218,27 @@ def main() -> int:
                 })();
                 """.replace("__SESSION_PAYLOAD__", session_payload),
             )
+        early_page = context.new_page()
+        early_page.on(
+            "console",
+            lambda msg: console_logs.append({"type": msg.type, "text": msg.text})
+            if msg.type in {"error", "warning"}
+            else None,
+        )
+        early_page.route(
+            f"{page_origin.rstrip('/')}/**",
+            lambda route, _request: serve_local_frontend(route, block_app_js=True),
+        )
+        early_page.goto(args.url, wait_until="domcontentloaded")
+        early_page.wait_for_timeout(min(max(args.delay_ms, 0), 500))
+        early = inspect_page(early_page)
+        screenshot_path = Path(args.screenshot)
+        early_screenshot_path = screenshot_path.with_name(
+            f"{screenshot_path.stem}.early{screenshot_path.suffix}"
+        )
+        early_page.screenshot(path=str(early_screenshot_path), full_page=False)
+        early_page.close()
+
         page = context.new_page()
         page.on(
             "console",
@@ -186,15 +246,11 @@ def main() -> int:
             if msg.type in {"error", "warning"}
             else None,
         )
-        page.route("**/app.js*", delay_app_js)
-        page.goto(args.url, wait_until="domcontentloaded")
-        page.wait_for_timeout(350)
-        early = inspect_page(page)
-        screenshot_path = Path(args.screenshot)
-        early_screenshot_path = screenshot_path.with_name(
-            f"{screenshot_path.stem}.early{screenshot_path.suffix}"
+        page.route(
+            f"{page_origin.rstrip('/')}/**",
+            lambda route, _request: serve_local_frontend(route),
         )
-        page.screenshot(path=str(early_screenshot_path), full_page=False)
+        page.goto(args.url, wait_until="domcontentloaded")
         try:
             page.wait_for_load_state("networkidle", timeout=10000)
         except Exception:
@@ -219,11 +275,17 @@ def main() -> int:
         and "index.html" in final["url"]
         and not final["entryVisible"]
     )
+    early_auth_redirect_ok = (
+        args.allow_auth_redirect
+        and not early["appVisible"]
+        and "index.html" in early["url"]
+        and not early["entryVisible"]
+    )
     ok = (
         delayed["value"]
         and not early["entryVisible"]
         and not early["hasLegacyIntroText"]
-        and early["loadingVisible"]
+        and (early["loadingVisible"] or early_auth_redirect_ok)
         and not early["appVisible"]
         and (
             (

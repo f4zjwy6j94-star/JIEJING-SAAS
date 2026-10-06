@@ -88,6 +88,29 @@ def platform_default_serving_model(*, provider: str, configured_model: str) -> s
     return configured_model
 
 
+def platform_model_for_tier(
+    *,
+    provider: str,
+    configured_model: str,
+    serving_model: str,
+    model_tier: str,
+) -> str:
+    """Choose a platform model by task complexity, never by frontend input."""
+
+    normalized_provider = provider.strip().lower()
+    normalized_tier = model_tier.strip().lower()
+    if normalized_tier != "pro":
+        return serving_model
+    explicit_pro_model = (os.environ.get("JIEJING_AI_CEO_PLATFORM_PRO_MODEL") or "").strip()
+    if explicit_pro_model:
+        return explicit_pro_model
+    if normalized_provider == "deepseek":
+        if "pro" in configured_model.lower():
+            return configured_model
+        return "deepseek-v4-pro"
+    return configured_model or serving_model
+
+
 def _env_enabled(name: str, *, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:

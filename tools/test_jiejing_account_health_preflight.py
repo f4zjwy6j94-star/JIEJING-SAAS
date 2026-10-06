@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_runtime.execution import ExecutionRequest, ExecutionService  # noqa: E402
+from tools.test_jiejing_account_health_incident_mode import _backend_publish_evidence  # noqa: E402
 
 
 def fail(message: str) -> int:
@@ -21,6 +22,11 @@ def fail(message: str) -> int:
 
 def _base_payload() -> dict:
     return {
+        "listing_project_identity": {
+            "key": "listing-project-account-health",
+            "source_report_id": "report_account_health",
+            "candidate_id": "candidate-account-health",
+        },
         "account_health": {
             "status": "clear",
             "selling_status": "active",
@@ -50,6 +56,13 @@ def _base_payload() -> dict:
             "item_location": "US",
         },
         "asset_manifest": {"assets": [{"url": "https://example.com/image.jpg"}]},
+        "publish_evidence": _backend_publish_evidence(
+            company_id="company_account_health",
+            store_id="store_account_health",
+            listing_project_key="listing-project-account-health",
+            report_id="report_account_health",
+            image_url="https://example.com/image.jpg",
+        ),
         "finance_review": {"net_profit_money": {"value": "3.20", "currency": "USD"}},
     }
 
@@ -103,4 +116,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

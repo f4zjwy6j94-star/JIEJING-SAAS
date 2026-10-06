@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .config import SaaSSettings
@@ -23,7 +23,7 @@ PLAN_CATALOG = [
         "duration_days": 7,
         "workspace_quota": 1,
         "team_member_quota": 1,
-        "monthly_task_quota": 10,
+        "monthly_task_quota": 20,
         "connected_store_quota": 1,
         "provider_job_quota": 30,
         "batch_row_quota": 0,
@@ -33,7 +33,7 @@ PLAN_CATALOG = [
     },
     {
         "key": "starter",
-        "label": "单店版",
+        "label": "有店铺",
         "intended_user": "single-store merchant running a complete listing workflow",
         "amount_minor": 9900,
         "currency": "CNY",
@@ -50,7 +50,7 @@ PLAN_CATALOG = [
     },
     {
         "key": "operator",
-        "label": "多店铺版",
+        "label": "多店铺",
         "intended_user": "growing merchant reusing workflows across several stores",
         "amount_minor": 19900,
         "currency": "CNY",
@@ -65,10 +65,15 @@ PLAN_CATALOG = [
         "media_points_included": 3000,
         "includes_real_platform_writes": False,
     },
-    {
+]
+
+# Retired plans stay readable for existing subscriptions and historical orders,
+# but never re-enter the merchant acquisition catalog or a new checkout path.
+LEGACY_PLAN_CATALOG = {
+    "team": {
         "key": "team",
         "label": "团队版",
-        "intended_user": "multi-store team requiring roles, approvals and audit",
+        "intended_user": "existing team-plan merchants only",
         "amount_minor": 29900,
         "currency": "CNY",
         "duration_days": 30,
@@ -81,8 +86,8 @@ PLAN_CATALOG = [
         "store_access_mode": "team_controlled",
         "media_points_included": 0,
         "includes_real_platform_writes": False,
-    },
-]
+    }
+}
 
 
 QUOTA_ACTION_UNITS = {
@@ -92,6 +97,12 @@ QUOTA_ACTION_UNITS = {
     "provider_job": "provider_job_quota",
     "model_report_assist": "provider_job_quota",
 }
+# Records created inside a merchant operation, not additional operations. Keep
+# unknown/legacy task types metered; this is not a status-based quota exemption.
+INTERNAL_TASK_RECORD_TYPES = frozenset({
+    "ai_ceo_chat_request", "merchant_ceo_chat_attempt",
+    "merchant_product_facts", "ai_ceo_product_vision",
+})
 STRIPE_CURRENT_API_VERSION = "2026-06-24.dahlia"
 STRIPE_GO_LIVE_DOCS = [
     "https://docs.stripe.com/get-started/checklist/go-live",
@@ -230,7 +241,7 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
             "merchant_visible_usage_required": True,
             "merchant_byok_chat_not_counted_as_workflow_task": True,
             "media_generation_uses_separate_media_points": True,
-            "media_points_are_not_bundled_with_subscription": True,
+            "media_points_are_not_bundled_with_subscription": False,
             "cost_control_required_before_live_media_or_large_model_batches": True,
         },
         "add_on_catalog": [
@@ -437,7 +448,7 @@ def _build_billing_test_rehearsal_summary(
             "key": "test_plan_catalog_available",
             "status": "ready" if plans_published and not provider_contract.get("missing_plan_ids") else "blocked",
             "evidence_summary": _compact_billing_evidence(plans_published=plans_published, missing_plan_ids=provider_contract.get("missing_plan_ids") or []),
-            "next_action": "Publish Starter/Operator/Team plan catalog for the rehearsal provider.",
+            "next_action": "Publish the current Starter and Operator plan catalog for the rehearsal provider.",
         },
         {
             "key": "test_checkout_and_portal_contract",
@@ -454,7 +465,7 @@ def _build_billing_test_rehearsal_summary(
             "key": "test_subscription_lifecycle_events",
             "status": "ready" if required_events.issubset(event_types) else "blocked",
             "evidence_summary": _compact_billing_evidence(required_events_present=required_events.issubset(event_types)),
-            "next_action": "Use POST /billing/test-event to rehearse activate, invoice_paid, payment_failed and cancel states.",
+            "next_action": "Use POST /owner/billing/test-event from the operations console to rehearse activate, invoice_paid, payment_failed and cancel states.",
         },
         {
             "key": "test_provider_order_query_or_signed_webhook",
@@ -464,7 +475,7 @@ def _build_billing_test_rehearsal_summary(
                 signed_webhook_or_order_query_required=True,
                 frontend_can_grant_entitlement=False,
             ),
-            "next_action": "Use POST /billing/provider-rehearsal to prove checkout, backend proof, entitlement and quota in one no-charge path.",
+            "next_action": "Use POST /owner/billing/provider-rehearsal from the operations console to prove checkout, backend proof, entitlement and quota in one no-charge path.",
         },
         {
             "key": "quota_hard_stop_rehearsal",
@@ -1036,22 +1047,21 @@ def _build_billing_live_cutover_matrix(
         _billing_live_cutover_step(
             "stripe_live_price_catalog",
             "Live product and Price catalog",
-            plans_published and all(bool(plan_ids.get(key)) for key in ("starter", "operator", "team")) and all(_env_bool(name) for name in live_object_flags),
+            plans_published and all(bool(plan_ids.get(key)) for key in ("starter", "operator")) and all(_env_bool(name) for name in live_object_flags),
             owner="commercial_ops",
             category="price_catalog",
             evidence_summary=_compact_billing_evidence(
                 plans_published=plans_published,
                 starter_price=bool(plan_ids.get("starter")),
                 operator_price=bool(plan_ids.get("operator")),
-                team_price=bool(plan_ids.get("team")),
+                legacy_team_price_optional=bool(plan_ids.get("team")),
                 live_objects_verified=all(_env_bool(name) for name in live_object_flags),
             ),
-            next_action="Publish live Starter/Operator/Team Price IDs and verify they are not sandbox/test objects before public charging.",
+            next_action="Publish live Starter and Operator Price IDs and verify they are not sandbox/test objects before public charging.",
             environment_keys=[
                 "JIEJING_BILLING_PLANS_PUBLISHED",
                 "JIEJING_STRIPE_PRICE_STARTER_ID",
                 "JIEJING_STRIPE_PRICE_OPERATOR_ID",
-                "JIEJING_STRIPE_PRICE_TEAM_ID",
                 *live_object_flags,
             ],
             verification=["/billing/plans", "Stripe live Products and Prices"],
@@ -1232,15 +1242,21 @@ def _compact_billing_evidence(**values: Any) -> str:
 def build_billing_usage(settings: SaaSSettings, repository: SaaSRepository, *, company_id: str) -> dict[str, Any]:
     """Return merchant-visible usage and quota status without payment secrets."""
 
-    subscription = repository.get_billing_subscription(company_id=company_id)
-    provider = _provider()
-    entitlement_active = _entitlement_active(provider=provider, subscription=subscription)
-    plan_key = _selected_plan_key(subscription=subscription, entitlement_active=entitlement_active)
+    subscription, provider, entitlement_active, plan_key = resolve_subscription_entitlement(
+        environment=settings.environment, company_id=company_id,
+        subscription=repository.get_billing_subscription(company_id=company_id),
+    )
+    if settings.environment == "production" and subscription is None:
+        # Software trial and platform-funded model quota are different gates.
+        # This grants no calls, credits or write permission; those retain their own checks.
+        provider = "free_trial"
+        subscription = _free_trial_subscription(repository, company_id=company_id)
+        entitlement_active = bool(subscription["entitlement_active"])
     plan = _plan_by_key(plan_key)
     usage = _company_usage(repository, company_id=company_id)
     quota_status = _quota_status(plan=plan, usage=usage)
     public_subscription = _public_subscription(subscription=subscription, provider=provider, entitlement_active=entitlement_active)
-    from .media_credits import build_media_credit_summary
+    from .media_credits import build_merchant_media_credit_summary
 
     return {
         "contract_version": "2026-05-19-billing-usage-quota",
@@ -1264,7 +1280,7 @@ def build_billing_usage(settings: SaaSSettings, repository: SaaSRepository, *, c
         "usage": usage,
         "quota_status": quota_status,
         "blocked_units": [item["unit"] for item in quota_status if item["would_block_next_unit"]],
-        "media_credits": build_media_credit_summary(repository, company_id=company_id),
+        "media_credits": build_merchant_media_credit_summary(repository, company_id=company_id),
         "subscription_quota_shutdown_state": _build_subscription_quota_shutdown_state(
             subscription=public_subscription,
             quota_enforcement_enabled=_env_bool("JIEJING_QUOTA_ENFORCEMENT_ENABLED"),
@@ -1356,22 +1372,42 @@ def _company_usage(repository: SaaSRepository, *, company_id: str) -> dict[str, 
     queue_jobs = repository.list_queue_jobs(company_id=company_id, limit=10000)
     reports = repository.list_reports(company_id=company_id)
     month_prefix = datetime.now(timezone.utc).strftime("%Y-%m")
-    monthly_tasks = [item for item in tasks if str(item.get("created_at") or "").startswith(month_prefix)]
-    provider_tasks = [
+    monthly_tasks = [
         item
-        for item in monthly_tasks
-        if str(item.get("task_type") or "") in {"provider_job", "ebay_read_only_sync", "ebay_read_only_live_plan", "model_value_rehearsal"}
+        for item in tasks
+        if _timestamp_utc_month(str(item.get("created_at") or "")) == month_prefix
     ]
+    provider_tasks = []
+    for item in monthly_tasks:
+        task_type = str(item.get("task_type") or "")
+        if task_type in {"provider_job", "ebay_read_only_sync", "ebay_read_only_live_plan", "model_value_rehearsal"}:
+            provider_tasks.append(item)
+            continue
+        task_input = item.get("input") if isinstance(item.get("input"), dict) else {}
+        if task_type == "merchant_ceo_chat" and (
+            task_input.get("model_resolution_mode") == "platform_managed_default"
+            or task_input.get("model_usage_owner") == "jiejing_platform_trial"
+        ):
+            provider_tasks.append(item)
+            continue
+        output = item.get("output") if isinstance(item.get("output"), dict) else {}
+        if task_type == "listing_draft_generation" and (
+            output.get("usage_consumed") is True or int(output.get("model_request_count") or 0) > 0
+        ):
+            provider_tasks.append(item)
     model_reports = [
         item
         for item in reports
-        if str(item.get("created_at") or "").startswith(month_prefix)
+        if _timestamp_utc_month(str(item.get("created_at") or "")) == month_prefix
         and str(item.get("report_type") or "") in {"market.report", "listing.package", "market.data_packet", "product.listing"}
     ]
     return {
         "period": month_prefix,
         "connected_store_count": len(stores),
-        "monthly_task_count": len(monthly_tasks),
+        "monthly_task_count": sum(
+            str(item.get("task_type") or "") not in INTERNAL_TASK_RECORD_TYPES
+            for item in monthly_tasks
+        ),
         "monthly_provider_job_count": len(provider_tasks),
         "monthly_model_report_assist_count": len(model_reports),
         "queue_job_count_sampled": len(queue_jobs),
@@ -1379,12 +1415,27 @@ def _company_usage(repository: SaaSRepository, *, company_id: str) -> dict[str, 
     }
 
 
+def _timestamp_utc_month(value: str) -> str:
+    """Return the UTC calendar month for one persisted ISO timestamp."""
+
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m")
+
+
 def _quota_status(*, plan: dict[str, Any], usage: dict[str, Any]) -> list[dict[str, Any]]:
     rows = [
         ("connected_store", "connected_store_count", "connected_store_quota"),
         ("ai_ceo_task", "monthly_task_count", "monthly_task_quota"),
         ("provider_job", "monthly_provider_job_count", "provider_job_quota"),
-        ("model_report_assist", "monthly_model_report_assist_count", "provider_job_quota"),
+        ("model_report_assist", "monthly_provider_job_count", "provider_job_quota"),
     ]
     status = []
     for unit, usage_key, quota_key in rows:
@@ -1419,17 +1470,28 @@ def _plan_catalog_with_provider_ids() -> list[dict[str, Any]]:
     return enriched
 
 
-def _selected_plan_key(*, subscription: dict[str, Any] | None = None, entitlement_active: bool = False) -> str:
+def _selected_plan_key(*, subscription: dict[str, Any] | None = None, entitlement_active: bool = False,
+    allow_env_default: bool = True) -> str:
+    entitlement_plan_keys = {item["key"] for item in PLAN_CATALOG} | set(LEGACY_PLAN_CATALOG)
     if entitlement_active and subscription:
         value = str(subscription.get("plan_key") or "").strip().lower()
-        if value in {item["key"] for item in PLAN_CATALOG}:
+        if value in entitlement_plan_keys:
             return value
+    if not allow_env_default:
+        return "free"
     value = os.environ.get("JIEJING_DEFAULT_PLAN_KEY", "free").strip().lower() or "free"
     return value if value in {item["key"] for item in PLAN_CATALOG} else "free"
 
 
 def _plan_by_key(plan_key: str) -> dict[str, Any]:
     plans = {item["key"]: item for item in _plan_catalog_with_provider_ids()}
+    provider_plan_ids = billing_plan_ids()
+    plans.update(
+        {
+            key: {**plan, "provider_plan_id": provider_plan_ids.get(key, "")}
+            for key, plan in LEGACY_PLAN_CATALOG.items()
+        }
+    )
     return plans.get(plan_key) or plans["free"]
 
 
@@ -1455,15 +1517,89 @@ def _canonical_provider(raw: str) -> str:
     return aliases.get(text, text)
 
 
-def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None) -> bool:
+def resolve_subscription_entitlement(*, environment: str, company_id: str,
+    subscription: dict[str, Any] | None) -> tuple[dict[str, Any] | None, str, bool, str]:
+    """One source for usage and transactional seat admission; no reads or grants."""
+    production = environment == "production"
+    provider = _provider()
+    if production:
+        # Checkout configuration is not evidence that this tenant has paid.
+        provider = _canonical_provider((subscription or {}).get("provider") or "")
+        if provider not in {"stripe", "paddle", "lemon_squeezy", "wechat_pay_native"}:
+            provider = "not_selected"
+    active = _entitlement_active(provider=provider, subscription=subscription, require_paid_term=production)
+    if production and not active and _owner_preview_allowed(company_id):
+        # A server-owned, exact tenant grant; never rewrite a payment/refund record.
+        provider = "owner_preview"
+        subscription = {
+            "provider": provider, "status": "owner_preview_active", "plan_key": "starter",
+            "entitlement_active": True, "payment_attention_required": False,
+            "subscription": {"access_kind": "owner_preview"},
+        }
+        active = True
+    plan_key = _selected_plan_key(subscription=subscription, entitlement_active=active,
+        allow_env_default=not production)
+    return subscription, provider, active, plan_key
+
+
+def _owner_preview_allowed(company_id: str) -> bool:
+    allowed = {value.strip() for value in os.environ.get("JIEJING_BILLING_PREVIEW_COMPANY_ALLOWLIST", "").split(",")}
+    return bool(company_id) and company_id != "*" and company_id in allowed
+
+
+def _free_trial_subscription(repository: SaaSRepository, *, company_id: str) -> dict[str, Any]:
+    company = repository.get_company(company_id) or {}
+    activation = repository.get_platform_trial_activation(company_id=company_id) or {}
+    started = str(activation.get("activated_at") or company.get("created_at") or "")
+    expires_at = None
+    active = False
+    try:
+        start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        expires_at = start + timedelta(days=int(_plan_by_key("free")["duration_days"]))
+        active = start <= datetime.now(timezone.utc) < expires_at
+    except (ValueError, OverflowError):
+        pass
+    return {
+        "provider": "free_trial", "status": "free_trial_active" if active else "free_trial_expired",
+        "plan_key": "free", "entitlement_active": active, "payment_attention_required": False,
+        "subscription": {"access_kind": "free_trial", "active_until": expires_at.isoformat() if expires_at else ""},
+    }
+
+
+def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None,
+    require_paid_term: bool = False) -> bool:
     if provider == "manual_seed":
         return True
-    if provider not in {"stripe", "paddle", "lemon_squeezy"} and provider not in TEST_BILLING_PROVIDERS and provider not in PRIVATE_BETA_BILLING_PROVIDERS:
+    if provider not in {"stripe", "paddle", "lemon_squeezy", "wechat_pay_native"} and provider not in TEST_BILLING_PROVIDERS and provider not in PRIVATE_BETA_BILLING_PROVIDERS:
         return False
-    return bool(subscription and subscription.get("entitlement_active") and not subscription.get("payment_attention_required"))
+    if not subscription or not subscription.get("entitlement_active") or subscription.get("payment_attention_required"):
+        return False
+    details = subscription.get("subscription") if isinstance(subscription.get("subscription"), dict) else {}
+    active_until = str(details.get("active_until") or "").strip()
+    if require_paid_term and (
+        not active_until or subscription.get("status") not in {"active", "trialing"}
+        or subscription.get("plan_key") not in ({item["key"] for item in PLAN_CATALOG if item["amount_minor"]} | set(LEGACY_PLAN_CATALOG))
+    ):
+        return False
+    if active_until:
+        try:
+            expires_at = datetime.fromisoformat(active_until.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            return False
+    return True
 
 
 def _plan_source(*, provider: str, subscription: dict[str, Any] | None) -> str:
+    if provider == "owner_preview":
+        return "account_scoped_preview"
+    if provider == "free_trial":
+        return "account_free_trial"
     if provider == "manual_seed":
         return "env_default_private_beta"
     if provider in PRIVATE_BETA_BILLING_PROVIDERS:
@@ -1534,8 +1670,9 @@ def _public_subscription(*, subscription: dict[str, Any] | None, provider: str, 
         "active_until": subscription_json.get("active_until") or "",
         "manual_reconciliation_required": bool(subscription_json.get("manual_reconciliation_required")),
         "private_beta_only": bool(subscription_json.get("private_beta_only")),
+        "access_kind": subscription_json.get("access_kind") if provider in {"owner_preview", "free_trial"} else "subscription",
         "block_reason": "" if entitlement_active else "billing_subscription_not_active",
-        "test_mode": provider in TEST_BILLING_PROVIDERS or subscription.get("provider") in TEST_BILLING_PROVIDERS,
+        "test_mode": provider == "owner_preview" or provider in TEST_BILLING_PROVIDERS or subscription.get("provider") in TEST_BILLING_PROVIDERS,
         "creates_real_charge": False,
         "frontend_gets_payment_secret": False,
         "secret_exposed": False,

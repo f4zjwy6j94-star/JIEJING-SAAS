@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from copy import deepcopy
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -97,16 +98,85 @@ def main() -> int:
         )
         if not packet_result.get("data_packet", {}).get("packet_id"):
             return fail("publish intake setup should create a sanitized data packet")
+        listing_project_identity = {
+            "key": "listing-project-unit-fresh-bumper",
+            "source_report_id": "report-unit-fresh-bumper",
+            "candidate_id": "candidate-unit-fresh-bumper",
+        }
+        product_image_url = "https://EXAMPLE.test:443/fresh-bumper.jpg#browser-fragment"
+        product_facts = post_json(
+            f"{base_url}/stores/{store['store_id']}/product-facts",
+            {
+                "listing_project_identity": listing_project_identity,
+                "merchant_product_fact_packet": {
+                    "merchant_confirmed_facts": {
+                        "product_name": "Fresh silicone door bumper pads",
+                        "source_url": "https://supplier.example.test/fresh-bumper",
+                        "sku": "JJ-FRESH-INTAKE-001",
+                        "condition": "NEW",
+                        "material": "Silicone",
+                        "package_weight_g": "80",
+                        "package_length_cm": "12",
+                        "package_width_cm": "8",
+                        "package_height_cm": "2",
+                        "unit_cost": "2.50",
+                        "selling_price": "9.99",
+                        "currency": "USD",
+                        "quantity": "1",
+                        "item_location": "US",
+                        "image_urls": product_image_url,
+                        "image_rights_confirmed": True,
+                    }
+                },
+            },
+            token=token,
+        )
+        product_fact_report_id = product_facts.get("report", {}).get("report_id")
+        if not product_fact_report_id:
+            return fail(f"product facts should create an authoritative report: {product_facts}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            confirmations_before_simulation_guard = conn.execute("select count(*) from confirmations").fetchone()[0]
+        for route in (
+            "publish-confirmation",
+            "ebay-draft-confirmation",
+            "existing-draft-publish-confirmation",
+        ):
+            status, guarded = post_json_status(
+                f"{base_url}/stores/{store['store_id']}/{route}",
+                {
+                    "simulation_only": True,
+                    "product": "Simulation-only bookmark",
+                    "listing_project_identity": {"key": "simulation-only-bookmark"},
+                },
+                token=token,
+            )
+            if status != 409 or guarded.get("error") != "simulation_only_listing_cannot_create_ebay_confirmation":
+                return fail(f"{route} must reject simulation-only product data before any eBay confirmation: {status} {guarded}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            confirmations_after_simulation_guard = conn.execute("select count(*) from confirmations").fetchone()[0]
+        if confirmations_after_simulation_guard != confirmations_before_simulation_guard:
+            return fail("simulation-only requests must not create any eBay confirmation record")
+        status, arbitrary_rights = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-confirmation",
+            {
+                "product": "Unverified arbitrary image",
+                "listing_project_identity": listing_project_identity,
+                "listing": {"sku": "UNVERIFIED", "title": "Unverified arbitrary image"},
+                "asset_manifest": {"assets": [{"url": "https://untrusted.example.test/arbitrary.jpg"}]},
+                "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
+            },
+            token=token,
+        )
+        if status != 422 or arbitrary_rights.get("error") != "publish_evidence_not_ready":
+            return fail(f"arbitrary browser image without server evidence must be blocked: {status} {arbitrary_rights}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            if conn.execute("select count(*) from confirmations").fetchone()[0] != confirmations_after_simulation_guard:
+                return fail("blocked publish evidence must not create a confirmation")
         result = post_json(
             f"{base_url}/stores/{store['store_id']}/publish-confirmation",
             {
                 "product": "Fresh silicone door bumper pads",
-                "listing_project_identity": {
-                    "key": "listing-project-unit-fresh-bumper",
-                    "product": "Fresh silicone door bumper pads",
-                    "source_id": "report-unit-fresh-bumper",
-                    "candidate_id": "candidate-unit-fresh-bumper",
-                },
+                "listing_project_identity": listing_project_identity,
                 "listing": {
                     "sku": "JJ-FRESH-INTAKE-001",
                     "title": "Clear Silicone Cabinet Door Bumper Pads Quiet Stopper Set",
@@ -124,14 +194,110 @@ def main() -> int:
                     "material": "Silicone",
                     "item_location": "US",
                 },
-                "asset_manifest": {"assets": [{"url": "https://example.test/fresh-bumper.jpg"}]},
-                "finance_review": {"net_profit_money": {"value": "3.25", "currency": "USD"}},
+                "asset_manifest": {"assets": [{"url": product_image_url}]},
+                "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
+                "finance_review": {
+                    "procurement_cost_money": {"value": "2.50", "currency": "USD"},
+                    "shipping_cost_money": {"value": "2.25", "currency": "USD"},
+                    "ebay_fee_money": {"value": "1.49", "currency": "USD"},
+                    "ad_budget_money": {"value": "0", "currency": "USD"},
+                    "return_risk_reserve_money": {"value": "0.50", "currency": "USD"},
+                    "exchange_rate": "1.234567",
+                    "net_profit_money": {"value": "3.25", "currency": "USD"},
+                    "gross_margin_percent": "32.53",
+                },
             },
             token=token,
         )
         confirmation = result.get("confirmation", {})
         if confirmation.get("action_type") != "publish_listing" or confirmation.get("status") != "pending":
             return fail(f"publish intake should create a pending publish confirmation: {result}")
+        saved_finance = confirmation.get("item", {}).get("publish_payload", {}).get("finance_review", {})
+        for key, expected in (("ebay_fee_money", "1.49"), ("return_risk_reserve_money", "0.5"), ("ad_budget_money", "0")):
+            if saved_finance.get(key) != {"value": expected, "currency": "USD"}:
+                return fail(f"publish intake must preserve the merchant's {key} in its confirmation snapshot")
+        if saved_finance.get("exchange_rate") != "1.234567":
+            return fail("publish intake must preserve exchange-rate precision, not round it as money")
+        preview_body = deepcopy(confirmation["item"]["publish_payload"])
+        preview_body["listing"]["merchant_location_key"] = "preview-fixture-warehouse"
+        preview_body["listing_project_identity"] = listing_project_identity
+        preview_body["publish_evidence_refs"] = {"product_fact_report_id": product_fact_report_id}
+        preview_body["simulation_only"] = True
+        with sqlite3.connect(SAAS_DB) as conn:
+            # Legacy same-store history is an isolated local fixture, not a
+            # current-project checkpoint. It must not break the HTTP precheck.
+            legacy = json.loads(conn.execute("select report_json from reports where report_id = ?",
+                                             (product_fact_report_id,)).fetchone()[0])
+            legacy.pop("listing_project_identity", None)
+            conn.execute("""insert into reports
+                (report_id, task_id, runtime_run_id, report_type, title, status, created_at, report_json)
+                select ?, task_id, runtime_run_id, report_type, title, status, ?, ?
+                from reports where report_id = ?""",
+                ("report-unrelated-legacy-intake", "2099-01-01T00:00:00Z", json.dumps(legacy), product_fact_report_id))
+            before_preview = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                              for table in ("tasks", "confirmations", "execution_results", "reports")]
+        status, preview = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-precheck", preview_body, token=token,
+        )
+        if status != 200 or preview.get("read_only") is not True:
+            return fail("simulation must support a server read-only precheck without creating a confirmation")
+        for key in ("confirmation_created", "task_created", "platform_write_attempted", "real_execution_allowed"):
+            if preview.get(key) is not False:
+                return fail(f"readonly precheck must explicitly keep {key}=false")
+        if not preview.get("publish_readiness", {}).get("checks") or not any(
+            row.get("key") == "simulation_only" for row in preview.get("preflight", {}).get("issues", [])
+        ):
+            return fail("readonly simulation must receive full checks without losing its simulation blocker")
+        if preview.get("publish_readiness", {}).get("ready_for_platform_adapter") is not False:
+            return fail("a preview is never authorization to call a platform adapter")
+        if preview.get("source_blockers"):
+            return fail("unrelated legacy history must not invalidate current-project source evidence")
+        preview_fields = next(row for row in preview["publish_readiness"]["checks"] if row["key"] == "field_completeness")
+        if preview_fields["blocking"] or preview_fields["details"]["missing_fields"]:
+            return fail(f"future confirmation identifiers must not be misreported as missing product data: {preview_fields['details']['missing_fields']}")
+        if "confirmation_record" not in preview["preflight"]["missing_fields"]:
+            return fail("readonly presentation must not weaken the actual execution preflight")
+        with sqlite3.connect(SAAS_DB) as conn:
+            after_preview = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                             for table in ("tasks", "confirmations", "execution_results", "reports")]
+        if before_preview != after_preview:
+            return fail("readonly precheck must not create business records")
+        other = post_json(f"{base_url}/auth/register", {
+            "email": "other-preview@example.test", "password": "local-test-password", "company_name": "Other Preview",
+        })
+        status, _ = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-precheck", preview_body, token=other["token"],
+        )
+        if status != 404:
+            return fail("readonly precheck must not cross company/store scope")
+        for quantity in ("1.5", "Infinity"):
+            invalid_body = deepcopy(confirmation["item"]["publish_payload"])
+            invalid_body["listing_project_identity"] = listing_project_identity
+            invalid_body["publish_evidence_refs"] = {"product_fact_report_id": product_fact_report_id}
+            invalid_body["listing"]["quantity"] = quantity
+            status, checked = post_json_status(
+                f"{base_url}/stores/{store['store_id']}/publish-confirmation", invalid_body, token=token,
+            )
+            if status >= 500 or "listing.quantity" not in {
+                issue.get("key") for issue in checked.get("preflight", {}).get("issues", [])
+            }:
+                return fail("invalid quantity must return an actionable preflight issue, not truncate or crash")
+        for field, value in (
+            ("shipping_cost_money", {"value": "NaN", "currency": "USD"}),
+            ("exchange_rate", "Infinity"),
+        ):
+            invalid_body = deepcopy(confirmation["item"]["publish_payload"])
+            invalid_body["listing_project_identity"] = listing_project_identity
+            invalid_body["publish_evidence_refs"] = {"product_fact_report_id": product_fact_report_id}
+            invalid_body["finance_review"][field] = value
+            status, checked = post_json_status(
+                f"{base_url}/stores/{store['store_id']}/publish-confirmation", invalid_body, token=token,
+            )
+            if status >= 500 or not any(
+                issue.get("key") == f"finance_review.{field}"
+                for issue in checked.get("preflight", {}).get("issues", [])
+            ):
+                return fail(f"provided invalid {field} must not disappear during intake normalization")
         with sqlite3.connect(SAAS_DB) as conn:
             publish_task_status = conn.execute(
                 "select status from tasks where task_id = ?",
@@ -185,15 +351,17 @@ def main() -> int:
                 return fail(f"each readiness check should remain confirmation gated: {check}")
         item = confirmation.get("item", {})
         payload = item.get("publish_payload", {})
+        if payload.get("listing_project_identity", {}).get("key") != listing_project_identity["key"]:
+            return fail(f"approved payload must carry the server-normalized Listing project scope: {payload}")
+        if payload.get("asset_manifest", {}).get("assets", [{}])[0].get("url") != "https://example.test/fresh-bumper.jpg":
+            return fail(f"approved payload must persist the resolver's canonical asset URL: {payload}")
         if payload.get("business_policies", {}).get("return_policy_id") != "return-policy":
             return fail(f"publish intake should merge business policies from packet: {payload}")
         serialized = json.dumps(result, ensure_ascii=False).lower()
         if "refresh_token" in serialized or "api_key" in serialized or "access_token" in serialized:
             return fail("publish intake response must not expose secrets")
 
-        draft_result = post_json(
-            f"{base_url}/stores/{store['store_id']}/ebay-draft-confirmation",
-            {
+        draft_request = {
                 "product": "Fresh silicone door bumper pads",
                 "listing_project_identity": {
                     "key": "listing-project-unit-fresh-bumper",
@@ -204,9 +372,13 @@ def main() -> int:
                 "listing": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("listing", {}),
                 "supplier_facts": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("supplier_facts", {}),
                 "asset_manifest": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("asset_manifest", {}),
+                "publish_evidence_refs": {"product_fact_report_id": product_fact_report_id},
                 "finance_review": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("finance_review", {}),
                 "idempotency_key": "draft-intake-unit-fresh-bumper",
-            },
+            }
+        draft_result = post_json(
+            f"{base_url}/stores/{store['store_id']}/ebay-draft-confirmation",
+            draft_request,
             token=token,
         )
         draft_confirmation = draft_result.get("confirmation", {})
@@ -235,6 +407,38 @@ def main() -> int:
         if "refresh_token" in draft_serialized or "api_key" in draft_serialized or "access_token" in draft_serialized:
             return fail("draft intake response must not expose secrets")
         draft_confirmation_id = draft_confirmation.get("confirmation_id")
+        with sqlite3.connect(SAAS_DB) as conn:
+            original_report_json = conn.execute(
+                "select report_json from reports where report_id = ?",
+                (product_fact_report_id,),
+            ).fetchone()[0]
+            revoked_report = json.loads(original_report_json)
+            revoked_packet = revoked_report["merchant_product_fact_packet"]
+            revoked_packet["merchant_confirmed_facts"]["image_rights_confirmed"] = False
+            for source_record in revoked_packet.get("source_records", []):
+                if source_record.get("type") == "merchant_product_image":
+                    source_record["rights_status"] = "pending"
+            conn.execute(
+                "update reports set report_json = ? where report_id = ?",
+                (json.dumps(revoked_report, ensure_ascii=False), product_fact_report_id),
+            )
+        status, revoked_decision = post_json_status(
+            f"{base_url}/confirmations/{draft_confirmation_id}/decision",
+            {"decision": "approve", "note": "Must be blocked after rights evidence is revoked."},
+            token=token,
+        )
+        if status != 409 or revoked_decision.get("error") != "publish_evidence_not_ready":
+            return fail(f"approval must revalidate revoked image rights: {status} {revoked_decision}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            if conn.execute(
+                "select status from confirmations where confirmation_id = ?",
+                (draft_confirmation_id,),
+            ).fetchone()[0] != "pending":
+                return fail("revoked evidence must leave the confirmation pending")
+            conn.execute(
+                "update reports set report_json = ? where report_id = ?",
+                (original_report_json, product_fact_report_id),
+            )
         draft_decision = post_json(
             f"{base_url}/confirmations/{draft_confirmation_id}/decision",
             {"decision": "approve", "note": "Contract test only; external writes remain disabled."},
@@ -249,9 +453,46 @@ def main() -> int:
             ).fetchone()[0]
         if approved_task_status != "approved_waiting_execution":
             return fail(f"approved draft task must show its real execution state: {approved_task_status}")
-        draft_execution = post_json(
+        with sqlite3.connect(SAAS_DB) as conn:
+            conn.execute(
+                "update reports set report_json = ? where report_id = ?",
+                (json.dumps(revoked_report, ensure_ascii=False), product_fact_report_id),
+            )
+        status, revoked_execution = post_json_status(
             f"{base_url}/confirmations/{draft_confirmation_id}/execute",
             {"platform": "ebay", "idempotency_key": "draft-intake-unit-fresh-bumper"},
+            token=token,
+        )
+        if status != 409 or revoked_execution.get("real_platform_write_attempted") is not False:
+            return fail(f"execution must stop before claim/write after evidence revocation: {status} {revoked_execution}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            if conn.execute(
+                "select status from confirmations where confirmation_id = ?",
+                (draft_confirmation_id,),
+            ).fetchone()[0] != "needs_revision":
+                return fail("revoked evidence must expire the old action-time approval")
+            conn.execute(
+                "update reports set report_json = ? where report_id = ?",
+                (original_report_json, product_fact_report_id),
+            )
+        replacement_draft = post_json(
+            f"{base_url}/stores/{store['store_id']}/ebay-draft-confirmation",
+            {**draft_request, "idempotency_key": "draft-intake-unit-fresh-bumper-replacement"},
+            token=token,
+        ).get("confirmation", {})
+        replacement_draft_id = replacement_draft.get("confirmation_id")
+        if replacement_draft.get("status") != "pending" or not replacement_draft_id:
+            return fail(f"restored evidence must require a fresh pending confirmation: {replacement_draft}")
+        replacement_decision = post_json(
+            f"{base_url}/confirmations/{replacement_draft_id}/decision",
+            {"decision": "approve", "note": "Fresh action-time approval after evidence restoration."},
+            token=token,
+        )
+        if replacement_decision.get("confirmation", {}).get("status") != "approved":
+            return fail(f"replacement draft confirmation must be independently approved: {replacement_decision}")
+        draft_execution = post_json(
+            f"{base_url}/confirmations/{replacement_draft_id}/execute",
+            {"platform": "ebay", "idempotency_key": "draft-intake-unit-fresh-bumper-replacement"},
             token=token,
         )
         stored_draft_execution = draft_execution.get("execution", {})
@@ -267,14 +508,93 @@ def main() -> int:
         with sqlite3.connect(SAAS_DB) as conn:
             completed_task_status = conn.execute(
                 "select status from tasks where task_id = ?",
-                (draft_confirmation.get("task_id"),),
+                (replacement_draft.get("task_id"),),
             ).fetchone()[0]
         if completed_task_status != "completed_no_platform_write":
             return fail(f"simulated draft task must close instead of remaining queued: {completed_task_status}")
+        # Report-only corruption cannot impersonate a new merchant save: its
+        # packet no longer matches the server task and authentication proof.
+        # Keep this negative fixture isolated to the temporary local SQLite.
+        simulated_report = json.loads(original_report_json)
+        simulated_report["merchant_product_fact_packet"]["simulation_only"] = True
         with sqlite3.connect(SAAS_DB) as conn:
+            conn.execute("update reports set report_json = ? where report_id = ?",
+                         (json.dumps(simulated_report), product_fact_report_id))
+            before_tampered_check = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                                     for table in ("tasks", "confirmations", "execution_results", "reports")]
+        preview_body["simulation_only"] = False
+        status, tampered_precheck = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-precheck", preview_body, token=token,
+        )
+        if status != 200 or tampered_precheck.get("read_only") is not True:
+            return fail("tampered source evidence must receive a safe readonly precheck")
+        if tampered_precheck.get("source_blockers") != ["product_facts_not_authenticated"]:
+            return fail("report-only packet corruption must fail server authentication")
+        for key in ("confirmation_created", "task_created", "platform_write_attempted", "real_execution_allowed"):
+            if tampered_precheck.get(key) is not False:
+                return fail("tampered source precheck must not create records or permit platform execution")
+        if tampered_precheck.get("publish_readiness", {}).get("ready_for_platform_adapter") is not False:
+            return fail("tampered source precheck must never authorize a platform adapter")
+        status, tampered_confirmation = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-confirmation", preview_body, token=token,
+        )
+        if (status != 422 or tampered_confirmation.get("confirmation_created") is not False
+                or tampered_confirmation.get("blockers") != ["product_facts_not_authenticated"]):
+            return fail("report-only packet corruption must block real confirmation intake")
+        with sqlite3.connect(SAAS_DB) as conn:
+            after_tampered_check = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                                    for table in ("tasks", "confirmations", "execution_results", "reports")]
+        if before_tampered_check != after_tampered_check:
+            return fail("tampered source checks must not create business records")
+
+        # Legitimate simulation is a new authenticated merchant action through
+        # the same endpoint as the UI, with the exact current report as its CAS
+        # base. Do not repair the old report's proof, hash, or task by hand.
+        status, simulation_save = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/product-facts",
+            {
+                "listing_project_identity": listing_project_identity,
+                "merchant_product_fact_packet": deepcopy(simulated_report["merchant_product_fact_packet"]),
+                "save_context": {
+                    "contract_version": "merchant_product_fact_save_v1",
+                    "mutation_id": "publish-intake-legitimate-simulation-save",
+                    "expected_fact_report_id": product_fact_report_id,
+                },
+            },
+            token=token,
+        )
+        simulated_fact_report_id = simulation_save.get("report", {}).get("report_id")
+        if (status != 201 or not simulated_fact_report_id or simulated_fact_report_id == product_fact_report_id
+                or simulation_save.get("is_current") is not True
+                or simulation_save.get("listing_project_identity") != listing_project_identity
+                or simulation_save.get("merchant_product_fact_packet", {}).get("simulation_only") is not True):
+            return fail("legitimate simulation facts must be saved through authenticated current-version CAS")
+        preview_body["publish_evidence_refs"] = {"product_fact_report_id": simulated_fact_report_id}
+        with sqlite3.connect(SAAS_DB) as conn:
+            before_simulation_check = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                                       for table in ("tasks", "confirmations", "execution_results", "reports")]
+        # The browser still omits the flag; only the newly saved server packet
+        # supplies the authoritative simulation boundary.
+        status, server_simulation = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-precheck", preview_body, token=token,
+        )
+        if status != 200 or server_simulation.get("simulation_only") is not True:
+            return fail("a browser cannot omit the authoritative simulation boundary during precheck")
+        if "simulation_only_product_facts" not in server_simulation.get("source_blockers", []):
+            return fail("server precheck must identify the authoritative simulated facts")
+        status, blocked_simulation = post_json_status(
+            f"{base_url}/stores/{store['store_id']}/publish-confirmation", preview_body, token=token,
+        )
+        if status != 422 or blocked_simulation.get("confirmation_created") is not False:
+            return fail("readonly precheck must not unlock real confirmation intake for simulated facts")
+        with sqlite3.connect(SAAS_DB) as conn:
+            after_simulation_check = [conn.execute(f"select count(*) from {table}").fetchone()[0]
+                                      for table in ("tasks", "confirmations", "execution_results", "reports")]
+            if before_simulation_check != after_simulation_check:
+                return fail("legitimate simulation checks must not create business records")
             conn.execute(
                 "update tasks set status = 'queued' where task_id = ?",
-                (draft_confirmation.get("task_id"),),
+                (replacement_draft.get("task_id"),),
             )
         repository = SaaSRepository(SAAS_DB)
         dry_run = repository.reconcile_confirmation_managed_tasks(apply=False)
@@ -283,7 +603,7 @@ def main() -> int:
         with sqlite3.connect(SAAS_DB) as conn:
             still_queued = conn.execute(
                 "select status from tasks where task_id = ?",
-                (draft_confirmation.get("task_id"),),
+                (replacement_draft.get("task_id"),),
             ).fetchone()[0]
         if still_queued != "queued":
             return fail("task reconciliation dry-run mutated data")
@@ -330,6 +650,21 @@ def post_json(url: str, payload: dict[str, Any], *, token: str | None = None) ->
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise AssertionError(f"HTTP {exc.code} for {url}: {detail}") from exc
+
+
+def post_json_status(url: str, payload: dict[str, Any], *, token: str | None = None) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_headers(token),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        return exc.code, json.loads(detail)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
