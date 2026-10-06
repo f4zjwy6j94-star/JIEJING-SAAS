@@ -46,7 +46,8 @@ def main() -> int:
     head = git("rev-parse", "HEAD")
     git("merge-base", "--is-ancestor", state["migration_base"], head)
     roots = {"repo": ROOT, "private": Path(state["private_root"]), "video": Path(state["video_output_root"]),
-             "evidence": Path("/workspace/onboarding-evidence")}
+             "evidence": Path("/workspace/onboarding-evidence"),
+             "complete_video": Path(state["complete_video_output_root"])}
     for group, files in state["pinned_files"].items():
         for relative, expected in files.items():
             checked_file(roots[group], relative, expected)
@@ -57,6 +58,11 @@ def main() -> int:
         path = checked_file(roots["video"], item["path"], item["sha256"])
         if path.stat().st_size != item["bytes"]:
             raise ValueError(f"Artifact size changed: {item['path']}")
+    complete_receipt = json.loads(checked_file(roots["complete_video"], "ASSET_RECEIPT.safe.json").read_text())
+    for item in complete_receipt["files"]:
+        path = checked_file(roots["complete_video"], item["path"], item["sha256"])
+        if path.stat().st_size != item["bytes"]:
+            raise ValueError(f"Complete video asset size changed: {item['path']}")
     verifier = checked_file(roots["private"], "continuity_tools.py", state["pinned_files"]["private"]["continuity_tools.py"])
     result = subprocess.run([sys.executable, str(verifier), "--verify"], capture_output=True, text=True, timeout=120)
     if result.returncode:
@@ -81,6 +87,7 @@ def main() -> int:
     print(json.dumps({"exit_code": 0, "head": head, "branch": git("branch", "--show-current"),
         "dirty": dirty, "video_source_and_artifacts_verified": True,
         "artifact_files_verified": len(artifact_receipt["files"]), "imported_data_exit_code": result.returncode,
+        "complete_video_files_verified": len(complete_receipt["files"]),
         "remote_head_equals_local": remote_saved, "independent_new_task_cold_start_certified": False,
         "production_deployment_certified": False}, ensure_ascii=False))
     return 0

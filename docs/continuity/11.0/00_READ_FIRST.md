@@ -1,5 +1,15 @@
 # 捷境 11.0 云端工作检查点
 
+## 当前检查点：完整视频 v1 已交付私人审看
+
+经营者最新请求已明确开始并完成视频制作，覆盖下方旧“只对齐/等待视频开始”的暂停条件。已制作约36秒1080×1920带中文合成旁白、原创配乐及真实本地示例操作的完整视频；经营者尚未认可最终成片，未公开发布。
+
+先读当前执行索引顶部与 `/workspace/jiejing-continuity/10.0/START_HERE.md`。作品、素材和可编辑ZIP：`/workspace/jiejing-deliverables/11.0/20261006-complete-v1`；源与重现步骤：`marketing/douyin-studio/docs/11.0-complete-video-v1.md`；最终保存回执：`/workspace/onboarding-evidence/20261006-complete-video/COMPLETE_VIDEO_SAVE.safe.json`。
+
+`verify_checkpoint.py` 现在同时校验原10.0资料、原视觉样片、新23文件素材回执和可编辑ZIP。素材缺失或SHA变化须失败；已有新工作先保留再更新检查点，不reset/clean。配音工具在仓库外独立环境，不是业务依赖升级。原三失败、新任务恢复和生产部署未验收仍分开保留。
+
+以下仅对齐/制作暂停文字记录较早阶段，不能用来拒绝这次明确制作授权，也不能用新制作授权扩展到公开发布。
+
 本文件提供云端工作接续入口。唯一项目进度索引仍为 `docs/JIEJING_CURRENT_EXECUTION_STATE.md` 的“当前接续摘要”；历史文件不是新的执行授权。
 
 ## 最新经营者要求：仅对齐资料，视频暂停

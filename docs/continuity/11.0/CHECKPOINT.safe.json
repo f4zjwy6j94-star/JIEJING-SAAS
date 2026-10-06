@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "jiejing-11-douyin-research-script-planning-20261006",
+  "checkpoint_name": "jiejing-11-complete-private-review-video-v1-20261006",
   "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
   "working_branch": "video/jiejing-11-continuity-20261006",
   "private_root": "/workspace/jiejing-continuity/10.0",
@@ -13,17 +13,23 @@
   "pinned_files": {
     "repo": {
       "AGENTS.md": "9ad2c01537cec7fedd0b24c71ff8ed7513b4514d0c20cb3ee973360e3846ddfe",
-      "marketing/douyin-studio/src/Root.tsx": "2ff8d8424c8dadc206555dcfa46d2d183f12c7478e979cef22fd60744d50fa81",
+      "marketing/douyin-studio/src/Root.tsx": "c41f06b663f83ad3f466c1bb81e1003eb99932c801ad58602e4171b41fbee1af",
       "marketing/douyin-studio/src/Douyin11VisualStudy.tsx": "31938fce8e1e93cd1bab02dd9fcc33dcdcb607ba1ee03c8aa60a50a7143354fb",
       "marketing/douyin-studio/src/index.ts": "957e481dd33a29b4a55ae0e95dbf763b7e48c37c427ca4bd1275faf34bc07a74",
       "marketing/douyin-studio/package.json": "3d555e7a46381dec7c5b335c2f57416cc482c242a581979d42378b6f958f04f1",
       "marketing/douyin-studio/package-lock.json": "08fd7d27c45182afe22ae1e36bd0c031fef3779a39ad4aaeee580000484f9ef7",
       "marketing/douyin-studio/public/brand/jiejing-app-icon.svg": "e6aaa79a4214680e878981f71e38a59e5a77f9c4ba8aece4853c16467a6d54a1",
       "marketing/douyin-studio/docs/11.0-visual-study-v1.md": "56dfd1e86b96bcf9f97a45f1488eb9f1292007881c471ab9d50d8fbffc334054",
-      "docs/continuity/11.0/00_READ_FIRST.md": "860f0ec69b8eb05e31f52072f32219f323e7019290b61f629e393cf38b01d628",
-      "docs/continuity/11.0/verify_checkpoint.py": "2769f4298c6f8579ee82c681cee3a0e5923126cfb8fcd6cd02b448f7b423126f",
+      "docs/continuity/11.0/00_READ_FIRST.md": "5f4a73e28886e47d12395078fbd57ba4159d66c839973d7d2a5c89b9154092f8",
+      "docs/continuity/11.0/verify_checkpoint.py": "4a019fa5f854f7a9585996e2bf94ebac49afa2950fb914a8e480c1c1340d32f9",
       "marketing/douyin-studio/docs/11.0-douyin-discussion-v1.md": "7cd3b47f863a4905fd2efccbca81a483994fb54d8a30624e0a217a7925c205c4",
-      "marketing/douyin-studio/docs/11.0-douyin-research-and-script-v1.md": "3bb7cf4057e573088ef062b27ac597a9a84cb2850c60d5da64612f92fd39c16c"
+      "marketing/douyin-studio/docs/11.0-douyin-research-and-script-v1.md": "3bb7cf4057e573088ef062b27ac597a9a84cb2850c60d5da64612f92fd39c16c",
+      "marketing/douyin-studio/src/Douyin11CompleteV1.tsx": "c050c9ddc0750d677e8b3aaf7c10d1203adeb57601058ed4eacb1272aff3142c",
+      "marketing/douyin-studio/docs/11.0-complete-video-v1.md": "2688f79aa4978a9b6540a380620d955391623b2b1eeb9f8f13f30652088f0a08",
+      "marketing/douyin-studio/tools/complete-v1/capture-demo-v2.cjs": "b6b6af931466fc89302042e8c7014e239fe801dbd657d14562f435afeaa56d2b",
+      "marketing/douyin-studio/tools/complete-v1/make-voice.py": "b35f579163064a01b19809f4d0399301f1f14d0348cf6aee9c9383bd4c9d2313",
+      "marketing/douyin-studio/tools/complete-v1/prepare-media.py": "0322dce52ef1ace025560af6c91de53f959b4cc5d5ed15d3b97b09426ba60f94",
+      "marketing/douyin-studio/tools/complete-v1/render-film.cjs": "c9d4855ce1dae1010afdfa747b5dd125f5e07c9328d0fe93a432b09a37d275e1"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -33,7 +39,7 @@
       "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c",
       "alignment_tools.py": "00b6cd40c5614cd4ecf4ad3ec88b87f681140d923469cf4d75eafdf2ff9178c9",
       "ALIGNMENT_STATUS.md": "1f2c382232e66330befa5f63f08d431b3653de04bde78c960bcfb89e2d6aa785",
-      "PROJECT_STAGE.safe.json": "10962b0a52b59506d3d5f4852adfac940e854daf1e921a90ed5e03462e2c2c3d"
+      "PROJECT_STAGE.safe.json": "5bb321004b314fb70dd9c3c2446a7933d7351d82689fb88ae032e90ef69cc083"
     },
     "video": {
       "SAVE_RECEIPT.safe.json": "0e03ff4ffbd4c46428d19c9e3cffe669e559d720aa0007100b0614fa71c8c3c3",
@@ -44,7 +50,14 @@
       "SAFE_ACCEPTANCE.md": "b02ef0446ace31b153ea6f6527984e7e9db77e1b16d071dbcd335431fc3891ea",
       "first-migration-node20-265-of-274/original-report.json": "abddb5e266a3688945de6b461513cbab6c7ff07787289a40246e8d52f6c4f486",
       "20261006-douyin-research/VIDEO_CAPABILITY.safe.json": "b6eb0ce420004306a5c77f991aa3368067ffe7a5c474880c3cd3c29529f7532b",
-      "20261006-douyin-research/PUBLIC_RESEARCH_ACCESS.safe.json": "6ff956bb2a25287981aba80ee460c859a6a3529e88c0c87e89cec6c7d85028f5"
+      "20261006-douyin-research/PUBLIC_RESEARCH_ACCESS.safe.json": "6ff956bb2a25287981aba80ee460c859a6a3529e88c0c87e89cec6c7d85028f5",
+      "20261006-complete-video/install_voice_tools.py": "589d7f0444858545ff1d81d899bbba21c5dbd7bc177e85fe8ef682f62ec539eb",
+      "20261006-complete-video/requirements.voice.lock.txt": "f0f6edd01e3f020fca44260ddb3ab6acfc20fc9e7ca7d335bfdca0615fc5b772",
+      "20261006-complete-video/VOICE_MODEL.safe.json": "f355bbe358e12ed0c5f5d3463d398e8212f003c1210cff7c26dcbff243a7cb52"
+    },
+    "complete_video": {
+      "ASSET_RECEIPT.safe.json": "3a1fdbee69beee3c1d422fcbb4fbcb2defd2fc916069c9ee4df73a52586ce44c",
+      "jiejing-complete-v1-editable.zip": "b6c076a5a4399843f001bba0828e6892e0cf1fd9cafc7cebd047a911266f5bb3"
     }
   },
   "video_direction_approved": false,
@@ -53,10 +66,13 @@
   "original_local_materials_not_all_uploaded": true,
   "full_274_gate_pass_claimed": false,
   "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash.",
-  "current_owner_phase": "douyin_research_and_detailed_script_planning",
-  "video_work_paused": true,
-  "video_start_requires_new_explicit_owner_instruction": "视频开始",
+  "current_owner_phase": "complete_video_owner_review",
+  "video_work_paused": false,
+  "video_start_requires_new_explicit_owner_instruction": false,
   "video_discussion_authorized": true,
   "video_script_planning_authorized": true,
-  "new_video_asset_production_authorized": false
+  "new_video_asset_production_authorized": true,
+  "complete_video_output_root": "/workspace/jiejing-deliverables/11.0/20261006-complete-v1",
+  "complete_video_created": true,
+  "complete_video_save_receipt": "/workspace/onboarding-evidence/20261006-complete-video/COMPLETE_VIDEO_SAVE.safe.json"
 }
