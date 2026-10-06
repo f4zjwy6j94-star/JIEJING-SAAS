@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "jiejing-11-materials-alignment-video-paused-20261006",
+  "checkpoint_name": "jiejing-11-douyin-research-script-planning-20261006",
   "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
   "working_branch": "video/jiejing-11-continuity-20261006",
   "private_root": "/workspace/jiejing-continuity/10.0",
@@ -22,7 +22,8 @@
       "marketing/douyin-studio/docs/11.0-visual-study-v1.md": "56dfd1e86b96bcf9f97a45f1488eb9f1292007881c471ab9d50d8fbffc334054",
       "docs/continuity/11.0/00_READ_FIRST.md": "860f0ec69b8eb05e31f52072f32219f323e7019290b61f629e393cf38b01d628",
       "docs/continuity/11.0/verify_checkpoint.py": "2769f4298c6f8579ee82c681cee3a0e5923126cfb8fcd6cd02b448f7b423126f",
-      "marketing/douyin-studio/docs/11.0-douyin-discussion-v1.md": "7cd3b47f863a4905fd2efccbca81a483994fb54d8a30624e0a217a7925c205c4"
+      "marketing/douyin-studio/docs/11.0-douyin-discussion-v1.md": "7cd3b47f863a4905fd2efccbca81a483994fb54d8a30624e0a217a7925c205c4",
+      "marketing/douyin-studio/docs/11.0-douyin-research-and-script-v1.md": "3bb7cf4057e573088ef062b27ac597a9a84cb2850c60d5da64612f92fd39c16c"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -32,7 +33,7 @@
       "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c",
       "alignment_tools.py": "00b6cd40c5614cd4ecf4ad3ec88b87f681140d923469cf4d75eafdf2ff9178c9",
       "ALIGNMENT_STATUS.md": "1f2c382232e66330befa5f63f08d431b3653de04bde78c960bcfb89e2d6aa785",
-      "PROJECT_STAGE.safe.json": "a66d695fd3084ddaf48e6da7bf8ad1c394d05ab5f0f51964fc5be8423830b2e4"
+      "PROJECT_STAGE.safe.json": "10962b0a52b59506d3d5f4852adfac940e854daf1e921a90ed5e03462e2c2c3d"
     },
     "video": {
       "SAVE_RECEIPT.safe.json": "0e03ff4ffbd4c46428d19c9e3cffe669e559d720aa0007100b0614fa71c8c3c3",
@@ -41,7 +42,9 @@
     "evidence": {
       "SAFE_ACCEPTANCE.json": "6a62be8b4bb9d99e122ab44b4e29f278451c0e52ad0dc9480bb12fa115253b0f",
       "SAFE_ACCEPTANCE.md": "b02ef0446ace31b153ea6f6527984e7e9db77e1b16d071dbcd335431fc3891ea",
-      "first-migration-node20-265-of-274/original-report.json": "abddb5e266a3688945de6b461513cbab6c7ff07787289a40246e8d52f6c4f486"
+      "first-migration-node20-265-of-274/original-report.json": "abddb5e266a3688945de6b461513cbab6c7ff07787289a40246e8d52f6c4f486",
+      "20261006-douyin-research/VIDEO_CAPABILITY.safe.json": "b6eb0ce420004306a5c77f991aa3368067ffe7a5c474880c3cd3c29529f7532b",
+      "20261006-douyin-research/PUBLIC_RESEARCH_ACCESS.safe.json": "6ff956bb2a25287981aba80ee460c859a6a3529e88c0c87e89cec6c7d85028f5"
     }
   },
   "video_direction_approved": false,
@@ -50,8 +53,10 @@
   "original_local_materials_not_all_uploaded": true,
   "full_274_gate_pass_claimed": false,
   "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash.",
-  "current_owner_phase": "douyin_strategy_and_video_direction_discussion",
+  "current_owner_phase": "douyin_research_and_detailed_script_planning",
   "video_work_paused": true,
   "video_start_requires_new_explicit_owner_instruction": "视频开始",
-  "video_discussion_authorized": true
+  "video_discussion_authorized": true,
+  "video_script_planning_authorized": true,
+  "new_video_asset_production_authorized": false
 }
