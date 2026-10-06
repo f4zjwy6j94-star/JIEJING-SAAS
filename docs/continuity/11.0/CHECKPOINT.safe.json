@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "jiejing-11-video-continuity-20261006",
+  "checkpoint_name": "jiejing-11-materials-alignment-video-paused-20261006",
   "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
   "working_branch": "video/jiejing-11-continuity-20261006",
   "private_root": "/workspace/jiejing-continuity/10.0",
@@ -20,7 +20,7 @@
       "marketing/douyin-studio/package-lock.json": "08fd7d27c45182afe22ae1e36bd0c031fef3779a39ad4aaeee580000484f9ef7",
       "marketing/douyin-studio/public/brand/jiejing-app-icon.svg": "e6aaa79a4214680e878981f71e38a59e5a77f9c4ba8aece4853c16467a6d54a1",
       "marketing/douyin-studio/docs/11.0-visual-study-v1.md": "56dfd1e86b96bcf9f97a45f1488eb9f1292007881c471ab9d50d8fbffc334054",
-      "docs/continuity/11.0/00_READ_FIRST.md": "9e71aa1334d7e7f0f671a1ead9fba9fbc2d71b7d1bb4baeded9365c1d0b942df",
+      "docs/continuity/11.0/00_READ_FIRST.md": "860f0ec69b8eb05e31f52072f32219f323e7019290b61f629e393cf38b01d628",
       "docs/continuity/11.0/verify_checkpoint.py": "2769f4298c6f8579ee82c681cee3a0e5923126cfb8fcd6cd02b448f7b423126f"
     },
     "private": {
@@ -28,7 +28,9 @@
       "working_materials_tools.py": "8908000d28a842051095c646bdd7771f6c415cc39d693dc443acb1cfbb68651e",
       "history_tools.py": "f19a4275e3d6da7402a288ba3708888696bc85235aa5ca74b3d3b5aac396835a",
       "media_tools.py": "2ae35314d7227ecce2db624d91e1fd3573def167302e0968b102a6d493028b34",
-      "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c"
+      "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c",
+      "alignment_tools.py": "00b6cd40c5614cd4ecf4ad3ec88b87f681140d923469cf4d75eafdf2ff9178c9",
+      "ALIGNMENT_STATUS.md": "1f2c382232e66330befa5f63f08d431b3653de04bde78c960bcfb89e2d6aa785"
     },
     "video": {
       "SAVE_RECEIPT.safe.json": "0e03ff4ffbd4c46428d19c9e3cffe669e559d720aa0007100b0614fa71c8c3c3",
@@ -45,5 +47,8 @@
   "publication_approved": false,
   "original_local_materials_not_all_uploaded": true,
   "full_274_gate_pass_claimed": false,
-  "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash."
+  "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash.",
+  "current_owner_phase": "materials_history_code_alignment_only",
+  "video_work_paused": true,
+  "video_start_requires_new_explicit_owner_instruction": "视频开始"
 }
