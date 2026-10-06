@@ -21,7 +21,8 @@
       "marketing/douyin-studio/public/brand/jiejing-app-icon.svg": "e6aaa79a4214680e878981f71e38a59e5a77f9c4ba8aece4853c16467a6d54a1",
       "marketing/douyin-studio/docs/11.0-visual-study-v1.md": "56dfd1e86b96bcf9f97a45f1488eb9f1292007881c471ab9d50d8fbffc334054",
       "docs/continuity/11.0/00_READ_FIRST.md": "860f0ec69b8eb05e31f52072f32219f323e7019290b61f629e393cf38b01d628",
-      "docs/continuity/11.0/verify_checkpoint.py": "2769f4298c6f8579ee82c681cee3a0e5923126cfb8fcd6cd02b448f7b423126f"
+      "docs/continuity/11.0/verify_checkpoint.py": "2769f4298c6f8579ee82c681cee3a0e5923126cfb8fcd6cd02b448f7b423126f",
+      "marketing/douyin-studio/docs/11.0-douyin-discussion-v1.md": "7cd3b47f863a4905fd2efccbca81a483994fb54d8a30624e0a217a7925c205c4"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -31,7 +32,7 @@
       "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c",
       "alignment_tools.py": "00b6cd40c5614cd4ecf4ad3ec88b87f681140d923469cf4d75eafdf2ff9178c9",
       "ALIGNMENT_STATUS.md": "1f2c382232e66330befa5f63f08d431b3653de04bde78c960bcfb89e2d6aa785",
-      "PROJECT_STAGE.safe.json": "e7e14e3b3847c7fa15d082c5feaaec01eba63c84bdf39ca07b7528601e8e65b7"
+      "PROJECT_STAGE.safe.json": "a66d695fd3084ddaf48e6da7bf8ad1c394d05ab5f0f51964fc5be8423830b2e4"
     },
     "video": {
       "SAVE_RECEIPT.safe.json": "0e03ff4ffbd4c46428d19c9e3cffe669e559d720aa0007100b0614fa71c8c3c3",
@@ -49,7 +50,8 @@
   "original_local_materials_not_all_uploaded": true,
   "full_274_gate_pass_claimed": false,
   "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash.",
-  "current_owner_phase": "materials_history_code_alignment_only",
+  "current_owner_phase": "douyin_strategy_and_video_direction_discussion",
   "video_work_paused": true,
-  "video_start_requires_new_explicit_owner_instruction": "视频开始"
+  "video_start_requires_new_explicit_owner_instruction": "视频开始",
+  "video_discussion_authorized": true
 }
