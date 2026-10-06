@@ -1,5 +1,11 @@
 # 捷境 11.0 云端工作检查点
 
+## 最新成片：画外音讲解 v2
+
+经营者已确认不露脸、自然讲解与画面对应，并要求持续制作，v2现已完成私人审看版。新增作品/素材目录 `/workspace/jiejing-deliverables/11.0/20261006-voiceover-v2`，说明 `marketing/douyin-studio/docs/11.0-voiceover-explainer-v2.md`。先读当前执行摘要和START_HERE最新条目，旧出镜/数字人建议已纠正。
+
+统一 `verify_checkpoint.py` 检查新增v2回执的文件大小/SHA和ZIP，同时保留原资料、旧样片及v1全部检查。丢失或变化必须报告，不能reset/clean消除差异。最终版本/远端/草稿见 `/workspace/onboarding-evidence/20261006-voiceover-v2/VOICEOVER_SAVE.safe.json`。方向获确认，成片与公开发布尚未获批准；原三失败不因视频验收关闭。
+
 ## 当前检查点：完整视频 v1 已交付私人审看
 
 经营者最新请求已明确开始并完成视频制作，覆盖下方旧“只对齐/等待视频开始”的暂停条件。已制作约36秒1080×1920带中文合成旁白、原创配乐及真实本地示例操作的完整视频；经营者尚未认可最终成片，未公开发布。

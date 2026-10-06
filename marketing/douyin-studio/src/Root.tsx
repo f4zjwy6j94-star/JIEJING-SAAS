@@ -1,4 +1,6 @@
 import "./index.css";
+import { Douyin11VoiceoverV2, Douyin11VoiceoverCover } from "./Douyin11VoiceoverV2";
+import { voiceoverDuration } from "./VoiceoverV2Timing";
 import { Douyin11CompleteV1, Douyin11CompleteCover } from "./Douyin11CompleteV1";
 import { FactsFilm, Douyin11ConceptBoard, Douyin11Storyboard } from "./Douyin11VisualStudy";
 import { Composition, Still } from "remotion";
@@ -10,6 +12,8 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="Douyin11VoiceoverV2" component={Douyin11VoiceoverV2} durationInFrames={voiceoverDuration} fps={30} width={1080} height={1920} />
+      <Still id="Douyin11VoiceoverCover" component={Douyin11VoiceoverCover} width={1080} height={1920} />
       <Composition id="Douyin11CompleteV1" component={Douyin11CompleteV1} durationInFrames={1078} fps={30} width={1080} height={1920} />
       <Still id="Douyin11CompleteCover" component={Douyin11CompleteCover} width={1080} height={1920} />
       <Composition id="Douyin11StyleA" component={FactsFilm} durationInFrames={360} fps={30} width={1080} height={1920} />
