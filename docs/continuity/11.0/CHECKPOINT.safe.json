@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "jiejing-11-narrative-rework-v3-20261007",
+  "checkpoint_name": "jiejing-11-continuous-explainer-v4-20261007",
   "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
   "working_branch": "video/jiejing-11-continuity-20261006",
   "private_root": "/workspace/jiejing-continuity/10.0",
@@ -13,15 +13,15 @@
   "pinned_files": {
     "repo": {
       "AGENTS.md": "9ad2c01537cec7fedd0b24c71ff8ed7513b4514d0c20cb3ee973360e3846ddfe",
-      "marketing/douyin-studio/src/Root.tsx": "1a243dd41ed602384212d8ec544ef0f782a699a8df86256a8f6d80c40c20b59c",
+      "marketing/douyin-studio/src/Root.tsx": "6793f417bffef41a9ee17852b8ac120b4fe46e3c746a84af1a727401af27cffb",
       "marketing/douyin-studio/src/Douyin11VisualStudy.tsx": "31938fce8e1e93cd1bab02dd9fcc33dcdcb607ba1ee03c8aa60a50a7143354fb",
       "marketing/douyin-studio/src/index.ts": "957e481dd33a29b4a55ae0e95dbf763b7e48c37c427ca4bd1275faf34bc07a74",
       "marketing/douyin-studio/package.json": "3d555e7a46381dec7c5b335c2f57416cc482c242a581979d42378b6f958f04f1",
       "marketing/douyin-studio/package-lock.json": "08fd7d27c45182afe22ae1e36bd0c031fef3779a39ad4aaeee580000484f9ef7",
       "marketing/douyin-studio/public/brand/jiejing-app-icon.svg": "e6aaa79a4214680e878981f71e38a59e5a77f9c4ba8aece4853c16467a6d54a1",
       "marketing/douyin-studio/docs/11.0-visual-study-v1.md": "56dfd1e86b96bcf9f97a45f1488eb9f1292007881c471ab9d50d8fbffc334054",
-      "docs/continuity/11.0/00_READ_FIRST.md": "011f6a7b40dba1983fb1037088d4ef018dea8586e0a085a8db2bb4266b03080d",
-      "docs/continuity/11.0/verify_checkpoint.py": "68e63b8ef4a8588943eb264bac967d00eaf08e8826c323abf67af63989c1b902",
+      "docs/continuity/11.0/00_READ_FIRST.md": "8702a3d6efe9fcdbc48c817bbe328a18b7a7fe75af08e6832f7f1feaf489b43d",
+      "docs/continuity/11.0/verify_checkpoint.py": "a65338c1a68d6d7f0b079a98620b9e0cc04c58230f649c573b6358a214348395",
       "marketing/douyin-studio/docs/11.0-douyin-discussion-v1.md": "7cd3b47f863a4905fd2efccbca81a483994fb54d8a30624e0a217a7925c205c4",
       "marketing/douyin-studio/docs/11.0-douyin-research-and-script-v1.md": "3bb7cf4057e573088ef062b27ac597a9a84cb2850c60d5da64612f92fd39c16c",
       "marketing/douyin-studio/src/Douyin11CompleteV1.tsx": "c050c9ddc0750d677e8b3aaf7c10d1203adeb57601058ed4eacb1272aff3142c",
@@ -42,7 +42,16 @@
       "marketing/douyin-studio/docs/11.0-narrative-rework-v3.md": "c6acfee9bcf37c36fddc533168ca47db380ec3e228dbf27dd485c41a0c4488c8",
       "marketing/douyin-studio/tools/narrative-v3/render-opening.cjs": "e0fab8155de8ba50e86e419ac7d60231a4879046cf6dee5ffdaedbbccb14c372",
       "marketing/douyin-studio/tools/narrative-v3/prepare-local-assets.py": "86ca8cc8d092148eccb852da5dcb55add014c0bd55aea5dad77b6668a9ab78e3",
-      "marketing/douyin-studio/tools/narrative-v3/verify-opening.py": "c426c13b5a2b363b188faa7a7325f99b67433558fcfaf87215df17e6c394800e"
+      "marketing/douyin-studio/tools/narrative-v3/verify-opening.py": "c426c13b5a2b363b188faa7a7325f99b67433558fcfaf87215df17e6c394800e",
+      "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
+      "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
+      "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "11becd950cf9b8eb938fe711cadc951c8c18214ded9f9e2348740f0040d8492c",
+      "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
+      "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
+      "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
+      "marketing/douyin-studio/tools/continuous-v4/prepare-voice.py": "aed535df6bd0683e2f0aabbe4f1c0099598a41048b8d296c69a9f508fe0e58ef",
+      "marketing/douyin-studio/tools/continuous-v4/render-film.cjs": "8dde3e55da66d05fa4142cac8208c636878eeece54d0a54a64bcec6fd583c38f"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -52,7 +61,7 @@
       "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c",
       "alignment_tools.py": "00b6cd40c5614cd4ecf4ad3ec88b87f681140d923469cf4d75eafdf2ff9178c9",
       "ALIGNMENT_STATUS.md": "1f2c382232e66330befa5f63f08d431b3653de04bde78c960bcfb89e2d6aa785",
-      "PROJECT_STAGE.safe.json": "ff8e01fd855d939425d6d623ff90244d5cb97766940ca1c5591c7b09a25e397c"
+      "PROJECT_STAGE.safe.json": "a294394ef0431ba031e1ce74340a4daa6cac3874bf2228bbee75118a9fd67afe"
     },
     "video": {
       "SAVE_RECEIPT.safe.json": "0e03ff4ffbd4c46428d19c9e3cffe669e559d720aa0007100b0614fa71c8c3c3",
@@ -79,6 +88,10 @@
     "narrative_video": {
       "ASSET_RECEIPT.safe.json": "5ed706fea69fe8b29487e66c30503b4d40712f498638a5d3008126a2be03b57e",
       "jiejing-narrative-v3-editable.zip": "ec423b027b8ed67c549b6c6f056566a8d6a09d88822120b9d748bf28ef5fff58"
+    },
+    "continuous_video": {
+      "ASSET_RECEIPT.safe.json": "47388fe648b6cba1794211617545b606ef63bafb28edb5c8f290a5139defe947",
+      "jiejing-continuous-v4-editable.zip": "4489fd83e79361fece25f80e129b7245092ea36574b2368d364c102724247526"
     }
   },
   "video_direction_approved": true,
@@ -87,7 +100,7 @@
   "original_local_materials_not_all_uploaded": true,
   "full_274_gate_pass_claimed": false,
   "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash.",
-  "current_owner_phase": "v2_rejected_v3_opening_and_voice_review",
+  "current_owner_phase": "v4_complete_continuous_narration_owner_review",
   "video_work_paused": false,
   "video_start_requires_new_explicit_owner_instruction": false,
   "video_discussion_authorized": true,
@@ -101,5 +114,18 @@
   "narrative_video_output_root": "/workspace/jiejing-deliverables/11.0/20261007-narrative-rework-v3",
   "v2_owner_creative_review": "rejected",
   "v3_complete_film": false,
-  "v3_direction_and_voice_approved": false
+  "v3_direction_and_voice_approved": false,
+  "continuous_video_output_root": "/workspace/jiejing-deliverables/11.0/20261007-continuous-v4",
+  "continuous_video_save_receipt": "/workspace/onboarding-evidence/20261007-continuous-v4/V4_SAVE.safe.json",
+  "v4_complete_film": true,
+  "v4_owner_creative_approval": false,
+  "v3_plain_language_direction_accepted": true,
+  "v3_pause_pattern_accepted": false,
+  "future_platforms_owner_confirmed": [
+    "Amazon",
+    "TikTok Shop",
+    "抖音"
+  ],
+  "current_supported_platform": "eBay",
+  "future_platforms_are_not_current_integrations": true
 }

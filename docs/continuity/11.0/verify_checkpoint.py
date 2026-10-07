@@ -49,7 +49,8 @@ def main() -> int:
              "evidence": Path("/workspace/onboarding-evidence"),
              "complete_video": Path(state["complete_video_output_root"]),
              "voiceover_video": Path(state["voiceover_video_output_root"]),
-             "narrative_video": Path(state["narrative_video_output_root"])}
+             "narrative_video": Path(state["narrative_video_output_root"]),
+             "continuous_video": Path(state["continuous_video_output_root"])}
     for group, files in state["pinned_files"].items():
         for relative, expected in files.items():
             checked_file(roots[group], relative, expected)
@@ -75,6 +76,11 @@ def main() -> int:
         path = checked_file(roots["narrative_video"], item["path"], item["sha256"])
         if path.stat().st_size != item["bytes"]:
             raise ValueError(f"Narrative study asset size changed: {item['path']}")
+    continuous_receipt = json.loads(checked_file(roots["continuous_video"], "ASSET_RECEIPT.safe.json").read_text())
+    for item in continuous_receipt["files"]:
+        path = checked_file(roots["continuous_video"], item["path"], item["sha256"])
+        if path.stat().st_size != item["bytes"]:
+            raise ValueError(f"Continuous video asset size changed: {item['path']}")
     verifier = checked_file(roots["private"], "continuity_tools.py", state["pinned_files"]["private"]["continuity_tools.py"])
     result = subprocess.run([sys.executable, str(verifier), "--verify"], capture_output=True, text=True, timeout=120)
     if result.returncode:
@@ -102,6 +108,7 @@ def main() -> int:
         "complete_video_files_verified": len(complete_receipt["files"]),
         "voiceover_video_files_verified": len(voiceover_receipt["files"]),
         "narrative_study_files_verified": len(narrative_receipt["files"]),
+        "continuous_video_files_verified": len(continuous_receipt["files"]),
         "remote_head_equals_local": remote_saved, "independent_new_task_cold_start_certified": False,
         "production_deployment_certified": False}, ensure_ascii=False))
     return 0

@@ -1,5 +1,15 @@
 # 捷境 11.0 云端工作检查点
 
+## 最新：v4连贯完整讲解与未来平台规划
+
+经营者认可白话讲述方向，要求声音连贯并亲自确认TikTok Shop名称。v4已完成约55.62秒完整私人审看版，一条约54.90秒合成旁白贯穿五个持续视觉段落，画面跟讲解推进；不逐镜合成或留停顿。当前eBay与后续亚马逊、TikTok Shop、抖音/更多平台明确区分，不声称尚未接入的平台可用。人物不出镜，声音自然度和成片认可仍待经营者审看。
+
+私人目录 `/workspace/jiejing-deliverables/11.0/20261007-continuous-v4`；主片 `jiejing-continuous-v4.mp4`、旁白 `jiejing-continuous-narration-v4.mp3`、字幕、可编辑ZIP、ASSET_RECEIPT/VIDEO_QA/VISUAL_REVIEW。源与重现说明 `marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md`。继续既有工程/私人工作分支，旧版本保留。
+
+启动运行 `python3 /workspace/JIEJING-SAAS/docs/continuity/11.0/verify_checkpoint.py`，必须检查v4及原全部资料，缺失/哈希变化报错，不reset/clean/checkout。实际远端版本、素材、环境草稿和发布状态以 `/workspace/onboarding-evidence/20261007-continuous-v4/V4_SAVE.safe.json` 为准；普通讨论不用反复编辑环境，本次仅保存新增视频/素材的恢复引用，未改变依赖/网络/权限，也未发布环境。
+
+原265/274和三项SaaS失败保持；完整讲解片不代表生产通道/商业收入/独立新任务恢复通过。以下较早记录按时点保留，旧“每句话对应一个镜头”不再是剪辑要求。
+
 ## 最新审看：v2未通过，v3仅为开篇方向样片
 
 2026-10-07经营者否决v2的声音、逐图讲述、配色与审美。先读当前执行摘要和 `marketing/douyin-studio/docs/11.0-narrative-rework-v3.md`。完整白话稿已重写，当前只有16秒连续动态开篇与两种声音试听，未完成/批准完整v3，不能复用旧“制作完成”当作创意认可。
