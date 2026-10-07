@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "jiejing-11-continuous-explainer-v4-20261007",
+  "checkpoint_name": "jiejing-11-higher-fidelity-AI-voice-search-20261007",
   "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
   "working_branch": "video/jiejing-11-continuity-20261006",
   "private_root": "/workspace/jiejing-continuity/10.0",
@@ -20,8 +20,8 @@
       "marketing/douyin-studio/package-lock.json": "08fd7d27c45182afe22ae1e36bd0c031fef3779a39ad4aaeee580000484f9ef7",
       "marketing/douyin-studio/public/brand/jiejing-app-icon.svg": "e6aaa79a4214680e878981f71e38a59e5a77f9c4ba8aece4853c16467a6d54a1",
       "marketing/douyin-studio/docs/11.0-visual-study-v1.md": "56dfd1e86b96bcf9f97a45f1488eb9f1292007881c471ab9d50d8fbffc334054",
-      "docs/continuity/11.0/00_READ_FIRST.md": "8702a3d6efe9fcdbc48c817bbe328a18b7a7fe75af08e6832f7f1feaf489b43d",
-      "docs/continuity/11.0/verify_checkpoint.py": "a65338c1a68d6d7f0b079a98620b9e0cc04c58230f649c573b6358a214348395",
+      "docs/continuity/11.0/00_READ_FIRST.md": "a6efd7c00ab5783b2388a9cc1734db247a07933961885dad4da652f582fc4932",
+      "docs/continuity/11.0/verify_checkpoint.py": "6919b91e3df6cb41b0c6c2841ad035347af5db2b240503b157d04e9c2d42fbf1",
       "marketing/douyin-studio/docs/11.0-douyin-discussion-v1.md": "7cd3b47f863a4905fd2efccbca81a483994fb54d8a30624e0a217a7925c205c4",
       "marketing/douyin-studio/docs/11.0-douyin-research-and-script-v1.md": "3bb7cf4057e573088ef062b27ac597a9a84cb2850c60d5da64612f92fd39c16c",
       "marketing/douyin-studio/src/Douyin11CompleteV1.tsx": "c050c9ddc0750d677e8b3aaf7c10d1203adeb57601058ed4eacb1272aff3142c",
@@ -46,12 +46,13 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "11becd950cf9b8eb938fe711cadc951c8c18214ded9f9e2348740f0040d8492c",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "d866c7a33e4682d11f0e2f31c451161eae51de2d632c80bdf58f4e9b7a1356ac",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
       "marketing/douyin-studio/tools/continuous-v4/prepare-voice.py": "aed535df6bd0683e2f0aabbe4f1c0099598a41048b8d296c69a9f508fe0e58ef",
-      "marketing/douyin-studio/tools/continuous-v4/render-film.cjs": "8dde3e55da66d05fa4142cac8208c636878eeece54d0a54a64bcec6fd583c38f"
+      "marketing/douyin-studio/tools/continuous-v4/render-film.cjs": "8dde3e55da66d05fa4142cac8208c636878eeece54d0a54a64bcec6fd583c38f",
+      "marketing/douyin-studio/docs/11.0-natural-voice-v5.md": "42d79976b9354d7cfc332c58e82e82757408b8d16d338ddb9a35dc0da811c360"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -61,7 +62,7 @@
       "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c",
       "alignment_tools.py": "00b6cd40c5614cd4ecf4ad3ec88b87f681140d923469cf4d75eafdf2ff9178c9",
       "ALIGNMENT_STATUS.md": "1f2c382232e66330befa5f63f08d431b3653de04bde78c960bcfb89e2d6aa785",
-      "PROJECT_STAGE.safe.json": "a294394ef0431ba031e1ce74340a4daa6cac3874bf2228bbee75118a9fd67afe"
+      "PROJECT_STAGE.safe.json": "8f41a64580b99412b803e0f288a94b208200d401b67d8ed9f9a86fb7f911452d"
     },
     "video": {
       "SAVE_RECEIPT.safe.json": "0e03ff4ffbd4c46428d19c9e3cffe669e559d720aa0007100b0614fa71c8c3c3",
@@ -92,6 +93,9 @@
     "continuous_video": {
       "ASSET_RECEIPT.safe.json": "47388fe648b6cba1794211617545b606ef63bafb28edb5c8f290a5139defe947",
       "jiejing-continuous-v4-editable.zip": "4489fd83e79361fece25f80e129b7245092ea36574b2368d364c102724247526"
+    },
+    "voice_audition": {
+      "ASSET_RECEIPT.safe.json": "5d9b6e08c6478850f3049a1d73dd2c6a1d49cb4859ddf74a3ebd9a85bc16abe1"
     }
   },
   "video_direction_approved": true,
@@ -100,7 +104,7 @@
   "original_local_materials_not_all_uploaded": true,
   "full_274_gate_pass_claimed": false,
   "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash.",
-  "current_owner_phase": "v4_complete_continuous_narration_owner_review",
+  "current_owner_phase": "both_voices_rejected_higher_fidelity_AI_selected_minimax_access_pending",
   "video_work_paused": false,
   "video_start_requires_new_explicit_owner_instruction": false,
   "video_discussion_authorized": true,
@@ -127,5 +131,15 @@
     "抖音"
   ],
   "current_supported_platform": "eBay",
-  "future_platforms_are_not_current_integrations": true
+  "future_platforms_are_not_current_integrations": true,
+  "voice_audition_output_root": "/workspace/jiejing-deliverables/11.0/20261007-natural-voice-v5",
+  "voice_audition_save_receipt": "/workspace/onboarding-evidence/20261007-natural-voice-v5/V5_SAVE.safe.json",
+  "v4_owner_voice_review": "rejected",
+  "v5_owner_voice_review": "rejected",
+  "v5_complete_film": false,
+  "human_recording_route_recommended": false,
+  "human_recording_route_owner_selected": false,
+  "selected_audio_source_route": "higher_fidelity_AI",
+  "minimax_trial_authorization": "see_latest_owner_reply_and_V5_SAVE_receipt",
+  "minimax_custom_generation_verified": false
 }
