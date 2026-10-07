@@ -1,5 +1,15 @@
 # 捷境 11.0 云端工作检查点
 
+## 2026-10-07最新：25秒v6完整推广片待审看
+
+经营者明确要求20–30秒完整片，作品已在 `/workspace/jiejing-deliverables/11.0/20261007-release-film-v6` 导出。主片 `jiejing-douyin-v6.mp4`，25秒、1080×1920、连续合成旁白、原创动画及少量真实输入示例；发布另行确认。免费预算0不变。
+
+选中的CosyVoice官方口语演示仅有学术用途说明，人物声音商业复刻权不明，未复制/克隆。当前用免费Qwen3-TTS预设Serena制作独立替代审看版，不是同一音色，经营者是否接受及自然度仍待听片。原v4/QwenA否决保留。自动转写/完整解码不等于真人听感通过。
+
+先读当前执行摘要及 `marketing/douyin-studio/docs/11.0-release-film-v6.md`，运行 `python3 /workspace/JIEJING-SAAS/docs/continuity/11.0/verify_checkpoint.py`；缺失/哈希变化必须报错，原全部历史/旧作品与三SaaS失败保持。仅在需要声源重制时使用仓库外隔离工具；其 `install_free_voice.py --verify-only` 只读校验17个模型文件和依赖，失败不能静默安装/联网。正常启动不自动配音或登录。
+
+准确远端提交、资产SHA与环境草稿状态见 `/workspace/onboarding-evidence/20261007-release-film-v6/V6_SAVE.safe.json`；本轮不自行发布环境或抖音，新任务恢复仍未验收。旧快照并非与本地/其他任务实时同步，不reset/checkout清理后续工作。下方旧阶段仅为历史。
+
 ## 2026-10-07最新：免费配音限定优先
 
 经营者明确只要免费。MiniMax参考音色仅条件性保留为备选，具体男女声和完整成片未定；此前USD1付费试音提议作废，不再等待付费批准，不充值/订阅、不用完免费额度自动转付费。API仍收费，免费账户额度和推广使用权未核实。
