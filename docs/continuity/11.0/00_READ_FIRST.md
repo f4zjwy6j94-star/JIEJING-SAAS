@@ -1,5 +1,15 @@
 # 捷境 11.0 云端工作检查点
 
+## 2026-10-07最新：v8多场景28秒完整作品
+
+经营者认可v7质感改善，否决围绕杯子的单一主题，已授权助手自行完成20–30秒整片。最新作品 `/workspace/jiejing-deliverables/11.0/20261007-complete-v8/jiejing-douyin-v8.mp4`，28秒1080×1920/24fps；七个原创三维空间/动作服务讲解，不是换品类轮播。完整源与说明 `marketing/douyin-studio/docs/11.0-complete-video-v8.md`。原作品保留；v7等待方向选择的暂停状态已更新。
+
+配音复用v6整段Serena，不是新生成/真人录音或原CosyVoice参考同一声音，声音/创意仍待主人审看。当前eBay，Amazon/TikTok Shop/抖音仅后续规划。无采购、付费调用、新依赖、生产/拼嘚/登录/发布行为。
+
+先读START_HERE与当前执行摘要，再运行 `python3 /workspace/JIEJING-SAAS/docs/continuity/11.0/verify_checkpoint.py`；统一入口新增v8资产回执/ZIP，保留原全部组，少文件/哈希变化就报错。后续修改先保存，不reset/checkout/clean回初始快照；普通启动不重新渲染/合成/安装。
+
+准确文件、源码远端和私人环境草稿见 `/workspace/onboarding-evidence/20261007-complete-v8/V8_SAVE.safe.json`。草稿保存不等于环境发布或独立新任务恢复；原265/274及三SaaS失败、生产通道未验收保持。以下旧记录按时点追溯。
+
 ## 2026-10-07最新：v6否决后，以v7三维视觉样片续接
 
 经营者明确认为v6文字模块画面太简单、缺乏美感；该片文件保留，但不是当前待发布候选。已实际研究四个公开品牌案例的可访问画面，抖音页面403、无可播放案例与爆款数据。详见 `marketing/douyin-studio/docs/11.0-creative-reset-v7.md`，不要声称已验证获客成效。
