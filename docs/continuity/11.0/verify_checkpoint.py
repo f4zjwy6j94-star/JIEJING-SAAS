@@ -52,7 +52,8 @@ def main() -> int:
              "narrative_video": Path(state["narrative_video_output_root"]),
              "continuous_video": Path(state["continuous_video_output_root"]),
              "voice_audition": Path(state["voice_audition_output_root"]),
-             "release_video": Path(state["release_video_output_root"])}
+             "release_video": Path(state["release_video_output_root"]),
+             "creative_study": Path(state["creative_study_output_root"])}
     for group, files in state["pinned_files"].items():
         for relative, expected in files.items():
             checked_file(roots[group], relative, expected)
@@ -93,6 +94,11 @@ def main() -> int:
         path = checked_file(roots["release_video"], item["path"], item["sha256"])
         if path.stat().st_size != item["bytes"]:
             raise ValueError(f"Release video asset size changed: {item['path']}")
+    creative_receipt = json.loads(checked_file(roots["creative_study"], "ASSET_RECEIPT.safe.json").read_text())
+    for item in creative_receipt["files"]:
+        path = checked_file(roots["creative_study"], item["path"], item["sha256"])
+        if path.stat().st_size != item["bytes"]:
+            raise ValueError(f"Creative study asset size changed: {item['path']}")
     verifier = checked_file(roots["private"], "continuity_tools.py", state["pinned_files"]["private"]["continuity_tools.py"])
     result = subprocess.run([sys.executable, str(verifier), "--verify"], capture_output=True, text=True, timeout=120)
     if result.returncode:
@@ -123,6 +129,7 @@ def main() -> int:
         "continuous_video_files_verified": len(continuous_receipt["files"]),
         "voice_audition_files_verified": len(voice_audition_receipt["files"]),
         "release_video_files_verified": len(release_receipt["files"]),
+        "creative_study_files_verified": len(creative_receipt["files"]),
         "remote_head_equals_local": remote_saved, "independent_new_task_cold_start_certified": False,
         "production_deployment_certified": False}, ensure_ascii=False))
     return 0

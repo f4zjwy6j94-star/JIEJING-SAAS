@@ -1,5 +1,15 @@
 # 捷境 11.0 云端工作检查点
 
+## 2026-10-07最新：v6否决后，以v7三维视觉样片续接
+
+经营者明确认为v6文字模块画面太简单、缺乏美感；该片文件保留，但不是当前待发布候选。已实际研究四个公开品牌案例的可访问画面，抖音页面403、无可播放案例与爆款数据。详见 `marketing/douyin-studio/docs/11.0-creative-reset-v7.md`，不要声称已验证获客成效。
+
+本轮由助手选择原创暖光三维方向，作品在 `/workspace/jiejing-deliverables/11.0/20261007-creative-reset-v7`。14.25秒720p/24fps样片、.blend可编辑工程、8帧分镜、素材回执与ZIP。66张实际三维帧按镜头内补帧，非原生24fps精渲染；不是完整新广告。现用旧v6声音前段作同稿视觉比较，声线和创意均未获主人认可。原作品不删除、不覆盖。
+
+先读START_HERE和当前执行摘要，保留实际分支/后续修改；执行 `python3 /workspace/JIEJING-SAAS/docs/continuity/11.0/verify_checkpoint.py`。新组及原全部资产必须校验，缺失/变化报错。另执行 `python3 /workspace/onboarding-evidence/20261007-creative-reset-v7/install_blender.py --verify-only`，离线验证官方便携Blender压缩包/可执行文件。普通启动不自动下载、渲染或合成配音；不reset/checkout/clean。
+
+准确Git/资产/草稿回执 `/workspace/onboarding-evidence/20261007-creative-reset-v7/V7_SAVE.safe.json`。本轮只存环境草稿，未发布；当前验证不证明新任务冷启动。三SaaS失败、生产边界、免费声音要求和COS取消保持。以下为旧时点记录，按最新否决与授权续接。
+
 ## 2026-10-07最新：25秒v6完整推广片待审看
 
 经营者明确要求20–30秒完整片，作品已在 `/workspace/jiejing-deliverables/11.0/20261007-release-film-v6` 导出。主片 `jiejing-douyin-v6.mp4`，25秒、1080×1920、连续合成旁白、原创动画及少量真实输入示例；发布另行确认。免费预算0不变。

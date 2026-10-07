@@ -1,4 +1,5 @@
 import "./index.css";
+import { Douyin11TactileV7 } from "./Douyin11TactileV7";
 import { Douyin11ReleaseV6, Douyin11ReleaseCover } from "./Douyin11ReleaseV6";
 import { releaseTiming } from "./ReleaseV6Timing";
 import { Douyin11ContinuousV4 } from "./Douyin11ContinuousV4";
@@ -17,6 +18,7 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="Douyin11TactileV7" component={Douyin11TactileV7} durationInFrames={342} fps={24} width={720} height={1280} />
       <Composition id="Douyin11ReleaseV6" component={Douyin11ReleaseV6} durationInFrames={releaseTiming.durationInFrames} fps={30} width={1080} height={1920} />
       <Still id="Douyin11ReleaseCover" component={Douyin11ReleaseCover} width={1080} height={1920} />
       <Composition id="Douyin11ContinuousV4" component={Douyin11ContinuousV4} durationInFrames={continuousTiming.duration_frames} fps={30} width={1080} height={1920} />
