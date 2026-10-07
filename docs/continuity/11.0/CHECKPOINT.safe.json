@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "v9 product explainer complete; v8 creatively rejected",
+  "checkpoint_name": "v10 full AI commerce explainer; v9 visual direction partly accepted; private review only",
   "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
   "working_branch": "video/jiejing-11-continuity-20261006",
   "private_root": "/workspace/jiejing-continuity/10.0",
@@ -20,8 +20,8 @@
       "marketing/douyin-studio/package-lock.json": "08fd7d27c45182afe22ae1e36bd0c031fef3779a39ad4aaeee580000484f9ef7",
       "marketing/douyin-studio/public/brand/jiejing-app-icon.svg": "e6aaa79a4214680e878981f71e38a59e5a77f9c4ba8aece4853c16467a6d54a1",
       "marketing/douyin-studio/docs/11.0-visual-study-v1.md": "56dfd1e86b96bcf9f97a45f1488eb9f1292007881c471ab9d50d8fbffc334054",
-      "docs/continuity/11.0/00_READ_FIRST.md": "be88bb4ee77935053e079c3fdec39086ee13c154097beafc2d611aa2776c5072",
-      "docs/continuity/11.0/verify_checkpoint.py": "c12e1e6b2939ab9725f576498c20bc45b38f0a9e0591fad6f9e1fbafc30ac3ba",
+      "docs/continuity/11.0/00_READ_FIRST.md": "1268b26a2edcdf6a09ea89a07c676b87c2239119cda62c2b9f050116ff3d96d7",
+      "docs/continuity/11.0/verify_checkpoint.py": "546b2f2a52fe45075652225cac9ef9461b6d465f18baaeffba49b20d30b573b2",
       "marketing/douyin-studio/docs/11.0-douyin-discussion-v1.md": "7cd3b47f863a4905fd2efccbca81a483994fb54d8a30624e0a217a7925c205c4",
       "marketing/douyin-studio/docs/11.0-douyin-research-and-script-v1.md": "3bb7cf4057e573088ef062b27ac597a9a84cb2850c60d5da64612f92fd39c16c",
       "marketing/douyin-studio/src/Douyin11CompleteV1.tsx": "c050c9ddc0750d677e8b3aaf7c10d1203adeb57601058ed4eacb1272aff3142c",
@@ -46,7 +46,7 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "cbe4f24840880eaa1f45542c72248bee70c3723c8c8fcb55beb49248306175b9",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "77783b5ebdbaf24282c538f6b9853c0d56063387046bcbec44128471c7cc2644",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
@@ -82,7 +82,16 @@
       "marketing/douyin-studio/tools/product-v9/prepare-film.py": "c3a7660350c79574137ed79c4f673b5d06a89ada36d760d9f9b72a27726eed4e",
       "marketing/douyin-studio/hyperframes/product-v9/DESIGN.md": "d1c89a9676dacd3c3d538725ed24051bcbba705f6d9b4356b3ae6cda2841d57d",
       "marketing/douyin-studio/hyperframes/product-v9/index.html": "80a8c800160b23adba9fbc0f94bfbe366c874d2186fef3e4ad54b34856938f09",
-      "marketing/douyin-studio/docs/11.0-product-rework-v9.md": "802f142d54de822f312a78d7a007d2151178a3768bbb152f8342aa7c13f04299"
+      "marketing/douyin-studio/docs/11.0-product-rework-v9.md": "802f142d54de822f312a78d7a007d2151178a3768bbb152f8342aa7c13f04299",
+      "marketing/douyin-studio/docs/11.0-ai-commerce-v10.md": "529a1f501ff470f25244791b3439282bd3d489ed89ad278bc93c9a8735cd3b8b",
+      "marketing/douyin-studio/hyperframes/commerce-v10/DESIGN.md": "1920bbe6e9492de290dfc46e29c1c1621d95d1ea4f4ae8ebfc65e7a760779eb8",
+      "marketing/douyin-studio/hyperframes/commerce-v10/index.template.html": "81af114ea35782078af5fd592e265c7ca5d981a7c22bcb2cadcad99834fd0e54",
+      "marketing/douyin-studio/tools/commerce-v10/make-voice.py": "6e3b3e7c55b722c5154ccb024e5b8a3bdc824c7d92410fcc6087171bd44ca1e0",
+      "marketing/douyin-studio/tools/commerce-v10/align-timing.py": "988a8202759fdd2493f4a91d2826dfa19396dce9afeacfd64ef852e31b28203b",
+      "marketing/douyin-studio/tools/commerce-v10/verify-film.py": "e5a522f253ba4b114caa314d2488f795182835e625d9b205004ba57aed50b19a",
+      "marketing/douyin-studio/tools/commerce-v10/transcribe-voice.py": "22bc8fa60c8cbef039d3e2e185417f5a87346c03afcf00bc0db86b2bf6e2e34e",
+      "marketing/douyin-studio/tools/commerce-v10/render-film.sh": "b0d53623488dbd890b10e226d8d16a7652fe7fa9179760dbb05523a70aa6df3b",
+      "marketing/douyin-studio/tools/commerce-v10/prepare-film.py": "14adbf3484d523ce97230cea3dfd8bf69326616512edeb97e6044199c172cb4c"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -92,7 +101,7 @@
       "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c",
       "alignment_tools.py": "00b6cd40c5614cd4ecf4ad3ec88b87f681140d923469cf4d75eafdf2ff9178c9",
       "ALIGNMENT_STATUS.md": "1f2c382232e66330befa5f63f08d431b3653de04bde78c960bcfb89e2d6aa785",
-      "PROJECT_STAGE.safe.json": "2f8b0334800e2ef82806a5921ea522d72b0ab79b310de4c6657147c232a80f01"
+      "PROJECT_STAGE.safe.json": "1d5df4806156840f7ea97a8b3ad428c139a13f07a1782a92d548d5acdcea7268"
     },
     "video": {
       "SAVE_RECEIPT.safe.json": "0e03ff4ffbd4c46428d19c9e3cffe669e559d720aa0007100b0614fa71c8c3c3",
@@ -179,6 +188,11 @@
       "ASSET_RECEIPT.safe.json": "57ef40b7dc30bc3f12fa77acac15f0a8a35a02ff0536e99b451a9337c2b30fcf",
       "jiejing-v9-editable.zip": "0cb90aa0c6b36eb2426d8aa701575d0a3f22ee77e91abf4a2afcf4291c734cd0",
       "PACKET_QA.safe.json": "5615166669dc9330fa63eca5f6ea5615bcf3df755976cb862ab01cdb81ebbe3d"
+    },
+    "commerce_video": {
+      "ASSET_RECEIPT.safe.json": "e1462b8e0af04c0b4699d31cf194b1512dbebfc3cac221438c71e90b3f659459",
+      "PACKET_QA.safe.json": "c6d3a55879391887874aa2cbafda6cbf3c899a8bcdb30d4d5c564634e00f0f30",
+      "jiejing-v10-editable.zip": "7b9db219657bb5c85ce11312c0e077b88d6af6350a5bdd33c3c1614347880bf2"
     }
   },
   "video_direction_approved": false,
@@ -249,5 +263,6 @@
   "v8_owner_creative_review": "rejected about20/100: unrelated imagery and awkward slogan",
   "v9_full_film_complete": true,
   "v9_visual_direction_approved": false,
-  "v9_voice_approved": false
+  "v9_voice_approved": false,
+  "commerce_video_output_root": "/workspace/jiejing-deliverables/11.0/20261007-ai-commerce-v10"
 }

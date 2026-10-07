@@ -55,7 +55,8 @@ def main() -> int:
              "release_video": Path(state["release_video_output_root"]),
              "creative_study": Path(state["creative_study_output_root"]),
              "diverse_video": Path(state["diverse_video_output_root"]),
-             "product_video": Path(state["product_video_output_root"])}
+             "product_video": Path(state["product_video_output_root"]),
+             "commerce_video": Path(state["commerce_video_output_root"])}
     for group, files in state["pinned_files"].items():
         for relative, expected in files.items():
             checked_file(roots[group], relative, expected)
@@ -111,6 +112,11 @@ def main() -> int:
         path = checked_file(roots["product_video"], item["path"], item["sha256"])
         if path.stat().st_size != item["bytes"]:
             raise ValueError(f"Product explainer asset size changed: {item['path']}")
+    commerce_receipt = json.loads(checked_file(roots["commerce_video"], "ASSET_RECEIPT.safe.json").read_text())
+    for item in commerce_receipt["files"]:
+        path = checked_file(roots["commerce_video"], item["path"], item["sha256"])
+        if path.stat().st_size != item["bytes"]:
+            raise ValueError(f"AI commerce video asset size changed: {item['path']}")
     verifier = checked_file(roots["private"], "continuity_tools.py", state["pinned_files"]["private"]["continuity_tools.py"])
     result = subprocess.run([sys.executable, str(verifier), "--verify"], capture_output=True, text=True, timeout=120)
     if result.returncode:
@@ -144,6 +150,7 @@ def main() -> int:
         "creative_study_files_verified": len(creative_receipt["files"]),
         "diverse_video_files_verified": len(diverse_receipt["files"]),
         "product_video_files_verified": len(product_receipt["files"]),
+        "commerce_video_files_verified": len(commerce_receipt["files"]),
         "remote_head_equals_local": remote_saved, "independent_new_task_cold_start_certified": False,
         "production_deployment_certified": False}, ensure_ascii=False))
     return 0
