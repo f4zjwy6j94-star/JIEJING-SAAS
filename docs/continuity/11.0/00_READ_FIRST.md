@@ -1,5 +1,11 @@
 # 捷境 11.0 云端工作检查点
 
+## 最新审看：v2未通过，v3仅为开篇方向样片
+
+2026-10-07经营者否决v2的声音、逐图讲述、配色与审美。先读当前执行摘要和 `marketing/douyin-studio/docs/11.0-narrative-rework-v3.md`。完整白话稿已重写，当前只有16秒连续动态开篇与两种声音试听，未完成/批准完整v3，不能复用旧“制作完成”当作创意认可。
+
+新私人输出 `/workspace/jiejing-deliverables/11.0/20261007-narrative-rework-v3`，声音仍为合成，听感待主人审看。统一检查点必须验证新增回执和全部原资产；少文件就失败。准确源码远端与草稿状态见 `/workspace/onboarding-evidence/20261007-narrative-v3/V3_SAVE.safe.json`。其余边界保持，下方条目是历史制作时点。
+
 ## 最新成片：画外音讲解 v2
 
 经营者已确认不露脸、自然讲解与画面对应，并要求持续制作，v2现已完成私人审看版。新增作品/素材目录 `/workspace/jiejing-deliverables/11.0/20261006-voiceover-v2`，说明 `marketing/douyin-studio/docs/11.0-voiceover-explainer-v2.md`。先读当前执行摘要和START_HERE最新条目，旧出镜/数字人建议已纠正。
