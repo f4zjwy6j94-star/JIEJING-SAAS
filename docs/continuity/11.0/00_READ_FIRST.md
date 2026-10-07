@@ -1,3 +1,15 @@
+## 最新：v8被否决；v9产品讲解重做完成，待私人审看
+
+2026-10-07经营者否决v8，评分约20分：画面无关、口号空泛。旧片保留为历史，不是获采用的推广成品。按点名的Product Design、HyperFrames、Build Web Apps能力重做29秒v9，白话连续旁白讲上架准备、捷境用途、中文需求/真实资料、修改、核对和确认；无无关球体/门/杯子主题或“你的跨境电商CEO”口号。
+
+新片和可编辑包在 `/workspace/jiejing-deliverables/11.0/20261007-product-rework-v9`。源码说明 `marketing/douyin-studio/docs/11.0-product-rework-v9.md`，实际保存回执 `/workspace/onboarding-evidence/20261007-product-rework-v9/V9_SAVE.safe.json`。仍为免费本地Qwen Serena合成配音，非真人/原CosyVoice参考音色，未获主人审美或声音认可，未公开发布。
+
+启动先保留实际版本，再执行 `python3 /workspace/JIEJING-SAAS/docs/continuity/11.0/verify_checkpoint.py` 和 `python3 /workspace/onboarding-evidence/20261007-product-rework-v9/install_hyperframes.py --verify-only`。缺文件/哈希变化必须报错，不自动下载、合成、渲染、reset/checkout/clean。HyperFrames0.8.140用仓库外Node24；原SaaS/Remotion Node20及锁定依赖不变。此处检查不等于新的任务冷启动或环境发布。
+
+成片完整解码/字幕/黑屏/响度与HyperFrames运行/排版/对比检查exit0；四项静态提示与WAV浏览器预加载ERR_ABORTED的帧检查exit1保留，不冒称所有工具全绿。首次错误和修正见安全回执。原265/274及三项SaaS失败不变，没有274重跑、业务/生产/拼嘚访问、main推送、付费或额外COS。
+
+以下为此前时点记录，按本条及经营者新反馈续接。
+
 # 捷境 11.0 云端工作检查点
 
 ## 2026-10-07最新：v8多场景28秒完整作品
