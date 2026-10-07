@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "jiejing-11-higher-fidelity-AI-voice-search-20261007",
+  "checkpoint_name": "jiejing-11-free-only-voice-options-20261007",
   "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
   "working_branch": "video/jiejing-11-continuity-20261006",
   "private_root": "/workspace/jiejing-continuity/10.0",
@@ -20,7 +20,7 @@
       "marketing/douyin-studio/package-lock.json": "08fd7d27c45182afe22ae1e36bd0c031fef3779a39ad4aaeee580000484f9ef7",
       "marketing/douyin-studio/public/brand/jiejing-app-icon.svg": "e6aaa79a4214680e878981f71e38a59e5a77f9c4ba8aece4853c16467a6d54a1",
       "marketing/douyin-studio/docs/11.0-visual-study-v1.md": "56dfd1e86b96bcf9f97a45f1488eb9f1292007881c471ab9d50d8fbffc334054",
-      "docs/continuity/11.0/00_READ_FIRST.md": "a6efd7c00ab5783b2388a9cc1734db247a07933961885dad4da652f582fc4932",
+      "docs/continuity/11.0/00_READ_FIRST.md": "1f7dac572eb455fde454ec2820d9895c88cb671ca8253401cd108b9bccb985d9",
       "docs/continuity/11.0/verify_checkpoint.py": "6919b91e3df6cb41b0c6c2841ad035347af5db2b240503b157d04e9c2d42fbf1",
       "marketing/douyin-studio/docs/11.0-douyin-discussion-v1.md": "7cd3b47f863a4905fd2efccbca81a483994fb54d8a30624e0a217a7925c205c4",
       "marketing/douyin-studio/docs/11.0-douyin-research-and-script-v1.md": "3bb7cf4057e573088ef062b27ac597a9a84cb2850c60d5da64612f92fd39c16c",
@@ -46,13 +46,14 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "d866c7a33e4682d11f0e2f31c451161eae51de2d632c80bdf58f4e9b7a1356ac",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "a238107f6ddbb3e8ce05feed974654a5331fbe14ac346580ce01dcf613115003",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
       "marketing/douyin-studio/tools/continuous-v4/prepare-voice.py": "aed535df6bd0683e2f0aabbe4f1c0099598a41048b8d296c69a9f508fe0e58ef",
       "marketing/douyin-studio/tools/continuous-v4/render-film.cjs": "8dde3e55da66d05fa4142cac8208c636878eeece54d0a54a64bcec6fd583c38f",
-      "marketing/douyin-studio/docs/11.0-natural-voice-v5.md": "42d79976b9354d7cfc332c58e82e82757408b8d16d338ddb9a35dc0da811c360"
+      "marketing/douyin-studio/docs/11.0-natural-voice-v5.md": "42d79976b9354d7cfc332c58e82e82757408b8d16d338ddb9a35dc0da811c360",
+      "marketing/douyin-studio/docs/11.0-free-voice-options.md": "f755f15ed196704f109457986ede2785451e90e234d72cf4d58fb907b2d4ee80"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -62,7 +63,7 @@
       "IMPORT_RECEIPT.json": "3e844bcbc5ed028037e68b2f0b02918672f69afd1797d80b8aff14570b2cc30c",
       "alignment_tools.py": "00b6cd40c5614cd4ecf4ad3ec88b87f681140d923469cf4d75eafdf2ff9178c9",
       "ALIGNMENT_STATUS.md": "1f2c382232e66330befa5f63f08d431b3653de04bde78c960bcfb89e2d6aa785",
-      "PROJECT_STAGE.safe.json": "8f41a64580b99412b803e0f288a94b208200d401b67d8ed9f9a86fb7f911452d"
+      "PROJECT_STAGE.safe.json": "701086c5fcf16e51ce9869be4deacfc1233918478b09f00bcc05941057e059cb"
     },
     "video": {
       "SAVE_RECEIPT.safe.json": "0e03ff4ffbd4c46428d19c9e3cffe669e559d720aa0007100b0614fa71c8c3c3",
@@ -76,7 +77,15 @@
       "20261006-douyin-research/PUBLIC_RESEARCH_ACCESS.safe.json": "6ff956bb2a25287981aba80ee460c859a6a3529e88c0c87e89cec6c7d85028f5",
       "20261006-complete-video/install_voice_tools.py": "589d7f0444858545ff1d81d899bbba21c5dbd7bc177e85fe8ef682f62ec539eb",
       "20261006-complete-video/requirements.voice.lock.txt": "f0f6edd01e3f020fca44260ddb3ab6acfc20fc9e7ca7d335bfdca0615fc5b772",
-      "20261006-complete-video/VOICE_MODEL.safe.json": "f355bbe358e12ed0c5f5d3463d398e8212f003c1210cff7c26dcbff243a7cb52"
+      "20261006-complete-video/VOICE_MODEL.safe.json": "f355bbe358e12ed0c5f5d3463d398e8212f003c1210cff7c26dcbff243a7cb52",
+      "20261007-free-voice-options/FREE_VOICE_SAMPLES.safe.json": "08cce77146580d1bb7cba0eef67679e755c0d516ea64d50ea8c31ed58aebe9b6",
+      "20261007-free-voice-options/cosyvoice3-neutral-official.wav": "a4af24054c26579bf6792e8be92b1b113beec213ae32cb4ce305c7b8d4ba123a",
+      "20261007-free-voice-options/cosyvoice3-conversation-official.wav": "5056d49cbb0d1f9450974b0a33f19149dc07a464a235fc870b23eea023266fba",
+      "20261007-free-voice-options/PUBLIC_READ.safe.json": "aaaffbb1ce986d3214621df23c7155012ea59e0af6e41fa104973265a0960e3d",
+      "20261007-free-voice-options/COSYVOICE_DEMO_READ.safe.json": "78c182e146a3d29012f34b2dd0c0793de310e3b6563e80bcde2432acee627a12",
+      "20261007-free-voice-options/cosyvoice3_model.public.txt": "d4ec0fe1342b60a424ce1cd8971c670d26be38068a96148bcb6a1b8a334c3088",
+      "20261007-free-voice-options/cosyvoice_license.public.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "20261007-free-voice-options/elevenlabs_free_commercial.public.txt": "3738a2d77e23eea96d09ce5bc58eb6ed165ed4c768b30e91bcd0b538338e45d8"
     },
     "complete_video": {
       "ASSET_RECEIPT.safe.json": "3a1fdbee69beee3c1d422fcbb4fbcb2defd2fc916069c9ee4df73a52586ce44c",
@@ -104,7 +113,7 @@
   "original_local_materials_not_all_uploaded": true,
   "full_274_gate_pass_claimed": false,
   "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash.",
-  "current_owner_phase": "both_voices_rejected_higher_fidelity_AI_selected_minimax_access_pending",
+  "current_owner_phase": "free_only_voice_search_minimax_conditional_fallback",
   "video_work_paused": false,
   "video_start_requires_new_explicit_owner_instruction": false,
   "video_discussion_authorized": true,
@@ -140,6 +149,9 @@
   "human_recording_route_recommended": false,
   "human_recording_route_owner_selected": false,
   "selected_audio_source_route": "higher_fidelity_AI",
-  "minimax_trial_authorization": "see_latest_owner_reply_and_V5_SAVE_receipt",
-  "minimax_custom_generation_verified": false
+  "minimax_trial_authorization": "paid_trial_not_authorized_free_only",
+  "minimax_custom_generation_verified": false,
+  "voice_budget_USD": 0,
+  "conditional_minimax_reference_fallback": true,
+  "cosyvoice_custom_generation_verified": false
 }
