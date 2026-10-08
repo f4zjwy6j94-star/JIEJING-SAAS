@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "kind": "manual_readonly_douyin_review",
+  "timezone": "Asia/Shanghai",
+  "observed_window_local": "2026-10-08 22:35 to 22:42",
+  "browser": "Local Chrome, ZONGSHU, connected extension; runtime tab IDs are not stable",
+  "account": { "name": "捷境AI电商SAAS", "douyin_id": "51406410196", "verified_on_home_page": true },
+  "work": {
+    "id": "7694285664078138658",
+    "title": "把电商上架准备交给AI，重要决定留给你",
+    "published_at": "2026-10-08T21:18:17+08:00",
+    "approximate_age_hours_range": [1.28, 1.40],
+    "observed_management_status": "流量减少",
+    "observed_review_result": "本作品流量减少",
+    "observed_detail_status": "审核结果：需优化",
+    "observed_reason": "出现批量发布违规或低质内容的行为",
+    "observed_reason_category": "画面",
+    "exact_trigger_frame_or_timestamp": null,
+    "account_wide_restriction_verified": false,
+    "public_visibility_independently_verified": false
+  },
+  "source_pages": {
+    "management": "https://creator.douyin.com/creator-micro/content/manage",
+    "work_detail": "https://creator.douyin.com/creator-micro/work-management/work-detail/7694285664078138658",
+    "account_identity": "https://creator.douyin.com/creator-micro/home"
+  },
+  "management_and_overview_display": {
+    "plays": 0,
+    "likes": 0,
+    "comments": 0,
+    "shares": 0,
+    "saves": 0,
+    "new_followers": 0,
+    "completion_ratio": 0,
+    "two_second_exit_ratio": 0,
+    "data_cutoff_at": null
+  },
+  "traffic_analysis_display": {
+    "average_watch_seconds": 12,
+    "five_second_completion_ratio": 0.6667,
+    "average_played_ratio": 0.1544,
+    "completion_ratio": 0,
+    "two_second_exit_ratio": 0,
+    "traffic_source_ratio": { "friends_page": 0.5, "personal_profile": 0.5 },
+    "displayed_source_denominator": null,
+    "recommendation_source_count_or_share": null,
+    "search_source_count_or_share": null,
+    "paid_source_count_or_share": null,
+    "search_keywords_display": "暂无数据",
+    "viewing_trend_display": "播放量超过200后，展示数据",
+    "data_cutoff_at": null
+  },
+  "account_overview_window": {
+    "from_date": "2026-10-01",
+    "through_date": "2026-10-07",
+    "update_note": "每天12点更新",
+    "covers_this_post": false
+  },
+  "interpretation": {
+    "cross_panel_values_reconciled": false,
+    "restriction_is_direct_platform_evidence": true,
+    "cause_of_data_discrepancy": "unknown",
+    "meaningful_watch_sample_size": null,
+    "organic_recommendation_growth_verified": false,
+    "all_generic_violation_examples_proven_for_this_work": false,
+    "duplicate_submission_by_this_workflow_proven": false,
+    "revenue_attribution": "unknown",
+    "next_content_hypothesis": "Use a specific merchant problem and authentic source-to-draft evidence, reduce generic brand-ad repetition; test in a new reviewed sample rather than reposting the restricted film."
+  },
+  "creative_review": {
+    "owner_screenshot_corroborates_same_post_notice": true,
+    "reviewed_file": "C:/Users/57249/OneDrive/桌面/捷境抖音推广_v10_删句版_20261008.mp4",
+    "file_sha256_after_extraction": "0fa4a5f264e0ffe656b6e07b66bacee0821f0972613869569ba9a93976d7b6dc",
+    "viewed_frame_times_seconds": [0.8, 3, 8, 16, 27, 37, 41, 45, 53, 65, 74],
+    "review_type": "Representative still frames plus original narrative and scene source, not full-motion listening or platform-transcode verification",
+    "observed_weaknesses": [
+      "Abstract brand and delegation opening rather than an immediately visible merchant problem",
+      "Many separate feature topics, generic composition at 41 seconds instead of a real product draft",
+      "Repeated crops at 45 seconds explain media use but do not demonstrate an actual AI output",
+      "Concrete title edit appears late at 53 seconds; closing returns to roles, website and roadmap"
+    ],
+    "platform_trigger_proven_by_creative_review": false,
+    "new_brief_revision": "v2 proposed direction in existing series-01-02-production-brief.md",
+    "recommended_topic": "One real source-data discrepancy and a clear pre-AI fact-check method",
+    "new_sample_or_film_created": false,
+    "new_direction_owner_approved": false,
+    "evidence_root": "D:/Codex-Verification/jiejing-douyin-review-20261008-2235"
+  },
+  "actions": {
+    "read_review_notice": true,
+    "read_identity_and_statistics": true,
+    "tutorial_hint_dismissed": true,
+    "appeal_or_survey_submitted": false,
+    "content_modified_deleted_or_reposted": false,
+    "paid_promotion_used": false,
+    "customer_data_read": false,
+    "new_video_produced": false
+  },
+  "scheduled_review": {
+    "automation_id": "automation-2",
+    "status_readback": "ACTIVE",
+    "local_time_daily": "21:30",
+    "execution_location": "current local thread using local Chrome",
+    "scheduler_triggered_first_run_verified": false,
+    "computer_off_execution_verified": false
+  }
+}
