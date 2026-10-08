@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "recorded_date": "2026-10-08",
+  "responsible_endpoint": "local 10.0",
+  "purpose": "Reproducible source selection and local installation receipt, not cloud installation or safety certification",
+  "upstream": {
+    "repository": "https://github.com/coreyhaines31/marketingskills",
+    "commit": "b9ba399dd88b082b926e261e8ccfb843d20aa066",
+    "license": "MIT",
+    "paths": [
+      "skills/social",
+      "skills/analytics"
+    ],
+    "retrieval": "Codex official skill-installer, fixed commit, download method",
+    "upstream_files_verified": 16,
+    "upstream_bytes": 126326,
+    "files": [
+      {
+        "path": "skills/analytics/SKILL.md",
+        "bytes": 8953,
+        "source_git_blob": "e849eca945a57a5f03b57e2c05f6f0ad6c6bb196",
+        "sha256": "fc8ab32a93032d705c6a21214102b55f666be5800b6734a179755f4a741d1e83"
+      },
+      {
+        "path": "skills/analytics/evals/evals.json",
+        "bytes": 6365,
+        "source_git_blob": "fd3df6a1371488d2d11fbfbc8628a91489a8423c",
+        "sha256": "56932e864114d69a61b6b55e639d207329c0a8b7df8b61a0e1188b249cbef1e8"
+      },
+      {
+        "path": "skills/analytics/references/event-library.md",
+        "bytes": 8654,
+        "source_git_blob": "c381b56c44b5b987e66de708d6061af873f68e55",
+        "sha256": "efc7bdb0a7b3efdea9e67ff0d1bc894dcf89ec9b9b8f3414f123d12bee109412"
+      },
+      {
+        "path": "skills/analytics/references/ga4-implementation.md",
+        "bytes": 6343,
+        "source_git_blob": "f2656dcbf0f4336eb756d9796e2d2cdab87452c7",
+        "sha256": "f33fd6db0cbdb1bdc183af5f52bedd956d14680e54bca2e2c3917de29698636e"
+      },
+      {
+        "path": "skills/analytics/references/gtm-implementation.md",
+        "bytes": 7570,
+        "source_git_blob": "956e63840d545b7ad5bbef8373e1f19e0bc258f7",
+        "sha256": "112da33832439d2ae0b2729e5031fc927df444cd1ae8eb20542d45c1b5690f52"
+      },
+      {
+        "path": "skills/social/SKILL.md",
+        "bytes": 18260,
+        "source_git_blob": "7f160d24420ce4761f7de9849f45814ad9e3a430",
+        "sha256": "1fa237bc6884b7b6c048a334aee02aeaff23f7d6dcb06868ca4fb123e3b71379"
+      },
+      {
+        "path": "skills/social/evals/evals.json",
+        "bytes": 11871,
+        "source_git_blob": "9236ff6e05e419556c92c7dc280746109b05aa62",
+        "sha256": "1d2592a0cfc6378ba8742ce6e19f5974663b1d8018c4f136e5f529373bf17198"
+      },
+      {
+        "path": "skills/social/references/carousel-frameworks.md",
+        "bytes": 11124,
+        "source_git_blob": "76c65c3d34dfb43f9fdd672a9e55e48037a670aa",
+        "sha256": "e703aa530ec9f68cdf5b58e8e0d4d1a5cc3f22b9e2d3e3222f16a9763d423247"
+      },
+      {
+        "path": "skills/social/references/listening-sources-template.md",
+        "bytes": 3479,
+        "source_git_blob": "286ca03a013ddfd23ef807cffd650ae04c6b7e02",
+        "sha256": "c68bc6f57b0a48c432b1ce72c9324d41a04d0e7784d0bab91afb4a6065a43e38"
+      },
+      {
+        "path": "skills/social/references/listening.md",
+        "bytes": 12268,
+        "source_git_blob": "6a157ae5288d2b9ffc675612760ef1570389e832",
+        "sha256": "f905f772ac782872143fda477c0049973b2477d1ec165377b164250dabe3bac0"
+      },
+      {
+        "path": "skills/social/references/platform-limits.md",
+        "bytes": 2830,
+        "source_git_blob": "94e1df9f22128ffc59e826c702c8a492b0e1bb03",
+        "sha256": "6ecc6b40ff82b95c48906341f7d3c58337671d4d94f624c858764f1ed5a77c3c"
+      },
+      {
+        "path": "skills/social/references/platforms.md",
+        "bytes": 5412,
+        "source_git_blob": "63f6ccc6e2de4efff265ebeb01abea06da15f7ef",
+        "sha256": "1443ac17ff2ce0e8bb9cadeaa250441c7a1e3274e368ebff7283a5164ff6b4ca"
+      },
+      {
+        "path": "skills/social/references/post-templates.md",
+        "bytes": 4016,
+        "source_git_blob": "10be33fe2104b3b984902deaa285d89963e18702",
+        "sha256": "9cca4680c95801daedfd8acadf9089d0083784c2567784888807569896f71d9b"
+      },
+      {
+        "path": "skills/social/references/reverse-engineering.md",
+        "bytes": 5551,
+        "source_git_blob": "6d6b8f9d8a497fbefd9ab17f5a4d281c7035edf9",
+        "sha256": "c27bef59d463b3b11331c1770f4a23e9e6bbce7d7c8db1e7f7f4f14ba206243f"
+      },
+      {
+        "path": "skills/social/references/short-form-video.md",
+        "bytes": 6517,
+        "source_git_blob": "067ab1478f35763e0b68439cf3c7a681871265ed",
+        "sha256": "5e782aa064fe0916b9c432d3317628de961678f1503103a4450ad0d20e94bf46"
+      },
+      {
+        "path": "skills/social/references/x-algorithm.md",
+        "bytes": 7113,
+        "source_git_blob": "af6aef741f893d644ec4d56617c1f8ace3ee82c1",
+        "sha256": "943b2c5a819aad53ebf62a1652adc47956d6fdf738e18cd98eeb609819a66180"
+      }
+    ]
+  },
+  "local": {
+    "installed": true,
+    "skills_root": "C:/Users/57249/.codex/skills",
+    "versions": {
+      "social": "2.3.3",
+      "analytics": "2.0.2"
+    },
+    "upstream_git_blob_match": true,
+    "license_copies_added": 2,
+    "executable_files_installed": 0,
+    "loaded_by_discovery_next_turn": true
+  },
+  "cloud": {
+    "installation_verified": false,
+    "instructions": "Receive the source and progress first. Inspect availability; only install the reviewed paths at the pinned commit with the platform skill installer if needed and authorized. Do not execute upstream example commands or silently upgrade."
+  },
+  "project_context": "docs/continuity/11.0/PRODUCT_MARKETING_CONTEXT.md",
+  "guide": "docs/continuity/11.0/GROWTH_TOOLKIT_20261008.md",
+  "production_brief": "marketing/douyin-studio/docs/series-01-02-production-brief.md",
+  "aggregate_template": "marketing/douyin-studio/operations/performance.template.json",
+  "boundaries": {
+    "external_connections_created": false,
+    "paid_services_used": false,
+    "automated_publication_enabled": false,
+    "analytics_tracking_installed": false,
+    "production_servers_changed": false,
+    "third_party_instructions_override_project": false,
+    "all_reference_prose_semantically_audited": false
+  },
+  "evidence_root": "D:/Codex-Verification/jiejing-growth-toolkit-20261008-2206"
+}

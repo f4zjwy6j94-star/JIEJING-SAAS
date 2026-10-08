@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "kind": "empty_aggregate_observation_template_not_live_analytics",
+  "timezone": "Asia/Shanghai",
+  "measurement_rule": "Use one copy per episode and 24h or 72h observation. Unknown remains null, never zero. This file does not collect data or install tracking.",
+  "episode_id": null,
+  "post_url": null,
+  "published_at": null,
+  "observed_at": null,
+  "target_age_hours": null,
+  "actual_age_hours": null,
+  "video_duration_seconds": null,
+  "title_variant": null,
+  "opening_variant": null,
+  "actual_hashtags": null,
+  "publication_state": "unknown",
+  "public_visibility_verified_at": null,
+  "metric_units": {
+    "counts": "integer, platform-defined unless explicitly deduplicated",
+    "rates": "ratio from 0 to 1, never mixed with percent from 0 to 100",
+    "duration": "seconds",
+    "money": "integer minor currency units; currency must be populated before recording money"
+  },
+  "source_per_section": {
+    "platform_metrics": { "source": null, "observed_at": null, "definition_notes": null },
+    "business_intent": { "source": null, "observed_at": null, "definition_notes": null },
+    "product_funnel": { "source": null, "observed_at": null, "definition_notes": null },
+    "cash": { "source": null, "observed_at": null, "definition_notes": null }
+  },
+  "platform_metrics": {
+    "plays": null,
+    "average_watch_seconds": null,
+    "two_second_exit_ratio": null,
+    "completion_ratio": null,
+    "likes": null,
+    "comments": null,
+    "saves": null,
+    "shares": null,
+    "profile_visits": null,
+    "new_followers": null
+  },
+  "business_intent": {
+    "deduplicated_relevant_inquiries": null,
+    "definition": "A concrete commerce need/question about using the product; likes and generic comments are not inquiries.",
+    "deduplication_method": null,
+    "privacy_rule": "Aggregate counts only. No account handles, emails, phone numbers, order bodies or comment transcripts."
+  },
+  "product_funnel": {
+    "verified_attributed_registrations": null,
+    "verified_attributed_key_experiences": null,
+    "key_experience_definition": null,
+    "verified_attributed_paying_customers": null,
+    "deduplication_method": null,
+    "attribution": {
+      "status": "unknown",
+      "method": null,
+      "window_hours": null,
+      "evidence_reference": null,
+      "rule": "Do not attribute all website registrations/payments to Douyin or to one post. Evidence references must be safe aggregate receipts, not secret or customer records."
+    }
+  },
+  "cash": {
+    "currency": null,
+    "verified_attributed_collected_minor_units": null,
+    "verified_attributed_refunded_minor_units": null,
+    "verified_attributed_net_collections_minor_units": null,
+    "deduplication_method": null,
+    "rule": "Only calculate net after both gross and refunds are known in the same currency/window/cohort. Net collections are not profit. No hypothetical earnings."
+  },
+  "review": {
+    "comparable_episode_ids": null,
+    "main_observation": null,
+    "evidence_limitations": null,
+    "next_single_variable_to_change": null,
+    "causal_effect_claimed": false
+  }
+}
