@@ -1,4 +1,5 @@
 import "./index.css";
+import { DouyinFactsV11, FactsCoverV11, FactsOpening, FactsSources, FactsQuestion, FactsMethod, FactsAsk, FactsClosing } from "./DouyinFactsV11";
 import { Douyin11CompleteV8, Douyin11CoverV8 } from "./Douyin11CompleteV8";
 import { Douyin11TactileV7 } from "./Douyin11TactileV7";
 import { Douyin11ReleaseV6, Douyin11ReleaseCover } from "./Douyin11ReleaseV6";
@@ -19,6 +20,14 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="DouyinFactsV11" component={DouyinFactsV11} durationInFrames={900} fps={30} width={1080} height={1920} />
+      <Still id="FactsCoverV11" component={FactsCoverV11} width={1080} height={1920} />
+      <Composition id="FactsOpening" component={FactsOpening} durationInFrames={105} fps={30} width={1080} height={1920} />
+      <Composition id="FactsSources" component={FactsSources} durationInFrames={135} fps={30} width={1080} height={1920} />
+      <Composition id="FactsQuestion" component={FactsQuestion} durationInFrames={120} fps={30} width={1080} height={1920} />
+      <Composition id="FactsMethod" component={FactsMethod} durationInFrames={210} fps={30} width={1080} height={1920} />
+      <Composition id="FactsAsk" component={FactsAsk} durationInFrames={180} fps={30} width={1080} height={1920} />
+      <Composition id="FactsClosing" component={FactsClosing} durationInFrames={150} fps={30} width={1080} height={1920} />
       <Composition id="Douyin11CompleteV8" component={Douyin11CompleteV8} durationInFrames={672} fps={24} width={1080} height={1920} />
       <Still id="Douyin11CoverV8" component={Douyin11CoverV8} width={1080} height={1920} />
       <Composition id="Douyin11TactileV7" component={Douyin11TactileV7} durationInFrames={342} fps={24} width={720} height={1280} />
