@@ -4,6 +4,16 @@
 
 ## 当前接续摘要（以本区续接，不按历史段落直接执行）
 
+### 10-08 20:33 只读复核：共用分支关系与网站当前可访问性
+
+经营者询问同一GitHub账号为何仍称“分支”、双端方式是否合理及是否影响已交付网站。本轮实际核对：云端本地HEAD与共享远端均为 `b75fb039b447dfbe67b4841fb8e746ade6853cc2`，工作树clean；本地10.0已通过此前回执接入同一仓库同一分支，但没有新的本机读取回执，不将远端更新冒充本机即时收到。账号、仓库、分支不同层级；当前并非为本地/云端建立两个独立产品，main本身也只是仓库中的另一条分支。
+
+从v10源码检查点71cfac7到上述b75fb03的14个改动路径，仅含AGENTS、交接文档/清单和接收保存辅助工具，没有应用业务代码、依赖锁、部署配置或CI修改。现有仓库CI push范围为main/codex/**，共用video分支不匹配；旧staging入口为手动派发，本次未调用且不建议复活。生产工具保持 `tools/jiejing_production_deploy.py`，本轮没有运行、SSH/数据库操作、重部署、搬库或影响拼嘚。未核查外部webhook，不声称全面部署链审计或云端独立生产通道已验收。
+
+北京时间2026-10-08 20:33:11只读HTTP检查：jiejing.shop正常跳转app.jiejing.shop，二者最终HTTP200；/health为200/status=ok，/health/deep为200/operational_health.status=ready；/readiness/product-saas为200，production_ready和can_accept_real_customers均true。仅为该时点页面/后端健康及公开就绪信号，不代表已登录商家流程、每个账号资格、真实eBay写入、计费扣款或长期无故障；本轮没有提取/重验所有收费及平台写入状态。安全记录在 `/workspace/onboarding-evidence/20261008-hybrid-workflow/architecture-readonly-review/`。
+
+建议现阶段保持本地与云端两个工作入口，复用同一私有分支和索引，生产继续沿用既有腾讯云部署；同一任务由一端推进，保存读回后另一端接收。网站运行与开发电脑开关机分开，文本/源码同步也不等于媒体大文件自动同步。经营者对首版交付完成、接下来推广的方向不改变；本轮未据此启动视频、重新开发SaaS或重跑全门禁，既有三项SaaS失败和素材/本机新对话的限定结论保持。
+
 ### 10-08 原11.0复核完成：新云端对话的源码/安全进度接续验收通过
 
 经营者先提供客户端“Environment published”截图，后提供独立新对话“验收捷境项目最新版本”的完成截图。本原11.0随后从共用分支实际运行receive，从 `29e5fec63b5b82eb2bc33b10a90bcfbee1ea1439` fast-forward至新对话保存的 `822b51fc77150f6bc7c119a8ae2d4c2f1f6da922`；fetch/fast-forward退出0，源码身份/祖先/clean/远端SHA检查退出0。完整读取新验收说明和当前摘要，89/89仓库固定SHA匹配；3文件变化仅为摘要、安全验收说明及其源码固定值，无业务变化。
