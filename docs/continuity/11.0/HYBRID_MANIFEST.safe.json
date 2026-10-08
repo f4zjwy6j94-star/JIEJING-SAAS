@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "work_branch": "video/jiejing-11-continuity-20261006",
+  "required_ancestor": "0b4e29970c3446f2785084a7439970396cba39ef",
+  "scope": "Initial Git identity and v10 transfer package only; not complete historical-data restoration or automated synchronization",
+  "artifacts": [
+    {
+      "relative_path": "jiejing-v10-editable.zip",
+      "bytes": 90974409,
+      "sha256": "7b9db219657bb5c85ce11312c0e077b88d6af6350a5bdd33c3c1614347880bf2"
+    }
+  ],
+  "all_history_verified_by_this_check": false,
+  "automatic_sync_installed": false,
+  "cold_start_verified": false,
+  "production_deployment_authorized": false
+}

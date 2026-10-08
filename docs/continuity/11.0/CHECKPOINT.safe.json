@@ -46,7 +46,7 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "77783b5ebdbaf24282c538f6b9853c0d56063387046bcbec44128471c7cc2644",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "cd1c862d926999940afd890f7d8bb388ff74d482b34848d17e969b15f471f039",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
@@ -91,7 +91,10 @@
       "marketing/douyin-studio/tools/commerce-v10/verify-film.py": "e5a522f253ba4b114caa314d2488f795182835e625d9b205004ba57aed50b19a",
       "marketing/douyin-studio/tools/commerce-v10/transcribe-voice.py": "22bc8fa60c8cbef039d3e2e185417f5a87346c03afcf00bc0db86b2bf6e2e34e",
       "marketing/douyin-studio/tools/commerce-v10/render-film.sh": "b0d53623488dbd890b10e226d8d16a7652fe7fa9179760dbb05523a70aa6df3b",
-      "marketing/douyin-studio/tools/commerce-v10/prepare-film.py": "14adbf3484d523ce97230cea3dfd8bf69326616512edeb97e6044199c172cb4c"
+      "marketing/douyin-studio/tools/commerce-v10/prepare-film.py": "14adbf3484d523ce97230cea3dfd8bf69326616512edeb97e6044199c172cb4c",
+      "docs/continuity/11.0/HYBRID_HANDOFF.md": "2a30a0ab5186e011b20a0106010e0684d060bac104a7046481c568ad30d33783",
+      "docs/continuity/11.0/HYBRID_MANIFEST.safe.json": "eb3ddb2dd86254150da0030560ec23cb9211ac622fbebec4d309f5e7e590e3f1",
+      "docs/continuity/11.0/hybrid_check.py": "2bc23bc7ed8114a1061fd9cdb154c60334056b120c1f63ffa1d6e3c894d1b5f5"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -264,5 +267,18 @@
   "v9_full_film_complete": true,
   "v9_visual_direction_approved": false,
   "v9_voice_approved": false,
-  "commerce_video_output_root": "/workspace/jiejing-deliverables/11.0/20261007-ai-commerce-v10"
+  "commerce_video_output_root": "/workspace/jiejing-deliverables/11.0/20261007-ai-commerce-v10",
+  "hybrid_handoff": {
+    "entry": "docs/continuity/11.0/HYBRID_HANDOFF.md",
+    "preflight": "docs/continuity/11.0/hybrid_check.py",
+    "local_baseline_reported": "1e94f2b798b158c8d34f224185151fcb95aaf912",
+    "initial_local_documents_to_preserve": 7,
+    "local_v10_mp4_matches_reported": true,
+    "local_v10_editable_zip_missing_reported": true,
+    "local_chrome_recovery_reported": true,
+    "automatic_sync_installed": false,
+    "new_storage_destination_authorized": false,
+    "bidirectional_sync_verified": false,
+    "cold_start_verified": false
+  }
 }
