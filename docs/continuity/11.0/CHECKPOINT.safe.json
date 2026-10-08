@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "Source/progress handoff; V12 clean spoken trial v02 verified, full films and listening pending; October 9 limited schedule",
+  "checkpoint_name": "Source/progress handoff; October 9 dated schedules corrected and read back, actual triggers pending; V12 full films not ready, no publication",
   "current_douyin_release_queue": "marketing/douyin-studio/operations/release-queue-20261009.safe.json",
   "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
   "working_branch": "video/jiejing-11-continuity-20261006",
@@ -13,8 +13,9 @@
   ],
   "pinned_files": {
     "repo": {
+      "marketing/douyin-studio/operations/checks/20261009-0400-publication-preflight.safe.json": "6f9a9e5fadcd192f73f8a48f79e198c0618d0fd14320699ef7cebab8bee1570e",
       "docs/continuity/11.0/DOUYIN_PREPARATION_PREFLIGHT_20261009_0120.md": "91009213efb866d1874b538613526350f848d6bd65ab0cfad0221aecea95a803",
-      "docs/continuity/11.0/DOUYIN_V12_SCHEDULE_RECEIPT_20261009.md": "0052d9339c224ab6ded78e1a442d4ba8047bdfe0c9296a244132ecfb91202e70",
+      "docs/continuity/11.0/DOUYIN_V12_SCHEDULE_RECEIPT_20261009.md": "13a5153ddeafe91010be04822f01169c2f601b9ee0173aafe5b26abd4d3851f1",
       "marketing/douyin-studio/docs/20261009-v12-voice-cinematic.md": "d6af068e8d1061cced43f9afab84e8f67401b9def942b4db10b6e1e42a0d3c64",
       "marketing/douyin-studio/operations/release-queue-20261009.safe.json": "6409e32dd524f6e2c8de5b4cd9cd108d3d57ea737902508e805cffff5c086360",
       "marketing/douyin-studio/operations/v12-assets.safe.json": "31c4b02a772bb998155f46e47aa535bf3bb2810ca533bc648f8ca1b25967add9",
@@ -69,7 +70,7 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "2d90390aa120c3ce2f35a5db070ad840c9843343561653c8c430473b7f305cba",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "1d9b90b8ac099559c6a6a174ad96b6df38fd0f4353c8b95204a9d52001999b5d",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
