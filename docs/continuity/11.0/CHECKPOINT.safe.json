@@ -46,7 +46,7 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "4d499878e8b5ced11eb5c29ebb2f2d025f0f7dc390ec978e2fb247171eabc15d",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "31448dbdf1a27e122cc565a1001e2bd9fce62a4ae1d7be29e4a10a4e4e42d3c4",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
@@ -97,7 +97,8 @@
       "docs/continuity/11.0/hybrid_check.py": "2bc23bc7ed8114a1061fd9cdb154c60334056b120c1f63ffa1d6e3c894d1b5f5",
       "docs/continuity/11.0/WORK_SYNC.md": "e40bce8b759454fe39a1cf8dffd818e9fe69629e233cfc2da74a6ce1df437be0",
       "docs/continuity/11.0/PROJECT_SYNC_MANIFEST.safe.json": "547595a4decbaf8a2a666ee2797b837c33496ce33c68516a5c17f496054ea0f3",
-      "docs/continuity/11.0/work_sync.py": "62cff355a8226a5f41dc97c84f334903b38b8da6574e296d20d74b75678d63b5"
+      "docs/continuity/11.0/work_sync.py": "62cff355a8226a5f41dc97c84f334903b38b8da6574e296d20d74b75678d63b5",
+      "docs/continuity/11.0/PROJECT_ENTRY_REVIEW_20261008.md": "078a4a9b935bc92468679c307241724d1a6b602af4acff3aeef63774528ab26b"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
