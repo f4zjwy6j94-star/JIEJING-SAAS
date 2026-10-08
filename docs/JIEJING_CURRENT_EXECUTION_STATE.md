@@ -4,6 +4,18 @@
 
 ## 当前接续摘要（以本区续接，不按历史段落直接执行）
 
+### 10-08 19:08 本地实机接入：已接收新流程，合并原记录并按 save 交回
+
+经营者已授权本地保全未提交记录、接收本工作分支最新版并将真实接入结果保存回同一分支；今后开工主动 receive，重要推进/新决定/收工主动更新索引并 save。视频、ZIP 下载和助手发片暂停，不再等 ZIP。当前任务负责端为本地10.0；本轮保存并读回成功后交给云端11.0接收核验，本地不继续并发修改这项接入任务。
+
+Windows 实际仓库仍为 `C:/Users/57249/Documents/Codex/2026-04-29/hermes-agents/software-demo`，工作分支仍为 `video/jiejing-11-continuity-20261006`。先把原未提交索引和两个本地入口逐字节复制到 `D:/Codex-Verification/jiejing-work-sync-20261008-190205/`，SHA/大小/源稳定性核验通过；原索引 SHA256 `830f511357d9e42b44eaa3657eb713fdede0254be792869f2cb1311895ff7026`，另在仅本地 `backup/local-receive-record-20261008-190205` / `764b9292888c84fa4a31dbb03210f0b4ddc348a8` 中按原始字节保全。此前7份原件及两个历史保全分支不改、不推送。旧接收段落完整合并到下方历史区，没有以云端索引覆盖丢弃。
+
+正常 fetch 发现远端 `6855ce3d3fb2307ef38edbdce33742cd7eb1135f`，已全文审查其 AGENTS、WORK_SYNC、work_sync.py，并核对8文件变化不涉及业务/部署规则。先将已审查的同字节 work_sync.py 放在仓库外用于首次引导；在正确且干净的原工作分支上实际 receive，从 `cee29381b9d36f32daeee443abbb49a0d4ff759f` fast-forward 到 `6855ce3d3fb2307ef38edbdce33742cd7eb1135f`，远端读回一致、退出0。随后直接使用已接收仓库内 receive 再验，退出0/equal/无新变更；独立 PROJECT_SYNC_MANIFEST 源码身份检查退出0。安全回执分别为上述目录 `PRESERVATION.safe.json`、`BOOTSTRAP.safe.json`、`RECEIVE.safe.json`、`RECEIVE_INSTALLED.safe.json`、`SOURCE_IDENTITY_RECEIVED.safe.json`。
+
+本地任务工作区 AGENTS 及旧 `LOCAL_START_HERE.md` 已更新为 WORK_SYNC 开工接收/推进保存入口，原文均保全。共享接入说明见 `docs/continuity/11.0/LOCAL_WORK_SYNC_RECEIPT_20261008.md`。此次仅保存本索引、该安全说明及 CHECKPOINT 中对应索引的 Git 文本 SHA；旧素材/视频严格清单和断言不改。Windows core.autocrlf=true，文本检出为 CRLF；仓库源码为 LF，所改索引固定值按实际将提交的 LF 内容核验，不用本次 Git 成功冒充全量文件原始字节或素材恢复通过。
+
+本记录提交前不预写“push已成功”。实际 save 的完整提交、秘密扫描、普通 push 和远端读回以仓库外 `SAVE.safe.json` 及最终 `STATUS_AFTER_SAVE.safe.json` 为准；共享分支出现本记录只证明已交出，不能代替云端任务运行 receive 并返回其 HEAD。下一步由云端11.0接收本回执，核对保留的本地历史段落和新入口；未获得该端实际回执前不称双端往返验收全部完成。无部署、main/强推、素材处理、新费用、生产/拼嘚访问、后台守护进程或聊天数据库合并。原三项SaaS失败和完整历史/素材、新任务恢复的未验收边界保留。
+
 ### 10-08最新：暂停视频，由经营者自行发布；先打通源码与项目进度接续
 
 经营者澄清使用的是安装在 Windows 上的 ChatGPT 桌面软件里的 Codex，而非在浏览器中工作。保留本地10.0与云端11.0两个原对话；当前目标是两端使用同一项目最新源码与工作进度，开机可在本机执行，关机可在云端接续已保存内容。不是合并聊天数据库或开关机时自动转移正在执行的操作。
@@ -21,6 +33,17 @@
 本轮Git身份范围清单 `PROJECT_SYNC_MANIFEST.safe.json` 独立于旧v10清单；旧 `HYBRID_MANIFEST.safe.json` 与 `verify_checkpoint.py` 条件不变。源/进度保存、对方实际接收、全量素材恢复、新任务冷启动、生产部署分别报告。下一步：云端保存可用入口 → 本地10.0接收并按最新规则记录一次真实接收回执 → 云端读回该回执，完成真实双向演练。远端push成功仅代表已交出，不等于另一端已经接收。
 
 原首次265/274退出1与三个SaaS失败保持，不重跑全门禁。没有业务代码/依赖/网络/权限/凭据修改，无main推送、生产/拼嘚/付款/公开发布动作。以下视频和下载条目均按其原日期保留，不能据旧条目恢复已暂停任务。
+
+**历史保留说明：以下是本地 16:53 首次接收记录的原文合并，描述当时状态；其中继续等待 ZIP、禁止所有分支推送等旧下一步已由上方最新决定和 WORK_SYNC.md 取代，不执行。**
+
+### 10-08 本地首次接收：Git 已对齐，可编辑 ZIP 尚未定位
+
+本地已正常 fetch 并接收 `video/jiejing-11-continuity-20261006` / `cee29381b9d36f32daeee443abbb49a0d4ff759f`（HEAD 712 提交），接收后读回远端 SHA 一致。原分支 `codex/ai-ceo-real-merchant-loop` 仍指向 `1e94f2b798b158c8d34f224185151fcb95aaf912`，没有 reset、clean、强制覆盖或 stash。原 7 份未提交文档先逐字节备份核验，再保存到仅本地分支 `backup/local-10-documents-20261008-164007` / `529fd21397a19947a4f63365810397f70de939d4`；6 份内容与云端一致（其中 AGENTS 仅换行差异），旧执行索引的本地迁移记录另存，不覆盖新索引。原始字节和双方文档在 `D:/Codex-Verification/jiejing-11-local-receive-20261008-164007/`，见 `ORIGINAL_DOCUMENTS.safe.json`、`DOCUMENT_COMPARISON.safe.json`、`GIT_RECEIVE.safe.json`。
+
+经营者表示 ZIP 已下载；本地实际已核对 Windows 下载目录 `C:/Users/57249/Downloads`、OneDrive 桌面/文档、附件目录及 C/D/E/F 文件名，暂未找到该文件或符合清单大小的近期 ZIP。已请求准确保存位置，不推断经营者没有下载。按云端清单执行 `hybrid_check.py --check-remote` 的初次回执为 `HYBRID_CHECK_INITIAL.safe.json`：Git 身份/祖先/远端一致、当时工作树 clean，素材检查退出 1，仅 `ARTIFACT_MISSING`。尚未复制、解包或执行任何包内脚本，不标记工程已收到。桌面 86 秒 v10 MP4 已再次核验 31,863,214 字节与既有 SHA 一致，不是工程 ZIP 的替代物。
+
+下一步只接收并校验 ZIP（90,974,409 字节，SHA256 `7b9db219657bb5c85ce11312c0e077b88d6af6350a5bdd33c3c1614347880bf2`），拒绝路径穿越、链接、特殊文件及重复覆盖，在仓库外新目录解包并逐文件记录校验；不运行包内历史脚本。接收说明及本地开工/收工入口为同一回执目录的 `handoff-iYbIrS.md` 和 `LOCAL_START_HERE.md`。本条是接收后的本地未提交记录，未推送、未送达云端；不能把前述接收时 clean 解释为本条写入后仍 clean。每次开工读最新索引和 `docs/continuity/11.0/HYBRID_HANDOFF.md`，收工先保存获准成果、读回校验并出回执。自动同步、关机接管、新任务冷启动和全部历史资料双端复制仍未验收。本次不部署、不发布、不推任何远端分支、不新增费用、不动拼嘚或历史资料。
+
 
 ### 10-08最新：本机 Chrome 恢复，双端盘点完成，正在建立有回执的交接
 
