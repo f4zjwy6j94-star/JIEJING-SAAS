@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "Source and project-progress handoff; all assistant video work paused by owner",
+  "checkpoint_name": "Source/progress handoff and owner-authorized local v10 edit; Douyin submission under review",
   "migration_base": "0b4e29970c3446f2785084a7439970396cba39ef",
   "working_branch": "video/jiejing-11-continuity-20261006",
   "private_root": "/workspace/jiejing-continuity/10.0",
@@ -12,7 +12,7 @@
   ],
   "pinned_files": {
     "repo": {
-      "AGENTS.md": "ccfb37c59d1dbf8c4ebca60d391b14244291569beaa5a3404833c16e4e9110f8",
+      "AGENTS.md": "c78f1b7a72320678243c941a493ee6489f56094c8c4128404e0b105ad72570d2",
       "marketing/douyin-studio/src/Root.tsx": "3b91123bc1a2aa89037ce4f8a3a2141e89453fb68f2b63d7dce0f761d80aeda4",
       "marketing/douyin-studio/src/Douyin11VisualStudy.tsx": "31938fce8e1e93cd1bab02dd9fcc33dcdcb607ba1ee03c8aa60a50a7143354fb",
       "marketing/douyin-studio/src/index.ts": "957e481dd33a29b4a55ae0e95dbf763b7e48c37c427ca4bd1275faf34bc07a74",
@@ -46,7 +46,7 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "debc89a6bc0421fef8c976331dc59afa141a4aacc52f76a38216fe47d09a896a",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "9b0ed2fbfe5a22f82b9e8c6db518b08fd9236c0ea0725804ccd7783bc321f9f0",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
@@ -95,13 +95,14 @@
       "docs/continuity/11.0/HYBRID_HANDOFF.md": "07413f2d2ef958b18fbc2fdf3993c553d32b3f1e1024f99c2fb2f1e0374075d3",
       "docs/continuity/11.0/HYBRID_MANIFEST.safe.json": "eb3ddb2dd86254150da0030560ec23cb9211ac622fbebec4d309f5e7e590e3f1",
       "docs/continuity/11.0/hybrid_check.py": "2bc23bc7ed8114a1061fd9cdb154c60334056b120c1f63ffa1d6e3c894d1b5f5",
-      "docs/continuity/11.0/WORK_SYNC.md": "99b0d07eb25c253ca59aee3addc1ab35e158ccc3e22a846161ec27e9da85d53f",
+      "docs/continuity/11.0/WORK_SYNC.md": "5a8333bf913ccf491b37b3959d3ec755130cdb858e286142a05db61d2ac5eef5",
       "docs/continuity/11.0/PROJECT_SYNC_MANIFEST.safe.json": "547595a4decbaf8a2a666ee2797b837c33496ce33c68516a5c17f496054ea0f3",
       "docs/continuity/11.0/work_sync.py": "62cff355a8226a5f41dc97c84f334903b38b8da6574e296d20d74b75678d63b5",
       "docs/continuity/11.0/PROJECT_ENTRY_REVIEW_20261008.md": "078a4a9b935bc92468679c307241724d1a6b602af4acff3aeef63774528ab26b",
       "docs/continuity/11.0/FRESH_CHAT_ACCEPTANCE.md": "aa9c9e16085e5a747e73c64a092e9821d1c597c01ed95705f940b946548c0049",
       "docs/continuity/11.0/FRESH_CHAT_ACCEPTANCE_RECEIPT_20261008.md": "4a65b18ad5744b318ef3d3e64e0636150629452c8fdd442d02e4242add00d3b9",
-      "docs/continuity/11.0/VIDEO_DELIVERY_20261008.md": "363989d60a0f3e23287cf5dd8d4edccc53ac288b545b9861c111ff40ed759fa0"
+      "docs/continuity/11.0/VIDEO_DELIVERY_20261008.md": "363989d60a0f3e23287cf5dd8d4edccc53ac288b545b9861c111ff40ed759fa0",
+      "docs/continuity/11.0/LOCAL_VIDEO_EDIT_PUBLICATION_20261008.md": "496164b235fca6628860dd9be4b81cfcebd8b4fb7c8bb4c8b6c70363c8a5d5ce"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -207,11 +208,12 @@
   },
   "video_direction_approved": false,
   "full_film_approved": false,
-  "publication_approved": false,
+  "publication_approved": true,
+  "publication_approval_scope": "Only the owner-requested v10 disclaimer-segment edit and one post to Jiejing Douyin on 2026-10-08; no standing publication or ad-spend permission",
   "original_local_materials_not_all_uploaded": true,
   "full_274_gate_pass_claimed": false,
   "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash.",
-  "current_owner_phase": "Return to promotion in the newly accepted cloud chat; deliver existing v10 narration-repaired MP4 for owner download and self-publication",
+  "current_owner_phase": "Local 10.0 edited the downloaded corrected v10, saved a separate Desktop copy and submitted once to Douyin; platform review pending",
   "video_work_paused": false,
   "video_start_requires_new_explicit_owner_instruction": true,
   "video_discussion_authorized": true,
@@ -304,18 +306,33 @@
       "platform": "Linux temporary real Git repositories; Windows pending"
     }
   },
-  "assistant_video_publication_paused": true,
+  "assistant_video_publication_paused": false,
   "existing_video_delivery": {
     "owner_request_date": "2026-10-08",
     "authorized": true,
-    "owner_will_publish": true,
-    "assistant_publication_authorized": false,
+    "owner_will_publish": false,
+    "assistant_publication_authorized": true,
     "file": "/workspace/jiejing-deliverables/11.0/20261008-v10-audio-fix/jiejing-douyin-v10-audio-fixed.mp4",
     "sha256": "005d2a12eec95e50a9b9054ba9b51c2cd8a7daaa4e8278554a3e191af757b458",
     "bytes": 31862665,
     "duration_seconds": 86,
-    "owner_download_confirmed": false,
+    "owner_download_confirmed": true,
     "delivery_record": "docs/continuity/11.0/VIDEO_DELIVERY_20261008.md",
-    "scope": "existing corrected MP4 retrieval and delivery; no new rendering or media upload to GitHub"
+    "scope": "Earlier delivery completed; latest explicit owner instruction authorizes this film's disclaimer-segment edit, Desktop save and one local-Chrome Douyin post; no media upload to GitHub"
+  },
+  "local_v10_publication": {
+    "record": "docs/continuity/11.0/LOCAL_VIDEO_EDIT_PUBLICATION_20261008.md",
+    "responsible_endpoint": "local 10.0",
+    "desktop_file": "C:/Users/57249/OneDrive/桌面/捷境抖音推广_v10_删句版_20261008.mp4",
+    "sha256": "0fa4a5f264e0ffe656b6e07b66bacee0821f0972613869569ba9a93976d7b6dc",
+    "bytes": 15263691,
+    "video_seconds": 77.666667,
+    "source_preserved": true,
+    "submitted_once": true,
+    "observed_platform_time": "2026-10-08 21:18 Asia/Shanghai",
+    "observed_status": "under_review",
+    "public_visibility_verified": false,
+    "remote_media_sync_claimed": false,
+    "evidence_root": "D:/Codex-Verification/jiejing-v10-publish-edit-20261008-2058"
   }
 }
