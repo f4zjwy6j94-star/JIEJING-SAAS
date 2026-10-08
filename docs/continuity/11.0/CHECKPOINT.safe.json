@@ -12,7 +12,7 @@
   ],
   "pinned_files": {
     "repo": {
-      "AGENTS.md": "c78f1b7a72320678243c941a493ee6489f56094c8c4128404e0b105ad72570d2",
+      "AGENTS.md": "07245c4da6e3d6cc060c032cd4c437effd3c1ebd55e0959b8162612f50aa95a2",
       "marketing/douyin-studio/src/Root.tsx": "3b91123bc1a2aa89037ce4f8a3a2141e89453fb68f2b63d7dce0f761d80aeda4",
       "marketing/douyin-studio/src/Douyin11VisualStudy.tsx": "31938fce8e1e93cd1bab02dd9fcc33dcdcb607ba1ee03c8aa60a50a7143354fb",
       "marketing/douyin-studio/src/index.ts": "957e481dd33a29b4a55ae0e95dbf763b7e48c37c427ca4bd1275faf34bc07a74",
@@ -46,7 +46,7 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "9b0ed2fbfe5a22f82b9e8c6db518b08fd9236c0ea0725804ccd7783bc321f9f0",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "372aba8bc4be6ec0921779fdba9c354ce2431643eb3da03dbe89e28bf57702f5",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
@@ -102,7 +102,8 @@
       "docs/continuity/11.0/FRESH_CHAT_ACCEPTANCE.md": "aa9c9e16085e5a747e73c64a092e9821d1c597c01ed95705f940b946548c0049",
       "docs/continuity/11.0/FRESH_CHAT_ACCEPTANCE_RECEIPT_20261008.md": "4a65b18ad5744b318ef3d3e64e0636150629452c8fdd442d02e4242add00d3b9",
       "docs/continuity/11.0/VIDEO_DELIVERY_20261008.md": "363989d60a0f3e23287cf5dd8d4edccc53ac288b545b9861c111ff40ed759fa0",
-      "docs/continuity/11.0/LOCAL_VIDEO_EDIT_PUBLICATION_20261008.md": "496164b235fca6628860dd9be4b81cfcebd8b4fb7c8bb4c8b6c70363c8a5d5ce"
+      "docs/continuity/11.0/LOCAL_VIDEO_EDIT_PUBLICATION_20261008.md": "496164b235fca6628860dd9be4b81cfcebd8b4fb7c8bb4c8b6c70363c8a5d5ce",
+      "docs/continuity/11.0/DOUYIN_OPERATIONS_PLAN_20261008.md": "7c808821f4889577c31b6a2580fe7f0f31b65a13b82fb5956c74f6d47fa1d509"
     },
     "private": {
       "continuity_tools.py": "bf6ff0a4a4387f2f0a3423af3f9cbca030aebb94e9dfead2fb1ee4088e24c216",
@@ -213,7 +214,7 @@
   "original_local_materials_not_all_uploaded": true,
   "full_274_gate_pass_claimed": false,
   "self_commit_identity": "Obtain actual HEAD and remote ref; do not embed a self-referential commit hash.",
-  "current_owner_phase": "Local 10.0 edited the downloaded corrected v10, saved a separate Desktop copy and submitted once to Douyin; platform review pending",
+  "current_owner_phase": "Local 10.0 verified the submitted caption and proposed two posts per day; awaiting operating-plan/publication-mode choice and production preflight before activating scheduling",
   "video_work_paused": false,
   "video_start_requires_new_explicit_owner_instruction": true,
   "video_discussion_authorized": true,
@@ -334,5 +335,22 @@
     "public_visibility_verified": false,
     "remote_media_sync_claimed": false,
     "evidence_root": "D:/Codex-Verification/jiejing-v10-publish-edit-20261008-2058"
+  },
+  "douyin_daily_operations": {
+    "plan": "docs/continuity/11.0/DOUYIN_OPERATIONS_PLAN_20261008.md",
+    "owner_requested_posts_per_day": 2,
+    "proposal_days": 7,
+    "proposal_new_posts": 14,
+    "status": "proposal_pending",
+    "recommended_publication_mode": "owner_review_before_publication",
+    "publication_mode_selected": false,
+    "proposed_timezone": "Asia/Shanghai",
+    "proposed_publication_times": ["12:30", "20:30"],
+    "proposed_next_day_generation_time": "18:00",
+    "scheduler_activated": false,
+    "new_film_pipeline_verified_on_this_local_endpoint": false,
+    "computer_off_cloud_generation_verified": false,
+    "new_videos_generated_this_turn": 0,
+    "already_submitted_post_modified": false
   }
 }
