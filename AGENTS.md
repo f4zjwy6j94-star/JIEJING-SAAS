@@ -2,6 +2,17 @@
 
 These instructions apply to the whole repository. They exist so local Codex, Codex Cloud, and GitHub-driven agents keep the same JIEJING safety and product boundaries.
 
+## Current Local And Cloud Work Continuity (2026-10-08)
+
+- The owner uses Codex inside the installed ChatGPT desktop app. Preserve original local 10.0 and private cloud 11.0; do not create a replacement project or claim that the conversations have been merged.
+- The owner has paused video creation, download, transfer, upload and assistant publication; they will publish their existing video themselves. Do not make the v10 ZIP a prerequisite for source/progress continuity. Keep historical files and verification results intact.
+- Use the existing private `video/jiejing-11-continuity-20261006` branch for authorized source and safe handoff records. The name is retained to avoid unnecessary branch changes; it does not authorize video work. Never push main, force-push, dispatch deployment or upload private material as part of this workflow.
+- Follow `docs/continuity/11.0/WORK_SYNC.md`. Before work, inspect status, use its safe receive command when the branch is correct and the tree clean, then read the latest `docs/JIEJING_CURRENT_EXECUTION_STATE.md`. Preserve dirty work, unexpected branches or divergence and report exact blockers instead of clearing them.
+- After an important completed step, a new owner decision, or before yielding after project changes, update that same execution index and save the explicitly reviewed source/document paths with the shared save command. Include the index in the save. The owner has requested timely source/progress handoff; do not ask for repeated generic save permission within the authorized task. Review files and run appropriate checks first; this does not authorize unrelated changes or secret/material uploads.
+- A push plus matching remote readback means handed off to the shared branch. It does not prove that the other endpoint has received it. The receiving endpoint must report its actual HEAD and readback. If saving fails, preserve the work and explicitly state that it has not been handed off.
+- Keep one endpoint responsible for a given task, recorded in the execution index. This is a coordination rule, not a distributed lock. Do not retry non-fast-forward pushes with force or automatically merge competing work. Do not repeat an external action merely because the other endpoint's receipt is missing.
+- This workflow runs at task boundaries and meaningful milestones; it is not a background daemon, complete chat mirror, automatic machine routing or proof of fresh-task restoration. Closed-computer operation uses only files and tools already available in cloud; local browser login remains local.
+
 ## Continuity And Instruction Conflicts
 
 - At a restart, handoff, or context compaction, read `docs/JIEJING_CURRENT_EXECUTION_STATE.md` before task actions. It is the single current execution index; dated handoffs are historical evidence, not automatic next-step instructions.
@@ -39,13 +50,12 @@ These instructions apply to the whole repository. They exist so local Codex, Cod
 - If an edge/WAF blocks script-like probes, retry with a normal browser User-Agent before declaring the app down.
 - Never claim paid public launch readiness without current `production_ready`, `can_accept_real_customers`, and `public_charging_allowed` evidence. Refund execution and eBay writing must be verified separately, not inferred from payment availability.
 
-## Local-First And Cloud Fallback
+## Local And Cloud Boundaries
 
-- Local Windows Codex is the primary operating mode.
-- Codex Cloud is a fallback route for times when the local computer cannot be used.
-- Use `Jiejing Cloud Fallback Self Check` before trusting a phone-only cloud session for JIEJING work.
+- The earlier local-first/fallback preference has been superseded by the owner's current two-endpoint continuity decision above. The prior strategy remains in Git history and dated handoffs, not as a current task instruction.
+- Use the shared source/progress workflow before trusting a resumed task; use historical materials only within the scope actually verified on that endpoint. Do not rerun full SaaS gates merely to recover context.
 - Do not treat Codex Cloud as having local-only files, browser login state, or local secrets.
-- Cloud fallback may edit GitHub code and run safe checks, but real deploy apply, eBay OAuth, Stripe live cutover, and secret-bearing operations still require explicit operator approval.
+- Real deploy apply, eBay OAuth, Stripe live cutover, and secret-bearing operations retain their specific operator-approval boundaries. Source/progress synchronization is not deployment authorization.
 
 ## Hard Safety Rules
 

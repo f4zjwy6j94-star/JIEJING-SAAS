@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "work_branch": "video/jiejing-11-continuity-20261006",
+  "required_ancestor": "0b4e29970c3446f2785084a7439970396cba39ef",
+  "scope": "Source and current project-progress handoff only. Owner paused all video work and transfers on 2026-10-08. This check does not verify the video package, full history, local-only data, or automatic task routing.",
+  "artifacts": [],
+  "video_transfer_required_for_this_scope": false,
+  "original_video_manifest": "HYBRID_MANIFEST.safe.json",
+  "original_full_verifier": "verify_checkpoint.py",
+  "all_history_verified_by_this_check": false,
+  "automatic_background_sync_installed": false,
+  "cold_start_verified": false,
+  "production_deployment_authorized": false
+}
