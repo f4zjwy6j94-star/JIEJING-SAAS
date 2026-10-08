@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "timezone": "Asia/Shanghai",
+  "owner_corrected_date": "2026-10-09",
+  "account_name": "捷境AI电商SAAS",
+  "douyin_id": "51406410196",
+  "authorization": "Two owner-requested posts on 2026-10-09 at 12:00 and 20:00 only; quality checks first. No spend or other account actions.",
+  "rejected_versions": ["DouyinFactsV11", "jiejing-facts-v11-30s-review.mp4"],
+  "old_post": {
+    "work_id": "7694285664078138658",
+    "owner_reported_removed": true,
+    "assistant_deleted": false,
+    "current_platform_state_verified": false,
+    "do_not_delete_again": true
+  },
+  "trial_not_for_publication": {
+    "version": "v02",
+    "path": "D:/Codex-Verification/jiejing-v12-20261009/jiejing-v12-14s-voice-style-review-v02.mp4",
+    "sha256": "3dcc8e3f901dfd998fd1616106ecea89495e50f44574a1c5ed546779291e5ac1",
+    "burned_in_production_note": false,
+    "platform_ai_declaration_required": true,
+    "duration_seconds": 14.366667,
+    "narration_present": true,
+    "keyframes_reviewed": 8,
+    "technical_check_passed": true,
+    "natural_voice_listening_review": false,
+    "owner_audio_feedback": "requested_pending",
+    "ready_to_publish": false
+  },
+  "preserved_previous_trial": {
+    "version": "v01",
+    "path": "D:/Codex-Verification/jiejing-v12-20261009/jiejing-v12-14s-voice-style-review.mp4",
+    "sha256": "0ba026a14f130555f04a2776c5da7db511cf3df9c231086b5e085897fbb46d67",
+    "not_for_publication": true
+  },
+  "slots": [
+    {
+      "episode_id": "v12-noon-sourcing-to-draft",
+      "planned_publish_at": "2026-10-09T12:00:00+08:00",
+      "topic": "从货源资料到上架草稿",
+      "status": "spoken_trial_ready_full_film_incomplete",
+      "media_path": null,
+      "sha256": null,
+      "narration_present": false,
+      "full_visual_review": false,
+      "natural_voice_listening_review": false,
+      "technical_check_passed": false,
+      "rights_and_claims_review": false,
+      "ready_to_publish": false,
+      "platform_work_id": null,
+      "submitted": false
+    },
+    {
+      "episode_id": "v12-evening-facts-first",
+      "planned_publish_at": "2026-10-09T20:00:00+08:00",
+      "topic": "AI内容要能核对来源",
+      "status": "script_only_full_film_incomplete",
+      "media_path": null,
+      "sha256": null,
+      "narration_present": false,
+      "full_visual_review": false,
+      "natural_voice_listening_review": false,
+      "technical_check_passed": false,
+      "rights_and_claims_review": false,
+      "ready_to_publish": false,
+      "platform_work_id": null,
+      "submitted": false
+    }
+  ],
+  "if_not_ready": "Do not upload a rejected, silent or unreviewed fallback. Report the exact missing gate. Do not invent a successful scheduled post.",
+  "if_missed": "Report missed slot; do not silently catch up or roll it to another day.",
+  "no_duplicate_submission": true,
+  "paid_calls_authorized": false
+}

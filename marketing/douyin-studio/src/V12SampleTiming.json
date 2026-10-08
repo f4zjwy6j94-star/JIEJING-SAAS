@@ -1,0 +1,12 @@
+{
+  "fps": 30,
+  "frames": 431,
+  "voice": "zf_094",
+  "naturalness_review": "pending",
+  "captions": [
+    {"text":"货源图都有了，怎么还卡在上架前？","startMs":266.667,"endMs":4433.333,"timestampMs":null,"confidence":null},
+    {"text":"一张图片，一份规格表。","startMs":4566.667,"endMs":7666.667,"timestampMs":null,"confidence":null},
+    {"text":"聊天里还有几句补充说明。","startMs":7800,"endMs":10500,"timestampMs":null,"confidence":null},
+    {"text":"先把资料理清，再开始写。","startMs":10633.333,"endMs":13900,"timestampMs":null,"confidence":null}
+  ]
+}

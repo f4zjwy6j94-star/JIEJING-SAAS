@@ -1,4 +1,5 @@
 import "./index.css";
+import { DouyinCinematicV12Sample, V12Arrival, V12Sources, V12Notes, V12Focus } from "./DouyinCinematicV12";
 import { DouyinFactsV11, FactsCoverV11, FactsOpening, FactsSources, FactsQuestion, FactsMethod, FactsAsk, FactsClosing } from "./DouyinFactsV11";
 import { Douyin11CompleteV8, Douyin11CoverV8 } from "./Douyin11CompleteV8";
 import { Douyin11TactileV7 } from "./Douyin11TactileV7";
@@ -20,6 +21,11 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="DouyinCinematicV12Sample" component={DouyinCinematicV12Sample} durationInFrames={431} fps={30} width={1080} height={1920} />
+      <Composition id="V12Arrival" component={V12Arrival} durationInFrames={137} fps={30} width={1080} height={1920} />
+      <Composition id="V12Sources" component={V12Sources} durationInFrames={97} fps={30} width={1080} height={1920} />
+      <Composition id="V12Notes" component={V12Notes} durationInFrames={85} fps={30} width={1080} height={1920} />
+      <Composition id="V12Focus" component={V12Focus} durationInFrames={112} fps={30} width={1080} height={1920} />
       <Composition id="DouyinFactsV11" component={DouyinFactsV11} durationInFrames={900} fps={30} width={1080} height={1920} />
       <Still id="FactsCoverV11" component={FactsCoverV11} width={1080} height={1920} />
       <Composition id="FactsOpening" component={FactsOpening} durationInFrames={105} fps={30} width={1080} height={1920} />

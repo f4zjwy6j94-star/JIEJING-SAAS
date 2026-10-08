@@ -1,0 +1,28 @@
+{
+  "date": "2026-10-09",
+  "media_root": "D:/Codex-Verification/jiejing-v12-20261009",
+  "rights_scope": "Original built-in image generation of fictional scenes; no named person, voice clone, customer testimonial, supplier photo or product UI claim. Platform AI disclosure required.",
+  "burned_in_production_note": false,
+  "platform_ai_declaration_required": true,
+  "images": [
+    {"file":"assets/noon-unboxing.png","sha256":"45e6d3ef2d18e74e7edaf548c4c1593bd2cd5ebfaf1e78b855cae1ef061b46ab","description":"Hands opening a ceramic sample box, warm olive and walnut desk scene"},
+    {"file":"assets/noon-sorting.png","sha256":"7997cae6ff8fe15611b36b7f2fb7b71dee8dda214ec301e3f2b89a79ea7ecfb6","description":"Top-down hands sorting six ceramic-cup photo prints"},
+    {"file":"assets/noon-detail.png","sha256":"40c77dda2497aad483c68b1ef0d78a50cebaf1592d1b5a272faffffc7b5c970b","description":"Hand inspecting an ivory cup, close detail"}
+  ],
+  "local_voice": {
+    "model": "Kokoro multi-lang v1.1",
+    "runtime": "sherpa-onnx 1.13.8 CPU, 2 threads, isolated D-drive Python 3.12 environment",
+    "model_archive_sha256": "a3f4c73d043860e3fd2e5b06f36795eb81de0fc8e8de6df703245edddd87dbad",
+    "model_archive_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2",
+    "model_card": "https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh",
+    "archive_license_header": "Apache License Version 2.0",
+    "wheels": "All seven official PyPI wheels installed with exact hashes from tools/voice-v12/requirements-win312.txt",
+    "trial_speaker": "zf_094, sid 56",
+    "voice_clone": false,
+    "paid_calls": 0,
+    "subjective_listening": "pending",
+    "initialization_warning": "Lexicon reported unknown token U+2753; generation completed. Do not infer pronunciation/naturalness pass."
+  },
+  "do_not_associate_cup_with_drain_cover_measurements": true,
+  "media_uploaded_to_git_or_cos": false
+}
