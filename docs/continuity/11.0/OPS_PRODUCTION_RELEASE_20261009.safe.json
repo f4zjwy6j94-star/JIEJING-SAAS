@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "owner_endpoint": "local-10.0",
+  "scope": "Jiejing OPS alignment production release; no Pindd mutation, real money or eBay writes",
+  "deployed_candidate": {
+    "commit": "d57e230524b0577bee98217a49a5ea8cb3e2a51e",
+    "tree": "7287f6185f0dae8b2ba9151c0e88ff6247ee7260",
+    "active_app": "/opt/jiejing-production/releases/20261009T090923Z-d57e230524b0/app",
+    "ops_asset_version": "ops-v1-eae6b27031bf"
+  },
+  "code_gate": {
+    "total": 280,
+    "passed": 280,
+    "failed": 0,
+    "exit_code": 0,
+    "source_stable": true,
+    "release_eligible": true,
+    "elapsed_seconds": 2948.19,
+    "finished_at_utc": "2026-10-09T09:02:17.136633Z",
+    "local_code_evidence_only": true
+  },
+  "deployment": {
+    "status": "deployed",
+    "mode": "apply",
+    "host": "43.129.169.223",
+    "source_sha": "d57e230524b0577bee98217a49a5ea8cb3e2a51e",
+    "bundle_sha256": "9bd900be803fa31743223708fee9a47c09002a9ad8a0c2e4d6bc0c5db0cb284c",
+    "manifest_sha256": "56109bb9742f055c156d59968e47db781242709d4c50f6511b6c4e53ddf0b941",
+    "private_env_normalization_required": false,
+    "private_env_normalization_planned": false,
+    "ops_previous_release_supported": true,
+    "ops_stored_certificate_preflight": true,
+    "private_env_normalization_applied": false,
+    "evidence_snapshot_initialized": true,
+    "ops_local_tls_assets_isolation_verified": true,
+    "candidate_release_persisted": true,
+    "active_switched": true,
+    "commercial_readiness": {
+      "contract_verified": true,
+      "status": "ready",
+      "reason": "none",
+      "blocker_count": 0,
+      "warning_count": 0,
+      "production_ready": true,
+      "beta_ready": true,
+      "can_accept_real_customers": true,
+      "public_charging_allowed": true
+    },
+    "secret_exposed": false,
+    "reason_code": null,
+    "stage_markers": [
+      "JIEJING_PRODUCTION_DEPLOY_APPLIED=1",
+      "SOURCE_COMMIT=d57e230524b0577bee98217a49a5ea8cb3e2a51e"
+    ],
+    "started_at_local_utc": "2026-10-09T09:05:11.309541+00:00",
+    "finished_at_local_utc": "2026-10-09T09:08:03.499800+00:00",
+    "exit_code": 0,
+    "attempt_count": 1,
+    "raw_logs_included": false
+  },
+  "host_comparison": {
+    "passed": 21,
+    "total": 21,
+    "pindd_api_unchanged_during_apply": true,
+    "pindd_pg_unchanged_during_apply": true,
+    "vault_unchanged_during_apply": true,
+    "caddy_runtime_and_persisted_identical": true,
+    "independent_pindd_upgrade_before_baseline": true
+  },
+  "ui_observation": {
+    "observed_local_beijing": "2026-10-09 17:08-17:14",
+    "authenticated_chrome": true,
+    "new_statistics_labels": true,
+    "window_30d": {
+      "visitor_ids": 42,
+      "registered_merchant_companies_cumulative": 9,
+      "signup_completed": 1,
+      "active_subscriptions": 0,
+      "commercial_orders": 0,
+      "receipts_cny": 0
+    },
+    "window_7d": {
+      "visitor_ids": 13,
+      "sessions": 23,
+      "page_views": 114,
+      "signup_completed": 0,
+      "active_subscriptions": 0,
+      "commercial_orders": 0,
+      "receipts_cny": 0,
+      "source": "unknown/untagged"
+    },
+    "previous_uv_definition_changed": true,
+    "no_douyin_attribution_proof": true
+  },
+  "evidence_limits": [
+    "PITR independent acceptance input still not connected; this release performs no restore",
+    "Automatic applied deployment SHA/time input still not connected to OPS; real host manifest verified separately",
+    "Server clock is about four minutes ahead of local client; exact cause not established and no shared-host time change performed",
+    "Current production readiness and independent review/cutover packets have different scopes; their statuses must not be overwritten"
+  ],
+  "refinement": {
+    "state": "local_focused_pass_not_yet_released",
+    "ops_asset_version": "ops-v1-3aaef3240f19",
+    "changes": [
+      "Asset identity no longer called source commit",
+      "Edge cutover preflight separated from live health",
+      "Approval workflow scope separated from current production readiness",
+      "Legacy evidence times rendered Asia/Shanghai"
+    ],
+    "red_tests_failed": 3,
+    "green_tests_passed": 6,
+    "full_gate_for_refinement_pending": true
+  },
+  "local_evidence_root": "D:/Codex-Verification/jiejing-ops-release-20261009",
+  "source_pin_audit": {
+    "historical_raw_crlf_vs_lf_differences": 83,
+    "all_83_match_when_normalized_to_lf": true,
+    "all_83_historical_pins_unchanged_from_deployed_commit": true,
+    "modified_current_index_and_work_sync_pins_match_raw_bytes": true,
+    "historical_pins_not_rewritten": true,
+    "complete_media_archive_verification_performed": false
+  },
+  "raw_logs_credentials_business_rows_included": false
+}

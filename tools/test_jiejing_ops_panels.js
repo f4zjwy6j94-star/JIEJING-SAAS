@@ -32,3 +32,35 @@ test("backup overall readiness cannot stand in for independent PITR proof", () =
   assert.match(html, /独立.*PITR.*证据/);
   assert.equal((html.match(/ops-reliability-item is-ready/g) || []).length, 1);
 });
+
+test("frontend asset identity is not presented as an applied source commit", () => {
+  const html = panels.renderLaunchAlignment({ops_console_evidence: {release: {frontend_asset_version: "theme-resource-v1"}}});
+  assert.match(html, /商家前端资源标识/);
+  assert.match(html, /theme-resource-v1/);
+  assert.match(html, /不是 Git 提交号/);
+  assert.doesNotMatch(html, /当前代码版本/);
+  assert.match(html, /not_connected/);
+});
+
+test("edge cutover preparation remains blocked without pretending the live site is down", () => {
+  const html = panels.renderRuntimeSecurityPanel({ops_console_evidence: {runtime: {status: "ready", edge_status: "blocked"}}});
+  assert.match(html, /域名与回调切换预检/);
+  assert.match(html, /不能用来判断网站当前是否可访问/);
+  assert.doesNotMatch(html, /<strong>公网边界<\/strong>/);
+  assert.match(html, /is-critical/);
+  assert.match(html, /title="blocked"/);
+  assert.equal((html.match(/ops-reliability-item is-ready/g) || []).length, 1);
+});
+
+test("independent approval records do not override current production readiness", () => {
+  const control = {status: "private_beta_ready_public_launch_blocked", ops_console_evidence: {readiness: {production_ready: true}}};
+  const current = panels.renderLaunchAlignment(control);
+  const workflow = panels.renderOwnerLaunchControlPanel(control);
+  assert.match(current, /is-ready/);
+  assert.match(workflow, /运营复核与交接记录/);
+  assert.match(workflow, /复核流程状态/);
+  assert.match(workflow, /不等于当前服务故障/);
+  assert.match(workflow, /private_beta_ready_public_launch_blocked/);
+  assert.match(workflow, /is-critical/);
+  assert.doesNotMatch(workflow, /<strong>总体门禁<\/strong>/);
+});
