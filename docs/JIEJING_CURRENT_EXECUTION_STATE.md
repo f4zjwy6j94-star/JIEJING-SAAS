@@ -4,6 +4,14 @@
 
 ## 当前接续摘要（以本区续接，不按历史段落直接执行）
 
+### 10-09 12:32官网完整收尾修订已另存桌面，待整片审看，未发布
+
+经营者对26秒Review01反馈“像半成品、没交代完”，要求继续优化并加捷境网址；本轮将“结果→下一步”补完整，不再停在二选一问题。新版独立`DouyinFlowV13Website`：草稿结果标题明确、商品结果归位转官网，末屏“从一个商品，开始用捷境”，口播“打开捷境官网，带上你的商品资料，从上架准备开始”。本机Chrome实际打开`https://jiejing.shop`跳转`https://app.jiejing.shop/`正式首页；片中短网址19.4秒后稳定至26秒结束。
+
+新版桌面：`C:/Users/57249/OneDrive/桌面/捷境推广_v13_20261009/捷境_v13_26秒_官网完整收尾版_02_未发布.mp4`；D盘`D:/Codex-Verification/jiejing-v13-20261009-1111/jiejing-v13-26s-website-review-02.mp4`；同SHA `62cad9d1e6681361d941614839b13946aac58215a128a1555be115a4a2f70e50`，2645061字节，26秒/780帧/1080×1920/30fps。完整解码exit0，-16.50LUFS/-4.34dBTP；类型/限定lint/渲染通过，最终7时点抽帧检查无网址字幕重叠。新24.16秒完整Voice Design声音沿认可方向，不是精确克隆；所有旧原件保留。完整听感/AV、主体商用资格及平台含网址预检等仍待完成，ready=false；无上传/定时/发布，晚间仍未完成。旧Review01不再是active候选。
+
+负责端本地10.0。开工正确干净receive起点`4cd9be9bde36806acab953c445153ec56af45e58`。新回执`docs/continuity/11.0/DOUYIN_V13_WEBSITE_REVISION_20261009.md`及`marketing/douyin-studio/operations/v13-website-review.safe.json`，发布清单active指向新片。下一步先看这一版完整反馈；未准许未经预检公开或规避网址审核。按WORK_SYNC保存源码/安全记录，D盘`WEBSITE_REVIEW_SAVE.safe.json`/`WEBSITE_REVIEW_STATUS_AFTER_SAVE.safe.json`记实际结果；媒体不进Git/COS，云端需真实receive。下方12:09仅是上一版历史。
+
 ### 10-09 12:09完成26秒新声整片审看版，先看后发；本条可延至12点后
 
 经营者最新明确“十二点多发也行，先做好一版给我看”。仅覆盖今天中午这一条的旧错过时段停止限制；不擅自公开、不延伸次日、不替晚间自动延期。本轮WORK_SYNC正确干净receive起点为 `29761c057ee9c2e4b4dfdeeafe61d932f5ac66e2`。负责端本地10.0。

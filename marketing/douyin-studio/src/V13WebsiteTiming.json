@@ -1,0 +1,25 @@
+{
+  "durationFrames": 780,
+  "voiceFile": "voice-design-website-02.wav",
+  "voiceSha256": "9240a64f9d33b2774a6b02bf92ab408762583da18fe68c1c0085eff83143ef38",
+  "timing_method": "New complete narration, local offline tiny ASR timestamps, not a human listening pass. Source audio offset 0.2s. Closing URL remains visible through frame 779.",
+  "scenes": {"openingEnd": 207, "draftEnd": 396, "editEnd": 522},
+  "captions": [
+    {"text":"商品图有了", "startMs":0, "endMs":1260, "timestampMs":null, "confidence":null},
+    {"text":"上架还卡在写文案？", "startMs":1520, "endMs":3420, "timestampMs":null, "confidence":null},
+    {"text":"把原图、参数和销售目标", "startMs":3860, "endMs":5620, "timestampMs":null, "confidence":null},
+    {"text":"交给捷境", "startMs":5620, "endMs":6480, "timestampMs":null, "confidence":null},
+    {"text":"先做标题、卖点", "startMs":7000, "endMs":8340, "timestampMs":null, "confidence":null},
+    {"text":"和描述的草稿", "startMs":8340, "endMs":9770, "timestampMs":null, "confidence":null},
+    {"text":"然后核对信息", "startMs":10200, "endMs":11140, "timestampMs":null, "confidence":null},
+    {"text":"改到合适为止", "startMs":11140, "endMs":12800, "timestampMs":null, "confidence":null},
+    {"text":"比如这个支架", "startMs":13000, "endMs":13900, "timestampMs":null, "confidence":null},
+    {"text":"标题改了", "startMs":14200, "endMs":15300, "timestampMs":null, "confidence":null},
+    {"text":"预览也跟着更新", "startMs":15400, "endMs":16930, "timestampMs":null, "confidence":null},
+    {"text":"当前先支持 eBay", "startMs":17300, "endMs":18500, "timestampMs":null, "confidence":null},
+    {"text":"发布由你确认", "startMs":18650, "endMs":20080, "timestampMs":null, "confidence":null},
+    {"text":"打开捷境官网", "startMs":20380, "endMs":21550, "timestampMs":null, "confidence":null},
+    {"text":"带上你的商品资料", "startMs":21720, "endMs":22820, "timestampMs":null, "confidence":null},
+    {"text":"从上架准备开始", "startMs":22820, "endMs":24300, "timestampMs":null, "confidence":null}
+  ]
+}

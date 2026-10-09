@@ -3,15 +3,16 @@ import path from "node:path";
 import crypto from "node:crypto";
 import {spawnSync} from "node:child_process";
 
-const [root] = process.argv.slice(2);
+const [root, revision = "review"] = process.argv.slice(2);
+if (!["review", "website"].includes(revision)) throw new Error("Unknown revision");
 if (!root || !path.isAbsolute(root) || !fs.existsSync(root)) throw new Error("Existing absolute V13 root required");
-const source = path.join(root, "review-film-01/jiejing-v13-new-voice-review-raw.mp4");
-const voice = path.join(root, "assets/voice-design-full-01.wav");
-const output = path.join(root, "jiejing-v13-26s-new-voice-review-01.mp4");
-const report = path.join(root, "REVIEW_MEDIA_QA_01.safe.json");
+const source = path.join(root, revision === "website" ? "website-film-02/jiejing-v13-website-02-raw.mp4" : "review-film-01/jiejing-v13-new-voice-review-raw.mp4");
+const voice = path.join(root, revision === "website" ? "assets/voice-design-website-02.wav" : "assets/voice-design-full-01.wav");
+const output = path.join(root, revision === "website" ? "jiejing-v13-26s-website-review-02.mp4" : "jiejing-v13-26s-new-voice-review-01.mp4");
+const report = path.join(root, revision === "website" ? "WEBSITE_MEDIA_QA_02.safe.json" : "REVIEW_MEDIA_QA_01.safe.json");
 if (fs.existsSync(output) || fs.existsSync(report)) throw new Error("Refusing overwrite");
 const hash = p => crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
-if (hash(voice) !== "e2bac7bd0849a33418550e8d4c6cb491776644563dc2b6cc34f41457d3d046c1") throw new Error("Unexpected voice; never fall back to rejected voices");
+if (hash(voice) !== (revision === "website" ? "9240a64f9d33b2774a6b02bf92ab408762583da18fe68c1c0085eff83143ef38" : "e2bac7bd0849a33418550e8d4c6cb491776644563dc2b6cc34f41457d3d046c1")) throw new Error("Unexpected voice; never fall back to rejected voices");
 const linux = p => `/mnt/${p[0].toLowerCase()}${p.slice(2).replaceAll("\\", "/")}`;
 const run = (bin, args) => {
   const r = spawnSync("wsl.exe", ["-d", "Ubuntu", "--exec", bin, ...args], {encoding:"utf8", windowsHide:true, maxBuffer:8*1024*1024});
