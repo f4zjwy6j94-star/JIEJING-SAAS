@@ -1,6 +1,8 @@
 {
   "date": "2026-10-09",
   "timezone": "Asia/Shanghai",
+  "latest_full_review_receipt": "marketing/douyin-studio/operations/v13-full-review.safe.json",
+  "historical_scope_note": "The rest records the earlier rebuild/trial. New 26-second full voice film now exists; use latest_full_review_receipt. Old voices remain rejected; publication remains false.",
   "received_head": "7462a227831560c0e12ac7e8c233dba5eaf92bf6",
   "owner_rejected_voices": ["Kokoro zf_094 in V12", "Qwen Serena reused from v10 in V13 sample"],
   "owner_v13_feedback": "仍有明显AI感，需要再换",

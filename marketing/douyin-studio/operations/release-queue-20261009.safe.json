@@ -5,6 +5,10 @@
   "account_name": "捷境AI电商SAAS",
   "douyin_id": "51406410196",
   "authorization": "Two owner-requested posts on 2026-10-09 at 12:00 and 20:00 only; quality checks first. No spend or other account actions.",
+  "latest_authorization_override": "Owner explicitly allowed the noon film after 12:00 on 2026-10-09 and requested a full review version first. Do not automatically upload/publish. No next-day extension; evening unchanged.",
+  "active_noon_review_receipt": "marketing/douyin-studio/operations/v13-full-review.safe.json",
+  "active_noon_review_sha256": "6560c0339c2b4f9e30918a618ea8d013e12f8b16bfabf7d8eccbf7f95b40f2a8",
+  "active_noon_ready_to_publish": false,
   "rejected_versions": ["DouyinFactsV11", "jiejing-facts-v11-30s-review.mp4", "DouyinNoonV12", "jiejing-v12-noon-44s-review-v01.mp4"],
   "latest_voice_decision": {
     "date": "2026-10-09",
@@ -21,6 +25,8 @@
     "new_voice_trial_sha256": "b26da2bcfa196ac2eb7b10e6a230a503e225f271340fb1cd221d9395dbcf45a4",
     "new_voice_owner_feedback": "Accepted by owner at approximately 2026-10-09 11:49 Asia/Shanghai: 这声音还可以接受。Trial voice direction only; not full-film approval.",
     "existing_24s_film_contains_rejected_voice": true,
+    "new_26s_review_receipt": "marketing/douyin-studio/operations/v13-full-review.safe.json",
+    "new_26s_full_voice_exists": true,
     "ready_to_publish": false
   },
   "old_post": {
@@ -56,6 +62,9 @@
       "planned_publish_at": "2026-10-09T12:00:00+08:00",
       "topic": "从货源资料到上架草稿",
       "status": "owner_rejected_20261009_1111_do_not_publish",
+      "historical_media_fields_below": true,
+      "replacement_review_receipt": "marketing/douyin-studio/operations/v13-full-review.safe.json",
+      "replacement_ready_to_publish": false,
       "owner_rejection": "Artificial slow narration; static unrelated pictures; not acceptable quality. Preserve original. V13 must replace the concept, not republish this file.",
       "media_path": "D:/Codex-Verification/jiejing-v12-20261009/noon-0900/jiejing-v12-noon-44s-review-v01.mp4",
       "desktop_media_path": "C:/Users/57249/OneDrive/桌面/捷境推广_v12_20261009/捷境_v12_中午44秒_完整审看版_v01.mp4",

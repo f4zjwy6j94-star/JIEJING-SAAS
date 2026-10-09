@@ -1,0 +1,23 @@
+{
+  "durationFrames": 780,
+  "voiceFile": "voice-design-full-01.wav",
+  "timing_method": "Aligned to local faster-whisper tiny word timestamps and measured silence; scripted proper nouns retained. Audio begins 0.2 seconds into the film. This is not a human listening pass.",
+  "scenes": {"openingEnd": 219, "draftEnd": 417, "editEnd": 570},
+  "captions": [
+    {"text":"商品图有了", "startMs":0, "endMs":1450, "timestampMs":null, "confidence":null},
+    {"text":"上架还卡在写文案？", "startMs":1500, "endMs":3640, "timestampMs":null, "confidence":null},
+    {"text":"把原图、参数和销售目标", "startMs":3880, "endMs":6220, "timestampMs":null, "confidence":null},
+    {"text":"交给捷境", "startMs":6220, "endMs":7120, "timestampMs":null, "confidence":null},
+    {"text":"先做标题、卖点", "startMs":7500, "endMs":9300, "timestampMs":null, "confidence":null},
+    {"text":"和描述的草稿", "startMs":9300, "endMs":10650, "timestampMs":null, "confidence":null},
+    {"text":"然后核对信息", "startMs":11000, "endMs":12180, "timestampMs":null, "confidence":null},
+    {"text":"改到合适为止", "startMs":12300, "endMs":13660, "timestampMs":null, "confidence":null},
+    {"text":"比如这个支架", "startMs":13770, "endMs":15030, "timestampMs":null, "confidence":null},
+    {"text":"标题改了", "startMs":15190, "endMs":16200, "timestampMs":null, "confidence":null},
+    {"text":"预览也跟着更新", "startMs":16400, "endMs":18040, "timestampMs":null, "confidence":null},
+    {"text":"当前先支持 eBay", "startMs":18760, "endMs":20170, "timestampMs":null, "confidence":null},
+    {"text":"发布由你确认", "startMs":20280, "endMs":21440, "timestampMs":null, "confidence":null},
+    {"text":"你最费时间的是写文案", "startMs":21710, "endMs":23820, "timestampMs":null, "confidence":null},
+    {"text":"还是做商品图？", "startMs":23890, "endMs":25100, "timestampMs":null, "confidence":null}
+  ]
+}

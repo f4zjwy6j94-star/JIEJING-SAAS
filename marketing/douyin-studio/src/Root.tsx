@@ -1,4 +1,8 @@
 import "./index.css";
+import {DouyinFlowV13Review} from "./DouyinFlowV13Review";
+import {ReviewOpening} from "./v13-flow/ReviewOpening";
+import {ReviewClose} from "./v13-flow/ReviewClose";
+import {ReviewDraft} from "./v13-flow/ReviewDraft";
 import {DouyinFlowV13} from "./DouyinFlowV13";
 import {FlowIngest} from "./v13-flow/Ingest";
 import {FlowDraft} from "./v13-flow/Draft";
@@ -36,6 +40,10 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="DouyinFlowV13Review" component={DouyinFlowV13Review} durationInFrames={780} fps={30} width={1080} height={1920}/>
+      <Composition id="ReviewOpening" component={ReviewOpening} durationInFrames={219} fps={30} width={1080} height={1920} defaultProps={{sceneDurationFrames:219}}/>
+      <Composition id="ReviewClose" component={ReviewClose} durationInFrames={210} fps={30} width={1080} height={1920}/>
+      <Composition id="ReviewDraft" component={ReviewDraft} durationInFrames={198} fps={30} width={1080} height={1920}/>
       <Composition id="DouyinFlowV13" component={DouyinFlowV13} durationInFrames={720} fps={30} width={1080} height={1920}/>
       <Composition id="FlowIngest" component={FlowIngest} durationInFrames={228} fps={30} width={1080} height={1920}/>
       <Composition id="FlowDraft" component={FlowDraft} durationInFrames={180} fps={30} width={1080} height={1920}/>
