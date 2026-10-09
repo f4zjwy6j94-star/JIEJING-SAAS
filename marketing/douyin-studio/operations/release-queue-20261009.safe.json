@@ -19,7 +19,7 @@
     "receipt": "marketing/douyin-studio/operations/v13-rebuild.safe.json",
     "new_voice_trial_path": "D:/Codex-Verification/jiejing-v13-20261009-1111/assets/voice-design-male-trial-01.wav",
     "new_voice_trial_sha256": "b26da2bcfa196ac2eb7b10e6a230a503e225f271340fb1cd221d9395dbcf45a4",
-    "new_voice_owner_feedback": "pending",
+    "new_voice_owner_feedback": "Accepted by owner at approximately 2026-10-09 11:49 Asia/Shanghai: 这声音还可以接受。Trial voice direction only; not full-film approval.",
     "existing_24s_film_contains_rejected_voice": true,
     "ready_to_publish": false
   },
