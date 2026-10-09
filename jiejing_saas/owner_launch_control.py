@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -392,6 +393,11 @@ def build_owner_launch_control(
         "external_blockers": external_blockers,
         "internal_work_queue": internal_work_queue,
         "evidence": evidence_summary,
+        "ops_console_evidence": build_ops_console_evidence(
+            backup=backup, operational=operational, edge=edge, readiness=readiness,
+            release_evidence=fixed_progress_release_evidence,
+            frontend_version=_current_frontend_asset_version(),
+        ),
         "safety": {
             "owner_admin_only": True,
             "platform_internal_admin_only": True,
@@ -408,6 +414,83 @@ def build_owner_launch_control(
             "confirmation_center_required_for_real_risk_actions": True,
             "secret_exposed": False,
         },
+    }
+
+
+def build_ops_console_evidence(
+    *, backup: dict[str, Any], operational: dict[str, Any], edge: dict[str, Any],
+    readiness: dict[str, Any], release_evidence: dict[str, Any], frontend_version: str,
+) -> dict[str, Any]:
+    """Project existing probes only; never infer a live deployment from local artifacts.
+
+    This whitelist deliberately excludes raw probe messages, identifiers, paths,
+    URLs, table counts and secrets. Missing booleans remain unknown, not false.
+    """
+    def obj(value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    def code(value: Any, default: str = "unknown") -> str:
+        return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", value) else default
+
+    def codes(value: Any) -> list[str]:
+        return [code(item) for item in value[:20] if code(item) != "unknown"] if isinstance(value, list) else []
+
+    def stamp(value: Any) -> str:
+        if not isinstance(value, str) or len(value) > 40:
+            return ""
+        try:
+            date = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return date.astimezone(timezone.utc).isoformat() if date.tzinfo else ""
+        except ValueError:
+            return ""
+
+    def flag(value: Any) -> bool | None:
+        return value if type(value) is bool else None
+
+    backup, operational, edge, readiness = map(obj, (backup, operational, edge, readiness))
+    storage, restore = obj(backup.get("object_storage")), obj(backup.get("restore"))
+    worker, queue = obj(operational.get("worker_runtime")), obj(operational.get("queue_runtime"))
+    backup_flag = flag(backup.get("backup_ready_for_paid_launch"))
+    items = readiness.get("items") if isinstance(readiness.get("items"), list) else []
+    return {
+        "contract_version": "2026-10-09-ops-evidence-v1",
+        "backup": {
+            "status": "unknown" if backup_flag is None else "ready" if backup_flag else "attention_required",
+            "blockers": codes(backup.get("blockers")),
+            "storage_status": "ready" if storage.get("target_ready") is True and storage.get("live_probe_fresh") is True else "attention_required" if storage else "unknown",
+            "storage_checked_at": stamp(storage.get("last_successful_probe_at")),
+            "restore_status": "ready" if restore.get("restore_drill_fresh") is True else "attention_required" if restore.get("restore_drill_recorded") is True else "unknown",
+            "restore_checked_at": stamp(restore.get("last_restore_drill_at")),
+            # minimum_policy.point_in_time_recovery is a requirement, not proof.
+            "pitr_status": "unknown",
+            "pitr_evidence_connected": False,
+        },
+        "runtime": {
+            "status": code(operational.get("status")),
+            "database_status": code(obj(operational.get("database_live_probe")).get("status")),
+            "queue_status": code(queue.get("status")),
+            "worker_status": code(worker.get("status")),
+            "worker_heartbeat_status": code(worker.get("heartbeat_status")),
+            "worker_checked_at": stamp(worker.get("latest_registered_worker_heartbeat_at") or worker.get("env_heartbeat_at") or worker.get("latest_job_heartbeat_at")),
+            "edge_status": code(edge.get("status")),
+            "blockers": codes(operational.get("blockers")),
+            "warnings": codes(operational.get("warnings")),
+        },
+        "readiness": {
+            "status": code(readiness.get("status")),
+            **{key: flag(readiness.get(key)) for key in ("beta_ready", "production_ready", "can_accept_real_customers")},
+            "blockers": [
+                {"key": code(item.get("key")), "status": code(item.get("status"))}
+                for item in items if isinstance(item, dict) and item.get("severity") == "blocker"
+            ][:20],
+        },
+        "release": {
+            "frontend_asset_version": code(frontend_version, ""),
+            "version_bound_evidence": bool(frontend_version and obj(release_evidence).get("frontend_asset_version") == frontend_version and obj(release_evidence).get("browser_smoke_passed") is True),
+            "production_deployment_status": "not_connected",
+            "scope": "current_code_identity_and_version_bound_historical_evidence",
+        },
+        "secret_exposed": False,
     }
 
 

@@ -289,6 +289,13 @@ def _operations_feedback_text(value: Any, *, limit: int) -> str:
     return re.sub(r"\s+", " ", text).strip()[:limit]
 
 
+def _operations_time_window_sql(column: str, database_engine: str) -> str:
+    """Internal fixed SQL expressions only; UTC and +08:00 fixtures compare alike."""
+    if database_engine == "postgres":
+        return f"{column} >= ? and {column} <= ?"
+    return f"datetime({column}) >= datetime(?) and datetime({column}) <= datetime(?)"
+
+
 def _account_classification_for_email(email: str) -> str:
     domain = str(email or "").strip().lower().partition("@")[2]
     return (
@@ -15575,8 +15582,6 @@ class SaaSRepository:
             period_ended_at = period_ended_at.replace(tzinfo=timezone.utc)
         else:
             period_ended_at = period_ended_at.astimezone(timezone.utc)
-        period_start_date = period_ended_at.date() - timedelta(days=safe_period_days - 1)
-        period_started_at = datetime.combine(period_start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
         analytics_period_ended_at = period_ended_at.astimezone(_OPERATIONS_ANALYTICS_TIMEZONE)
         analytics_period_start_date = analytics_period_ended_at.date() - timedelta(days=safe_period_days - 1)
         analytics_period_started_at = datetime.combine(
@@ -15585,14 +15590,20 @@ class SaaSRepository:
             tzinfo=_OPERATIONS_ANALYTICS_TIMEZONE,
         )
         analytics_period_started_utc = analytics_period_started_at.astimezone(timezone.utc)
+        period_started_at = analytics_period_started_utc.isoformat()
         if self.database_engine == "postgres":
-            analytics_window_sql = "occurred_at >= ?"
+            analytics_window_sql = "occurred_at >= ? and occurred_at <= ?"
             analytics_day_sql = "to_char(occurred_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')"
             analytics_period_parameter: datetime | str = analytics_period_started_utc
+            analytics_end_parameter: datetime | str = period_ended_at
         else:
-            analytics_window_sql = "datetime(occurred_at) >= datetime(?)"
+            analytics_window_sql = "datetime(occurred_at) >= datetime(?) and datetime(occurred_at) <= datetime(?)"
             analytics_day_sql = "date(datetime(occurred_at), '+8 hours')"
             analytics_period_parameter = analytics_period_started_utc.isoformat()
+            analytics_end_parameter = period_ended_at.isoformat()
+        analytics_window_sql += " and not exists (select 1 from users actor where actor.user_id = platform_analytics_events.user_id and actor.account_classification <> 'merchant')"
+        source_value_sql = "analytics_json::jsonb -> 'metadata' ->> 'traffic_source'" if self.database_engine == "postgres" else "json_extract(analytics_json, '$.metadata.traffic_source')"
+        source_group_sql = f"case when {source_value_sql} in ('douyin', 'wechat', 'xiaohongshu', 'bilibili') then {source_value_sql} else 'unknown' end"
         with self._connect() as conn:
             accounts_row = conn.execute(
                 """
@@ -15617,10 +15628,10 @@ class SaaSRepository:
                 """
             ).fetchone()
             feedback_rows = conn.execute(
-                """
+                f"""
                 select f.status, f.module_key, f.reason, f.created_at
                 from merchant_product_feedback f
-                where f.created_at >= ?
+                where {_operations_time_window_sql('f.created_at', self.database_engine)}
                   and exists (
                     select 1 from users actor
                     where actor.user_id = f.user_id
@@ -15635,19 +15646,19 @@ class SaaSRepository:
                 )
                 order by f.created_at asc
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchall()
             synthetic_feedback_excluded_row = conn.execute(
-                """
+                f"""
                 select count(*) as count
                 from merchant_product_feedback f
-                where f.created_at >= ? and exists (
+                where {_operations_time_window_sql('f.created_at', self.database_engine)} and exists (
                   select 1 from users u
                   where u.user_id = f.user_id
                     and u.account_classification = 'synthetic_test'
                 )
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchone()
             all_plan_rows = conn.execute(
                 """
@@ -15660,16 +15671,16 @@ class SaaSRepository:
                 """
             ).fetchall()
             all_order_rows = conn.execute(
-                """
+                f"""
                 select company_id, provider, status, amount_minor, order_json,
                        case when exists (
                          select 1 from users u
                          where u.default_company_id = o.company_id and u.account_classification = 'merchant'
                        ) then 1 else 0 end as merchant_account
                 from billing_orders o
-                where coalesce(paid_at, created_at) >= ?
+                where {_operations_time_window_sql('coalesce(paid_at, created_at)', self.database_engine)}
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchall()
             active_subscription_order_rows = conn.execute(
                 """
@@ -15688,28 +15699,28 @@ class SaaSRepository:
                 """
             ).fetchall()
             task_rows = conn.execute(
-                """
+                f"""
                 select status, count(*) as count
                 from tasks t
-                where t.created_at >= ? and exists (
+                where {_operations_time_window_sql('t.created_at', self.database_engine)} and exists (
                   select 1 from users u
                   where u.default_company_id = t.company_id and u.account_classification = 'merchant'
                 )
                 group by status
                 order by status
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchall()
             active_merchants_row = conn.execute(
-                """
+                f"""
                 select count(distinct t.company_id) as count
                 from tasks t
-                where t.created_at >= ? and exists (
+                where {_operations_time_window_sql('t.created_at', self.database_engine)} and exists (
                   select 1 from users u
                   where u.default_company_id = t.company_id and u.account_classification = 'merchant'
                 )
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchone()
             media_row = conn.execute(
                 """
@@ -15738,9 +15749,9 @@ class SaaSRepository:
                   coalesce(sum(case when event_key = 'signup_completed' then 1 else 0 end), 0) as signup_completed,
                   count(distinct case when event_key = 'signup_completed' and visitor_hash is not null and visitor_hash <> '' then visitor_hash end) as signup_completed_visitors
                 from platform_analytics_events
-                where {analytics_window_sql}
+                where {analytics_window_sql} and event_key <> 'performance_sample'
                 """,
-                (analytics_period_parameter,),
+                (analytics_period_parameter, analytics_end_parameter),
             ).fetchone()
             traffic_daily_rows = conn.execute(
                 f"""
@@ -15757,7 +15768,7 @@ class SaaSRepository:
                 group by {analytics_day_sql}
                 order by day_key
                 """,
-                (analytics_period_parameter,),
+                (analytics_period_parameter, analytics_end_parameter),
             ).fetchall()
             traffic_page_rows = conn.execute(
                 f"""
@@ -15775,7 +15786,7 @@ class SaaSRepository:
                 group by page_key
                 order by event_count desc, page_key
                 """,
-                (analytics_period_parameter,),
+                (analytics_period_parameter, analytics_end_parameter),
             ).fetchall()
             performance_rows = conn.execute(
                 f"""
@@ -15785,10 +15796,24 @@ class SaaSRepository:
                 order by occurred_at desc
                 limit 5000
                 """,
-                (analytics_period_parameter,),
+                (analytics_period_parameter, analytics_end_parameter),
+            ).fetchall()
+            traffic_source_rows = conn.execute(
+                f"""
+                select {source_group_sql} as source,
+                  count(distinct nullif(visitor_hash, '')) as visitors,
+                  count(distinct nullif(session_hash, '')) as sessions,
+                  coalesce(sum(case when event_key = 'page_view' then 1 else 0 end), 0) as page_views,
+                  coalesce(sum(case when event_key = 'signup_completed' then 1 else 0 end), 0) as signup_completed
+                from platform_analytics_events
+                where {analytics_window_sql} and event_key <> 'performance_sample'
+                group by {source_group_sql}
+                order by page_views desc, source
+                """,
+                (analytics_period_parameter, analytics_end_parameter),
             ).fetchall()
             model_usage_rows = conn.execute(
-                """
+                f"""
                 select usage_owner, cost_status,
                        coalesce(sum(request_count), 0) as request_count,
                        coalesce(sum(input_tokens), 0) as input_tokens,
@@ -15796,7 +15821,7 @@ class SaaSRepository:
                        coalesce(sum(total_tokens), 0) as total_tokens,
                        coalesce(sum(cost_minor), 0) as cost_minor
                 from model_usage_ledger m
-                where created_at >= ? and (
+                where {_operations_time_window_sql('created_at', self.database_engine)} and (
                   company_id is null or exists (
                     select 1 from users u
                     where u.default_company_id = m.company_id and u.account_classification = 'merchant'
@@ -15805,13 +15830,13 @@ class SaaSRepository:
                 group by usage_owner, cost_status
                 order by usage_owner, cost_status
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchall()
             model_reliability_rows = conn.execute(
-                """
+                f"""
                 select usage_json
                 from model_usage_ledger m
-                where created_at >= ? and (
+                where {_operations_time_window_sql('created_at', self.database_engine)} and (
                   company_id is null or exists (
                     select 1 from users u
                     where u.default_company_id = m.company_id and u.account_classification = 'merchant'
@@ -15820,17 +15845,17 @@ class SaaSRepository:
                 order by created_at desc
                 limit 5000
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchall()
             provider_cost_rows = conn.execute(
-                """
+                f"""
                 select cost_category, cost_status,
                        count(*) as record_count,
                        coalesce(sum(unit_count), 0) as unit_count,
                        coalesce(sum(media_points), 0) as media_points,
                        coalesce(sum(cost_minor), 0) as cost_minor
                 from provider_cost_ledger c
-                where created_at >= ? and (
+                where {_operations_time_window_sql('created_at', self.database_engine)} and (
                   company_id is null or exists (
                     select 1 from users u
                     where u.default_company_id = c.company_id and u.account_classification = 'merchant'
@@ -15839,13 +15864,13 @@ class SaaSRepository:
                 group by cost_category, cost_status
                 order by cost_category, cost_status
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchall()
             provider_reliability_rows = conn.execute(
-                """
+                f"""
                 select cost_json
                 from provider_cost_ledger c
-                where created_at >= ? and (
+                where {_operations_time_window_sql('created_at', self.database_engine)} and (
                   company_id is null or exists (
                     select 1 from users u
                     where u.default_company_id = c.company_id and u.account_classification = 'merchant'
@@ -15854,7 +15879,7 @@ class SaaSRepository:
                 order by created_at desc
                 limit 5000
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchall()
             metering_migration_row = conn.execute(
                 "select applied_at from schema_migrations where migration_id = ?",
@@ -15875,15 +15900,16 @@ class SaaSRepository:
                 select count(*) as count
                 from tasks t
                 left join model_usage_ledger m on m.task_id = t.task_id
-                where t.task_type = 'merchant_ceo_chat' and t.created_at >= ? and m.usage_id is null
+                where t.task_type = 'merchant_ceo_chat' and {_operations_time_window_sql('t.created_at', self.database_engine)} and m.usage_id is null
                   and {model_usage_required}
                   and exists (
                     select 1 from users u
                     where u.default_company_id = t.company_id and u.account_classification = 'merchant'
                   )
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchone()
+            metering_start_sql = "t.created_at >= ?" if self.database_engine == "postgres" else "datetime(t.created_at) >= datetime(?)"
             current_unmetered_model_row = (
                 conn.execute(
                     f"""
@@ -15891,31 +15917,31 @@ class SaaSRepository:
                     from tasks t
                     left join model_usage_ledger m on m.task_id = t.task_id
                     where t.task_type = 'merchant_ceo_chat'
-                      and t.created_at >= ? and t.created_at >= ? and m.usage_id is null
+                      and {_operations_time_window_sql('t.created_at', self.database_engine)} and {metering_start_sql} and m.usage_id is null
                       and {model_usage_required}
                       and exists (
                         select 1 from users u
                         where u.default_company_id = t.company_id and u.account_classification = 'merchant'
                       )
                     """,
-                    (period_started_at, metering_started_at_value),
+                    (period_started_at, period_ended_at.isoformat(), metering_started_at_value),
                 ).fetchone()
                 if metering_started_at_value
                 else None
             )
             unmetered_media_row = conn.execute(
-                """
+                f"""
                 select count(*) as count
                 from media_credit_ledger l
                 left join provider_cost_ledger c
                   on c.company_id = l.company_id and c.reference_type = 'media_job' and c.reference_id = l.reference_id
-                where l.operation_type = 'settle' and l.created_at >= ? and c.cost_id is null
+                where l.operation_type = 'settle' and {_operations_time_window_sql('l.created_at', self.database_engine)} and c.cost_id is null
                   and exists (
                     select 1 from users u
                     where u.default_company_id = l.company_id and u.account_classification = 'merchant'
                   )
                 """,
-                (period_started_at,),
+                (period_started_at, period_ended_at.isoformat()),
             ).fetchone()
 
         def non_commercial_provider(provider: Any) -> bool:
@@ -16302,7 +16328,7 @@ class SaaSRepository:
         return {
             "contract_version": "2026-07-15-platform-operations-overview-v9",
             "audience": "platform_internal_admin",
-            "period": {"days": safe_period_days, "started_at": period_started_at},
+            "period": {"days": safe_period_days, "started_at": period_started_at, "ended_at": period_ended_at.isoformat(), "timezone": "Asia/Shanghai", "includes_partial_today": True},
             "accounts": {
                 "registered_users": int(accounts_row["registered_users"] or 0),
                 "merchant_companies": int(accounts_row["merchant_companies"] or 0),
@@ -16343,6 +16369,11 @@ class SaaSRepository:
                 "visitor_to_signup_percent": round((signup_completed_visitors / visitors) * 100, 2) if visitors else 0.0,
                 "daily_trend": traffic_daily_trend,
                 "page_breakdown": traffic_page_breakdown,
+                "source_breakdown": [
+                    {"source": str(row["source"]), **{key: int(row[key] or 0) for key in ("visitors", "sessions", "page_views", "signup_completed")}}
+                    for row in traffic_source_rows
+                ],
+                "source_model": "explicit_session_tag_not_verified_platform_referral",
                 "automated_browser_collection_enabled": False,
                 "raw_ip_stored": False,
                 "user_agent_stored": False,
@@ -16405,6 +16436,12 @@ class SaaSRepository:
             },
             "data_quality": {
                 "scope": "merchant_accounts_and_commercial_transactions",
+                "accounts_scope": "cumulative_merchant_accounts",
+                "traffic_scope": "anonymous_browser_identifiers_not_verified_people",
+                "funnel_is_cohort": False,
+                "anonymous_manual_tests_may_be_included": True,
+                "historical_source_not_backfilled": True,
+                "identified_non_merchant_analytics_excluded": True,
                 "synthetic_test_accounts_excluded": int(accounts_row["synthetic_test_accounts"] or 0),
                 "synthetic_test_feedback_excluded": int(synthetic_feedback_excluded_row["count"] or 0),
                 "test_subscriptions_excluded": test_subscriptions_excluded,
@@ -16454,8 +16491,8 @@ class SaaSRepository:
         safe_limit = min(max(int(limit or 25), 1), 100)
         offset = _operations_cursor_offset(cursor)
         period_ended_at = datetime.now(timezone.utc)
-        period_start_date = period_ended_at.date() - timedelta(days=safe_period_days - 1)
-        period_started_at = datetime.combine(period_start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+        period_start_date = period_ended_at.astimezone(_OPERATIONS_ANALYTICS_TIMEZONE).date() - timedelta(days=safe_period_days - 1)
+        period_started_at = datetime.combine(period_start_date, datetime.min.time(), tzinfo=_OPERATIONS_ANALYTICS_TIMEZONE).astimezone(timezone.utc).isoformat()
         normalized_filters = {
             "status": str(status or "").strip().lower(),
             "category": str(category or "").strip().lower(),
@@ -16530,16 +16567,16 @@ class SaaSRepository:
                     )
             elif normalized_section == "transactions":
                 rows = conn.execute(
-                    """
+                    f"""
                     select o.* from billing_orders o
-                    where coalesce(o.paid_at, o.created_at) >= ? and exists (
+                    where {_operations_time_window_sql('coalesce(o.paid_at, o.created_at)', self.database_engine)} and exists (
                       select 1 from users u where u.default_company_id = o.company_id
                       and u.account_classification = 'merchant'
                     )
                     order by o.created_at desc, o.order_id asc
                     limit 5001
                     """,
-                    (period_started_at,),
+                    (period_started_at, period_ended_at.isoformat()),
                 ).fetchall()
                 records = []
                 for row in rows:
@@ -16573,30 +16610,30 @@ class SaaSRepository:
                     )
             elif normalized_section == "costs":
                 model_rows = conn.execute(
-                    """
+                    f"""
                     select usage_id, company_id, task_id, usage_owner, request_count,
                            input_tokens, output_tokens, total_tokens, cost_minor, currency, cost_status, created_at
-                    from model_usage_ledger m where created_at >= ? and (
+                    from model_usage_ledger m where {_operations_time_window_sql('created_at', self.database_engine)} and (
                       company_id is null or exists (
                         select 1 from users u where u.default_company_id = m.company_id
                         and u.account_classification = 'merchant'
                       )
                     ) order by created_at desc limit 5001
                     """,
-                    (period_started_at,),
+                    (period_started_at, period_ended_at.isoformat()),
                 ).fetchall()
                 provider_rows = conn.execute(
-                    """
+                    f"""
                     select cost_id, company_id, task_id, cost_category, resource_type,
                            unit_count, media_points, cost_minor, currency, cost_status, created_at
-                    from provider_cost_ledger c where created_at >= ? and (
+                    from provider_cost_ledger c where {_operations_time_window_sql('created_at', self.database_engine)} and (
                       company_id is null or exists (
                         select 1 from users u where u.default_company_id = c.company_id
                         and u.account_classification = 'merchant'
                       )
                     ) order by created_at desc limit 5001
                     """,
-                    (period_started_at,),
+                    (period_started_at, period_ended_at.isoformat()),
                 ).fetchall()
                 records = []
                 for row in model_rows:
@@ -16646,16 +16683,16 @@ class SaaSRepository:
                 records.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
             elif normalized_section == "workflows":
                 rows = conn.execute(
-                    """
+                    f"""
                     select t.task_id, t.company_id, t.task_type, t.status, t.created_at, t.updated_at,
                            (select count(*) from queue_jobs q where q.task_id = t.task_id) as job_count,
                            (select coalesce(sum(q.attempts), 0) from queue_jobs q where q.task_id = t.task_id) as attempt_count
-                    from tasks t where t.created_at >= ? and exists (
+                    from tasks t where {_operations_time_window_sql('t.created_at', self.database_engine)} and exists (
                       select 1 from users u where u.default_company_id = t.company_id
                       and u.account_classification = 'merchant'
                     ) order by t.created_at desc, t.task_id asc limit 5001
                     """,
-                    (period_started_at,),
+                    (period_started_at, period_ended_at.isoformat()),
                 ).fetchall()
                 records = []
                 for row in rows:
@@ -16679,7 +16716,7 @@ class SaaSRepository:
                     )
             elif normalized_section == "feedback":
                 feedback_where = [
-                    "f.created_at >= ?",
+                    f"{_operations_time_window_sql('f.created_at', self.database_engine)}",
                     """
                     exists (
                       select 1 from users actor
@@ -16697,7 +16734,7 @@ class SaaSRepository:
                     )
                     """,
                 ]
-                feedback_params: list[Any] = [period_started_at]
+                feedback_params: list[Any] = [period_started_at, period_ended_at.isoformat()]
                 if normalized_filters["status"]:
                     feedback_where.append("f.status = ?")
                     feedback_params.append(normalized_filters["status"])
@@ -16737,15 +16774,15 @@ class SaaSRepository:
                     )
             else:
                 rows = conn.execute(
-                    """
+                    f"""
                     select a.audit_id, a.company_id, a.actor_type, a.action_type, a.target_type,
                            a.created_at, a.audit_json from audit_logs a
-                    where a.created_at >= ? and exists (
+                    where {_operations_time_window_sql('a.created_at', self.database_engine)} and exists (
                       select 1 from users u where u.default_company_id = a.company_id
                       and u.account_classification = 'merchant'
                     ) order by a.created_at desc, a.audit_id asc limit 5001
                     """,
-                    (period_started_at,),
+                    (period_started_at, period_ended_at.isoformat()),
                 ).fetchall()
                 records = []
                 for row in rows:
@@ -16775,7 +16812,7 @@ class SaaSRepository:
         response = {
             "contract_version": "2026-07-15-platform-operations-detail-v1",
             "section": normalized_section,
-            "period": {"days": safe_period_days, "started_at": period_started_at},
+            "period": {"days": safe_period_days, "started_at": period_started_at, "ended_at": period_ended_at.isoformat(), "timezone": "Asia/Shanghai", "includes_partial_today": True},
             "filters": {key: value for key, value in normalized_filters.items() if value},
             "items": page_items,
             "returned_count": len(page_items),

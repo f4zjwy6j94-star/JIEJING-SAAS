@@ -33,6 +33,11 @@ BLOCKED_DIRS = {"assets", "media", "materials", "artifacts", "output", "outputs"
                 "databases", "database", "logs", "uploads", "downloads", "private",
                 "secrets", "credentials", "videos", "audio", "images",
                 "cc-desktop-zh-cn-win-portable-main"}
+# Owner-approved 2026-10-09: these existing text sources only, not asset folders.
+REVIEWED_TRACKED_ASSET_SOURCES = frozenset({
+    "assets/jiejing-first-party-analytics.js",
+    "assets/jiejing-ops-panels.js",
+})
 SENSITIVE_WORDS = {"env", "secret", "secrets", "credential", "credentials", "token",
                    "tokens", "password", "passwords", "cookie", "cookies", "session",
                    "sessions", "key", "keys"}
@@ -209,7 +214,11 @@ def safe_path(git, relative):
         raise Stop("UNSAFE_PATH", "paths", relative_path=relative)
     lower = [part.lower() for part in parts]
     words = {word for part in lower for word in re.split(r"[._-]", part)}
-    if (relative == SCANNER or set(lower) & BLOCKED_DIRS or words & SENSITIVE_WORDS
+    reviewed_asset = (relative in REVIEWED_TRACKED_ASSET_SOURCES
+                      and git.run(["ls-files", "--error-unmatch", "--", relative],
+                                  "paths", allowed=(0, 1)).returncode == 0)
+    if (relative == SCANNER or (set(lower) & BLOCKED_DIRS and not reviewed_asset)
+            or words & SENSITIVE_WORDS
             or (Path(relative).suffix.lower() not in SOURCE_SUFFIXES
                 and parts[-1] not in {"README", "LICENSE", "Makefile", "Dockerfile"})):
         raise Stop("SENSITIVE_OR_NON_SOURCE_PATH", "paths", relative_path=relative)
@@ -223,6 +232,8 @@ def safe_path(git, relative):
     if not path.exists():
         if relative == INDEX:
             raise Stop("INDEX_MISSING", "progress_index")
+        if reviewed_asset:
+            raise Stop("PATH_MISSING", "paths", relative_path=relative)
         if git.run(["ls-files", "--error-unmatch", "--", relative], "paths", allowed=(0, 1)).returncode:
             raise Stop("PATH_MISSING", "paths", relative_path=relative)
         return None  # Explicit deletion of a previously tracked source file.

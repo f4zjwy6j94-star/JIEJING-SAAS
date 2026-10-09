@@ -136,9 +136,23 @@ def main() -> int:
     try:
         base = f"http://127.0.0.1:{PORT}"
         _wait_for_health(base)
+        forged_signup = _post_json(
+            f"{base}/analytics/events",
+            {"event_key": "signup_completed", "page_key": "register", "event_id": "synthetic-forged-signup"},
+        )
+        if forged_signup["status"] != 400:
+            return fail("public analytics must not fabricate a server-owned signup completion")
+        reused_client_event = _post_json(
+            f"{base}/analytics/events",
+            {"event_key": "page_view", "page_key": "register", "event_id": "synthetic-real-registration"},
+        )
+        if reused_client_event["status"] != 202:
+            return fail("the colliding client event fixture was not accepted")
         merchant = _post_json(
             f"{base}/auth/register",
-            {"email": MERCHANT_EMAIL, "password": PASSWORD, "company_name": "Ordinary Merchant"},
+            {"email": MERCHANT_EMAIL, "password": PASSWORD, "company_name": "Ordinary Merchant",
+             "analytics": {"visitor_id": "synthetic-source-visitor", "session_id": "synthetic-source-session", "event_id": "synthetic-real-registration",
+                           "metadata": {"traffic_source": "douyin", "referrer": "https://private.invalid/"}}},
         )
         admin = _post_json(
             f"{base}/auth/register",
@@ -155,6 +169,12 @@ def main() -> int:
             return fail("registration did not create test sessions")
 
         with sqlite3.connect(db) as conn:
+            signup_rows = conn.execute("select analytics_json from platform_analytics_events where event_key = 'signup_completed'").fetchall()
+            if len(signup_rows) != 3:
+                return fail("only three actual registrations may create signup completion events")
+            signup_metadata = [json.loads(row[0]).get("metadata", {}) for row in signup_rows]
+            if sum(item.get("traffic_source") == "douyin" for item in signup_metadata) != 1 or any("referrer" in item for item in signup_metadata):
+                return fail("server registration must retain the allowlisted source without private referrer data")
             conn.execute(
                 "update users set account_classification = 'synthetic_test' where email = ?",
                 (SYNTHETIC_EMAIL,),

@@ -39,8 +39,10 @@ def main() -> int:
         return fail("media credit packs must adapt to the settings content width")
     if "word-break: keep-all" not in styles or "white-space: nowrap" not in styles:
         return fail("media credit pack labels and purchase actions must not break vertically")
-    if "20260715-owner-traffic-analytics-v104" not in app_html:
-        return fail("subscription entry cache version was not updated")
+    analytics_script = './assets/jiejing-first-party-analytics.js?v=20261009-ops-measurement-v105'
+    if (f'src="{analytics_script}"' not in app_html
+            or f'src="{analytics_script}"' not in (ROOT / "index.html").read_text(encoding="utf-8")):
+        return fail("landing and workbench analytics must both reference the reviewed cache version")
 
     print("PASS: workbench subscription entry is visible, responsive, and reuses billing settings")
     return 0

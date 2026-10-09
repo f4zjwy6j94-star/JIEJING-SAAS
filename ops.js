@@ -88,6 +88,7 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return escapeHtml(value);
     return new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai",
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -135,7 +136,7 @@
     const key = String(value || "").toLowerCase();
     if (/failed|critical|error|revoked|blocked/.test(key)) return "is-critical";
     if (/pending|partial|attention|unavailable|timeout|processing|review/.test(key)) return "is-attention";
-    if (/ready|active|paid|completed|actual|reconciled|success|recorded/.test(key)) return "is-ready";
+    if (["ready", "active", "paid", "completed", "actual", "reconciled", "success", "recorded"].includes(key)) return "is-ready";
     return "";
   }
 
@@ -346,10 +347,6 @@
     return `<article class="ops-metric ${tone}"><span class="ops-metric-label">${escapeHtml(label)}</span><strong class="ops-metric-value">${escapeHtml(value)}</strong><span class="ops-metric-note">${escapeHtml(note)}</span></article>`;
   }
 
-  function activeSubscriptionCount(subscriptions) {
-    return (subscriptions || []).reduce((total, item) => total + (/active|paid/.test(String(item.status || "")) ? Number(item.count || 0) : 0), 0);
-  }
-
   function paidConversion(overview) {
     const merchants = Number(overview?.accounts?.merchant_companies || 0);
     const paid = Number(overview?.unit_economics?.paid_company_count || 0);
@@ -395,7 +392,7 @@
     const bars = rows.map((item) => {
       const value = Number(item.visitors || 0);
       const height = Math.max(value ? 5 : 1, Math.round((value / max) * 100));
-      return `<div class="ops-trend-column" title="${escapeHtml(item.day)} · ${formatNumber(value)} 位访客"><span style="height:${height}%"></span></div>`;
+      return `<div class="ops-trend-column" title="${escapeHtml(item.day)} · ${formatNumber(value)} 个访客标识"><span style="height:${height}%"></span></div>`;
     }).join("");
     return `<div class="ops-trend">${bars}</div><div class="ops-trend-legend"><span>${escapeHtml(rows[0]?.day || "")}</span><span>${escapeHtml(rows.at(-1)?.day || "")}</span></div>`;
   }
@@ -403,11 +400,11 @@
   function renderFunnel(overview) {
     const traffic = overview.traffic_analytics || {};
     const values = [
-      ["访问", Number(traffic.visitors || 0)],
-      ["查看定价", Number(traffic.pricing_views || 0)],
-      ["开始注册", Number(traffic.signup_started || 0)],
-      ["完成注册", Number(traffic.signup_completed || 0)],
-      ["成功付费商家", Number(overview.unit_economics?.paid_company_count || 0)],
+      ["访问标识", Number(traffic.visitors || 0)],
+      ["定价浏览次数", Number(traffic.pricing_views || 0)],
+      ["注册发起次数", Number(traffic.signup_started || 0)],
+      ["注册完成事件", Number(traffic.signup_completed || 0)],
+      ["本期付费公司", Number(overview.unit_economics?.paid_company_count || 0)],
     ];
     const max = Math.max(1, values[0][1]);
     return `<div class="ops-funnel">${values.map(([label, value]) => `<div class="ops-funnel-row"><span>${escapeHtml(label)}</span><div class="ops-funnel-track"><span style="width:${Math.min(100, (value / max) * 100)}%"></span></div><strong>${formatNumber(value)}</strong></div>`).join("")}</div>`;
@@ -417,16 +414,17 @@
     const overview = state.overview || {};
     const traffic = overview.traffic_analytics || {};
     const economics = overview.unit_economics || {};
-    const activeSubscriptions = activeSubscriptionCount(overview.subscriptions);
+    const activeSubscriptions = economics.active_subscriber_company_count;
     const marginReady = economics.cost_coverage_complete === true;
     const alertSummary = overview.provider_reliability_analytics?.alerts || {};
     const openAlerts = Number(alertSummary.critical_count || 0) + Number(alertSummary.attention_count || 0);
     const feedback = overview.product_feedback || {};
     elements.content.innerHTML = `
+      ${measurementScope(overview.period)}
       <div class="ops-metrics">
-        ${metric("唯一访客", formatNumber(traffic.visitors), `${state.period} 天 · ${formatNumber(traffic.sessions)} 个会话`)}
-        ${metric("注册商家", formatNumber(overview.accounts?.merchant_companies), `完成注册 ${formatNumber(traffic.signup_completed)} 次`)}
-        ${metric("生效订阅", formatNumber(activeSubscriptions), `付费商家占比 ${paidConversion(overview)}`)}
+        ${metric("访客标识 UV", formatNumber(traffic.visitors), `${state.period} 天 · 匿名浏览器去重，非已核实客户`)}
+        ${metric("累计注册商家", formatNumber(overview.accounts?.merchant_companies), `窗口内完成注册 ${formatNumber(traffic.signup_completed)} 次`)}
+        ${metric("生效订阅", formatNumber(activeSubscriptions), `本期付费 / 累计商家 ${paidConversion(overview)}，非同期转化率`)}
         ${metric("平台实收", formatMoney(economics.paid_revenue_minor), `${formatNumber(economics.paid_order_count)} 笔商业订单`)}
         ${metric("标准化 MRR", formatMoney(economics.normalized_mrr_minor), economics.mrr_status === "ready" ? "有效订阅已覆盖" : "部分订阅缺付款依据", economics.mrr_status === "ready" ? "" : "is-attention")}
         ${metric("平台模型成本", formatMoney(economics.platform_model_cost_minor), "商家自带模型不计入捷境模型成本")}
@@ -437,10 +435,10 @@
       </div>
       <div class="ops-grid-two">
         <section class="ops-panel"><div class="ops-section-head"><div><h2>访客趋势</h2><p>按日去重访客，只统计允许列表事件。</p></div>${pill(traffic.status, traffic.status === "instrumented" ? "已采集" : "暂无事件")}</div>${renderTrend(traffic.daily_trend)}</section>
-        <section class="ops-panel"><div class="ops-section-head"><div><h2>转化漏斗</h2><p>访问到付费的真实事件和订单事实。</p></div></div>${renderFunnel(overview)}</section>
+        <section class="ops-panel"><div class="ops-section-head"><div><h2>经营环节计数</h2><p>访客标识、行为次数与付费公司是不同单位，不是同一批人的逐级转化漏斗。</p></div></div>${renderFunnel(overview)}</section>
       </div>
       <section class="ops-panel">
-        <div class="ops-section-head"><div><h2>数据质量</h2><p>测试账号、验收订单和未覆盖成本不计入正式经营指标。</p></div>${pill(marginReady ? "ready" : "partial", marginReady ? "成本覆盖完整" : "成本覆盖不完整")}</div>
+        <div class="ops-section-head"><div><h2>数据质量与统计边界</h2><p>已识别测试账号和验收订单单独排除；匿名人工自测仍可能计入流量，未知成本不按零处理。</p></div>${pill(marginReady ? "ready" : "partial", marginReady ? "成本覆盖完整" : "成本覆盖不完整")}</div>
         <dl class="ops-definition-list">
           <dt>测试账号排除</dt><dd>${formatNumber(overview.data_quality?.synthetic_test_accounts_excluded)} 个</dd>
           <dt>测试反馈排除</dt><dd>${formatNumber(overview.data_quality?.synthetic_test_feedback_excluded)} 条</dd>
@@ -449,6 +447,20 @@
           <dt>未覆盖供应商成本</dt><dd>${formatNumber(economics.unknown_provider_cost_records)} 条</dd>
         </dl>
       </section>`;
+  }
+
+  function measurementScope(period = {}) {
+    const stamp = (value) => {
+      if (!value || !Number.isFinite(Date.parse(value))) return "未提供";
+      return new Intl.DateTimeFormat("zh-CN", {timeZone: "Asia/Shanghai", dateStyle: "short", timeStyle: "short", hour12: false}).format(new Date(value));
+    };
+    return `<section class="ops-measurement-scope" aria-label="统计口径"><strong>北京时间 · 含今日未结束时段</strong><span>${escapeHtml(stamp(period.started_at))} — ${escapeHtml(stamp(period.ended_at))}</span><p>期间指标按以上窗口；商家总数、当前订阅和额度余额为累计或当前快照。UV 是浏览器标识，不等于新客户，不能直接归因抖音。</p></section>`;
+  }
+
+  function renderTrafficSources(traffic) {
+    const names = {douyin: "抖音来源标签", wechat: "微信来源标签", xiaohongshu: "小红书来源标签", bilibili: "哔哩哔哩来源标签", unknown: "未知 / 未标记"};
+    const rows = Array.isArray(traffic.source_breakdown) ? traffic.source_breakdown : [];
+    return `<section class="ops-panel"><div class="ops-section-head"><div><h2>推广来源观察</h2><p>只识别主动携带的来源标签，不是平台认证归因。手动搜索网址、历史记录及未标记访问保持未知；跨来源 UV 不可相加。</p></div></div>${table([{key: "source", label: "来源", render: row => escapeHtml(names[row.source] || names.unknown)}, {key: "visitors", label: "访客标识", number: true}, {key: "page_views", label: "浏览次数", number: true}, {key: "signup_completed", label: "注册事件", number: true}], rows)}<details class="ops-measurement-help"><summary>如何测量下一次推广与排除手动浏览自测</summary><p>新版部署后，可使用 <code>https://app.jiejing.shop/#from-douyin</code>；来源标签在本标签页最多保留 30 分钟，不读取 referrer 或完整网址。已发布视频的访问不会因此被补记。</p><p>手动检查页面可从 <code>https://app.jiejing.shop/#internal-test</code> 进入，同标签页 30 分钟暂停浏览器事件采集；不改变账号或业务数据，服务端真实注册仍保留。它不能识别或删除之前的自测访问。</p></details></section>`;
   }
 
   function table(headers, rows, options = {}) {
@@ -484,7 +496,7 @@
       { key: "page_views", label: "浏览", number: true, render: (r) => formatNumber(r.page_views) },
       { key: "signup_completed", label: "完成注册", number: true, render: (r) => formatNumber(r.signup_completed) },
     ];
-    return `<div class="ops-metrics">${metric("访客", formatNumber(summary.visitors), `${state.period} 天`)}${metric("会话", formatNumber(summary.sessions), "随机会话标识去重")}${metric("页面浏览", formatNumber(summary.page_views), "不存完整 URL")}${metric("访问转注册", `${Number(summary.visitor_to_signup_percent || 0).toFixed(1)}%`, "完成注册访客 / 访客")}${metric("首屏体验 P75", pageP75.lcp_ms == null ? "暂无样本" : `${formatNumber(pageP75.lcp_ms)} ms`, `${formatNumber(performance.page_load?.sample_count)} 个匿名样本`)}${metric("设置模块 P75", settingsP75.duration_ms == null ? "暂无样本" : `${formatNumber(settingsP75.duration_ms)} ms`, `${formatNumber(performance.settings_module?.sample_count)} 个匿名样本`)}</div>${detailPanel("页面表现", "只展示允许列表页面的聚合数据。", "", table(headers, detail.items || []), detail)}`;
+    return `${measurementScope(detail.period)}${renderTrafficSources(summary)}<div class="ops-metrics">${metric("访客标识 UV", formatNumber(summary.visitors), `${state.period} 天 · 不是外部客户人数`)}${metric("会话", formatNumber(summary.sessions), "随机会话标识去重")}${metric("页面浏览", formatNumber(summary.page_views), "不存完整 URL")}${metric("访问转注册", `${Number(summary.visitor_to_signup_percent || 0).toFixed(1)}%`, "本窗口完成注册标识 / 全部访客标识")}${metric("首屏体验 P75", pageP75.lcp_ms == null ? "暂无样本" : `${formatNumber(pageP75.lcp_ms)} ms`, `${formatNumber(performance.page_load?.sample_count)} 个匿名样本`)}${metric("设置模块 P75", settingsP75.duration_ms == null ? "暂无样本" : `${formatNumber(settingsP75.duration_ms)} ms`, `${formatNumber(performance.settings_module?.sample_count)} 个匿名样本`)}</div>${detailPanel("页面表现", "仅允许列表事件；性能采样不单独增加 UV。同一浏览器跨页面/渠道可能重复出现，分项不可直接相加。", "", table(headers, detail.items || []), detail)}`;
   }
 
   function renderMerchants(detail) {
@@ -660,7 +672,7 @@
 
   function renderSettings() {
     const overview = state.overview || {};
-    elements.content.innerHTML = `<section class="ops-panel"><div class="ops-section-head"><div><h2>后台边界</h2><p>经营数据只读，反馈处理只更新内部状态；高风险命令仍由确认中心和人工审批控制。</p></div>${pill("ready", "内部账号")}</div><dl class="ops-definition-list"><dt>统计范围</dt><dd>${escapeHtml(overview.data_quality?.scope || "商家账号与商业交易")}</dd><dt>商家导航</dt><dd>不显示运营后台入口</dd><dt>供应商显示</dt><dd>中性能力名称，不展示供应商品牌或密钥</dd><dt>流量隐私</dt><dd>不存 IP、完整 URL、查询参数、User-Agent 或浏览器指纹</dd><dt>商家内容</dt><dd>任务下钻不显示对话、商品、客户或原始模型内容</dd><dt>资金与平台写入</dt><dd>本后台不直接执行付款、退款、eBay 发布、改价、库存、广告、采购或政策修改</dd><dt>成本覆盖</dt><dd>${overview.unit_economics?.cost_coverage_complete ? "当前时间范围覆盖完整" : "当前仍有缺失项，不显示确定毛利"}</dd><dt>版本</dt><dd>${escapeHtml(overview.contract_version || "-")}</dd></dl></section>`;
+    elements.content.innerHTML = `<section class="ops-panel"><div class="ops-section-head"><div><h2>后台边界</h2><p>经营数据只读，反馈处理只更新内部状态；高风险命令仍由确认中心和人工审批控制。</p></div>${pill("ready", "内部账号")}</div><dl class="ops-definition-list"><dt>统计范围</dt><dd>${escapeHtml(overview.data_quality?.scope || "商家账号与商业交易")}</dd><dt>商家导航</dt><dd>不显示运营后台入口</dd><dt>供应商显示</dt><dd>中性能力名称，不展示供应商品牌或密钥</dd><dt>流量隐私</dt><dd>不存 IP、完整 URL、查询参数、User-Agent 或浏览器指纹</dd><dt>商家内容</dt><dd>任务下钻不显示对话、商品、客户或原始模型内容</dd><dt>资金与平台写入</dt><dd>退款须逐笔审核并再次确认金额；其余付款、eBay 发布、改价、库存、广告、采购或政策修改不在此直接执行</dd><dt>成本覆盖</dt><dd>${overview.unit_economics?.cost_coverage_complete ? "当前时间范围覆盖完整" : "当前仍有缺失项，不显示确定毛利"}</dd><dt>版本</dt><dd>${escapeHtml(overview.contract_version || "-")}</dd></dl></section>`;
   }
 
   function opsPanels() {
@@ -871,7 +883,7 @@
       elements.content.innerHTML = '<div class="ops-empty">运营组件尚未加载，请刷新页面。</div>';
       return;
     }
-    if (view === "launch") elements.content.innerHTML = panels.renderOwnerLaunchControlPanel(state.ownerLaunchControl);
+    if (view === "launch") elements.content.innerHTML = panels.renderLaunchAlignment(state.ownerLaunchControl || {}) + panels.renderOwnerLaunchControlPanel(state.ownerLaunchControl);
     if (view === "payment") elements.content.innerHTML = panels.renderPaymentAcceptancePanel({
       testEvent: state.billingTestEvent,
       provider: state.billingProviderRehearsal,

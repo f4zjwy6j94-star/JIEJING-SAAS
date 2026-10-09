@@ -3748,6 +3748,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             try:
                 event = sanitize_analytics_event(body)
+                if event["event_key"] == "signup_completed":
+                    raise ValueError("signup completion is recorded by the registration service only")
                 if not event.get("event_id_hash"):
                     raise ValueError("analytics event id is required")
                 self.repository.record_platform_analytics_event(**event)
@@ -3890,7 +3892,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             **analytics_input,
                             "event_key": "signup_completed",
                             "page_key": "register",
-                            "event_id": analytics_input.get("event_id") or f"signup-completed:{user['user_id']}",
+                            # Client event IDs must not collide with or suppress
+                            # a server-owned registration completion.
+                            "event_id": f"signup-completed:{user['user_id']}",
                         }
                     )
                     self.repository.record_platform_analytics_event(

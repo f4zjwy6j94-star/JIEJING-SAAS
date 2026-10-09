@@ -3,6 +3,12 @@
 
   const visitorStorageKey = "jiejing_analytics_visitor_v1";
   const sessionStorageKey = "jiejing_analytics_session_v1";
+  const sourceStorageKey = "jiejing_analytics_source_v1";
+  const internalPreviewKey = "jiejing_analytics_internal_preview_until_v1";
+  const sourceTags = Object.freeze({"#from-douyin": "douyin", "#from-wechat": "wechat", "#from-xiaohongshu": "xiaohongshu", "#from-bilibili": "bilibili"});
+  const sourceLifetimeMs = 30 * 60 * 1000;
+  const sourceTagExpiresAt = Date.now() + sourceLifetimeMs;
+  let sourceTagRecorded = false;
   const performanceScopes = new Set(["page_load", "settings_module"]);
   const performanceOutcomes = new Set(["success", "error"]);
   const performanceMetricKeys = new Set([
@@ -23,6 +29,14 @@
 
   function analyticsCollectionAllowed() {
     if (window.__JIEJING_ANALYTICS_TEST_MODE__ === true) return true;
+    if (window.location.hash === "#internal-test") {
+      try { window.sessionStorage.setItem(internalPreviewKey, String(Date.now() + sourceLifetimeMs)); } catch (error) { /* No storage required for this page. */ }
+      return false;
+    }
+    try {
+      const until = Number(window.sessionStorage.getItem(internalPreviewKey));
+      if (until > Date.now() && until <= Date.now() + sourceLifetimeMs) return false;
+    } catch (error) { /* Storage unavailable: preserve normal collection policy. */ }
     // Automated browser traffic is excluded from live visitor totals by default.
     if (window.navigator && window.navigator.webdriver === true) return false;
     const hostname = String(window.location.hostname || "").toLowerCase();
@@ -89,8 +103,23 @@
     return "landing";
   }
 
+  function sourceMetadata() {
+    // Only exact, predefined fragments are inspected. Never collect a query,
+    // full URL or referrer. A tag is not proof of a platform referral.
+    const tagged = Object.hasOwn(sourceTags, window.location.hash) ? sourceTags[window.location.hash] : "";
+    try {
+      if (tagged && !sourceTagRecorded) {
+        window.sessionStorage.setItem(sourceStorageKey, JSON.stringify({source: tagged, expires_at: sourceTagExpiresAt}));
+        sourceTagRecorded = true;
+      }
+      const saved = JSON.parse(window.sessionStorage.getItem(sourceStorageKey) || "null");
+      if (saved && Object.values(sourceTags).includes(saved.source) && saved.expires_at > Date.now() && saved.expires_at <= Date.now() + sourceLifetimeMs) return {traffic_source: saved.source};
+    } catch (error) { /* A missing/corrupt record leaves attribution unknown. */ }
+    return tagged && Date.now() < sourceTagExpiresAt ? {traffic_source: tagged} : {};
+  }
+
   function context() {
-    return { visitor_id: visitorId, session_id: sessionId, event_id: randomId() };
+    return { visitor_id: visitorId, session_id: sessionId, event_id: randomId(), metadata: sourceMetadata() };
   }
 
   function track(eventKey, options) {
@@ -100,7 +129,7 @@
       event_key: String(eventKey || ""),
       page_key: String(settings.page_key || currentPageKey()),
       ...context(),
-      metadata: settings.metadata && typeof settings.metadata === "object" ? settings.metadata : {},
+      metadata: { ...(settings.metadata && typeof settings.metadata === "object" ? settings.metadata : {}), traffic_source: undefined, ...sourceMetadata() },
     };
     fetch(`${apiBase()}/analytics/events`, {
       method: "POST",

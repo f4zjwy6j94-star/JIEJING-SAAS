@@ -20,6 +20,7 @@ ANALYTICS_EVENT_KEYS = {
 }
 ANALYTICS_PAGE_KEYS = {"landing", "pricing", "login", "register", "workbench"}
 ANALYTICS_METADATA_KEYS = {"entry_surface", "plan_key"}
+ANALYTICS_TRAFFIC_SOURCES = {"douyin", "wechat", "xiaohongshu", "bilibili"}
 PERFORMANCE_SCOPES = {"page_load", "settings_module"}
 PERFORMANCE_OUTCOMES = {"success", "error"}
 PERFORMANCE_NUMERIC_KEYS = {
@@ -129,6 +130,11 @@ def sanitize_analytics_event(payload: dict[str, Any]) -> dict[str, Any]:
         for key in ANALYTICS_METADATA_KEYS
         if str(metadata_input.get(key) or "").strip()
     }
+    # An enum tag, not a URL/referrer or arbitrary campaign string. Untagged
+    # history remains unknown and cannot be attributed retrospectively.
+    traffic_source = metadata_input.get("traffic_source")
+    if isinstance(traffic_source, str) and traffic_source in ANALYTICS_TRAFFIC_SOURCES:
+        metadata["traffic_source"] = traffic_source
     if event_key == "performance_sample":
         scope = str(metadata_input.get("performance_scope") or "").strip().lower()
         outcome = str(metadata_input.get("outcome") or "").strip().lower()

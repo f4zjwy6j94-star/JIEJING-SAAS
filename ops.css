@@ -125,6 +125,8 @@ button { cursor: pointer; }
 }
 .ops-toolbar h1 { margin: 0; font-size: 24px; line-height: 1.25; }
 .ops-toolbar-actions { display: flex; align-items: center; gap: 10px; }
+.ops-panel > .ops-toolbar-actions { flex-wrap: wrap; }
+.ops-panel > .ops-toolbar-actions button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .ops-segmented { display: inline-grid; grid-auto-flow: column; border: 1px solid var(--ops-strong-line); border-radius: 6px; overflow: hidden; }
 .ops-segmented button { min-width: 58px; min-height: 36px; border: 0; border-right: 1px solid var(--ops-line); background: #fff; color: var(--ops-muted); padding: 6px 10px; }
 .ops-segmented button:last-child { border-right: 0; }
@@ -197,6 +199,17 @@ button { cursor: pointer; }
 .ops-reliability-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .ops-reliability-item { border: 1px solid var(--ops-line); border-radius: 6px; padding: 14px; background: #fff; }
 .ops-reliability-item header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.ops-reliability-item header { flex-wrap: wrap; }
+.ops-reliability-item .ops-pill { white-space: normal; overflow-wrap: anywhere; }
+.ops-reliability-item p, .ops-evidence-issues { line-height: 1.65; overflow-wrap: anywhere; }
+.ops-evidence-note, .ops-measurement-scope { color: var(--ops-muted); font-size: 12px; line-height: 1.7; }
+.ops-measurement-scope { border: 1px solid var(--ops-line); border-left: 3px solid var(--ops-green); border-radius: 6px; padding: 14px 18px; background: #f6f9f7; }
+.ops-measurement-scope strong, .ops-measurement-scope span { display: block; }
+.ops-measurement-scope strong { color: var(--ops-text); }
+.ops-measurement-scope p { margin: 6px 0 0; }
+.ops-measurement-help { margin-top: 18px; font-size: 12px; color: var(--ops-muted); line-height: 1.7; }
+.ops-measurement-help summary { cursor: pointer; color: var(--ops-text); }
+.ops-measurement-help code { overflow-wrap: anywhere; }
 .ops-reliability-item dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 0; }
 .ops-reliability-item dt { color: var(--ops-muted); font-size: 10px; }
 .ops-reliability-item dd { margin: 3px 0 0; font-weight: 750; font-variant-numeric: tabular-nums; }
