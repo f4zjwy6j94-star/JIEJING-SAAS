@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "owner_endpoint": "local-10.0",
+  "scope": "Approved temporary money pause and existing-mode OPS/API recovery; research and safe handoff",
+  "operation_date_beijing": "2026-10-09",
+  "handoff_date_beijing": "2026-10-10",
+  "received_source_commit": "302ce54828bd6f38dc2107a5d2ee757953dbed20",
+  "production_code_commit": "d57e230524b0577bee98217a49a5ea8cb3e2a51e",
+  "application_source_modified": false,
+  "code_gate": {
+    "started_at": "2026-10-09T15:19:59.636327Z",
+    "finished_at": "2026-10-09T16:09:36.605019Z",
+    "source_commit": "302ce54828bd6f38dc2107a5d2ee757953dbed20",
+    "source_tree": "f9044abd89a81bba09e4d89f040a88de93303dc5",
+    "source_stable": true,
+    "release_eligible": true,
+    "total_checks": 280,
+    "passed": 280,
+    "failed": [],
+    "elapsed_seconds": 2976.98,
+    "exit_code": 0,
+    "local_code_evidence_only": true,
+    "deployment_performed": false
+  },
+  "independent_recovery_verification": {
+    "observed_at_local_utc": "2026-10-09T15:42:59.6768839Z",
+    "source_commit": "d57e230524b0577bee98217a49a5ea8cb3e2a51e",
+    "source_unchanged": true,
+    "scope": "Configuration-limited service recovery; no paid launch or database restore",
+    "checks": {
+      "same_active_release": true,
+      "same_source_commit": true,
+      "only_two_money_keys_changed": true,
+      "other_env_bytes_preserved": true,
+      "deploy-jiejing-saas-1_same_image": true,
+      "deploy-jiejing-saas-1_running": true,
+      "deploy-jiejing-saas-1_money_paused": true,
+      "deploy-jiejing-worker-1_same_image": true,
+      "deploy-jiejing-worker-1_running": true,
+      "deploy-jiejing-worker-1_money_paused": true,
+      "deploy-jiejing-frontend-1_identity_start_preserved": true,
+      "deploy-jiejing-ops-frontend-1_identity_start_preserved": true,
+      "deploy-jiejing-edge-1_identity_start_preserved": true,
+      "deploy-jiejing-vault-1_identity_start_preserved": true,
+      "deploy-jiejing-vault-token-renewer-1_identity_start_preserved": true,
+      "pindd-staging.service_identity_start_preserved": true,
+      "pindd-postgres-staging.service_identity_start_preserved": true,
+      "caddy_persisted_preserved": true,
+      "caddy_runtime_preserved": true,
+      "caddy_runtime_matches_disk": true,
+      "ops_config_preserved": true,
+      "ops_proxy_was_502": true,
+      "ops_proxy_restored_401": true,
+      "ops_reload_kept_container_identity": true,
+      "public_probes_pass": true,
+      "paid_readiness_not_falsified": true
+    },
+    "passed": 26,
+    "total": 26,
+    "failures": [],
+    "public_probes": [
+      {
+        "url": "https://app.jiejing.shop/health",
+        "status": 200,
+        "expected": 200,
+        "pass": true
+      },
+      {
+        "url": "https://app.jiejing.shop/readiness/product-saas",
+        "status": 200,
+        "expected": 200,
+        "pass": true
+      },
+      {
+        "url": "https://ops.jiejing.shop/",
+        "status": 200,
+        "expected": 200,
+        "pass": true
+      },
+      {
+        "url": "https://ops.jiejing.shop/permissions/me",
+        "status": 401,
+        "expected": 401,
+        "pass": true
+      }
+    ],
+    "public_readiness": {
+      "production_ready": false,
+      "can_accept_real_customers": false,
+      "blocker_count": 1,
+      "warning_count": 1
+    },
+    "chrome_login": "Actual existing local Chrome login succeeded; aggregate overview loaded",
+    "screenshot": "OPS_LOGIN_RECOVERED.png",
+    "clock_note": "Server timestamps in referenced receipts are about 216 seconds ahead of the local clock; neither changed",
+    "production_business_rows_or_credentials_included": false
+  },
+  "current_runtime_state": {
+    "status": "recovered_limited_money_paused",
+    "active_manifest_commit": "d57e230524b0577bee98217a49a5ea8cb3e2a51e",
+    "api_status": "running_healthy",
+    "worker_status": "running",
+    "ops_proxy_anonymous_status": 401,
+    "actual_local_chrome_login_succeeded": true,
+    "charge_allowed": false,
+    "refund_allowed": false,
+    "current_production_ready": false,
+    "current_can_accept_real_customers": false,
+    "blocker_count": 1,
+    "warning_count": 1,
+    "sole_backup_blocker": "restore_drill_overdue",
+    "restore_last_at_utc": "2026-09-09T10:00:45.075504+00:00",
+    "restore_max_age_days": 30,
+    "expired_at_utc": "2026-10-09T10:00:45.075504+00:00",
+    "billing_warning": "private_beta_ready_paid_launch_pending",
+    "public_readiness_probed_at_local_utc": "2026-10-09T15:42:59.6768839Z",
+    "owner_authorization": "Explicit approval this turn to temporarily pause charges/refunds and restore limited operation",
+    "restored_using_existing_controlled_draft_boot_contract": true,
+    "same_r1_images_recreated": [
+      "API",
+      "Worker"
+    ],
+    "only_changed_environment_keys": [
+      "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
+      "JIEJING_WECHAT_PAY_REFUND_ALLOWED"
+    ],
+    "other_environment_bytes_preserved": true,
+    "ops_nginx_graceful_reload_count": 1,
+    "ops_nginx_config_and_container_identity_preserved": true,
+    "existing_ebay_confirmation_gated_draft_and_publish_lane_unchanged": true,
+    "broad_real_platform_write_flags": false,
+    "production_database_restore_performed": false,
+    "pindd_vault_edge_identity_and_start_preserved": true,
+    "new_fees": false,
+    "recovery_receipt": "docs/continuity/11.0/OPS_RESTRICTED_RECOVERY_20261009.safe.json",
+    "next_action": "Keep money paused; separately scope real isolated PG restore acceptance and cold-boot/upstream-resolution prevention. Do not reapply R2 or auto-restore the whole private env backup."
+  },
+  "aggregate_snapshot": {
+    "time_source": "OPS server Asia/Shanghai, about 216 seconds ahead of local clock",
+    "period_start": "2026-09-10 00:00",
+    "period_end": "2026-10-09 23:26",
+    "today_partial": true,
+    "visitor_ids": 42,
+    "merchant_companies_cumulative": 9,
+    "signup_completed_events_in_window": 1,
+    "active_subscriptions": 0,
+    "commercial_orders": 0,
+    "receipts_cny": 0,
+    "unpriced_cost_providers": 6,
+    "external_customer_identity_verified": false,
+    "douyin_attribution_verified": false,
+    "mixed_denominator_conversion_calculated": false
+  },
+  "remaining": [
+    "Real isolated PG restore acceptance and renewed evidence are separately scoped, not executed",
+    "Cold-start time-validity and OPS upstream lifecycle prevention not yet implemented/deployed",
+    "R2 display refinements not active in production",
+    "New creative directions/storyboards/audible sample not produced this turn; V15 still rejected"
+  ],
+  "local_evidence_root": "D:/Codex-Verification/jiejing-ops-restricted-recovery-20261009",
+  "save_receipts": [
+    "HANDOFF_SAVE.safe.json",
+    "STATUS_AFTER_SAVE.safe.json"
+  ],
+  "credentials_raw_logs_customer_rows_or_media_included": false,
+  "cloud_receive_verified": false
+}

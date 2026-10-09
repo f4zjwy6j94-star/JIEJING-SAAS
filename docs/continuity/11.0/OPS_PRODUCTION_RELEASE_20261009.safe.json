@@ -99,7 +99,8 @@
     "Current production readiness and independent review/cutover packets have different scopes; their statuses must not be overwritten"
   ],
   "refinement": {
-    "state": "full_gate_passed_but_deployment_failed_api_unavailable",
+    "state": "full_gate_passed_deployment_failed_r2_inactive_service_recovered_on_r1",
+    "state_at_failed_apply": "full_gate_passed_but_deployment_failed_api_unavailable",
     "ops_asset_version": "ops-v1-3aaef3240f19",
     "changes": [
       "Asset identity no longer called source commit",
@@ -174,6 +175,46 @@
   },
   "raw_logs_credentials_business_rows_included": false,
   "current_runtime_state": {
+    "status": "recovered_limited_money_paused",
+    "active_manifest_commit": "d57e230524b0577bee98217a49a5ea8cb3e2a51e",
+    "api_status": "running_healthy",
+    "worker_status": "running",
+    "ops_proxy_anonymous_status": 401,
+    "actual_local_chrome_login_succeeded": true,
+    "charge_allowed": false,
+    "refund_allowed": false,
+    "current_production_ready": false,
+    "current_can_accept_real_customers": false,
+    "blocker_count": 1,
+    "warning_count": 1,
+    "sole_backup_blocker": "restore_drill_overdue",
+    "restore_last_at_utc": "2026-09-09T10:00:45.075504+00:00",
+    "restore_max_age_days": 30,
+    "expired_at_utc": "2026-10-09T10:00:45.075504+00:00",
+    "billing_warning": "private_beta_ready_paid_launch_pending",
+    "public_readiness_probed_at_local_utc": "2026-10-09T15:42:59.6768839Z",
+    "owner_authorization": "Explicit approval this turn to temporarily pause charges/refunds and restore limited operation",
+    "restored_using_existing_controlled_draft_boot_contract": true,
+    "same_r1_images_recreated": [
+      "API",
+      "Worker"
+    ],
+    "only_changed_environment_keys": [
+      "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
+      "JIEJING_WECHAT_PAY_REFUND_ALLOWED"
+    ],
+    "other_environment_bytes_preserved": true,
+    "ops_nginx_graceful_reload_count": 1,
+    "ops_nginx_config_and_container_identity_preserved": true,
+    "existing_ebay_confirmation_gated_draft_and_publish_lane_unchanged": true,
+    "broad_real_platform_write_flags": false,
+    "production_database_restore_performed": false,
+    "pindd_vault_edge_identity_and_start_preserved": true,
+    "new_fees": false,
+    "recovery_receipt": "docs/continuity/11.0/OPS_RESTRICTED_RECOVERY_20261009.safe.json",
+    "next_action": "Keep money paused; separately scope real isolated PG restore acceptance and cold-boot/upstream-resolution prevention. Do not reapply R2 or auto-restore the whole private env backup."
+  },
+  "incident_runtime_state_before_recovery": {
     "status": "incident_api_unavailable_after_failed_r2_deployment",
     "latest_attempt_candidate": "26f322c9bd2724414a7e9f45a7c9396e66a0bae5",
     "active_manifest_commit": "d57e230524b0577bee98217a49a5ea8cb3e2a51e",

@@ -2,9 +2,17 @@
 
 负责端：本地10.0。经营者本轮明确批准部署现有后台优化并继续修复。接收起点 `4749bc048d151d294e4629ed5e5c5df49a7e81dc`，同工作分支，正常fetch/fast-forward。本文记录准备时状态，后续以实际生成回执为准；不是预先宣称上线完成。
 
-## 最新紧急状态：R2全量通过，但上线失败，API尚未恢复
+## 最新结果：受限恢复完成，正式收费仍暂停
 
-以本节为当前事实，下面17点是R1当时成功历史。R2候选 `26f322c9bd2724414a7e9f45a7c9396e66a0bae5` / tree `7ee7794a2ce7ee00fb92ceb32d843219f4d74cf0` 于UTC10:37:35完成全部280项、零失败、source_stable/release_eligible=true。使用官方签名和哈希核验的独立Node24.20.0，仅进程级PATH；系统Node24.15未更改。此前95/280中1项Node退出3221226505的失败保留，边界比较没有证明唯一根因，不能改写为从未失败。
+经营者明确批准后，10月9日夜间只将收款/退款两项开关暂停，用同一R1镜像恢复API和Worker；OPS Nginx遗留旧API地址导致的第二层502，经配置检查及一次平滑reload解决。本机Chrome真实登录、经营聚合加载已验证，独立恢复核对26/26通过。生产仍 `d57e230524b0577bee98217a49a5ea8cb3e2a51e`，没有重新部署R2；拼嘚、Vault/renewer、edge及Caddy边界保持，没有数据库恢复/迁移或费用。
+
+`production_ready=false`、`can_accept_real_customers=false`，PG `restore_drill_overdue`仍是阻断，资金开关保持暂停；原eBay确认通道配置没有被本轮扩大或关闭。不能把后台可用说成正式收费恢复。完整恢复及防复发待办见 `OPS_RESTRICTED_RECOVERY_20261009.md` / safe.json；本发布JSON的 `current_runtime_state` 已更新，原事故状态保留在 `incident_runtime_state_before_recovery`。
+
+本地冻结候选 `302ce54828bd6f38dc2107a5d2ee757953dbed20` 的280项回归于UTC16:09:36（10月10日00:09:36北京时间）全部通过，2976.98秒、source_stable/release_eligible=true；之后才更新交接记录。此本地代码检查不是新生产部署或恢复演练，R2显示修订仍未上线。证据根 `D:/Codex-Verification/jiejing-ops-restricted-recovery-20261009/`。
+
+## 18:56事故历史：R2全量通过，但上线失败，当时API未恢复
+
+本节为18:56事故历史；最新受限恢复以上一节为准，下面17点是R1当时成功历史。R2候选 `26f322c9bd2724414a7e9f45a7c9396e66a0bae5` / tree `7ee7794a2ce7ee00fb92ceb32d843219f4d74cf0` 于UTC10:37:35完成全部280项、零失败、source_stable/release_eligible=true。使用官方签名和哈希核验的独立Node24.20.0，仅进程级PATH；系统Node24.15未更改。此前95/280中1项Node退出3221226505的失败保留，边界比较没有证明唯一根因，不能改写为从未失败。
 
 R2白名单包556文件，SHA `30ff7ab8390ab422793d670cb06a0502a02f871f849e453a15a9fbdd402d5b03`；manifest SHA `585b977d21e2e8d240e2b87f59a13a64f309a9ff6aba7e448133d123b7c7f2a2`。dry-run一次exit0，正式apply一次UTC10:43:41–10:54:16 exit1。原脚本回传 `JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=start_candidate_api`、`OPS_SURFACE_FAILED=anonymous_auth`、`JIEJING_PRODUCTION_ROLLBACK_INCOMPLETE=1`。原包装器只从stdout解析，失败JSON实际在stderr，所以新增安全分类回执R2_APPLY_FAILURE_FINAL；原失败文件不覆盖，不复制原始日志。
 

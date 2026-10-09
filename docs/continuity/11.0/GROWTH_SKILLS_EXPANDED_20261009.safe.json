@@ -1,0 +1,147 @@
+{
+  "observed_at_utc": "2026-10-09T15:34:59.9023912Z",
+  "repository": "https://github.com/coreyhaines31/marketingskills",
+  "source_commit": "1efedbc5148b54b2f0f6c6c9fe0be62e151c7fff",
+  "license": "MIT; root license preserved in each installed skill",
+  "installed_skills": [
+    "cro",
+    "attribution"
+  ],
+  "versions": {
+    "cro": "2.0.3",
+    "attribution": "1.1.4"
+  },
+  "installation_method": "Existing OpenAI skill-installer, --method download, fixed commit",
+  "installed_scope": "This local Windows Codex only",
+  "available_for_discovery": "Next user turn; current content read for scoped application",
+  "files_verified": 12,
+  "all_match_upstream": true,
+  "third_party_scripts_executed": false,
+  "credentials_or_service_accounts_created": false,
+  "permissions_expanded": false,
+  "paid_services_enabled": false,
+  "cloud_installation_verified": false,
+  "reviewed_not_installed": [
+    "video 2.2.1: edit anatomy reused as research; generic batch/silent/browser workarounds not adopted",
+    "Pexo: hosted backend, API key and credits required",
+    "Novoads: API key and paid generation required",
+    "Impeccable: existing local skill reused selectively, no CLI download or upgrade"
+  ],
+  "boundaries": [
+    "No new tracking or identity stitching",
+    "Unknown traffic source remains unknown",
+    "Do not change prices/plans or invent testimonials",
+    "No template-led videos or silent replacement",
+    "No credential reading or browser security changes"
+  ],
+  "files": [
+    {
+      "skill": "cro",
+      "path": "C:\\Users\\57249\\.codex\\skills\\cro\\SKILL.md",
+      "upstream_path": "skills/cro/SKILL.md",
+      "bytes": 7114,
+      "sha256": "6e172cc38178c800ff41ceb097f36c6a1db8035fb88a1fee53043f8ec38a6f35",
+      "git_blob_sha": "2b0a5bb9aa17ed83ff111dbfe6ea722610828a29",
+      "matches_upstream": true
+    },
+    {
+      "skill": "cro",
+      "path": "C:\\Users\\57249\\.codex\\skills\\cro\\evals\\evals.json",
+      "upstream_path": "skills/cro/evals/evals.json",
+      "bytes": 7656,
+      "sha256": "62f3003602836e2b49d797ca582e7703629a6b07b131eb77b51b2bb39fe65775",
+      "git_blob_sha": "a7393125c1cc757e111cd0d2e29ff7f5a071de31",
+      "matches_upstream": true
+    },
+    {
+      "skill": "cro",
+      "path": "C:\\Users\\57249\\.codex\\skills\\cro\\references\\experiments.md",
+      "upstream_path": "skills/cro/references/experiments.md",
+      "bytes": 7850,
+      "sha256": "bbcc356c0af36cfaa4556bf9e929deac30c65cafb37f909d7c51d4777fe254ca",
+      "git_blob_sha": "abc31c716ec966c9c6c9a12ca3e8b076ce3ea320",
+      "matches_upstream": true
+    },
+    {
+      "skill": "cro",
+      "path": "C:\\Users\\57249\\.codex\\skills\\cro\\references\\form.md",
+      "upstream_path": "skills/cro/references/form.md",
+      "bytes": 10332,
+      "sha256": "49b8f29b3da1ae6510572288cad3eb1f3d43a969373443be98b38639746587e6",
+      "git_blob_sha": "56f6e03e28f3d6193316552ca840d26b66a89c79",
+      "matches_upstream": true
+    },
+    {
+      "skill": "cro",
+      "path": "C:\\Users\\57249\\.codex\\skills\\cro\\LICENSE",
+      "upstream_path": "LICENSE",
+      "bytes": 1069,
+      "sha256": "b70d71e24e40fce5da8f4b6f9cd862096a048e433db7f3c8cac5e348e6d34591",
+      "git_blob_sha": "7c48dd638a9ebed49a8ef0c0c4eea90105381cdf",
+      "matches_upstream": true
+    },
+    {
+      "skill": "attribution",
+      "path": "C:\\Users\\57249\\.codex\\skills\\attribution\\SKILL.md",
+      "upstream_path": "skills/attribution/SKILL.md",
+      "bytes": 23406,
+      "sha256": "b0493b97f7a22d6daf7fe47a67e8dc050e5cca98fe952df7dea2bf296853c978",
+      "git_blob_sha": "f9c8af64b3cb98eeae5971e9c9df6df426fbeb89",
+      "matches_upstream": true
+    },
+    {
+      "skill": "attribution",
+      "path": "C:\\Users\\57249\\.codex\\skills\\attribution\\evals\\evals.json",
+      "upstream_path": "skills/attribution/evals/evals.json",
+      "bytes": 13186,
+      "sha256": "795a908eacac5cd2213d03d635fd92d94a6d7d66544b68273a0dbdcc2609607b",
+      "git_blob_sha": "51e7f7392eb36ac639aa70ddefea39ea3d68e609",
+      "matches_upstream": true
+    },
+    {
+      "skill": "attribution",
+      "path": "C:\\Users\\57249\\.codex\\skills\\attribution\\references\\attribution-models.md",
+      "upstream_path": "skills/attribution/references/attribution-models.md",
+      "bytes": 6783,
+      "sha256": "503c61bf2f38d54755398fc5b1bb0d190e989c59494b097407652ae65bf474af",
+      "git_blob_sha": "b2a8f6e216a13b75ecb6bfbf73526a97d7da8f2d",
+      "matches_upstream": true
+    },
+    {
+      "skill": "attribution",
+      "path": "C:\\Users\\57249\\.codex\\skills\\attribution\\references\\by-business-type.md",
+      "upstream_path": "skills/attribution/references/by-business-type.md",
+      "bytes": 7866,
+      "sha256": "56eeabaa3f6d4934ec30a8e33ad87e8e2fd1455a07e118a8cc4182f5a54a7314",
+      "git_blob_sha": "54c67bf5b374bf2dafd0717a3477b8acb5d497d2",
+      "matches_upstream": true
+    },
+    {
+      "skill": "attribution",
+      "path": "C:\\Users\\57249\\.codex\\skills\\attribution\\references\\first-party-tracking.md",
+      "upstream_path": "skills/attribution/references/first-party-tracking.md",
+      "bytes": 19867,
+      "sha256": "a8e12b00d3d049d4b32e3a2785e504936ee7ae33a523a2a1717c338bd4140b6c",
+      "git_blob_sha": "84d9dd9293689bec71423b4f762e208e762cc2b5",
+      "matches_upstream": true
+    },
+    {
+      "skill": "attribution",
+      "path": "C:\\Users\\57249\\.codex\\skills\\attribution\\references\\measurement-paradigms.md",
+      "upstream_path": "skills/attribution/references/measurement-paradigms.md",
+      "bytes": 9839,
+      "sha256": "228ccb10005d5b38c25125e511c5a572b858aeeffd761a53b7170b28326be193",
+      "git_blob_sha": "e6deca56260da7a35f1c861cad050fed62bb4dae",
+      "matches_upstream": true
+    },
+    {
+      "skill": "attribution",
+      "path": "C:\\Users\\57249\\.codex\\skills\\attribution\\LICENSE",
+      "upstream_path": "LICENSE",
+      "bytes": 1069,
+      "sha256": "b70d71e24e40fce5da8f4b6f9cd862096a048e433db7f3c8cac5e348e6d34591",
+      "git_blob_sha": "7c48dd638a9ebed49a8ef0c0c4eea90105381cdf",
+      "matches_upstream": true
+    }
+  ]
+}
