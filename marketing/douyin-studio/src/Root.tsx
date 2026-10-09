@@ -1,4 +1,5 @@
 import "./index.css";
+import {JiejingV16} from "./noon-v16/Film";
 import {JiejingV15Recut} from "./v15-recut/Film";
 import {V15Hook} from "./v15-recut/Hook";
 import {V15Question} from "./v15-recut/Question";
@@ -63,6 +64,7 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="JiejingV16" component={JiejingV16} durationInFrames={660} fps={30} width={1080} height={1920} defaultProps={{withAudio:false}}/>
       <Composition id="JiejingV15Recut" component={JiejingV15Recut} durationInFrames={708} fps={30} width={1080} height={1920}/>
       <Composition id="V15Hook" component={V15Hook} durationInFrames={88} fps={30} width={1080} height={1920} defaultProps={{durationFrames:88}}/>
       <Composition id="V15Question" component={V15Question} durationInFrames={114} fps={30} width={1080} height={1920}/>

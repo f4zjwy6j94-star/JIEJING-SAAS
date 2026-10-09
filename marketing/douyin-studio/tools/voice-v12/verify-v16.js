@@ -1,0 +1,28 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {spawnSync} from 'node:child_process';
+const [file,out,durationText='22']=process.argv.slice(2);
+const duration=Number(durationText);
+if(![12,22].includes(duration)||!file||!path.isAbsolute(file)||!fs.statSync(file).isFile())throw new Error('Expected existing V16 media and known duration');
+if(!out||!path.isAbsolute(out)||fs.existsSync(out))throw new Error('Fresh verification directory required');
+fs.mkdirSync(out,{recursive:true});
+const linux=p=>`/mnt/${p[0].toLowerCase()}${p.slice(2).replaceAll('\\','/')}`;
+const run=(bin,args)=>{
+  const p=spawnSync('wsl.exe',['-d','Ubuntu','--exec',`/usr/bin/${bin}`,...args],{encoding:'utf8',windowsHide:true,maxBuffer:6*1024*1024});
+  if(p.status!==0)throw new Error(`${bin} failed (${p.status}): ${p.stderr.slice(-1500)}`);
+  return p;
+};
+const meta=JSON.parse(run('ffprobe',['-v','error','-show_entries','format=duration,size:stream=codec_name,width,height,r_frame_rate,nb_frames,sample_rate,channels,start_time','-of','json',linux(file)]).stdout);
+run('ffmpeg',['-v','error','-xerror','-i',linux(file),'-map','0:v:0','-map','0:a:0','-f','null','-']);
+const measured=run('ffmpeg',['-hide_banner','-i',linux(file),'-af','loudnorm=I=-16:TP=-1.5:LRA=7:print_format=json','-f','null','-']).stderr;
+const loudness=JSON.parse(measured.slice(measured.lastIndexOf('{'),measured.lastIndexOf('}')+1));
+const black=run('ffmpeg',['-hide_banner','-i',linux(file),'-vf','blackdetect=d=0.05:pix_th=0.02','-an','-f','null','-']).stderr;
+const blackIntervals=black.split('\n').filter(x=>x.includes('black_start:'));
+const v=meta.streams.find(s=>s.codec_name==='h264');
+const a=meta.streams.find(s=>s.codec_name==='aac');
+const checks={h264_1080x1920:v?.width===1080&&v?.height===1920,fps30:v?.r_frame_rate==='30/1',frame_count:Number(v?.nb_frames)===duration*30,duration:Math.abs(Number(meta.format.duration)-duration)<.05,aac_48k_stereo:a?.sample_rate==='48000'&&a?.channels===2,audio_starts_at_zero:Math.abs(Number(a?.start_time))<.02,full_decode:true,no_black_interval:blackIntervals.length===0,loudness:Number(loudness.input_i)>=-18&&Number(loudness.input_i)<=-14,true_peak:Number(loudness.input_tp)<=-1};
+const result={file,sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),meta,loudness,black_intervals:blackIntervals,checks,technical_passed:Object.values(checks).every(Boolean),human_listening_review:false,full_speed_av_review:false,ready_to_publish:false};
+fs.writeFileSync(path.join(out,'TECHNICAL.safe.json'),JSON.stringify(result,null,2)+'\n',{flag:'wx'});
+console.log(JSON.stringify(result,null,2));
+if(!result.technical_passed)process.exitCode=1;
