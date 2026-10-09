@@ -1,4 +1,10 @@
 import "./index.css";
+import {EveningConflict} from "./evening-facts/Conflict";
+import {EveningSources} from "./evening-facts/Sources";
+import {EveningSeparate} from "./evening-facts/Separate";
+import {EveningAsk} from "./evening-facts/Ask";
+import {EveningResolve} from "./evening-facts/Resolve";
+import {EveningClosing} from "./evening-facts/Closing";
 import {DouyinFlowV13Website} from "./DouyinFlowV13Website";
 import {WebsiteClose} from "./v13-flow/WebsiteClose";
 import {DouyinFlowV13Review} from "./DouyinFlowV13Review";
@@ -42,6 +48,12 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="EveningConflict" component={EveningConflict} durationInFrames={120} fps={30} width={1080} height={1920}/>
+      <Composition id="EveningSources" component={EveningSources} durationInFrames={120} fps={30} width={1080} height={1920}/>
+      <Composition id="EveningSeparate" component={EveningSeparate} durationInFrames={120} fps={30} width={1080} height={1920}/>
+      <Composition id="EveningAsk" component={EveningAsk} durationInFrames={120} fps={30} width={1080} height={1920}/>
+      <Composition id="EveningResolve" component={EveningResolve} durationInFrames={120} fps={30} width={1080} height={1920}/>
+      <Composition id="EveningClosing" component={EveningClosing} durationInFrames={120} fps={30} width={1080} height={1920}/>
       <Composition id="DouyinFlowV13Website" component={DouyinFlowV13Website} durationInFrames={780} fps={30} width={1080} height={1920}/>
       <Composition id="WebsiteClose" component={WebsiteClose} durationInFrames={258} fps={30} width={1080} height={1920} defaultProps={{durationFrames:258}}/>
       <Composition id="WebsiteOpening" component={ReviewOpening} durationInFrames={207} fps={30} width={1080} height={1920} defaultProps={{sceneDurationFrames:207}}/>

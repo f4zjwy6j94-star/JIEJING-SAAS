@@ -16,6 +16,16 @@
 
 证据在 `D:/Codex-Verification/jiejing-ops-release-20261009/`：`full-gate-r3-node2420/`、`R2_DEPLOY_DRY_RUN.safe.json`、`R2_APPLY_FAILURE_FINAL.safe.json`、`R2_STARTUP_BLOCKERS.safe.json`、`R2_AFTER_FAILED_ROLLBACK.safe.json`。原始诊断只保留本地不入Git；同名OPS_PRODUCTION_RELEASE MD/JSON追加此次事故，原R1成功历史保留。最终本地提交/远端读回写 `INCIDENT_HANDOFF_SAVE.safe.json`，不预称成功；云端须真实receive，未接收不算已交接。当前不能刷新可信网站访问/订阅数据，17点数据不得冒称18点实时值。
 
+### 10-09 19:22晚片制作接续：六个新分镜已出，免费旁白额度阻塞，禁止用旧片顶替
+
+本地10.0的17点准备heartbeat于19:22实际到达，尚未过20:00；正确clean receive实际HEAD/远端 `d67e49fe6d5d1e2491fdbd217dbc1ce8fcf322d9`。核对Chrome账号捷境AI电商SAAS/51406410196，作品列表5条及列表末尾，只有中午V13加4条历史私密作，未见晚片重复项。中午7694526164412550415仍已发布；先详情55播放/1赞/完播7.69%/2秒跳出60.56%，稍后列表59/1/7.25%/62.67%，不同面板时点分开保存，不推算因果或收入。中午MP4 SHA重新核对一致，未编辑/重发。
+
+晚片已在原Remotion工程增加独立六场可编辑分镜、新公开口播稿与文案，主题是11.5/20标注冲突；不把20猜成包装尺寸，不做假软件核实/发布成功。两轮各6张1080×1920图，最新 `D:/Codex-Verification/jiejing-evening-20261009-1922/boards-v02/`，完整安全SHA在机器回执。tsc/限定lint/脚本语法/两轮渲染及拒绝覆盖反例通过；六图抽帧检查发现遮挡已修正。**这些只是分镜，不是整片、自然旁白或审美验收完成。**
+
+官方Qwen免费Voice Design按已认可男声方向只生成一次，实际弹窗“访客配额已满”，音频为空/错误；已请求经营者在保留的Chrome页面自行登录，尚未收到完成，不购买PRO、不绕额度、不回用被拒声音。队列已写 `storyboard_only_voice_guest_quota_blocked`，media/SHA为空，所有整片门槛/ready/上传/提交/定时均false。先补新声音、带声样片和全片审看；20:00仍未就绪不发，过时不补发或跨日。没有更改两条自动化或延伸日期。上方API故障仍优先且未获本轮恢复授权；不宣传当前完全可用，不改服务器/eBay/拼嘚或产生费用。
+
+接续 `docs/continuity/11.0/DOUYIN_EVENING_PREPARATION_20261009_1922.md`、`marketing/douyin-studio/docs/20261009-evening-facts-storyboard.md`、`operations/checks/20261009-1922-evening-preparation.safe.json`（operations相对studio）。本轮只将明确源码和安全记录save原共用分支，D盘SAVE/STATUS_AFTER_SAVE才是实际推送读回；媒体未入Git/COS，另一端需receive。不要把首次接收/分镜完成写成发布成功。
+
 ### 10-09 19点 新任务：保存Refero Styles供以后UI设计参考，不修改当前产品
 
 经营者要求学习Refero Styles的美感、层次、交互与动效，保存AI可读资料供后续设计。本地10.0从干净共用分支正常receive `e2a4c563596cd5bda3a9e573f697a8f6f8b451e0`，未切换/重建项目。实际D盘目录 `D:/Codex-References/refero-styles-20261009/`：官方MIT Skill固定版本 `a9b54a3e62a6391f5f5ab7a20e4ddb32fb79a27d`完整当前检出30文件（浅历史）、50个资料入口、Linear/Cursor/Notion/Ramp/Perplexity/OpenAI共6套原生Extended DESIGN.md及6张截图；原下载文件保留。不是2,000+全库离线镜像，也未接通/安装付费MCP。外部文件不入Git。
