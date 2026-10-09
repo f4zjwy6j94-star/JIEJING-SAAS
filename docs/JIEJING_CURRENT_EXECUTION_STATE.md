@@ -6,6 +6,8 @@
 
 ### 10-09 18:56紧急状态：R2部署失败且API尚未恢复，等待受限运行授权；禁止按下方历史ready继续
 
+**21:30经营者登录502只读复核：** 正确干净status/receive保持`a29e1ffd3805f2bca7cb9e6eb71da5da40d4b4dd`。本机Chrome当前“内部人员登录”真实显示“请求失败 (502)”；没有读取或重新提交密码。匿名GET：OPS静态首页200，app的`/health`及`/readiness/product-saas`均502，证实后端不可用，不是只在登录凭据验证失败。已重读下方原主机事故回执和当前启动源码，本轮未重新登录主机；精确根因仍引用18点只读主机证据，不冒称新的容器快照。没有修复/改配置/重启/支付/数据库恢复，未让经营者反复登录。建议先获明确受限运行授权，按既有启动契约暂停收款/退款及真实平台写入，再恢复登录与OPS；不改演练时间、延长阈值或跳过保护。最新安全探针回执在`D:/Codex-Verification/jiejing-ops-login-diagnosis-20261009-2130/READONLY_DIAGNOSIS.safe.json`。先前17点成功不能继续称“现在已全部修好”；上次部署前未验证时间性阻断的缺口仍须修复。
+
 最新候选 `26f322c9bd2724414a7e9f45a7c9396e66a0bae5`（tree `7ee7794a2ce7ee00fb92ceb32d843219f4d74cf0`）在隔离官方Node24.20.0下完整280/280通过，source_stable/release_eligible=true，UTC10:37:35完成，2897.48秒。未改断言/超时/重试，全局Node未变。上一轮95项中1项Node原生退出的失败和中断证据保留，不声称精确根因已证实。
 
 同一候选556文件包、dry-run通过；R2 apply仅一次，UTC10:43:41–10:54:16，exit1。真实失败标记 `start_candidate_api`、`OPS_SURFACE_FAILED=anonymous_auth`、`JIEJING_PRODUCTION_ROLLBACK_INCOMPLETE=1`。**活动目录/镜像已经回到R1 d57e230，但API仍restarting/unhealthy，并非服务恢复。** 下方17点“生产ready/21项通过”只代表当时，不能用来说明当前可用。当前其他6容器运行；本次前后Pindd API/PG、Vault/renewer标识及启动时间相同，Caddy持久文件和规范化运行配置不变，无遗留部署进程。
