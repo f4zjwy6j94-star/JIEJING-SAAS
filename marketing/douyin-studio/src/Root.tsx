@@ -1,4 +1,12 @@
 import "./index.css";
+import {JiejingV15Recut} from "./v15-recut/Film";
+import {V15Hook} from "./v15-recut/Hook";
+import {V15Question} from "./v15-recut/Question";
+import {V15Ingest} from "./v15-recut/Ingest";
+import {V15Draft} from "./v15-recut/Draft";
+import {V15Verify} from "./v15-recut/Verify";
+import {V15Confirm} from "./v15-recut/Confirm";
+import {V15Closing} from "./v15-recut/Closing";
 import {EveningV14VisualEdit} from "./evening-v14/Film";
 import {V14Hook} from "./evening-v14/Hook";
 import {V14Hold} from "./evening-v14/Hold";
@@ -55,6 +63,14 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="JiejingV15Recut" component={JiejingV15Recut} durationInFrames={708} fps={30} width={1080} height={1920}/>
+      <Composition id="V15Hook" component={V15Hook} durationInFrames={88} fps={30} width={1080} height={1920} defaultProps={{durationFrames:88}}/>
+      <Composition id="V15Question" component={V15Question} durationInFrames={114} fps={30} width={1080} height={1920}/>
+      <Composition id="V15Ingest" component={V15Ingest} durationInFrames={92} fps={30} width={1080} height={1920} defaultProps={{durationFrames:92}}/>
+      <Composition id="V15Draft" component={V15Draft} durationInFrames={94} fps={30} width={1080} height={1920} defaultProps={{durationFrames:94}}/>
+      <Composition id="V15Verify" component={V15Verify} durationInFrames={77} fps={30} width={1080} height={1920} defaultProps={{durationFrames:77}}/>
+      <Composition id="V15Confirm" component={V15Confirm} durationInFrames={93} fps={30} width={1080} height={1920}/>
+      <Composition id="V15Closing" component={V15Closing} durationInFrames={150} fps={30} width={1080} height={1920}/>
       <Composition id="EveningV14VisualEdit" component={EveningV14VisualEdit} durationInFrames={690} fps={30} width={1080} height={1920}/>
       <Composition id="V14Hook" component={V14Hook} durationInFrames={75} fps={30} width={1080} height={1920}/>
       <Composition id="V14Hold" component={V14Hold} durationInFrames={75} fps={30} width={1080} height={1920}/>

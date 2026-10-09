@@ -1,5 +1,11 @@
 {
   "schema_version": 1,
+  "latest_review_override": "Owner explicitly asked to reuse the voice in today's published noon film. V15 reorders that exact narration and rebuilds visuals; complete review02 delivered, not published. No signup/TTS needed for this edit. V14 original topic remains incomplete history.",
+  "active_evening_review_receipt": "marketing/douyin-studio/operations/checks/20261009-v15-approved-audio-recut.safe.json",
+  "active_evening_review_sha256": "5ca76fc2913ba760541e36ffb5c91b19fa65b1f64af40362478d2fea97870209",
+  "active_evening_review_media_path": "D:/Codex-Verification/jiejing-v15-approved-audio-recut-20261009/film-02/jiejing-v15-23.6s-approved-voice-review.mp4",
+  "active_evening_review_ready_to_publish": false,
+  "active_evening_review_uploaded": false,
   "timezone": "Asia/Shanghai",
   "owner_corrected_date": "2026-10-09",
   "account_name": "捷境AI电商SAAS",
@@ -162,8 +168,8 @@
       "scheduled_publish_at_verified": null,
       "platform_precheck_passed": false,
       "remaining_gates": [
-        "Owner has no Hugging Face account. Official guest quota exhausted and bounded local Qwen inference trials failed without producing new audio. Choose an available authorized voice source; do not keep requesting login to a nonexistent account, pay, evade quota, or reuse rejected voices.",
-        "V14 visual timeline and nine current keyframes are not a complete film. New natural narration, timed captions, voiced sample, complete AV and technical/rights/facts review remain required; older six-frame boards are preserved history.",
+        "Superseded voice blocker: owner chose the exact published noon narration. New V15 re-edit is complete for review without signup or TTS; read active_evening_review_receipt. V14's different original script remains incomplete and must not be mislabeled delivered.",
+        "V15 has a complete voiced file and technical/frame checks, but owner complete AV feedback remains pending. V14 visual timeline and earlier storyboards are preserved history, not the active delivered file.",
         "Before any upload: reconfirm account/duplicates, AI declaration, cover/copy/precheck and native scheduling lead time. No early immediate publish, late catch-up or next-day extension.",
         "Known OPS/API incident remains unresolved in the current execution index. Do not claim current full SaaS availability or request immediate payment. This media task does not authorize service recovery."
       ],
