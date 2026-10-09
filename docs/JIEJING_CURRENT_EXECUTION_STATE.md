@@ -16,6 +16,14 @@
 
 证据在 `D:/Codex-Verification/jiejing-ops-release-20261009/`：`full-gate-r3-node2420/`、`R2_DEPLOY_DRY_RUN.safe.json`、`R2_APPLY_FAILURE_FINAL.safe.json`、`R2_STARTUP_BLOCKERS.safe.json`、`R2_AFTER_FAILED_ROLLBACK.safe.json`。原始诊断只保留本地不入Git；同名OPS_PRODUCTION_RELEASE MD/JSON追加此次事故，原R1成功历史保留。最终本地提交/远端读回写 `INCIDENT_HANDOFF_SAVE.safe.json`，不预称成功；云端须真实receive，未接收不算已交接。当前不能刷新可信网站访问/订阅数据，17点数据不得冒称18点实时值。
 
+### 10-09 19点 新任务：保存Refero Styles供以后UI设计参考，不修改当前产品
+
+经营者要求学习Refero Styles的美感、层次、交互与动效，保存AI可读资料供后续设计。本地10.0从干净共用分支正常receive `e2a4c563596cd5bda3a9e573f697a8f6f8b451e0`，未切换/重建项目。实际D盘目录 `D:/Codex-References/refero-styles-20261009/`：官方MIT Skill固定版本 `a9b54a3e62a6391f5f5ab7a20e4ddb32fb79a27d`完整当前检出30文件（浅历史）、50个资料入口、Linear/Cursor/Notion/Ramp/Perplexity/OpenAI共6套原生Extended DESIGN.md及6张截图；原下载文件保留。不是2,000+全库离线镜像，也未接通/安装付费MCP。外部文件不入Git。
+
+Product Design本机偏好与一份用户明确要求的记忆补充已登记；项目共用接续见 `docs/continuity/11.0/REFERO_STYLES_REFERENCE_20261009.md`，含公开来源和全部50个入口。以后UI任务先按页面选主参考、给2–3个可见方向、确认后再增量实现；不能照搬品牌素材、字体或业务规则，动效需实际交互验证。云端收到安全索引不代表已收到D盘原件或安装插件。
+
+本轮只做公开参考研究与保存，未修改UI源码、线上配置、费用、eBay或拼嘚。**上方API未恢复/待受限运行特定批准的紧急状态仍优先；本新任务不是恢复授权，也没有新的生产健康验收。** 原始文件SHA/版本核验与实际交出结果分别留D盘 `VERIFY.safe.json` / `WORK_SYNC_SAVE.safe.json`；仅在真实成功后称已交出，另一端仍须receive。
+
 ### 10-09 17点 OPS优化已受控部署：280/280通过，独立主机核对21/21；继续收尾显示歧义
 
 实际生产已从 `1e94f2b798b158c8d34f224185151fcb95aaf912` 更新为 `d57e230524b0577bee98217a49a5ea8cb3e2a51e`，活动目录 `/opt/jiejing-production/releases/20261009T090923Z-d57e230524b0/app`。同一干净候选全量280/280通过，source_stable/release_eligible为true；原失败/中断记录保留。白名单包556文件，正常dry-run/apply各一次exit0，TLS/OPS六项资源及匿名访问隔离通过，未规范化私有环境配置。部署回读production_ready、can_accept_real_customers、public_charging_allowed为true，阻断/警告0；它是对应快照，不是实际收益或无限制平台写入授权。
