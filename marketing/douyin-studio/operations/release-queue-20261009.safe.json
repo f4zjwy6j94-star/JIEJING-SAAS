@@ -5,7 +5,24 @@
   "account_name": "捷境AI电商SAAS",
   "douyin_id": "51406410196",
   "authorization": "Two owner-requested posts on 2026-10-09 at 12:00 and 20:00 only; quality checks first. No spend or other account actions.",
-  "rejected_versions": ["DouyinFactsV11", "jiejing-facts-v11-30s-review.mp4"],
+  "rejected_versions": ["DouyinFactsV11", "jiejing-facts-v11-30s-review.mp4", "DouyinNoonV12", "jiejing-v12-noon-44s-review-v01.mp4"],
+  "latest_voice_decision": {
+    "date": "2026-10-09",
+    "voice": "V13 reused Qwen Serena from v10",
+    "owner_feedback": "仍有明显AI感，需要再换",
+    "allowed_for_publication": false,
+    "sample_path": "D:/Codex-Verification/jiejing-v13-20261009-1111/sample-01/v13-sample-raw.mp4",
+    "do_not_reuse_for_evening": true
+  },
+  "current_rebuild_not_for_publication": {
+    "version": "V13 action flow with replacement voice pending",
+    "receipt": "marketing/douyin-studio/operations/v13-rebuild.safe.json",
+    "new_voice_trial_path": "D:/Codex-Verification/jiejing-v13-20261009-1111/assets/voice-design-male-trial-01.wav",
+    "new_voice_trial_sha256": "b26da2bcfa196ac2eb7b10e6a230a503e225f271340fb1cd221d9395dbcf45a4",
+    "new_voice_owner_feedback": "pending",
+    "existing_24s_film_contains_rejected_voice": true,
+    "ready_to_publish": false
+  },
   "old_post": {
     "work_id": "7694285664078138658",
     "owner_reported_removed": true,
@@ -38,7 +55,8 @@
       "episode_id": "v12-noon-sourcing-to-draft",
       "planned_publish_at": "2026-10-09T12:00:00+08:00",
       "topic": "从货源资料到上架草稿",
-      "status": "full_44s_candidate_ready_for_owner_av_review_not_for_publication",
+      "status": "owner_rejected_20261009_1111_do_not_publish",
+      "owner_rejection": "Artificial slow narration; static unrelated pictures; not acceptable quality. Preserve original. V13 must replace the concept, not republish this file.",
       "media_path": "D:/Codex-Verification/jiejing-v12-20261009/noon-0900/jiejing-v12-noon-44s-review-v01.mp4",
       "desktop_media_path": "C:/Users/57249/OneDrive/桌面/捷境推广_v12_20261009/捷境_v12_中午44秒_完整审看版_v01.mp4",
       "sha256": "448c3dbe38c3ca5c1f242f35112e12f84eeaa6efc2807041ec0883ca5f76d6fc",
@@ -58,6 +76,7 @@
       "cover_visually_reviewed": true,
       "full_visual_review": false,
       "natural_voice_listening_review": false,
+      "owner_av_review_passed": false,
       "technical_check_passed": true,
       "asset_provenance_review": true,
       "script_and_claims_review": true,
@@ -65,7 +84,7 @@
       "rights_and_claims_review": false,
       "ready_to_publish": false,
       "remaining_gates": [
-        "Full normal-speed viewing and listening, including AI/eBay/Jiejing pronunciation, naturalness and pacing; requested from owner, no reply yet.",
+        "Owner rejected this V12 film and voice. It cannot be published. Complete a new film with an acceptable replacement voice, then perform full AV review.",
         "Confirm individual or organization eligibility under installed Remotion license before commercial publication.",
         "Only after ready: recheck local Chrome account, duplicate submissions, platform AI declaration, cover/copy and platform precheck. Native schedule capability/time not yet verified."
       ],

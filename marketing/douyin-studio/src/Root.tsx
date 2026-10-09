@@ -1,4 +1,9 @@
 import "./index.css";
+import {DouyinFlowV13} from "./DouyinFlowV13";
+import {FlowIngest} from "./v13-flow/Ingest";
+import {FlowDraft} from "./v13-flow/Draft";
+import {FlowEdit} from "./v13-flow/Edit";
+import {FlowClose} from "./v13-flow/Close";
 import { DouyinNoonV12 } from "./DouyinNoonV12";
 import { NoonOpening } from "./v12-noon/Opening";
 import { NoonThreshold } from "./v12-noon/Threshold";
@@ -31,6 +36,11 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="DouyinFlowV13" component={DouyinFlowV13} durationInFrames={720} fps={30} width={1080} height={1920}/>
+      <Composition id="FlowIngest" component={FlowIngest} durationInFrames={228} fps={30} width={1080} height={1920}/>
+      <Composition id="FlowDraft" component={FlowDraft} durationInFrames={180} fps={30} width={1080} height={1920}/>
+      <Composition id="FlowEdit" component={FlowEdit} durationInFrames={228} fps={30} width={1080} height={1920}/>
+      <Composition id="FlowClose" component={FlowClose} durationInFrames={84} fps={30} width={1080} height={1920}/>
       <Composition id="DouyinNoonV12" component={DouyinNoonV12} durationInFrames={1320} fps={30} width={1080} height={1920} />
       <Still id="NoonCover" component={NoonCover} width={1080} height={1920} />
       <Composition id="NoonOpening" component={NoonOpening} durationInFrames={136} fps={30} width={1080} height={1920} />
