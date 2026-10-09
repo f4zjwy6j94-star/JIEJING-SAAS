@@ -18,6 +18,12 @@
 
 证据在 `D:/Codex-Verification/jiejing-ops-release-20261009/`：`full-gate-r3-node2420/`、`R2_DEPLOY_DRY_RUN.safe.json`、`R2_APPLY_FAILURE_FINAL.safe.json`、`R2_STARTUP_BLOCKERS.safe.json`、`R2_AFTER_FAILED_ROLLBACK.safe.json`。原始诊断只保留本地不入Git；同名OPS_PRODUCTION_RELEASE MD/JSON追加此次事故，原R1成功历史保留。最终本地提交/远端读回写 `INCIDENT_HANDOFF_SAVE.safe.json`，不预称成功；云端须真实receive，未接收不算已交接。当前不能刷新可信网站访问/订阅数据，17点数据不得冒称18点实时值。
 
+### 10-09最新经营者反馈：V15视觉被否决，不能发布；复盘须落实为不同构图与叙事
+
+经营者再次明确否决“旧模板、无层次/高级感”，不是继续等V15审看同意。当前V15机器回执已设`owner_rejected_visual_template_do_not_publish`，ready=false，原MP4/源码及已认可声音保留；不上传、补发或靠换颜色转场再次提交。主线程核对六张最终帧与场景源码、独立只读复核确认：标题/卡片/字幕布局重复、同PNG平面运动，2.93秒动作之后又退回3.8秒问题介绍，尾页5秒约占21%。前次把接受音色等同继续沿用旧台词，重剪没有完成创意重构；技术PASS不等于经营者接受，70播放是V13非V15，不能归因平台或特定视觉。
+
+建议改为“商品改造现场”：商品大特写→一个资料问题→局部操作证据→完成结果，官网与结果同屏；备选卖家问题故事/极简品牌片。先定方向、6–8帧分镜及10–15秒带声样段，再扩整片；当前只是建议，没有新画面/新旁白或成片，不因旧声音能重用而限制文案。详见`marketing/douyin-studio/docs/20261009-v15-owner-rejection.md`，本地完整五维评审在D盘`jiejing-v15-critique-20261009/review.html`。本轮receive`fdc43af9ef9fbe8c246f6435a4c1ae9b7389d54f`后仅保存决定/评审/候选状态；实际SAVE/远端SHA在同D盘回执，云端仍须receive。上方OPS事故及待授权恢复不变，不修改SaaS、账号或服务器。
+
 ### 10-09 21:55两小时复盘（22:00–22:01实读）：V13累计70播放，OPS502仍缺测
 
 本轮只读heartbeat，正确干净receive保持`d2066c7799aa7cd7d07d66e0aefe4f5eabe4c42c`，无已知全量冻结/其它agent写入。本机Chrome核对捷境AI电商SAAS/51406410196；作品7694526164412550415状态正常、12:51发布、26秒、约9.15小时。新鲜详情70播放/1赞，评论/分享/收藏/涨粉0，平均4秒、完播6.25%、2秒跳出63.95%、5秒完播17.44%；来源推荐88.8%、主页10%、朋友1.3%。较19:46累计显示+10、较20:18显示+8，不当成精确时间窗新增人数；分母/截止未知、未到24小时，不能断言限流或效果胜负。

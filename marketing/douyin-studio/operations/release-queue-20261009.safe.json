@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
-  "latest_review_override": "Owner explicitly asked to reuse the voice in today's published noon film. V15 reorders that exact narration and rebuilds visuals; complete review02 delivered, not published. No signup/TTS needed for this edit. V14 original topic remains incomplete history.",
+  "latest_review_override": "Owner rejected V15 for repeated visual template and insufficient hierarchy/quality. Preserve the complete file and accepted source voice, but do not publish this candidate. A different concept, storyboard and audible sample are not yet produced or approved; V14 original topic remains incomplete history.",
+  "active_evening_review_status": "owner_rejected_visual_template_do_not_publish",
   "active_evening_review_receipt": "marketing/douyin-studio/operations/checks/20261009-v15-approved-audio-recut.safe.json",
   "active_evening_review_sha256": "5ca76fc2913ba760541e36ffb5c91b19fa65b1f64af40362478d2fea97870209",
   "active_evening_review_media_path": "D:/Codex-Verification/jiejing-v15-approved-audio-recut-20261009/film-02/jiejing-v15-23.6s-approved-voice-review.mp4",
