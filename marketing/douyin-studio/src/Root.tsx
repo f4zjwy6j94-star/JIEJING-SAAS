@@ -1,4 +1,11 @@
 import "./index.css";
+import {EveningV14VisualEdit} from "./evening-v14/Film";
+import {V14Hook} from "./evening-v14/Hook";
+import {V14Hold} from "./evening-v14/Hold";
+import {V14Ask} from "./evening-v14/Ask";
+import {V14Evidence} from "./evening-v14/Evidence";
+import {V14Draft} from "./evening-v14/Draft";
+import {V14End} from "./evening-v14/End";
 import {EveningConflict} from "./evening-facts/Conflict";
 import {EveningSources} from "./evening-facts/Sources";
 import {EveningSeparate} from "./evening-facts/Separate";
@@ -48,6 +55,13 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="EveningV14VisualEdit" component={EveningV14VisualEdit} durationInFrames={690} fps={30} width={1080} height={1920}/>
+      <Composition id="V14Hook" component={V14Hook} durationInFrames={75} fps={30} width={1080} height={1920}/>
+      <Composition id="V14Hold" component={V14Hold} durationInFrames={75} fps={30} width={1080} height={1920}/>
+      <Composition id="V14Ask" component={V14Ask} durationInFrames={180} fps={30} width={1080} height={1920}/>
+      <Composition id="V14Evidence" component={V14Evidence} durationInFrames={90} fps={30} width={1080} height={1920}/>
+      <Composition id="V14Draft" component={V14Draft} durationInFrames={150} fps={30} width={1080} height={1920}/>
+      <Composition id="V14End" component={V14End} durationInFrames={120} fps={30} width={1080} height={1920}/>
       <Composition id="EveningConflict" component={EveningConflict} durationInFrames={120} fps={30} width={1080} height={1920}/>
       <Composition id="EveningSources" component={EveningSources} durationInFrames={120} fps={30} width={1080} height={1920}/>
       <Composition id="EveningSeparate" component={EveningSeparate} durationInFrames={120} fps={30} width={1080} height={1920}/>

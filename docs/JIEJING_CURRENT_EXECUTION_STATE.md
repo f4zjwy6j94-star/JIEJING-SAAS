@@ -16,6 +16,18 @@
 
 证据在 `D:/Codex-Verification/jiejing-ops-release-20261009/`：`full-gate-r3-node2420/`、`R2_DEPLOY_DRY_RUN.safe.json`、`R2_APPLY_FAILURE_FINAL.safe.json`、`R2_STARTUP_BLOCKERS.safe.json`、`R2_AFTER_FAILED_ROLLBACK.safe.json`。原始诊断只保留本地不入Git；同名OPS_PRODUCTION_RELEASE MD/JSON追加此次事故，原R1成功历史保留。最终本地提交/远端读回写 `INCIDENT_HANDOFF_SAVE.safe.json`，不预称成功；云端须真实receive，未接收不算已交接。当前不能刷新可信网站访问/订阅数据，17点数据不得冒称18点实时值。
 
+### 10-09 晚间经营者复盘与V14重做：23秒视觉工程已保存，免费配音路线失败，无带声成片
+
+经营者要求解释错过排期、复盘中午数据并重做供审看，随后明确“我没有账号”。本地10.0从正确干净分支实际receive `8aa9094d85c7742bd3e6f8ea1b9b03a992567ec9`；本轮未代注册HF、未购买PRO、未绕配额，也没有深夜补发授权。中午V13实际12:51已发布，晚于计划；17点准备任务19:22才到且未有完整片，20:01检查没有就绪片。不能把排程设置当按时交付，不能将未交付归咎经营者没有账号。
+
+20:18左右本机Chrome重新核对捷境AI电商SAAS/51406410196及作品7694526164412550415：状态正常，62播放、1赞，其余互动/吸粉0；平均4秒、完播6.94%、2秒跳出61.54%、5秒完播17.95%；来源推荐87.5%、主页11.1%、朋友1.4%。约7.45小时且分母/截止未知，不能断言限流、音色导致失败或投流占比。V13首帧已有问题，但初段重复信息、约五组文字竞争、具体标题动作约13.2秒才出现、结尾约占33%；这是逐镜观察，不是小样本已证因果。OPS本轮未重查，上方API事故仍未处理，不用旧统计冒充实时转化。
+
+原Remotion内新增 `src/evening-v14/` 六场与 `EveningV14VisualEdit`，暂定23秒：11.5/20冲突立即出现→先问清→实物/包装分层和实测图→保留原资料→尺寸待核实的草稿→4秒捷境/官网收束。原创物件动画不是软件录屏、实测或客户案例；没有固定栏目头、截图堆叠或制作说明页脚。最新九帧 `D:/Codex-Verification/jiejing-evening-rework-20261009-owner01/v14-frames-03/`，已有Studio预览 `http://localhost:3109/EveningV14VisualEdit`，不是带声成片。源码入口及完整稿见 `marketing/douyin-studio/docs/20261009-evening-v14-rework.md`。
+
+官方免费网页无访客额度；随后D盘隔离安装官方Qwen3-TTS 0.6B固定模型，SHA核对及pip check通过，未动全局运行环境/驱动。受限试音先遇加载峰值，等值分片解决后仍有FP16非有限值，五次短句探测最终停止于 `Non-finite hidden state before projection; wider model precision would be required`。所有本轮安装/下载/试音进程已结束，没有新WAV或MP4；不继续无限试验、不拿静音或被拒声音顶替。独立环境/模型/缓存约13.26GiB留D盘，原件保留、未上传，没产生云费用。不能将安装成功冒充可用配音产线。
+
+发布仍ready=false，上传/提交0；下一步需要经营者选择可用声音来源：自行免费注册/登录HF后核对实际免费额度，或提供有权使用的旁白录音；注册不保证额度、不要求付费、不索取密码。拿到可用声音后再对齐时序、导出整片并完整视听/技术/权利事实复核，给经营者审看；补发需新时段授权。真实数据与失败/检查入口分别为 `operations/reviews/20261009-v13-2018.safe.json`、`operations/checks/20261009-evening-v14-rework.safe.json`（相对studio）。仅明确源码/安全记录按WORK_SYNC保存；实际完整HEAD及推送读回留上述D盘 `SAVE.safe.json`，另一端仍须receive，媒体与聊天未自动同步。不部署SaaS、不操作eBay/拼嘚/共享服务器或费用。
+
 ### 10-09 20:01晚片发布检查：未完成，未发布，本批不自动补发
 
 发布heartbeat实际于北京时间20:01:03到达。正确干净共用分支status/receive后，本地与远端均为`6a79a623c976ec6bbdc2101e84a95588c1970758`；未发现全量门禁或其它agent并发写入。最新晚片队列仍无完整媒体路径/SHA、无新旁白，完整视听/技术/权利事实门槛及ready全部false。19:22免费声音额度阻塞是已有记录，本轮未重试生成或声称登录后恢复；不是只因任务晚到一分钟而取消一条已完成影片。

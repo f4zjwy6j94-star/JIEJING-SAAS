@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "timezone": "Asia/Shanghai",
+  "observation_window": "2026-10-09 around 20:18 Asia/Shanghai; exact metric cutoff and denominators are not supplied by the platform",
+  "account_verified": {"name": "捷境AI电商SAAS", "douyin_id": "51406410196", "browser": "local Chrome existing session"},
+  "work_id": "7694526164412550415",
+  "published_at": "2026-10-09T12:51:00+08:00",
+  "published_at_precision": "minute; seconds normalized to 00, not observed",
+  "age_hours_approximate": 7.45,
+  "duration_seconds": 26,
+  "observed_status": "作品状态正常",
+  "metrics": {
+    "plays": 62,
+    "likes": 1,
+    "comments": 0,
+    "shares": 0,
+    "saves": 0,
+    "new_followers": 0,
+    "average_watch_seconds": 4,
+    "completion_percent": 6.94,
+    "two_second_exit_percent": 61.54,
+    "five_second_completion_percent": 17.95,
+    "average_played_percent": 16.96,
+    "impressions": null,
+    "post_profile_visits": null
+  },
+  "displayed_traffic_source_percent": {"recommendation": 87.5, "profile": 11.1, "friends": 1.4},
+  "source_denominator": "unknown; do not infer integer source counts or paid/organic split",
+  "website_conversion": {"queried_this_turn": false, "uv": null, "registrations": null, "paid_orders": null, "reason": "Current execution index records unresolved API/OPS incident; historical values are not current evidence"},
+  "local_evidence": "D:/Codex-Verification/jiejing-evening-rework-20261009-owner01/DOUYIN_CURRENT_REVIEW.jpg",
+  "content_observations": [
+    "The complete opening question exists at frame zero. It is incorrect to say there was no early hook.",
+    "Initial 3.5 seconds mainly repeat the problem with moving product and three task cards; approximately five text groups compete at 2.2 seconds.",
+    "Draft begins about 6.9 seconds; the concrete title edit appears about 13.2 seconds.",
+    "Closing plus website occupies about 8.6 of 26 seconds; these are source/keyframe observations, not proven causes of the metrics."
+  ],
+  "next_film_changes": [
+    "Show the specific 11.5 versus 20 source conflict immediately, in an explicit listing-preparation context.",
+    "Deliver a usable rule in the first five seconds; show separate item and package questions and a measurement-photo request.",
+    "Keep conflicting source records and pending measurements visible; do not invent the correct number or supplier response.",
+    "Use original layered object motion and a short branded website close, with a newly generated acceptable narration."
+  ],
+  "limitations": [
+    "Small sample and under 24 hours old: no causal diagnosis, viral guarantee, throttling conclusion or experiment winner.",
+    "Do not mix earlier 60-play snapshot percentages with this panel or infer conversions from same-period website traffic.",
+    "New film changes topic, timing and visual treatment together; not a controlled single-variable A/B test.",
+    "No account/other-post mutation, upload, publication, paid service, server operation or new tracking in this review."
+  ]
+}
