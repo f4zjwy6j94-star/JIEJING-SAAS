@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "kind": "aggregate_readonly_growth_review",
+  "timezone": "Asia/Shanghai",
+  "automation_id": "automation-2",
+  "triggered_at": "2026-10-09T19:46:33.021+08:00",
+  "scheduler_trigger_observed": true,
+  "result": "partial_douyin_observed_ops_502",
+  "observed_window_local": [
+    "2026-10-09T19:46:33+08:00",
+    "2026-10-09T19:54:02+08:00"
+  ],
+  "observation_time_precision": "Bounded run window, not an exact per-metric timestamp.",
+  "source": "Local Chrome existing login and visible UI only; no API scraping, cloud browser or customer-detail reads.",
+  "receive_head": "efbe42f60eafb4f7cc337ea3551f1bb0dfc59967",
+  "receive_remote_head": "efbe42f60eafb4f7cc337ea3551f1bb0dfc59967",
+  "branch": "video/jiejing-11-continuity-20261006",
+  "concurrency": {
+    "clean_equal_before_receive": true,
+    "active_known_gate_or_save_process_observed": false,
+    "other_live_agents_writing": false,
+    "prior_1515_pending_records_already_merged": true
+  },
+  "episode_id": "v13-website-review-02",
+  "work_id": "7694526164412550415",
+  "post_url": "https://creator.douyin.com/creator-micro/work-management/work-detail/7694526164412550415?enter_from=homepage",
+  "account": {
+    "name": "捷境AI电商SAAS",
+    "douyin_id": "51406410196",
+    "verified": true
+  },
+  "published_at_platform": "2026-10-09T12:51:00+08:00",
+  "published_at_precision": "minute; seconds not displayed",
+  "video_duration_seconds": 26,
+  "actual_age_hours_approx": 7,
+  "observation_stage": "before_24_hours",
+  "publication_state": "作品状态正常; prior management list 已发布",
+  "flow_reduction_notice_observed": false,
+  "public_visibility_verified_at": null,
+  "data_cutoff": null,
+  "update_policy_observed": "数据指标说明：次日10点更新昨日作品数据。",
+  "definition_notes": [
+    "Platform help defines plays as view events, not unique people. Completion is a complete-view share with daily or cumulative time grain.",
+    "The help text is a general update notice, not a confirmed cutoff for each current-day card. Current-day counters are visible; final settled values remain unknown.",
+    "Rate denominators and rounding vary or are not exposed. Do not recompute counts from ratios, or reconcile 4 seconds with 17.13% as exact numbers.",
+    "Account home overview covers October 2-8, updated at noon, and excludes this October 9 publication. Its account-level totals are not used as this video's profile visits."
+  ],
+  "metric_units": {
+    "counts": "platform-defined events unless documented otherwise",
+    "rates": "ratio 0..1",
+    "duration": "seconds",
+    "money": "integer minor units only when measured"
+  },
+  "platform_metrics": {
+    "impressions": null,
+    "plays": 60,
+    "likes": 1,
+    "comments": 0,
+    "shares": 0,
+    "saves": 0,
+    "danmaku": 0,
+    "new_followers": 0,
+    "unfollows": 0,
+    "profile_visits": null,
+    "average_watch_seconds": 4,
+    "two_second_exit_ratio": 0.6267,
+    "completion_ratio": 0.0714,
+    "five_second_completion_ratio": 0.1733,
+    "average_play_ratio": 0.1713,
+    "fan_play_ratio": 0.034,
+    "like_ratio": 0.0167,
+    "not_interested_ratio": 0
+  },
+  "traffic_source_ratios": {
+    "recommendation_page": 0.871,
+    "personal_profile": 0.114,
+    "friends_page": 0.014,
+    "search": null,
+    "paid": null
+  },
+  "search_keywords_state": "暂无数据",
+  "watch_curve_state": "播放量超过200后，展示数据; this is a chart display condition, not a growth threshold.",
+  "comparison": {
+    "baseline": "marketing/douyin-studio/operations/reviews/20261009-v13-2hour.safe.json",
+    "baseline_window_local": [
+      "2026-10-09T15:15:00+08:00",
+      "2026-10-09T15:24:00+08:00"
+    ],
+    "scope": "Same work-detail lifetime count cards; differences of displayed snapshots, not exact event-time intervals or new unique customers.",
+    "displayed_count_deltas": {
+      "plays": 19,
+      "likes": 0,
+      "comments": 0,
+      "shares": 0,
+      "saves": 0,
+      "new_followers": 0
+    },
+    "rate_deltas_computed": false,
+    "not_used_as_baseline": "The initially retained content list showed59 while freshly navigated home/detail showed60. No growth is inferred from that stale cross-panel difference."
+  },
+  "website": {
+    "url": "https://ops.jiejing.shop/",
+    "status": "REQUEST_FAILED_502",
+    "observed_surface": "Internal login shell with status 请求失败 (502); existing OPS tab focus commands timed out, same-Chrome fresh tab showed the explicit502.",
+    "requested_period_days": [
+      7,
+      30
+    ],
+    "actual_data_window": null,
+    "data_cutoff": null,
+    "metrics": {
+      "unique_visitor_identifiers": null,
+      "pageviews": null,
+      "sessions": null,
+      "registrations_completed": null,
+      "active_subscriptions": null,
+      "existing_usage_summary": null,
+      "commercial_orders": null,
+      "collected_minor_units": null
+    },
+    "source_tags_current_effective": null,
+    "beijing_window_current_effective": null,
+    "deployment_evidence": "R1 deployed and read back at17:00; R2 failure/current incident documented in OPS_PRODUCTION_RELEASE_20261009.safe.json. Local source does not prove current aggregate availability.",
+    "previous_numbers_reused_as_current": false,
+    "previous_zeroes_reused": false,
+    "login_requested_again": false,
+    "server_changes": false
+  },
+  "business_intent": {
+    "deduplicated_relevant_inquiries": null,
+    "private_messages_or_customer_details_read": false
+  },
+  "product_funnel": {
+    "verified_attributed_registrations": null,
+    "verified_attributed_key_experiences": null,
+    "verified_attributed_paying_customers": null,
+    "attribution_status": "unknown"
+  },
+  "cash": {
+    "currency": null,
+    "verified_attributed_collected_minor_units": null,
+    "verified_attributed_refunded_minor_units": null,
+    "verified_attributed_net_collections_minor_units": null
+  },
+  "review": {
+    "visible_facts": "60 displayed plays and1 like; visible recommendation source87.1%; mean watch4s; OPS metrics unavailable. No new restriction notice on this work.",
+    "hypothesis": "The useful concrete action may arrive too late. Earlier source review placed the result scene at6.9s; this remains a hypothesis, not proof of individual exits or an algorithm penalty.",
+    "experiment_id": "GROWTH-H001",
+    "next_primary_editorial_change": "Put a concrete conflict or legible outcome in the first1-2s. Preserve accepted natural voice direction and completed ending; let each motion reveal a new fact.",
+    "candidate_opening": "同一件商品，11.5还是20？ Show both source labels immediately, then a specific supplier-confirmation action; do not guess which value is packaging.",
+    "caution": "The evening candidate also changes topic/visuals, so it is not a controlled single-variable A/B experiment. This run only refines a recommendation, not its media or release queue.",
+    "paired_followup_design": "If later comparing opening variants, keep case, voice, approximate length, CTA and distribution conditions as close as possible; compare similar-age normal-state originals at first24h/72h observations.",
+    "causal_effect_claimed": false,
+    "statistical_winner_claimed": false,
+    "viral_guarantee": false,
+    "business_evidence_missing": [
+      "Current website aggregate availability",
+      "Verified source-to-registration linkage",
+      "Attributed product usage",
+      "Attributed real collections"
+    ]
+  },
+  "checkpoints": {
+    "first_24h_eligible_at": "2026-10-10T12:51:00+08:00",
+    "first_72h_eligible_at": "2026-10-12T12:51:00+08:00",
+    "eligible_is_not_exact_scheduled_observation": true,
+    "weekly_summary": "After7days, using accumulated comparable evidence; no week-level conclusion yet."
+  },
+  "learning": {
+    "skills": [
+      "social2.3.3",
+      "analytics2.0.2"
+    ],
+    "original_author_reference": "https://github.com/coreyhaines31/marketingskills/blob/b9ba399dd88b082b926e261e8ccfb843d20aa066/skills/social/references/short-form-video.md",
+    "reference_verified_in_local_chrome": true,
+    "adopted": [
+      "One specific opening problem",
+      "Motion follows spoken meaning and contributes information",
+      "An understandable completed result and one next step",
+      "Separate awareness, intent, product use and collections"
+    ],
+    "not_adopted": [
+      "Fixed completion thresholds or universal best times",
+      "Guaranteed gains from hashtags/captions",
+      "Bulk scraping, comments or private messages",
+      "Source installation or new tracking"
+    ],
+    "competitor_cases_claimed_reviewed": 0,
+    "new_tools_installed": 0
+  },
+  "evidence_root": "D:/Codex-Verification/jiejing-growth-review-20261009-1946",
+  "screenshots_local_only": [
+    "DOUYIN_TRAFFIC.jpg",
+    "OPS_502.jpg"
+  ],
+  "raw_logs_customer_data_or_media_committed": false,
+  "side_effects": {
+    "new_film": false,
+    "published": false,
+    "deleted": false,
+    "modified_post": false,
+    "pinned": false,
+    "appealed": false,
+    "commented": false,
+    "private_message_sent": false,
+    "new_tracking": false,
+    "paid": false,
+    "production_deployed": false,
+    "ebay": false,
+    "pindd": false,
+    "shared_server": false
+  },
+  "handoff": {
+    "responsible_endpoint": "local10.0",
+    "save_receipt": "D:/Codex-Verification/jiejing-growth-review-20261009-1946/SAVE.safe.json",
+    "status_receipt": "D:/Codex-Verification/jiejing-growth-review-20261009-1946/STATUS_AFTER_SAVE.safe.json",
+    "cloud_receive_still_required": true
+  }
+}
