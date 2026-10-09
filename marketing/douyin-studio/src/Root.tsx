@@ -1,4 +1,14 @@
 import "./index.css";
+import { DouyinNoonV12 } from "./DouyinNoonV12";
+import { NoonOpening } from "./v12-noon/Opening";
+import { NoonThreshold } from "./v12-noon/Threshold";
+import { NoonSources } from "./v12-noon/Sources";
+import { NoonTriage } from "./v12-noon/Triage";
+import { NoonDraft } from "./v12-noon/Draft";
+import { NoonWorkspace } from "./v12-noon/Workspace";
+import { NoonReview } from "./v12-noon/Review";
+import { NoonClosing } from "./v12-noon/Closing";
+import { NoonCover } from "./v12-noon/Cover";
 import { DouyinCinematicV12Sample, V12Arrival, V12Sources, V12Notes, V12Focus } from "./DouyinCinematicV12";
 import { DouyinFactsV11, FactsCoverV11, FactsOpening, FactsSources, FactsQuestion, FactsMethod, FactsAsk, FactsClosing } from "./DouyinFactsV11";
 import { Douyin11CompleteV8, Douyin11CoverV8 } from "./Douyin11CompleteV8";
@@ -21,6 +31,16 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition id="DouyinNoonV12" component={DouyinNoonV12} durationInFrames={1320} fps={30} width={1080} height={1920} />
+      <Still id="NoonCover" component={NoonCover} width={1080} height={1920} />
+      <Composition id="NoonOpening" component={NoonOpening} durationInFrames={136} fps={30} width={1080} height={1920} />
+      <Composition id="NoonThreshold" component={NoonThreshold} durationInFrames={88} fps={30} width={1080} height={1920} />
+      <Composition id="NoonSources" component={NoonSources} durationInFrames={200} fps={30} width={1080} height={1920} />
+      <Composition id="NoonTriage" component={NoonTriage} durationInFrames={234} fps={30} width={1080} height={1920} />
+      <Composition id="NoonDraft" component={NoonDraft} durationInFrames={222} fps={30} width={1080} height={1920} />
+      <Composition id="NoonWorkspace" component={NoonWorkspace} durationInFrames={117} fps={30} width={1080} height={1920} />
+      <Composition id="NoonReview" component={NoonReview} durationInFrames={135} fps={30} width={1080} height={1920} />
+      <Composition id="NoonClosing" component={NoonClosing} durationInFrames={188} fps={30} width={1080} height={1920} />
       <Composition id="DouyinCinematicV12Sample" component={DouyinCinematicV12Sample} durationInFrames={431} fps={30} width={1080} height={1920} />
       <Composition id="V12Arrival" component={V12Arrival} durationInFrames={137} fps={30} width={1080} height={1920} />
       <Composition id="V12Sources" component={V12Sources} durationInFrames={97} fps={30} width={1080} height={1920} />

@@ -7,7 +7,17 @@
   "images": [
     {"file":"assets/noon-unboxing.png","sha256":"45e6d3ef2d18e74e7edaf548c4c1593bd2cd5ebfaf1e78b855cae1ef061b46ab","description":"Hands opening a ceramic sample box, warm olive and walnut desk scene"},
     {"file":"assets/noon-sorting.png","sha256":"7997cae6ff8fe15611b36b7f2fb7b71dee8dda214ec301e3f2b89a79ea7ecfb6","description":"Top-down hands sorting six ceramic-cup photo prints"},
-    {"file":"assets/noon-detail.png","sha256":"40c77dda2497aad483c68b1ef0d78a50cebaf1592d1b5a272faffffc7b5c970b","description":"Hand inspecting an ivory cup, close detail"}
+    {"file":"assets/noon-detail.png","sha256":"40c77dda2497aad483c68b1ef0d78a50cebaf1592d1b5a272faffffc7b5c970b","description":"Hand inspecting an ivory cup, close detail"},
+    {
+      "file": "assets/noon-working.png",
+      "sha256": "729f389daa85c02c286f159cbc872dc61be8de85eb2ab1e7b21d77c749a9aca2",
+      "description": "Original fictional over-shoulder hands/keyboard/notebook editorial scene; no readable application UI.",
+      "generated_original": "C:/Users/57249/.codex/generated_images/01a03351-e7c5-7d80-a83c-277c438c4101/exec-96102abd-91b7-46d3-94b6-9e6dc3808489.png",
+      "reference_files": ["assets/noon-unboxing.png", "assets/noon-sorting.png"],
+      "generation_method": "Built-in imagegen, no external paid API or voice cloning.",
+      "prompt": "Use case: photorealistic-natural. Generate one new editorial photographic scene for a vertical 9:16 short film about preparing an online product listing. The attached images are visual references only for the fictional merchant's warm walnut desk, ivory speckled ceramic sample cup and olive knit sleeves. New shot: intimate over-the-shoulder close view of hands on a laptop keyboard and a paper notebook, the same ivory speckled cup sample and two printed photos neatly placed to the side; screen angled away and defocused, absolutely no readable UI or text. Focus on hand, keyboard edge and paper textures; soft window daylight, muted olive shadows, warm natural highlights, shallow optical depth of field, high-end editorial still with foreground blur. A calm purposeful composition, not corporate stock photography, no face visible. Vertical 9:16, cinematic detail. No text, logos, watermark, labels, fake customer, sales figures or software screenshot. Preserve plausible anatomy and cup design. This is a fictional illustrative scene, not documentary footage.",
+      "visual_review": "Reviewed hands and composition. Fictional continuity only, not an exact SKU or proof of actual customer work."
+    }
   ],
   "local_voice": {
     "model": "Kokoro multi-lang v1.1",
@@ -22,6 +32,25 @@
     "paid_calls": 0,
     "subjective_listening": "pending",
     "initialization_warning": "Lexicon reported unknown token U+2753; generation completed. Do not infer pronunciation/naturalness pass."
+  },
+  "noon_full_narration": {
+    "file": "noon-0900/voice-01/narration.wav",
+    "sha256": "2e07f03354df9a4e710e9affdae9a7e26cb8387e5cfbcfa06ec2b95255cbece7",
+    "source_script": "marketing/douyin-studio/tools/voice-v12/noon-script.json",
+    "timing_receipt": "noon-0900/voice-01/TIMING.safe.json",
+    "speaker": "zf_094, sid 56",
+    "duration_seconds": 44,
+    "line_count": 12,
+    "sample_rate": 24000,
+    "channels": 1,
+    "subjective_listening": "pending_owner_review",
+    "background_music": false
+  },
+  "renderer_license": {
+    "installed_version": "Remotion 4.0.518",
+    "evidence": "marketing/douyin-studio/node_modules/remotion/LICENSE.md",
+    "eligibility": "pending_owner_entity_size_confirmation",
+    "purchase_or_upgrade": false
   },
   "do_not_associate_cup_with_drain_cover_measurements": true,
   "media_uploaded_to_git_or_cos": false
