@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "kind": "aggregate_readonly_growth_review",
+  "timezone": "Asia/Shanghai",
+  "observed_window_local": [
+    "2026-10-09T15:15:00+08:00",
+    "2026-10-09T15:24:00+08:00"
+  ],
+  "observation_time_precision": "Bounded session window, not an exact per-metric timestamp",
+  "source": "Local Chrome visible creator dashboard and OPS login page, not API scraping",
+  "episode_id": "v13-website-review-02",
+  "work_id": "7694526164412550415",
+  "post_url": "https://creator.douyin.com/creator-micro/work-management/work-detail/7694526164412550415?enter_from=homepage",
+  "account": {
+    "name": "捷境AI电商SAAS",
+    "douyin_id": "51406410196",
+    "verified": true
+  },
+  "published_at_platform": "2026-10-09T12:51:00+08:00",
+  "age_hours_approx": 2.5,
+  "video_duration_seconds": 26,
+  "publication_state": "作品状态正常",
+  "public_visibility_verified_at": null,
+  "data_cutoff": null,
+  "source_per_section": {
+    "platform_metrics": {
+      "source": "Work detail overview and traffic analysis",
+      "data_cutoff": null,
+      "denominators": "Not exposed for each rate; do not back-calculate viewer counts"
+    },
+    "website": {
+      "source": "ops.jiejing.shop",
+      "status": "LOGIN_REQUIRED",
+      "current_metrics": null,
+      "prior_snapshot_is_not_current": true
+    }
+  },
+  "platform_metrics": {
+    "plays": 41,
+    "likes": 1,
+    "comments": 0,
+    "shares": 0,
+    "saves": 0,
+    "new_followers": 0,
+    "profile_visits": null,
+    "average_watch_seconds": 6,
+    "two_second_exit_ratio": 0.5577,
+    "completion_ratio": 0.1064,
+    "five_second_completion_ratio": 0.2115,
+    "average_play_ratio": 0.2137,
+    "fan_play_ratio": 0.051
+  },
+  "traffic_source_ratios": {
+    "recommendation_page": 0.83,
+    "personal_profile": 0.149,
+    "friends_page": 0.021,
+    "search": null,
+    "paid": null
+  },
+  "quality_notes": [
+    "Initial previously-open content list showed 0 plays; newly navigated home latest-work tile showed 40, then work detail showed 41. Do not compute growth from the stale list.",
+    "Home account overview cutoff is 2026-10-02 to 2026-10-08, updated daily at noon, so it does not cover this new work.",
+    "Different cards/rates may update on different clocks. Denominators unknown and rounded values are not reconciled into viewer counts.",
+    "Recommendation source is visible; this is not proof of unique natural viewers, viral distribution, or website attribution.",
+    "41 plays is a small early sample. No causal diagnosis or statistically significant winner is claimed."
+  ],
+  "product_funnel": {
+    "verified_attributed_registrations": null,
+    "verified_attributed_key_experiences": null,
+    "verified_attributed_paying_customers": null,
+    "attribution_status": "unknown"
+  },
+  "cash": {
+    "currency": null,
+    "verified_attributed_net_collections_minor_units": null
+  },
+  "review": {
+    "main_observation": "The work has visible recommendation-source traffic but early attention may be weak.",
+    "source_grounded_creative_observation": "V13 composition opens for 207 frames at 30 fps (6.9s); draft-result scene begins at frame207. Mean watch time shown is6s. This is an inspectable timing concern, not proof all viewers leave before the result.",
+    "next_single_variable_to_change": "For the next original piece, put one comprehensible problem/result transformation in the first1-2s; retain accepted voice direction and a coherent completed demonstration.",
+    "experiment_type": "observational editorial iteration, not randomized A/B test",
+    "causal_effect_claimed": false
+  },
+  "side_effects": {
+    "published": false,
+    "deleted": false,
+    "appealed": false,
+    "commented": false,
+    "new_tracking": false,
+    "paid": false,
+    "production_deployed": false
+  }
+}

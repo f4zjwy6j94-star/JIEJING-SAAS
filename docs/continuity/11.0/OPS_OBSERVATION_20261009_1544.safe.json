@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "source": "Authenticated local Chrome OPS visible aggregate panels",
+  "timezone": "Asia/Shanghai",
+  "observed_date": "2026-10-09",
+  "login_confirmed": true,
+  "real_business_writes": false,
+  "refreshed_panels": {
+    "overview_30d": "2026-10-09T15:44:06+08:00",
+    "traffic_30d": "2026-10-09T15:42:31+08:00",
+    "overview_and_traffic_7d": "2026-10-09T15:43:20+08:00",
+    "reliability_30d": "2026-10-09T15:44:06+08:00"
+  },
+  "periods": {
+    "seven_days": {
+      "start": "2026-10-03",
+      "end": "2026-10-09",
+      "visitor_ids": 14,
+      "sessions": 24,
+      "page_views": 114,
+      "completed_registrations": 0,
+      "active_subscriptions": 0,
+      "commercial_orders": 0,
+      "actual_collections_cny": 0,
+      "normalized_mrr_cny": 0,
+      "pricing_views": 3,
+      "started_registrations": 0,
+      "alerts": 0,
+      "pending_feedback": 0,
+      "uncovered_supplier_cost_records": 2,
+      "page_breakdown": [
+        {
+          "page": "workbench",
+          "visitor_ids": 3,
+          "sessions": 9,
+          "page_views": 91
+        },
+        {
+          "page": "landing",
+          "visitor_ids": 13,
+          "sessions": 19,
+          "page_views": 23
+        }
+      ]
+    },
+    "thirty_days": {
+      "start": "2026-09-10",
+      "end": "2026-10-09",
+      "visitor_ids": 43,
+      "sessions": 106,
+      "page_views": 312,
+      "completed_registrations": 1,
+      "active_subscriptions": 0,
+      "commercial_orders": 0,
+      "actual_collections_cny": 0,
+      "normalized_mrr_cny": 0,
+      "pricing_views": 15,
+      "started_registrations": 1,
+      "alerts": 1,
+      "pending_feedback": 0,
+      "uncovered_supplier_cost_records": 6,
+      "page_breakdown": [
+        {
+          "page": "workbench",
+          "visitor_ids": 4,
+          "sessions": 45,
+          "page_views": 207
+        },
+        {
+          "page": "landing",
+          "visitor_ids": 42,
+          "sessions": 81,
+          "page_views": 105
+        }
+      ]
+    }
+  },
+  "change_vs_previous": {
+    "previous_source": "docs/continuity/11.0/OPS_ANALYTICS_READONLY_20261009.md",
+    "previous_7d_at": "2026-10-09T13:03:37+08:00",
+    "previous_30d_at": "2026-10-09T13:04:29+08:00",
+    "same_displayed_periods": true,
+    "both_periods_delta": {
+      "visitor_ids": 0,
+      "sessions": 0,
+      "page_views": 0,
+      "completed_registrations": 0,
+      "active_subscriptions": 0,
+      "commercial_orders": 0,
+      "actual_collections_cny": 0
+    },
+    "day_trend_oct_9_visitor_ids": 1,
+    "conclusion": "No increase in these displayed aggregates since the previous snapshot; not proof that tracking captures every real visit."
+  },
+  "quality": {
+    "merchant_companies_cumulative": 9,
+    "marked_test_accounts_excluded": 1439,
+    "all_anonymous_operator_traffic_excluded": "not_verified",
+    "external_customer_identity_verified": false,
+    "douyin_attribution": "unknown",
+    "contribution_margin": "unknown_cost_coverage_incomplete",
+    "live_ops_asset_version": "ops-v1-b0add5273e04",
+    "local_candidate_ops_asset_version": "ops-v1-eae6b27031bf",
+    "latest_ops_fixes_deployed": false
+  },
+  "reliability_30d": {
+    "critical_alerts": 0,
+    "attention_alerts": 1,
+    "attention_reason": "model_latency",
+    "model_samples": 100,
+    "model_full_p75_ms": 21931,
+    "model_first_chunk_p75_ms": 1672,
+    "model_failure_percent": 0,
+    "model_timeout_percent": 0,
+    "conclusion": "Same 30-day aggregate as previous review; not evidence of a current outage.",
+    "payment_health_not_proof_of_commercial_payment": true
+  },
+  "analysis": [
+    "Recorded visits exist, but no new registrations or commercial receipts in this comparison.",
+    "Near-term acquisition and activation remain unproven; small sample cannot diagnose demand or a registration defect.",
+    "114 page views in 7 days include 91 workbench views from 3 visitor IDs; do not call 114 new customers.",
+    "No current campaign attribution proof; do not credit or blame the new Douyin video from these totals.",
+    "Keep future review comparisons on the same time window, definitions and refresh time."
+  ],
+  "continuity": {
+    "owner": "local 10.0",
+    "branch": "video/jiejing-11-continuity-20261006",
+    "head": "4749bc048d151d294e4629ed5e5c5df49a7e81dc",
+    "source_clean_and_remote_equal_at_start": true,
+    "gate_candidate_frozen": true,
+    "receive_deferred_to_preserve_running_gate": true,
+    "safe_shared_branch_save_pending": true,
+    "cloud_received": false
+  }
+}

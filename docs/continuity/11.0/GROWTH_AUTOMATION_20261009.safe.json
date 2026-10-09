@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "verified_at_utc": "2026-10-09T07:27:28Z",
+  "verification_time_precision": "clock-confirmed after TOML readback",
+  "actual_settings": {
+    "id": "automation-2",
+    "kind": "heartbeat",
+    "name": "捷境抖音与网站每两小时复盘",
+    "status": "ACTIVE",
+    "rrule": "FREQ=HOURLY;INTERVAL=2",
+    "target_thread_id": "01a03351-e7c5-7d80-a83c-277c438c4101",
+    "created_at": 1791470422431,
+    "updated_at": 1791530823233,
+    "notificationPolicy": null,
+    "prompt_sha256": "e75be7487ab47413b1bf07a1e97fd374b41d17470becddea5914e51c53f5547c",
+    "mentions_pending_receipt": true,
+    "local_chrome_required": true,
+    "no_publication_boundary": true
+  },
+  "mode": "updated_existing_not_created_duplicate",
+  "other_automations_modified": false,
+  "first_scheduled_execution_verified": false,
+  "manual_readonly_review_completed": true,
+  "runs_when_local_computer_off": false,
+  "proof": "automation_update returned Updated; parsed existing TOML readback; prompt hash and constraints verified",
+  "publication": false,
+  "paid_spend": false
+}
