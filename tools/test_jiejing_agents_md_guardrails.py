@@ -27,7 +27,9 @@ def main() -> int:
     patch_script = PATCH_SCRIPT.read_text(encoding="utf-8") if PATCH_SCRIPT.exists() else ""
 
     required = [
-        "JIEJING is an eBay-first AI CEO SaaS",
+        "JIEJING is an AI CEO SaaS for cross-border commerce operations, delivered eBay-first.",
+        "eBay is the first supported platform, not a permanent exclusive scope.",
+        "Future platform expansion must not be presented as currently available functionality.",
         "Do not reframe it as a generic ERP",
         "https://app.jiejing.shop/health",
         "https://app.jiejing.shop/health/deep",
