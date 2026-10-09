@@ -2,7 +2,23 @@
 
 负责端：本地10.0。经营者本轮明确批准部署现有后台优化并继续修复。接收起点 `4749bc048d151d294e4629ed5e5c5df49a7e81dc`，同工作分支，正常fetch/fast-forward。本文记录准备时状态，后续以实际生成回执为准；不是预先宣称上线完成。
 
-## 17点实际结果与收尾修订
+## 最新紧急状态：R2全量通过，但上线失败，API尚未恢复
+
+以本节为当前事实，下面17点是R1当时成功历史。R2候选 `26f322c9bd2724414a7e9f45a7c9396e66a0bae5` / tree `7ee7794a2ce7ee00fb92ceb32d843219f4d74cf0` 于UTC10:37:35完成全部280项、零失败、source_stable/release_eligible=true。使用官方签名和哈希核验的独立Node24.20.0，仅进程级PATH；系统Node24.15未更改。此前95/280中1项Node退出3221226505的失败保留，边界比较没有证明唯一根因，不能改写为从未失败。
+
+R2白名单包556文件，SHA `30ff7ab8390ab422793d670cb06a0502a02f871f849e453a15a9fbdd402d5b03`；manifest SHA `585b977d21e2e8d240e2b87f59a13a64f309a9ff6aba7e448133d123b7c7f2a2`。dry-run一次exit0，正式apply一次UTC10:43:41–10:54:16 exit1。原脚本回传 `JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=start_candidate_api`、`OPS_SURFACE_FAILED=anonymous_auth`、`JIEJING_PRODUCTION_ROLLBACK_INCOMPLETE=1`。原包装器只从stdout解析，失败JSON实际在stderr，所以新增安全分类回执R2_APPLY_FAILURE_FINAL；原失败文件不覆盖，不复制原始日志。
+
+故障后只读核实：活动指针与应用容器回到R1 d57e230，API仍restarting/unhealthy，其他六容器running；没有遗留发布进程。不能把“旧文件回位”说成“服务已恢复”。本次前后Pindd API/PG、Vault/renewer的进程或容器ID及启动时间保持，Caddy文件和完整规范化配置相同。未改共享网络/防火墙、未重启整机，没有数据库回滚或重建。
+
+唯一备份阻断 `restore_drill_overdue`：PG演练登记2026-09-09T10:00:45.075504Z，30天有效期在今天18:00:45北京时间结束。Vault演练09-24仍新鲜；只读Worker探测得到production_ready=false/can_accept_real_customers=false，DB/队列/Worker/监控等其余检查正常。当前API无法提供在线readiness，不将Worker诊断冒充公网API成功。启动逻辑对新旧镜像相同，所以按原工具回退也无法跨过该时间门槛。部署预检未提前检查这一启动阻断，须补防再次发生；本地全量PASS不证明实时演练证据有效。
+
+已请求经营者决定：先暂时暂停收款/退款并用既有受限模式恢复服务，还是保持现场。当前未获得新运营状态批准，未更改私有环境开关、过期时间、30天阈值或安全保护；更未拿新时间伪造恢复验收。恢复演练/生产库操作不在本批OPS授权内，需要对应明确方案和许可。不要重复部署、盲重启或给blocked刷绿。当前优先级是服务恢复，不是继续美化。
+
+服务器时钟只读观察比本机快约216–219秒，服务端NTP显示同步，本机W32Time停用；未改任一时钟、确切偏差来源未独立确认。即使按较慢本机时钟，R2部署也已在18:00:45之后，不影响本次过期结论。大产物、原始失败和截图仅D盘保留。
+
+关键回执：`full-gate-r3-node2420/SUMMARY.safe.json`、`R2_DEPLOY_DRY_RUN.safe.json`、`R2_DEPLOY_APPLY.safe.json`、`R2_APPLY_FAILURE_FINAL.safe.json`、`R2_STARTUP_BLOCKERS.safe.json`、`R2_AFTER_FAILED_ROLLBACK.safe.json`。本轮最终仅保存事故状态文档，候选源码不再改动；保存后的文档HEAD不是生产代码版本，另一端需receive。
+
+## 17点实际结果与收尾修订（历史）
 
 第一候选 `d57e230524b0577bee98217a49a5ea8cb3e2a51e`（tree `7287f6185f0dae8b2ba9151c0e88ff6247ee7260`）已完整通过280/280，耗时2948.19秒，source_stable/release_eligible均true。全量报告在 `full-gate-ssd/`，旧仓库报告原样保全SHA `f613d8760668bc3db07d80a34ad4af0646d509fa73f204c0f5d4499a176b3a13`。
 
@@ -32,7 +48,7 @@ D盘HDD临时库这一轮07:05:32Z启动，完成104/280后受控中断。5项�
 
 新测试运行采用现有base Python，进程级PYTHONPATH复用D盘已锁定protobuf 5.29.6，相关腾讯运行测试已exit0；不装全局包。只在C创建新小型合成临时目录，每个检查前读磁盘余量，低于1.5GiB即停止，不删旧文件。报告/媒体/安装包留D盘。原280命令、断言、超时和重试完全保留；不改正式数据持久化设置、不关闭SQLite持久化来凑性能。
 
-## 当前仍待真实完成
+## 原候选准备顺序（历史；当前先处理上方事故）
 
 1. 审查/保存新的干净候选并读回完整SHA。
 2. 同一候选完整280项通过，报告source_stable及release_eligible为真。

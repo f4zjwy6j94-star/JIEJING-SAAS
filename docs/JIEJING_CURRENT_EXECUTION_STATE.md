@@ -4,6 +4,18 @@
 
 ## 当前接续摘要（以本区续接，不按历史段落直接执行）
 
+### 10-09 18:56紧急状态：R2部署失败且API尚未恢复，等待受限运行授权；禁止按下方历史ready继续
+
+最新候选 `26f322c9bd2724414a7e9f45a7c9396e66a0bae5`（tree `7ee7794a2ce7ee00fb92ceb32d843219f4d74cf0`）在隔离官方Node24.20.0下完整280/280通过，source_stable/release_eligible=true，UTC10:37:35完成，2897.48秒。未改断言/超时/重试，全局Node未变。上一轮95项中1项Node原生退出的失败和中断证据保留，不声称精确根因已证实。
+
+同一候选556文件包、dry-run通过；R2 apply仅一次，UTC10:43:41–10:54:16，exit1。真实失败标记 `start_candidate_api`、`OPS_SURFACE_FAILED=anonymous_auth`、`JIEJING_PRODUCTION_ROLLBACK_INCOMPLETE=1`。**活动目录/镜像已经回到R1 d57e230，但API仍restarting/unhealthy，并非服务恢复。** 下方17点“生产ready/21项通过”只代表当时，不能用来说明当前可用。当前其他6容器运行；本次前后Pindd API/PG、Vault/renewer标识及启动时间相同，Caddy持久文件和规范化运行配置不变，无遗留部署进程。
+
+只读在现有Worker、既有PG结构及只读事务内核实：唯一backup阻断是 `restore_drill_overdue`。真实PG恢复演练登记 `2026-09-09T10:00:45.075504Z`，30天门槛于今天北京时间18:00:45到期；Vault恢复证据仍新鲜，数据库/队列/Worker/现行监控等基础状态不是此次阻断。新旧API的冷启动规则都拒绝这项过期证据，因此回退旧镜像不能解决。发布前预检没有检查这种时间性启动阻断，是本轮暴露的发布流程缺口；不能归因账号/拼嘚，也不能用本地280PASS替代生产状态。
+
+已向经营者请求：是否允许临时暂停收款及退款，使用既有受限运行模式先恢复服务，之后单独核验恢复演练/正式收费。**当前尚未收到该变更批准，未改私有环境开关、演练时间/阈值或启动保护；没有恢复/重建生产库。** 下一步先处理该明确选择，再按当前锁/实际服务状态制定最小恢复动作；不要重复apply R2、伪造演练或强制放行。部署优化尚未完成，负责端仍本地10.0。本机Chrome刷新OPS实际显示“请求失败 (502)”，已保留截图与同一标签；这是API故障，不要求经营者再输密码或重新扫码。
+
+证据在 `D:/Codex-Verification/jiejing-ops-release-20261009/`：`full-gate-r3-node2420/`、`R2_DEPLOY_DRY_RUN.safe.json`、`R2_APPLY_FAILURE_FINAL.safe.json`、`R2_STARTUP_BLOCKERS.safe.json`、`R2_AFTER_FAILED_ROLLBACK.safe.json`。原始诊断只保留本地不入Git；同名OPS_PRODUCTION_RELEASE MD/JSON追加此次事故，原R1成功历史保留。最终本地提交/远端读回写 `INCIDENT_HANDOFF_SAVE.safe.json`，不预称成功；云端须真实receive，未接收不算已交接。当前不能刷新可信网站访问/订阅数据，17点数据不得冒称18点实时值。
+
 ### 10-09 17点 OPS优化已受控部署：280/280通过，独立主机核对21/21；继续收尾显示歧义
 
 实际生产已从 `1e94f2b798b158c8d34f224185151fcb95aaf912` 更新为 `d57e230524b0577bee98217a49a5ea8cb3e2a51e`，活动目录 `/opt/jiejing-production/releases/20261009T090923Z-d57e230524b0/app`。同一干净候选全量280/280通过，source_stable/release_eligible为true；原失败/中断记录保留。白名单包556文件，正常dry-run/apply各一次exit0，TLS/OPS六项资源及匿名访问隔离通过，未规范化私有环境配置。部署回读production_ready、can_accept_real_customers、public_charging_allowed为true，阻断/警告0；它是对应快照，不是实际收益或无限制平台写入授权。

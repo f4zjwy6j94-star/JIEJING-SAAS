@@ -99,7 +99,7 @@
     "Current production readiness and independent review/cutover packets have different scopes; their statuses must not be overwritten"
   ],
   "refinement": {
-    "state": "local_focused_pass_not_yet_released",
+    "state": "full_gate_passed_but_deployment_failed_api_unavailable",
     "ops_asset_version": "ops-v1-3aaef3240f19",
     "changes": [
       "Asset identity no longer called source commit",
@@ -109,7 +109,59 @@
     ],
     "red_tests_failed": 3,
     "green_tests_passed": 6,
-    "full_gate_for_refinement_pending": true
+    "full_gate_for_refinement_pending": false,
+    "candidate_commit": "26f322c9bd2724414a7e9f45a7c9396e66a0bae5",
+    "candidate_tree": "7ee7794a2ce7ee00fb92ceb32d843219f4d74cf0",
+    "full_gate": {
+      "total": 280,
+      "passed": 280,
+      "failed": 0,
+      "exit_code": 0,
+      "source_stable": true,
+      "release_eligible": true,
+      "finished_at_utc": "2026-10-09T10:37:35.140646Z",
+      "elapsed_seconds": 2897.48,
+      "node_runtime": "isolated official Node 24.20.0, process-local PATH only",
+      "evidence": "full-gate-r3-node2420/SUMMARY.safe.json",
+      "production_success_inferred": false
+    },
+    "preserved_failed_local_run": {
+      "completed": 95,
+      "passed": 94,
+      "failed": 1,
+      "not_completed": 185,
+      "nested_node_exit": 3221226505,
+      "root_cause_proven": false,
+      "evidence": "full-gate-r2/INTERRUPTED.safe.json"
+    },
+    "dry_run": {
+      "status": "passed",
+      "exit_code": 0,
+      "attempt_count": 1
+    },
+    "apply": {
+      "status": "failed",
+      "reason": "remote_command_failed",
+      "returncode": 1,
+      "stage_markers": [
+        "JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=start_candidate_api",
+        "OPS_SURFACE_FAILED=anonymous_auth",
+        "JIEJING_PRODUCTION_ROLLBACK_INCOMPLETE=1"
+      ],
+      "raw_logs_included": false,
+      "attempt_count": 1,
+      "started_at_local_utc": "2026-10-09T10:43:41.553395+00:00",
+      "finished_at_local_utc": "2026-10-09T10:54:16.342786+00:00",
+      "bundle_sha256": "30ff7ab8390ab422793d670cb06a0502a02f871f849e453a15a9fbdd402d5b03",
+      "manifest_sha256": "585b977d21e2e8d240e2b87f59a13a64f309a9ff6aba7e448133d123b7c7f2a2"
+    },
+    "deployment_weakness_observed": "Preflight did not evaluate the time-sensitive live startup blockers before restarting API; the same expired proof blocks the previous image too.",
+    "impact_observation": {
+      "pindd_api_pg_pid_and_start_unchanged": true,
+      "vault_and_renewer_unchanged": true,
+      "caddy_canonical_and_file_unchanged": true,
+      "maintenance_processes_remaining": 0
+    }
   },
   "local_evidence_root": "D:/Codex-Verification/jiejing-ops-release-20261009",
   "source_pin_audit": {
@@ -120,5 +172,35 @@
     "historical_pins_not_rewritten": true,
     "complete_media_archive_verification_performed": false
   },
-  "raw_logs_credentials_business_rows_included": false
+  "raw_logs_credentials_business_rows_included": false,
+  "current_runtime_state": {
+    "status": "incident_api_unavailable_after_failed_r2_deployment",
+    "latest_attempt_candidate": "26f322c9bd2724414a7e9f45a7c9396e66a0bae5",
+    "active_manifest_commit": "d57e230524b0577bee98217a49a5ea8cb3e2a51e",
+    "api_status": "restarting_unhealthy",
+    "other_six_containers_running": true,
+    "automatic_rollback": "incomplete_previous_code_returned_but_same_startup_blocker",
+    "sole_backup_blocker": "restore_drill_overdue",
+    "restore_last_at_utc": "2026-09-09T10:00:45.075504+00:00",
+    "restore_max_age_days": 30,
+    "expired_at_utc": "2026-10-09T10:00:45.075504+00:00",
+    "current_production_ready": false,
+    "production_readiness_from": "read-only existing Worker, PostgreSQL read-only transactions; API unavailable",
+    "current_can_accept_real_customers": false,
+    "previous_success_is_historical": true,
+    "public_metrics_not_refreshed_during_incident": true,
+    "chrome_ops_visible_error": "请求失败 (502)",
+    "chrome_evidence": "D:/Codex-Verification/jiejing-ops-release-20261009/OPS_R2_CURRENT_502.jpg",
+    "login_retry_not_requested": true,
+    "operator_question": "Permission requested to temporarily pause charges/refunds and recover the existing restricted operating mode; no approval received yet",
+    "changes_not_performed": [
+      "no readiness date rewrite",
+      "no threshold extension",
+      "no safety guard bypass",
+      "no production data restore/rebuild",
+      "no Pindd/Vault mutation",
+      "no duplicate R2 apply"
+    ],
+    "next_action": "Wait for the explicit operational-mode decision. Recheck current state and locks before any recovery; do not blindly rerun deploy."
+  }
 }
