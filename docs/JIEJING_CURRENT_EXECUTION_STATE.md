@@ -18,6 +18,16 @@
 
 证据在 `D:/Codex-Verification/jiejing-ops-release-20261009/`：`full-gate-r3-node2420/`、`R2_DEPLOY_DRY_RUN.safe.json`、`R2_APPLY_FAILURE_FINAL.safe.json`、`R2_STARTUP_BLOCKERS.safe.json`、`R2_AFTER_FAILED_ROLLBACK.safe.json`。原始诊断只保留本地不入Git；同名OPS_PRODUCTION_RELEASE MD/JSON追加此次事故，原R1成功历史保留。最终本地提交/远端读回写 `INCIDENT_HANDOFF_SAVE.safe.json`，不预称成功；云端须真实receive，未接收不算已交接。当前不能刷新可信网站访问/订阅数据，17点数据不得冒称18点实时值。
 
+### 10-09晚技能学习已接入：四条分享实读、追加两条运营案例，三项轻量安装核验
+
+本地10.0正确干净status/receive保持`874aff161e863b877a100b727d135201c0213c7d`后，按经营者要求在本机Chrome打开四个真实分享作品，并搜索`Codex 抖音运营`与`短视频 开头 完播率 复盘`；深入读珍妮丁丁说运营流程和文刀刘某数据复盘。依据页面/关键帧/现有本地模型辅助转录整理方法，视频真实仓库由画面核实；没有把搜索列表当看完或把粗转录当真人听审。结论与逐项取舍见`docs/continuity/11.0/DOUYIN_SKILL_RESEARCH_20261009.md`。
+
+现有skill-installer固定提交安装本机`humanizer-zh`、`baoyu-cover-image`、`seedance-prompt-zh`，保留MIT许可，47/47文件独立核验匹配上游；准确commit/路径/逐文件哈希见`GROWTH_SKILLS_LINKED_20261009.safe.json`。未执行新第三方脚本、调用计费服务、建帐号或扩浏览器权限；付费ASR/Clipcat/MuAPI及CDP类工具均未启用。已有HyperFrames/Remotion不重装、不升级项目依赖。三项安装不是生成/审美或云端安装验收。
+
+经营者最新要求是以后由助手主动按任务选技能，不用再让用户报名称；已写AGENTS和`CREATIVE_SKILL_ROUTING.md`，纠正旧增长文档强制沿用v10配色的过时条款，并补充复盘到具体句子/镜头的应用记录。本轮完成方法、文案编辑练习和分镜约束，**没有新声样段/成片、没有投稿、没有新流量快照**。V15仍被否决ready=false，原件保留；下一步是不同构图的6–8帧与10–15秒带声样段，不重复旧模板。上方OPS事故与待授权恢复不变，不宣称当前可立即收费。
+
+本轮媒体、关键帧、粗转录和详细上游审查仅留`D:/Codex-Verification/jiejing-douyin-linked-skills-20261009/`，不入Git。仅源码入口/安全文档按WORK_SYNC save，共用分支不变，最终SAVE/STATUS_AFTER_SAVE记录真实SHA与远端读回；不预称另一端已receive。没有SaaS/eBay/拼嘚/共享服务器操作、费用或新自动化。
+
 ### 10-09最新经营者反馈：V15视觉被否决，不能发布；复盘须落实为不同构图与叙事
 
 经营者再次明确否决“旧模板、无层次/高级感”，不是继续等V15审看同意。当前V15机器回执已设`owner_rejected_visual_template_do_not_publish`，ready=false，原MP4/源码及已认可声音保留；不上传、补发或靠换颜色转场再次提交。主线程核对六张最终帧与场景源码、独立只读复核确认：标题/卡片/字幕布局重复、同PNG平面运动，2.93秒动作之后又退回3.8秒问题介绍，尾页5秒约占21%。前次把接受音色等同继续沿用旧台词，重剪没有完成创意重构；技术PASS不等于经营者接受，70播放是V13非V15，不能归因平台或特定视觉。
