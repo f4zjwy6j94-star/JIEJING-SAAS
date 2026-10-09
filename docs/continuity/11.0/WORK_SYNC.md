@@ -4,6 +4,8 @@
 
 ## 本轮范围
 
+2026-10-10约01:30最新：经营者要求恢复正式微信收费/退款。本轮status/receive到3136f15后只读核实：R1服务健康、微信9/9配置及原批准仍齐全，历史已验证付款1次；唯一backup阻断PG演练过期，两资金开关仍false。已核对现有PG14隔离恢复可用资源，未执行备份/恢复、配置更改、重启或支付。具体隔离恢复及随后恢复资金开关/短暂API-Worker刷新方案已询问，待该范围答复；不要把目标授权或安全交接当操作已完成，不改日期/TTL或盲开开关。读 `BILLING_REOPEN_20261010.md` / safe.json及最新索引。原中午V16和八小时复盘保持，本地10.0负责；源码与安全记录仍只按明确路径save原分支，其他端需receive且不并发操作服务器。
+
 2026-10-10凌晨最新覆盖：经营者明确批准临时暂停收款/退款并恢复服务；10/9夜间已恢复API/Worker，仅对OPS Nginx做一次配置不变的平滑reload，原Chrome实际登录成功。生产仍R1 `d57e230524b0577bee98217a49a5ea8cb3e2a51e`；26/26恢复核对通过。资金暂停、PG演练过期阻断仍在，production_ready/can_accept_real_customers均false；不是全面收费恢复，不重复R2 apply或恢复env备份。源候选 `302ce54828bd6f38dc2107a5d2ee757953dbed20` 完整280/280于10/10 00:09:36结束，冻结解除后才整理记录。读 `OPS_RESTRICTED_RECOVERY_20261009.md` 及当前索引；下方18:56待批准/未恢复是历史。扩大研究及cro/attribution本机安装见 `GROWTH_SKILL_APPLICATION_20261009.md` / `GROWTH_SKILLS_EXPANDED_20261009.safe.json`，不代表云端接入、新片或生产UI改造。仍由本地10.0负责、原分支明确路径save、另一端须receive；没有拼嘚、真实业务、费用或跨日视频补发。
 
 2026-10-09 18:56紧急覆盖：R2候选26f322c9bd2724414a7e9f45a7c9396e66a0bae5完整280/280及dry-run通过，但apply在启动API阶段失败；回退代码到R1后API仍未恢复。唯一阻断为PG恢复演练在今天18:00:45超过30天。不得依据下面历史ready/已部署结论重复部署或宣称当前可收费。经营者尚待确认临时暂停收款/退款并恢复受限运行；未改开关、阈值或演练日期，未做数据库恢复。当前负责人本地10.0；另一端先receive本事故记录，不能并行恢复或重复apply。详见当前执行索引及OPS_PRODUCTION_RELEASE_20261009.safe.json的current_runtime_state。

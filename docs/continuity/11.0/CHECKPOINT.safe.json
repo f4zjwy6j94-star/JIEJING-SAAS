@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "October10 V16 new narrated 22-second review film, not ready or uploaded; single noon task configured; OPS money remains paused",
+  "checkpoint_name": "October10 billing restoration requested and diagnosed; isolated restore scope pending; V16 noon review film unchanged",
   "current_douyin_release_queue": "marketing/douyin-studio/operations/release-queue-20261010.safe.json",
   "latest_noon_production_check": "marketing/douyin-studio/operations/checks/20261010-v16-production.safe.json",
   "preserved_october9_release_queue": "marketing/douyin-studio/operations/release-queue-20261009.safe.json",
@@ -19,6 +19,8 @@
   ],
   "pinned_files": {
     "repo": {
+      "docs/continuity/11.0/BILLING_REOPEN_20261010.md": "753fbe6b9748aa21fe115736c4da99bc6a569bbe88286bf4b3afe3a8e63d2db2",
+      "docs/continuity/11.0/BILLING_REOPEN_20261010.safe.json": "aea74f039a5de0ce6b445492ca55d40f9d89ba535ea7ac85d288f454c8b2ddd4",
       "docs/continuity/11.0/DOUYIN_NOON_CANDIDATE_20261009.md": "dfd2e53b10f830d6236a02c03700e632c28c4f9eebd313be0eb57df8f2b251c3",
       "marketing/douyin-studio/operations/checks/20261009-0900-noon-production.safe.json": "12dfc700cc43c20e1469c71c1431c1228c84b9f1a08acdeafcf4daa94df8c8d3",
       "marketing/douyin-studio/src/DouyinNoonV12.tsx": "ac920b8937fdf3f20de3eeb5e6836984b20007941c8aef758fddde9092849171",
@@ -51,7 +53,7 @@
       "marketing/douyin-studio/tools/voice-v12/package.json": "89c47db7851f89caec72da4f215ebc21cf1e294aeef3b45d2583562d846ab035",
       "marketing/douyin-studio/tools/voice-v12/render.js": "4096f3aa2387e31f257860bce8893700bd47a55bc12957756f083109ee106c0e",
       "marketing/douyin-studio/tools/voice-v12/finish.js": "fa83202a0c346fdc4d28071a1fd7c9d33c6d2a837fd8e597235d41a53a8587b8",
-      "AGENTS.md": "9827c8a1d243b81b71bae0f89a408721ba476337434366afdc393bcb1132720a",
+      "AGENTS.md": "59641049b27bc64569f86aed839b7409bbc7595a3355649e819afaaa8b2da8bf",
       "marketing/douyin-studio/src/Root.tsx": "60eef1f4737129a2f66cbd50489ccc34620fb95d08807f200cfdaeae9a948524",
       "marketing/douyin-studio/src/DouyinFactsV11.tsx": "df39c543a7cf979a863be163e29ea21a96b1ca8b85b4bc79a6aa90360c97228a",
       "marketing/douyin-studio/docs/facts-v11-design.md": "9358ed3982bd4d23cda8b517afa64bab50153dccf1be3d8b2b21c890f6c0958a",
@@ -92,7 +94,7 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "505fbacd7fea133841277ad91bfb1e94a6a8f214986fcaac8379162e9dd14e67",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "f3186578673af4ff4ec71c60a98b6d0551dcac3ab57db0f357753e61b1182654",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
@@ -141,7 +143,7 @@
       "docs/continuity/11.0/HYBRID_HANDOFF.md": "07413f2d2ef958b18fbc2fdf3993c553d32b3f1e1024f99c2fb2f1e0374075d3",
       "docs/continuity/11.0/HYBRID_MANIFEST.safe.json": "eb3ddb2dd86254150da0030560ec23cb9211ac622fbebec4d309f5e7e590e3f1",
       "docs/continuity/11.0/hybrid_check.py": "2bc23bc7ed8114a1061fd9cdb154c60334056b120c1f63ffa1d6e3c894d1b5f5",
-      "docs/continuity/11.0/WORK_SYNC.md": "f612ecbe21e6631d69159a9341bd56d80aeaa346f7831536c84d922a84d40ad7",
+      "docs/continuity/11.0/WORK_SYNC.md": "7b3050e5ed8614f7399849f8857365e66bd9e1f62c2712d77816b3e4e423099d",
       "docs/continuity/11.0/PROJECT_SYNC_MANIFEST.safe.json": "547595a4decbaf8a2a666ee2797b837c33496ce33c68516a5c17f496054ea0f3",
       "docs/continuity/11.0/work_sync.py": "d6dfc00ca321fbab2831bf8624e5ad98b5522e88483a52a4e062861fcf33f50c",
       "docs/continuity/11.0/PROJECT_ENTRY_REVIEW_20261008.md": "078a4a9b935bc92468679c307241724d1a6b602af4acff3aeef63774528ab26b",
