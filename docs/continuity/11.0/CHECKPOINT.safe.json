@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
-  "checkpoint_name": "October10 08:25 eight-hour review: V13 94 plays and OPS aggregates readable; V16 and billing restoration pending gates unchanged",
+  "checkpoint_name": "October10 09:00 V16 morning review: existing 22-second file technical 10/10, eight frames and correct local Chrome account checked; natural voice/full AV and platform gates pending, no upload",
   "current_douyin_release_queue": "marketing/douyin-studio/operations/release-queue-20261010.safe.json",
   "latest_noon_production_check": "marketing/douyin-studio/operations/checks/20261010-v16-production.safe.json",
+  "latest_noon_preparation_check": "marketing/douyin-studio/operations/checks/20261010-0900-v16-review.safe.json",
   "preserved_october9_release_queue": "marketing/douyin-studio/operations/release-queue-20261009.safe.json",
   "latest_evening_publication_check": "marketing/douyin-studio/operations/checks/20261009-2001-evening-publication.safe.json",
   "latest_evening_rework": "marketing/douyin-studio/operations/checks/20261009-v15-approved-audio-recut.safe.json",
@@ -19,6 +20,9 @@
   ],
   "pinned_files": {
     "repo": {
+      "marketing/douyin-studio/operations/checks/20261010-0900-v16-review.safe.json": "46de15d037bf0e68725bce1da6f2d971c5a5dbd66f830771369fffb482a20bcf",
+      "marketing/douyin-studio/docs/20261010-noon-v16.md": "25bd88326d2a8f953c73dbd28a02a7ec8524e52760079825a0fd77799485461d",
+      "marketing/douyin-studio/operations/release-queue-20261010.safe.json": "24eaf8c1c1a440769070415fa27f6f7f4157403a3275eceeae8ab8e61abf0db4",
       "docs/continuity/11.0/BILLING_REOPEN_20261010.md": "753fbe6b9748aa21fe115736c4da99bc6a569bbe88286bf4b3afe3a8e63d2db2",
       "docs/continuity/11.0/BILLING_REOPEN_20261010.safe.json": "aea74f039a5de0ce6b445492ca55d40f9d89ba535ea7ac85d288f454c8b2ddd4",
       "docs/continuity/11.0/DOUYIN_NOON_CANDIDATE_20261009.md": "dfd2e53b10f830d6236a02c03700e632c28c4f9eebd313be0eb57df8f2b251c3",
@@ -94,7 +98,7 @@
       "marketing/douyin-studio/src/Douyin11ContinuousV4.tsx": "6e980fb6866a517c59fcc2301976cf404ca2e6771b63d149ec6b11c71513e28c",
       "marketing/douyin-studio/src/ContinuousV4Timing.ts": "784102a8c3310f56cdb957bcc769806306d17ca07c1f28645d85bec140e4e1b3",
       "marketing/douyin-studio/docs/11.0-continuous-explainer-v4.md": "4f8e5d1613dcb8dd9e824f09833774155f86aa0e5ff638c4ba053e8d2b8e29a2",
-      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "779e8815a2361cfe3d82bc9423794c75b1a3bce2df8fb3d02b2ed3bfc9fdd9ae",
+      "docs/JIEJING_CURRENT_EXECUTION_STATE.md": "0d72be9ca84cf8990848ec3fd0c5e0510fd390af0a4ce4d0e546fd49742f7358",
       "marketing/douyin-studio/tools/continuous-v4/make-voice.py": "832f8c3b0c6f0d4d975d2348cdddc66dec654a4e26fa0aeda03b31cfc11f962d",
       "marketing/douyin-studio/tools/continuous-v4/prepare-assets.py": "6c717c87be00374276ce156fd19cc2e779d75b71b9a589fe3e97890bc1bfb53a",
       "marketing/douyin-studio/tools/continuous-v4/verify-film.py": "2d2017c6620eb38e550484f487b489a7c871c6c9671b277ed1148bd936c36227",
