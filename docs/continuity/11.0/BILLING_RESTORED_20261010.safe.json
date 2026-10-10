@@ -1,0 +1,307 @@
+{
+  "schema_version": 1,
+  "status": "wechat_charge_refund_capability_restored_and_verified",
+  "prepared_at_local_utc": "2026-10-10T03:45:44.309659+00:00",
+  "responsible_endpoint": "local_10.0",
+  "branch": "video/jiejing-11-continuity-20261006",
+  "received_source_head": "6ee37cd23253e0bf33f047f86f6807b046985d20",
+  "unchanged_production_head": "d57e230524b0577bee98217a49a5ea8cb3e2a51e",
+  "authorization": "Owner approved the proposed bounded isolated restore and subsequent WeChat capability restoration; no customer funds operation.",
+  "completed_once_no_repeat": true,
+  "applied_at_local_utc": "2026-10-10T03:12:37.489007+00:00",
+  "restore": {
+    "run_id": "20261010T030752Z-d412e063",
+    "method": "managed_postgres_logical_dump_same_snapshot_isolated_restore",
+    "source": {
+      "identity": "684049b9d4039ea605db450c7b9d34591b656822a8d03b5e0230fa6c6d4f383e",
+      "version": 140023,
+      "readonly": true,
+      "table_count": 47
+    },
+    "backup_bytes": 29510900,
+    "backup_sha256": "a6793626ce022d8ae6f32ad130b3eef3414a2d4609a02744bca5343d5c8a10bb",
+    "backup_mode": "0o600",
+    "dump_warning_count": 0,
+    "restore_warning_count": 0,
+    "comparison": {
+      "tables": 47,
+      "rows": 113070,
+      "all_rows_match": true
+    },
+    "constraints_match": true,
+    "constraints": 173,
+    "unvalidated_constraints": 0,
+    "same_snapshot": true,
+    "network_none": true,
+    "no_ports": true,
+    "tmpfs_only": true,
+    "temporary_container_removed": true,
+    "dump_client_removed": true,
+    "private_evidence_path": "/opt/jiejing-production/releases/20260822-170619/private/restore-drills/20261010T030752Z-d412e063/evidence.json",
+    "production_database_writes": false,
+    "provider_calls": false,
+    "pitr_replay_tested": false
+  },
+  "restore_finished_server_utc": "2026-10-10T03:13:15.135023+00:00",
+  "restore_received_local_utc": "2026-10-10T03:09:38.266069+00:00",
+  "clock_note": "Server is about 217 seconds ahead of local. Both clocks retained; no clock setting changed.",
+  "failed_attempts_preserved": {
+    "count": 3,
+    "reason": "Protective Docker tmpfs metadata and Alpine socket path checks; fixed against actual read-only mount evidence before a complete successful restore.",
+    "not_counted_as_success": true,
+    "backups_retained": true
+  },
+  "changed_config_names_only": [
+    "JIEJING_RESTORE_DRILL_LAST_AT",
+    "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
+    "JIEJING_WECHAT_PAY_REFUND_ALLOWED"
+  ],
+  "api_worker_same_images_refreshed_only": true,
+  "ops_proxy_reload_needed": false,
+  "other_five_containers_unchanged": true,
+  "pindd_service_metadata_unchanged": true,
+  "production_database_not_overwritten": true,
+  "source_code_not_deployed": true,
+  "ebay_lanes_unchanged": true,
+  "public": {
+    "observed_at_local_utc": "2026-10-10T03:13:02.227198+00:00",
+    "responses": {
+      "health": {
+        "status": 200,
+        "expected": 200,
+        "pass": true
+      },
+      "deep": {
+        "status": 200,
+        "expected": 200,
+        "pass": true
+      },
+      "readiness": {
+        "status": 200,
+        "expected": 200,
+        "pass": true
+      },
+      "ops": {
+        "status": 200,
+        "expected": 200,
+        "pass": true
+      },
+      "ops_auth": {
+        "status": 401,
+        "expected": 401,
+        "pass": true
+      }
+    },
+    "readiness": {
+      "production_ready": true,
+      "can_accept_real_customers": true,
+      "blocker_count": 0,
+      "warning_count": 0,
+      "authenticated_summary": false
+    },
+    "billing": {
+      "billing_ready_for_paid_launch": true,
+      "public_charging_allowed": true,
+      "charge_now_allowed": true
+    },
+    "checks": {
+      "routes": true,
+      "health": true,
+      "deep": true,
+      "ready": true,
+      "public_summary": true,
+      "all_three_billing_flags": true
+    },
+    "passed": true
+  },
+  "independent_backend": {
+    "observed_at_server_utc": "2026-10-10T03:16:45.565294+00:00",
+    "production_ready": true,
+    "can_accept_real_customers": true,
+    "blocker_count": 0,
+    "warning_count": 0,
+    "backup_blockers": [],
+    "restore": {
+      "last_restore_drill_at": "2026-10-10T03:13:15.135023+00:00",
+      "restore_drill_fresh": true,
+      "restore_drill_age_days": 0.002,
+      "restore_drill_max_age_days": 30.0
+    },
+    "vault": {
+      "restore_drill_at": "2026-09-24T00:44:44.843002+00:00",
+      "restore_drill_fresh": true,
+      "recovery_proof_ready": true
+    },
+    "wechat": {
+      "provider_connection_ready": true,
+      "owner_approval_recorded": true,
+      "production_environment": true,
+      "real_checkout_ready": true,
+      "charge_now_allowed": true,
+      "refund_now_allowed": true,
+      "configured": {
+        "appid": true,
+        "mchid": true,
+        "merchant_serial": true,
+        "merchant_private_key": true,
+        "api_v3_key": true,
+        "response_verification_key": true,
+        "response_verification_key_id": true,
+        "notify_url": true,
+        "refund_notify_url": true
+      },
+      "blockers": []
+    },
+    "verified_paid_order_count": 1
+  },
+  "independent_checks": {
+    "observed_at_local_utc": "2026-10-10T03:13:59.347634+00:00",
+    "checks": {
+      "restore_succeeded": true,
+      "same_snapshot_table_digests": true,
+      "constraints_match": true,
+      "target_isolated": true,
+      "temporary_containers_removed": true,
+      "production_db_not_restored": true,
+      "billing_apply_succeeded": true,
+      "only_three_values_changed": true,
+      "other_env_bytes_preserved": true,
+      "other_effective_env_preserved": true,
+      "same_active_release": true,
+      "same_production_commit": true,
+      "source_and_images_unchanged": true,
+      "real_drill_time_recorded": true,
+      "freshness_threshold_unchanged": true,
+      "no_actual_money_or_ebay_operation": true,
+      "no_new_payment_proof_claim": true,
+      "pindd_metadata_unchanged": true,
+      "ops_auth_proxy_works": true,
+      "no_proxy_reload_needed": true,
+      "public_after_passed": true,
+      "production_ready": true,
+      "can_accept_customers": true,
+      "no_readiness_blockers_or_warnings": true,
+      "wechat_checkout_restored": true,
+      "wechat_charge_restored": true,
+      "wechat_refund_restored": true,
+      "no_backup_blocker": true,
+      "no_held_maintenance_locks": true,
+      "deploy-jiejing-saas-1_same_image": true,
+      "deploy-jiejing-saas-1_refreshed_running": true,
+      "deploy-jiejing-worker-1_same_image": true,
+      "deploy-jiejing-worker-1_refreshed_running": true,
+      "deploy-jiejing-frontend-1_same_image": true,
+      "deploy-jiejing-frontend-1_unchanged": true,
+      "deploy-jiejing-ops-frontend-1_same_image": true,
+      "deploy-jiejing-ops-frontend-1_unchanged": true,
+      "deploy-jiejing-edge-1_same_image": true,
+      "deploy-jiejing-edge-1_unchanged": true,
+      "deploy-jiejing-vault-1_same_image": true,
+      "deploy-jiejing-vault-1_unchanged": true,
+      "deploy-jiejing-vault-token-renewer-1_same_image": true,
+      "deploy-jiejing-vault-token-renewer-1_unchanged": true,
+      "api_healthy": true,
+      "local_guard_regressions": true
+    },
+    "passed": 45,
+    "total": 45,
+    "failed": [],
+    "tests": [
+      {
+        "script": "test_drill_guards.py",
+        "exit_code": 0,
+        "output_sha256": "2debe722d5804e54cfb397d02ed03707f449f8c5096e021cf5a6ee1175c9df7f"
+      },
+      {
+        "script": "test_reopen_guards.py",
+        "exit_code": 0,
+        "output_sha256": "223e06d17dfb6c32bd67ca7c62b915cb03e0a1189bad193f723662e346b75b55"
+      }
+    ],
+    "actual_new_payment_refund_test": false,
+    "pitr_or_whole_host_recovery_claimed": false
+  },
+  "chrome": {
+    "recorded_at_beijing": "2026-10-10T11:16:45+08:00",
+    "observation_window_beijing": "2026-10-10 11:13 to 11:16:45",
+    "clock_precision": "bounded browser observation window; server UI time is about 217 seconds ahead of local",
+    "browser": "existing local Chrome extension 3",
+    "tab_id": "1331225205",
+    "origin": "https://ops.jiejing.shop",
+    "after_refresh_authenticated": true,
+    "role_visible": "主理人 · 内部权限",
+    "overview_loaded": true,
+    "production_ready_visible": "已就绪",
+    "can_accept_customers_visible": "已就绪",
+    "backup_overall_visible": "已就绪",
+    "restore_drill_visible": "已就绪",
+    "displayed_restore_time_beijing_server": "2026-10-10T11:13:15+08:00",
+    "pitr_independent_evidence": "证据未提供",
+    "remaining_legacy_panels": "Production deployment receipt not integrated; secondary launch/workbook panels still use their separate blocked/default evidence states. Not equivalent to the verified current payment capability flags.",
+    "reliability": {
+      "critical_alerts": 0,
+      "attention_alerts": 1,
+      "attention_reason": "model high latency",
+      "model_sample_count": 100,
+      "model_complete_p75_ms": 21931,
+      "model_first_chunk_p75_ms": 1672,
+      "failure_percent": 0,
+      "timeout_percent": 0,
+      "window": "OPS selected 30-day aggregation; not newly generated production tests"
+    },
+    "screenshots_local_only": [
+      "OPS_READINESS_RESTORED.png",
+      "OPS_BACKUP_RESTORED.png"
+    ],
+    "customer_or_payment_details_read": false,
+    "orders_or_refunds_submitted": false,
+    "cookies_credentials_or_raw_logs_output": false,
+    "no_cloud_browser": true
+  },
+  "full_local_gate": {
+    "started_at": "2026-10-10T02:56:52.562324Z",
+    "finished_at": "2026-10-10T03:45:03.390513Z",
+    "source_commit": "6ee37cd23253e0bf33f047f86f6807b046985d20",
+    "source_tree": "f717d5e3fdbad96f1494ec9ad2a04dd3dd08c676",
+    "source_stable": true,
+    "release_eligible": true,
+    "total_checks": 280,
+    "passed": 280,
+    "failed": [],
+    "elapsed_seconds": 2890.84,
+    "exit_code": 0,
+    "local_code_evidence_only": true,
+    "deployment_performed": false
+  },
+  "full_gate_is_local_source_only": true,
+  "proof_directory_local_only": "D:/Codex-Verification/jiejing-billing-restore-20261010-1058",
+  "proof_file_sha256": {
+    "PREFLIGHT.safe.json": "9369a5dce077a7510050d269b1308428566f6f7b15c766a5276a4ce8167a41df",
+    "RESTORE.safe.json": "2e3da0ef8bba63510e86e3bdbb3a606dd551949193666ddf49d64a31c5af5c80",
+    "RESTORE_V2.safe.json": "bb74508d2adf0e74b197ed986fcd16d10ed01c1b821aa948d7428d6a68a0850b",
+    "RESTORE_V3.safe.json": "2721e3bc1e3a078dc97a5f04c7c0d24ffe8135dbcb1a30d0da92cf766f768377",
+    "RESTORE_V4.safe.json": "4f5cef21b7153515823166676c56f647eeb73e784b40a2070009e713d8c45d1c",
+    "REOPEN_PLAN.safe.json": "424e61bf6c858d92899a320a0c39b48127f03d6b82e14c02fcab4a7d96492cb2",
+    "REOPEN_APPLY.safe.json": "bfdd0e839efda2a62f5a77744c6dc156351076251bc5e3af02601fd52a3b08a4",
+    "POSTFLIGHT.safe.json": "ffcd89890ef2d9f498899a7c04d2594fe550fce2b2c8614b3889260161e57502",
+    "PUBLIC_AFTER.safe.json": "02ce69d863ae9bfcacc95d59b83878e8cdb271bb942ac9021ebe57ae362b004f",
+    "INDEPENDENT_VERIFICATION.safe.json": "32984d6e4f2647ee023c65b80acf6351863e8344ef093304854e9fe7023f135c",
+    "CHROME_VERIFY.safe.json": "3eff5fdc173c5e65853028a10d7a6b4471944ce0237884b863c5ef0c48e3b587",
+    "full-gate-node2420/RUNTIME.safe.json": "e5b7b89c62dae8faf44a04bf57639721350134db260faeb49c84bca0be6a42ae",
+    "full-gate-node2420/SUMMARY.safe.json": "82b9aca188c8372287fc3f533c094e535a38b35bd722c56297794f4acaa592c1"
+  },
+  "remaining": [
+    "Legacy OPS deployment/launch evidence panels are not yet aligned; actual billing capability flags are verified true.",
+    "One model high-latency attention alert remains; no critical alert in the observed window.",
+    "Time-sensitive startup preflight and OPS upstream DNS lifecycle prevention changes remain undeployed.",
+    "Logical recovery is not PITR or whole-host disaster recovery; independent PITR evidence remains absent.",
+    "Maintain freshness before Vault October24 and PG November9 deadlines, with early operational margin; no recurring restore automation created."
+  ],
+  "actual_customer_charge_or_refund": false,
+  "new_revenue_claimed": false,
+  "new_fee_or_service_purchase": false,
+  "ebay_or_pindd_operation": false,
+  "video_production_or_publication": false,
+  "credentials_business_rows_raw_logs_or_media_included": false,
+  "handoff": "Save only explicit reviewed safe paths after gate completion. Remote readback is handoff, not proof of cloud receive or automatic synchronization."
+}
