@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.billing_domestic import request_domestic_billing_refund_review  # noqa: E402
-from jiejing_saas.repository import SaaSRepository  # noqa: E402
+from jiejing_saas.repository import SaaSRepository, now_iso  # noqa: E402
 
 
 OUT = ROOT / "output" / "jiejing-domestic-billing-refund-browser-test"
@@ -140,13 +140,19 @@ def main() -> int:
         confirmation_id = str(review.get("confirmation_id") or "")
         if not confirmation_id:
             return _fail(f"browser refund fixture did not create a confirmation: {review}")
-        repository.decide_confirmation(
-            company_id=company_id,
-            confirmation_id=confirmation_id,
-            decision="approve",
-            decided_by=user_id,
-            note="Browser regression approval only; provider execution remains separate.",
-        )
+        try:
+            repository.decide_confirmation(company_id=company_id,confirmation_id=confirmation_id,
+                decision="approve",decided_by=user_id,note="Historical browser fixture.",
+                expected_access_epochs=repository.access_session_epochs(user_id=user_id,company_id=company_id))
+        except PermissionError as exc:
+            if 'domestic_refund' not in str(exc):
+                raise
+        else:
+            return _fail("merchant decision must not approve a domestic refund")
+        # Retain the old unsafe row to exercise the original downstream UI gate.
+        with repository._connect() as conn:
+            conn.execute("update confirmations set status='approved',decided_by=?,decided_at=? where company_id=? and confirmation_id=?",
+                (user_id,now_iso(),company_id,confirmation_id))
 
         result = _inspect_browser(
             base=base,

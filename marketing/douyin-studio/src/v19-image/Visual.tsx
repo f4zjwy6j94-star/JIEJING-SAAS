@@ -1,0 +1,15 @@
+import React from 'react';
+import {AbsoluteFill, Easing, Img, interpolate, staticFile, useCurrentFrame} from 'remotion';
+
+export const palette={paper:'#ebe8df',ink:'#1b2925',green:'#384a3c',muted:'#728076',cream:'#fbf8f0',line:'#c4c9bd'};
+export const easing=Easing.bezier(.16,.78,.25,1);
+export const move=(f:number,a:number,b:number,x=0,y=1)=>interpolate(f,[a,b],[x,y],{extrapolateLeft:'clamp',extrapolateRight:'clamp',easing});
+export const Stage:React.FC<{children:React.ReactNode;dark?:boolean}>=({children,dark=false})=><AbsoluteFill style={{overflow:'hidden',background:dark?palette.ink:palette.paper,color:dark?palette.cream:palette.ink,fontFamily:'"Microsoft YaHei",sans-serif'}}>
+  <AbsoluteFill style={{background:dark?'radial-gradient(ellipse at 0% 40%,#47604b 0%,transparent 65%)':'radial-gradient(ellipse at 5% 0%,#fffdf7 0%,transparent 55%),linear-gradient(130deg,transparent,#d2d9cc)'}}/>{children}
+</AbsoluteFill>;
+export const Photo:React.FC<{kind:string;style?:React.CSSProperties;contain?:boolean}>=({kind,style,contain=false})=><Img src={staticFile(`images/${kind}.webp`)} style={{width:'100%',height:'100%',objectFit:contain?'contain':'cover',...style}}/>;
+export const Cursor:React.FC<{x:number;y:number;click?:number}>=({x,y,click=0})=><div style={{position:'absolute',left:x,top:y,zIndex:10}}>{click>0&&<div style={{position:'absolute',left:-22,top:-22,width:62,height:62,borderRadius:'50%',border:'3px solid #819868',opacity:1-click,scale:1+click}}/>}<svg width="50" height="62" viewBox="0 0 40 50"><path d="M4 3v36l10-9 9 17 8-4-10-17h14z" fill="#fffef8" stroke="#233229" strokeWidth="2.5"/></svg></div>;
+export const Tag:React.FC<{children:React.ReactNode;dark?:boolean;style?:React.CSSProperties}>=({children,dark=false,style})=><div style={{display:'inline-flex',alignItems:'center',padding:'14px 24px',borderRadius:40,fontSize:31,letterSpacing:1,color:dark?'#eef1e8':palette.ink,background:dark?'#14221ed9':'#f9f8efef',border:`1px solid ${dark?'#6c7b6b':'#c8d0c2'}`,...style}}>{children}</div>;
+export const Brand:React.FC<{white?:boolean}>=({white=false})=><div style={{display:'flex',alignItems:'center',gap:18,color:white?'#f9faf2':palette.ink,fontWeight:700,fontSize:46}}><svg width="52" height="52" viewBox="0 0 52 52"><rect width="52" height="52" rx="15" fill={white?'#f9faf2':palette.ink}/><path d="M14 16h23L22 36h16M14 27h12" fill="none" stroke={white?palette.ink:'#fffdf6'} strokeWidth="3"/></svg>捷境</div>;
+export const Sub:React.FC<{children:React.ReactNode;dark?:boolean}>=({children,dark=false})=><div data-caption style={{position:'absolute',left:90,right:100,bottom:204,textAlign:'center',fontSize:44,fontWeight:500,lineHeight:1.45,color:dark?'#fffdf5':palette.ink,zIndex:40,textShadow:dark?'0 3px 18px #07150dd9':'0 2px 8px #ffffffbb'}}>{children}</div>;
+export const Letter:React.FC<{text:string;start:number;end:number;style?:React.CSSProperties}>=({text,start,end,style})=>{const f=useCurrentFrame();return <span style={style}>{text.slice(0,Math.round(move(f,start,end)*text.length))}<span style={{opacity:Math.floor(f/10)%2}}>|</span></span>};

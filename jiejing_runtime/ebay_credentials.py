@@ -79,8 +79,12 @@ class EbayCredentialResolver:
         }
 
     def oauth_refresh_status(self) -> dict[str, Any]:
-        token_data, token_source = self._best_token_data()
-        app_credentials = self._read_json(self._wsl_home() / "credentials" / "ebay_production_app_keyset.json")
+        wsl_lookup_enabled = self._env_enabled("JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP", default=True)
+        token_data, token_source = self._best_token_data() if wsl_lookup_enabled else ({}, "missing")
+        app_credentials = (
+            self._read_json(self._wsl_home() / "credentials" / "ebay_production_app_keyset.json")
+            if wsl_lookup_enabled else {}
+        )
         refresh_token_present = bool(token_data.get("refresh_token")) if isinstance(token_data, dict) else False
         client_id_present = bool(
             os.environ.get("JIEJING_EBAY_CLIENT_ID")
@@ -107,15 +111,19 @@ class EbayCredentialResolver:
         }
 
     def hermes_refresh_adapter_status(self) -> dict[str, Any]:
-        script = self._wsl_home() / "scripts" / "ebay_business_policies.py"
+        available = self._env_enabled("JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP", default=True) and (
+            self._wsl_home() / "scripts" / "ebay_business_policies.py"
+        ).exists()
         return {
-            "available": script.exists(),
-            "path": "/home/hermes/.hermes/scripts/ebay_business_policies.py" if script.exists() else "",
+            "available": available,
+            "path": "/home/hermes/.hermes/scripts/ebay_business_policies.py" if available else "",
             "mode": "read_only_policy_refresh",
             "secret_exposed": False,
         }
 
     def refresh_with_hermes_policy_adapter(self, timeout_seconds: int = 90) -> dict[str, Any]:
+        if not self._env_enabled("JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP", default=True):
+            return {"status": "disabled", "summary": "Hermes WSL credential lookup is disabled.", "secret_exposed": False}
         if os.name != "nt":
             return {"status": "unsupported_host", "summary": "Hermes WSL refresh bridge is only enabled from Windows host.", "secret_exposed": False}
         script = "/home/hermes/.hermes/scripts/ebay_business_policies.py"
@@ -144,9 +152,13 @@ class EbayCredentialResolver:
         }
 
     def listing_rules_snapshot_present(self) -> bool:
+        if not self._env_enabled("JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP", default=True):
+            return False
         return (self._wsl_home() / "output" / "ebay-account" / "northvalesource_listing_rules_latest.json").exists()
 
     def policy_snapshot_present(self) -> bool:
+        if not self._env_enabled("JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP", default=True):
+            return False
         return (self._wsl_home() / "output" / "ebay-account" / "business_policies_latest.json").exists()
 
     def _policy_response(self, section: Any, array_key: str) -> dict[str, Any]:

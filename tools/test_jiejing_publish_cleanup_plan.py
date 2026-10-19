@@ -105,6 +105,7 @@ def main() -> int:
         decision="approve",
         decided_by=user["user_id"],
         note="unit cleanup approval",
+        expected_access_epochs=repo.access_session_epochs(user_id=user["user_id"],company_id=user["default_company_id"]),
     )
     request = ExecutionRequest(
         action_type="cleanup_test_listing",

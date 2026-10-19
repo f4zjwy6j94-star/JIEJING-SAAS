@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -24,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     serve = subparsers.add_parser("serve", help="Serve the local backend API.")
     serve.add_argument("--db", default=str(ROOT / "output" / "jiejing-saas-backend" / "saas.sqlite"))
     serve.add_argument("--runtime-db", default=str(ROOT / "output" / "jiejing-saas-backend" / "runtime.sqlite"))
+    serve.add_argument("--runtime-knowledge-pack", default=None, help="Explicit local knowledge pack; validated before serving.")
     serve.add_argument("--output-root", default=str(ROOT / "output" / "jiejing-saas-backend"))
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8788)
@@ -40,6 +42,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.command == "serve":
+        if args.runtime_knowledge_pack is not None or "JIEJING_RUNTIME_KNOWLEDGE_PACK" in os.environ:
+            from jiejing_runtime.knowledge import load_default_knowledge_base
+
+            load_default_knowledge_base(args.runtime_knowledge_pack)
+            if args.runtime_knowledge_pack is not None:
+                os.environ["JIEJING_RUNTIME_KNOWLEDGE_PACK"] = args.runtime_knowledge_pack
         SaaSBackendServer(
             db_path=Path(args.db).resolve(),
             runtime_db_path=Path(args.runtime_db).resolve(),

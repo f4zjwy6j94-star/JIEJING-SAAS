@@ -23,7 +23,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.api_server import SaaSBackendHandler
 from jiejing_saas.config import SaaSSettings
-from jiejing_saas.repository import ConfirmationDecisionConflict, SaaSRepository
+from jiejing_saas.repository import ConfirmationDecisionConflict, SaaSRepository, now_iso
 from jiejing_saas.security import SessionManager
 
 
@@ -39,7 +39,8 @@ class RefundOperatorAuthorizationTest(unittest.TestCase):
         for key, email in (("merchant", "merchant@example.test"), ("reviewer", "platform-reviewer@example.test"), ("other", "other@example.test")):
             account = self.repo.create_user_with_company(email=email, password="Local-fixture-password-2026", company_name=key)
             self.accounts[key] = account
-            self.tokens[key] = sessions.create_token(user_id=account["user"]["user_id"], company_id=account["company"]["company_id"], email=email)
+            self.tokens[key] = sessions.create_token(user_id=account["user"]["user_id"], company_id=account["company"]["company_id"], email=email,
+                access_epochs=self.repo.access_session_epochs(user_id=account["user"]["user_id"],company_id=account["company"]["company_id"]))
         self.company_id = self.accounts["merchant"]["company"]["company_id"]
         self.user_id = self.accounts["merchant"]["user"]["user_id"]
         self.order_id = "refund-auth-order"
@@ -153,7 +154,7 @@ class RefundOperatorAuthorizationTest(unittest.TestCase):
 
     def test_historical_merchant_approval_requires_new_platform_review(self) -> None:
         confirmation_id = self.request_review()
-        self.repo.decide_confirmation(company_id=self.company_id, confirmation_id=confirmation_id, decision="approve", decided_by=self.user_id, note="Historical merchant self approval")
+        self.seed_adversarial_legacy_approval(confirmation_id)
         status, response = self.request("/owner/billing/domestic/refunds", account="reviewer", ops=True)
         self.assertEqual(status, 200, response)
         order = response["refund_reviews"][0]
@@ -168,11 +169,20 @@ class RefundOperatorAuthorizationTest(unittest.TestCase):
 
     def test_audit_claim_without_live_platform_reviewer_cannot_authorize_refund(self) -> None:
         confirmation_id = self.request_review()
-        self.repo.decide_confirmation(company_id=self.company_id, confirmation_id=confirmation_id, decision="approve", decided_by=self.user_id, note="Untrusted old approval")
+        self.seed_adversarial_legacy_approval(confirmation_id)
         confirmation = self.repo.get_confirmation(company_id=self.company_id, confirmation_id=confirmation_id)
         self.repo.write_audit(company_id=self.company_id, store_id=None, user_id=self.user_id, actor_type="platform_internal_admin", action_type="billing.domestic_refund.reviewed", target_type="confirmation", target_id=confirmation_id, summary="Adversarial legacy audit fixture", details={"decision": "approve", "review_reason": "Forged role label is insufficient.", "reviewer_company_id": self.company_id, "order_id": self.order_id, "amount_minor": 9900, "currency": "CNY", "decided_at": confirmation["decided_at"]})
         _, response = self.request("/owner/billing/domestic/refunds", account="reviewer", ops=True)
         self.assertFalse(response["refund_reviews"][0]["platform_review_verified"])
+
+    def seed_adversarial_legacy_approval(self, confirmation_id):
+        with self.assertRaisesRegex(PermissionError,'domestic_refund'):
+            self.repo.decide_confirmation(company_id=self.company_id,confirmation_id=confirmation_id,
+                decision='approve',decided_by=self.user_id,note='Rejected merchant bypass',
+                expected_access_epochs=self.repo.access_session_epochs(user_id=self.user_id,company_id=self.company_id))
+        with self.repo._connect() as conn:
+            conn.execute("update confirmations set status='approved',decided_by=?,decided_at=? where company_id=? and confirmation_id=?",
+                (self.user_id,now_iso(),self.company_id,confirmation_id))
 
     def test_review_packet_has_scoped_usage_evidence_without_merchant_content(self) -> None:
         self.request_review()

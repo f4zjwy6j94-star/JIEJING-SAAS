@@ -38,6 +38,15 @@ POSTGRES_PLATFORM_MODEL_TRIAL_RESERVATIONS_MIGRATION = (
 POSTGRES_LISTING_DRAFT_EDIT_CHECKPOINTS_MIGRATION = (
     ROOT / "jiejing_saas" / "migrations" / "005_listing_draft_edit_checkpoints_postgres.sql"
 )
+POSTGRES_SUPPORT_CONVERSATIONS_MIGRATION = (
+    ROOT / "jiejing_saas" / "migrations" / "006_support_conversations_postgres.sql"
+)
+POSTGRES_ACCESS_REVOCATION_EPOCHS_MIGRATION = (
+    ROOT / "jiejing_saas" / "migrations" / "007_access_revocation_epochs_postgres.sql"
+)
+POSTGRES_CONFIRMATION_AUTHORITIES_MIGRATION = (
+    ROOT / "jiejing_saas" / "migrations" / "008_confirmation_authorities_postgres.sql"
+)
 POSTGRES_MIGRATION_ADVISORY_LOCK_KEY = -1280677561506917264
 
 
@@ -54,6 +63,24 @@ class _PostgresColumnPostcondition:
 
 
 POSTGRES_CRITICAL_COLUMN_POSTCONDITIONS: tuple[_PostgresColumnPostcondition, ...] = (
+    *(_PostgresColumnPostcondition('confirmation_approval_authorities_v1',name,
+        'int8' if name.endswith('_epoch') else 'int4' if name=='binding_version' else 'text',name=='store_id')
+      for name in ('authority_id','company_id','confirmation_id','store_id','action_type','approver_user_id',
+                   'approver_user_epoch','approver_member_epoch','required_permission','approved_role',
+                   'approved_at','approved_item_sha256','binding_version')),
+    *(_PostgresColumnPostcondition('confirmation_execution_authorities_v1',name,
+        'int8' if name.endswith('_epoch') else 'int4' if name=='operation_count' else 'text',
+        name in {'store_id','admitted_at','terminal_reason'})
+      for name in ('attempt_id','company_id','store_id','confirmation_id','approval_authority_id','executor_user_id',
+                   'executor_user_epoch','executor_member_epoch','required_permissions','business_binding_sha256',
+                   'operation_plan_sha256','operation_count','operation_state_json','phase','created_at','admitted_at','terminal_reason')),
+    _PostgresColumnPostcondition('confirmations','approval_authority_id','text',True),
+    _PostgresColumnPostcondition('external_execution_claims','authority_json','text',True),
+    _PostgresColumnPostcondition('ebay_account_deletion_events','verification_json','text',False),
+    _PostgresColumnPostcondition('ebay_account_deletion_events','processing_json','text',False),
+    _PostgresColumnPostcondition("access_revocation_epochs", "user_id", "text", False),
+    _PostgresColumnPostcondition("access_revocation_epochs", "company_id", "text", False),
+    _PostgresColumnPostcondition("access_revocation_epochs", "generation", "int8", False),
     _PostgresColumnPostcondition("media_credit_buckets", "bucket_id", "text", False),
     _PostgresColumnPostcondition("media_credit_buckets", "company_id", "text", False),
     _PostgresColumnPostcondition("media_credit_buckets", "source_type", "text", False),
@@ -171,6 +198,24 @@ POSTGRES_CRITICAL_INDEX_POSTCONDITIONS: tuple[_PostgresIndexPostcondition, ...] 
     ),
 )
 POSTGRES_CRITICAL_CONSTRAINT_POSTCONDITIONS: tuple[_PostgresConstraintPostcondition, ...] = (
+    _PostgresConstraintPostcondition('approval.authority_pk','confirmation_approval_authorities_v1','p',('authority_id',)),
+    _PostgresConstraintPostcondition('approval.scope_unique','confirmation_approval_authorities_v1','u',('company_id','confirmation_id','authority_id')),
+    _PostgresConstraintPostcondition('approval.confirmation_scope_fk','confirmation_approval_authorities_v1','f',
+        ('company_id','confirmation_id','store_id'),'confirmations',('company_id','confirmation_id','store_id')),
+    _PostgresConstraintPostcondition('approval.store_scope_fk','confirmation_approval_authorities_v1','f',
+        ('company_id','store_id'),'stores',('company_id','store_id')),
+    _PostgresConstraintPostcondition('approval.user_fk','confirmation_approval_authorities_v1','f',('approver_user_id',),'users',('user_id',)),
+    _PostgresConstraintPostcondition('execution.attempt_pk','confirmation_execution_authorities_v1','p',('attempt_id',)),
+    _PostgresConstraintPostcondition('execution.approval_scope_fk','confirmation_execution_authorities_v1','f',
+        ('company_id','confirmation_id','approval_authority_id'),'confirmation_approval_authorities_v1',('company_id','confirmation_id','authority_id')),
+    _PostgresConstraintPostcondition('execution.confirmation_scope_fk','confirmation_execution_authorities_v1','f',
+        ('company_id','confirmation_id','store_id'),'confirmations',('company_id','confirmation_id','store_id')),
+    _PostgresConstraintPostcondition('execution.user_fk','confirmation_execution_authorities_v1','f',('executor_user_id',),'users',('user_id',)),
+    _PostgresConstraintPostcondition('confirmation.current_approval_scope_fk','confirmations','f',
+        ('company_id','confirmation_id','approval_authority_id'),'confirmation_approval_authorities_v1',('company_id','confirmation_id','authority_id')),
+    _PostgresConstraintPostcondition(
+        "access_revocation_epochs.scope_pk", "access_revocation_epochs", "p", ("user_id", "company_id"),
+    ),
     _PostgresConstraintPostcondition(
         "listing_draft_edit_heads.scope_pk", "listing_draft_edit_heads", "p",
         ("company_id", "store_id", "project_key"),
@@ -298,6 +343,24 @@ POSTGRES_MIGRATION_MANIFEST: tuple[_PostgresMigrationSpec, ...] = (
                 "jiejing-listing-draft-edit-checkpoints-postgres-v20260906",
             ),
         ),
+    ),
+    _PostgresMigrationSpec(
+        path=POSTGRES_SUPPORT_CONVERSATIONS_MIGRATION,
+        canonical_sha256="9e25bf69fb807a410abbfee3eccddb4b7d9c6c70165bbbbfc284e285369f8684",
+        migration_records=(("20261012_006_support_conversations_postgres",
+                            "jiejing-support-conversations-postgres-v20261012"),),
+    ),
+    _PostgresMigrationSpec(
+        path=POSTGRES_ACCESS_REVOCATION_EPOCHS_MIGRATION,
+        canonical_sha256="b18dfad4176472851b8c8739a351e7fe0e15f1b9ea9691d446415345efc76ac1",
+        migration_records=(("20261014_007_access_revocation_epochs_postgres",
+                            "jiejing-access-revocation-epochs-postgres-v20261014"),),
+    ),
+    _PostgresMigrationSpec(
+        path=POSTGRES_CONFIRMATION_AUTHORITIES_MIGRATION,
+        canonical_sha256="a475a7375a3f77200ce8d7fe9296db5f1ad62babaaba9d0661c1b53d3b0d5d0d",
+        migration_records=(("20261014_008_confirmation_authorities_postgres",
+                            "jiejing-confirmation-authorities-postgres-v20261014"),),
     ),
 )
 
@@ -713,6 +776,10 @@ def _probe_postgres_schema_contract(
             "missing_constraints": missing_constraints,
             "secret_exposed": False,
         }
+    missing_guards = _postgres_missing_authority_guards(cursor, migrations)
+    if missing_guards:
+        return {"status":"blocked", "blocked_by":["postgres_confirmation_authority_guard_drift"],
+                "missing_authority_guards":missing_guards,"secret_exposed":False}
     return {
         "status": "ok",
         "required_relation_count": len(required_relations),
@@ -721,9 +788,58 @@ def _probe_postgres_schema_contract(
             len(POSTGRES_CRITICAL_COLUMN_POSTCONDITIONS)
             + len(POSTGRES_CRITICAL_INDEX_POSTCONDITIONS)
             + len(POSTGRES_CRITICAL_CONSTRAINT_POSTCONDITIONS)
+            + 4  # Three immutable/scope triggers and the active-attempt index.
         ),
         "secret_exposed": False,
     }
+
+
+def _postgres_missing_authority_guards(cursor: Any, migrations) -> list[str]:
+    """Check behavior-bearing objects, not only the existence of sidecar columns.
+
+    Function source is compared with the already checksum-validated migration;
+    names alone must not bless a replaced no-op function or conditional trigger.
+    One bounded catalog query covers all three triggers and the partial index.
+    """
+    expected = {
+        'approval_receipt_guard':('confirmation_approval_authorities_v1','jiejing_approval_receipt_guard'),
+        'current_approval_scope_guard':('confirmations','jiejing_current_approval_scope_guard'),
+        'execution_receipt_scope_guard':('confirmation_execution_authorities_v1','jiejing_execution_receipt_scope_guard'),
+    }
+    sql = next((m.sql for m in migrations if m.path == POSTGRES_CONFIRMATION_AUTHORITIES_MIGRATION),'')
+    bodies = dict(re.findall(r'create or replace function (\w+)\(\) returns trigger language plpgsql as \$\$(.*?)\$\$;',sql,re.S))
+    cursor.execute('''select r.relname,t.tgname,t.tgtype,t.tgenabled,pg_get_expr(t.tgqual,t.tgrelid),
+        t.tgattr::text,p.proname,p.prosrc,i.indisunique,i.indisvalid,i.indisready,i.indislive,pg_get_indexdef(i.indexrelid)
+        from pg_trigger t join pg_class r on r.oid=t.tgrelid join pg_namespace n on n.oid=r.relnamespace
+        join pg_proc p on p.oid=t.tgfoid join pg_namespace pn on pn.oid=p.pronamespace
+        left join pg_class ir on ir.relname='confirmation_one_active_attempt' and ir.relnamespace=n.oid
+        left join pg_index i on i.indexrelid=ir.oid
+        where n.nspname='public' and pn.nspname='public' and not t.tgisinternal
+          and t.tgname::text=any(%s) and not p.prosecdef and p.pronargs=0''', (list(expected),))
+    valid=set()
+    active_index=False
+    for table,trigger,kind,enabled,qualifier,columns,function,body,unique,usable,ready,live,indexdef in cursor.fetchall():
+        if (trigger in expected and (table,function)==expected[trigger] and kind==23 and enabled=='O'
+                and qualifier is None and columns=='' and function in bodies
+                and str(body).strip()==bodies[function].strip()):
+            valid.add(trigger)
+        normalized = _normalize_confirmation_authority_index_definition(str(indexdef or ''))
+        expected_index = "create unique index confirmation_one_active_attempt on public.confirmation_execution_authorities_v1 using btree (confirmation_id) where (phase = any (array['prewrite'::text, 'admitted'::text, 'reconciliation_required'::text]))"
+        if unique and usable and ready and live and normalized==expected_index:
+            active_index=True
+    missing=sorted(set(expected)-valid)
+    if not active_index:
+        missing.append('confirmation_one_active_attempt')
+    return missing
+
+
+def _normalize_confirmation_authority_index_definition(definition: str) -> str:
+    # This catalog check is intentionally narrower than the legacy normalizer.
+    # SQL keywords are case-insensitive; quoted identifiers and phase literals
+    # are not. Preserve both their case and their whitespace verbatim.
+    parts = re.split(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")", definition)
+    return ''.join(part if index % 2 else re.sub(r'\s+', ' ', part.lower())
+                   for index, part in enumerate(parts)).strip()
 
 
 def _postgres_migration_ledger(cursor: Any) -> dict[str, str]:

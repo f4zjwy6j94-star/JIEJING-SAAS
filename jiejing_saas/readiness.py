@@ -23,6 +23,7 @@ from .database_plan import build_database_plan
 from .ebay_live_read_adapter import build_live_read_adapter_status
 from .ebay_token_refresh_adapter import build_ebay_token_refresh_adapter_status
 from .infrastructure_drivers import build_infrastructure_driver_status
+from .media_credits import estimate_media_points
 from .model_value_gate import build_model_value_gate
 from .monitoring import build_monitoring_status
 from .operational_health import build_operational_health
@@ -1822,9 +1823,37 @@ def build_media_generation_capability_status() -> dict[str, Any]:
     live_enabled = _env_enabled("JIEJING_MEDIA_LIVE_PROVIDER_ENABLED", default=False)
     video_enabled = _env_enabled("JIEJING_MEDIA_LIVE_VIDEO_ENABLED", default=False)
     live_calls_allowed = bool(live_enabled and driver_configured)
+    # Use the same quote policy as queue admission. Configured credentials and
+    # provider switches do not approve a merchant price or authorize spending.
+    video_quotes = [
+        estimate_media_points({"video_generation_requested": True, "video_duration_seconds": seconds})
+        for seconds in (6, 10)
+    ]
+    video_pricing_approved = all(quote.get("chargeable") is True for quote in video_quotes)
+    video_blockers = []
+    if not driver_configured:
+        video_blockers.append("media_provider_not_configured")
+    if not live_enabled:
+        video_blockers.append("live_media_generation_disabled")
+    if not video_enabled:
+        video_blockers.append("video_provider_disabled")
+    video_blockers.extend(
+        blocker
+        for quote in video_quotes
+        for blocker in quote.get("blocked_by", [])
+        if isinstance(blocker, str) and blocker
+    )
+    if not video_pricing_approved and not any(quote.get("blocked_by") for quote in video_quotes):
+        video_blockers.append("video_media_points_pricing_not_approved")
+    video_blockers = list(dict.fromkeys(video_blockers))
+    live_video_allowed = bool(live_calls_allowed and video_enabled and video_pricing_approved and not video_blockers)
     if live_calls_allowed:
         public_status = "live_generation_ready_waiting_asset_review"
-        customer_visible_summary = "素材真实生成通道已可用；输出仍必须先进入素材清单、权利审核和 Listing 复核。"
+        customer_visible_summary = (
+            "图片和视频真实生成通道已可用；输出仍必须先进入素材清单、权利审核和 Listing 复核。"
+            if live_video_allowed
+            else "图片真实生成通道已可用，视频生成暂未开放；输出仍必须先进入素材清单、权利审核和 Listing 复核。"
+        )
         next_action = "继续审核素材清单、成本记录和 Listing 使用状态；不要跳过人工确认。"
     elif driver_configured:
         public_status = "dry_run_review_chain_ready_live_generation_disabled"
@@ -1840,7 +1869,9 @@ def build_media_generation_capability_status() -> dict[str, Any]:
         "status": public_status,
         "live_generation_enabled": live_enabled,
         "live_image_generation_enabled": live_calls_allowed,
-        "live_video_generation_enabled": bool(live_calls_allowed and video_enabled),
+        "live_video_generation_enabled": live_video_allowed,
+        "video_pricing_approved": video_pricing_approved,
+        "video_generation_blocked_by": video_blockers,
         "live_provider_calls_allowed": live_calls_allowed,
         "asset_manifest_required": True,
         "asset_review_required": True,

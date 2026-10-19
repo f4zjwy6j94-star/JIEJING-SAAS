@@ -32,6 +32,9 @@ _TEMP_ROOT = tempfile.TemporaryDirectory(prefix="jiejing-saas-backend-test-", ig
 OUT = Path(_TEMP_ROOT.name)
 SAAS_DB = OUT / "saas-test.sqlite"
 RUNTIME_DB = OUT / "runtime-test.sqlite"
+RUNTIME_KNOWLEDGE_PACK = OUT / "runtime-knowledge.synthetic.json"
+SYNTHETIC_KNOWLEDGE_ITEM_ID = "backend-mvp-synthetic-knowledge"
+SYNTHETIC_KNOWLEDGE_SOURCE_REF = "fixture://backend-mvp/runtime-knowledge"
 
 
 def fail(message: str) -> int:
@@ -490,6 +493,30 @@ def main() -> int:
         if path.exists():
             path.unlink()
 
+    RUNTIME_KNOWLEDGE_PACK.write_text(
+        json.dumps(
+            {
+                "version": "backend-mvp-synthetic-knowledge-v1",
+                "generated_at": "2026-10-18T00:00:00+00:00",
+                "items": [
+                    {
+                        "item_id": SYNTHETIC_KNOWLEDGE_ITEM_ID,
+                        "title": "Synthetic backend MVP knowledge",
+                        "role": "all",
+                        "task_types": ["market.report"],
+                        "tags": ["synthetic-local-regression"],
+                        "source_ref": SYNTHETIC_KNOWLEDGE_SOURCE_REF,
+                        "content": "Use supplied facts; leave unknown facts unconfirmed.",
+                        "source_type": "synthetic_test_fixture",
+                        "priority": 50,
+                    }
+                ],
+                "redaction_report": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
     port = find_free_port()
     process = subprocess.Popen(
         [
@@ -500,6 +527,8 @@ def main() -> int:
             str(SAAS_DB),
             "--runtime-db",
             str(RUNTIME_DB),
+            "--runtime-knowledge-pack",
+            str(RUNTIME_KNOWLEDGE_PACK),
             "--output-root",
             str(OUT),
             "--host",
@@ -1170,6 +1199,7 @@ def main() -> int:
             decision="approve",
             decided_by=me["user"]["user_id"],
             note="Rollback fixture",
+            expected_access_epochs=approval_repo.access_session_epochs(user_id=me["user"]["user_id"],company_id=owner_company_id),
         )
         with sqlite3.connect(SAAS_DB) as rollback_conn:
             rollback_conn.execute(
@@ -1220,6 +1250,7 @@ def main() -> int:
             decision="approve",
             decided_by=me["user"]["user_id"],
             note="Linked request fixture",
+            expected_access_epochs=approval_repo.access_session_epochs(user_id=me["user"]["user_id"],company_id=owner_company_id),
         )
         with sqlite3.connect(SAAS_DB) as linked_request_conn:
             linked_request_conn.execute(
@@ -1435,11 +1466,16 @@ def main() -> int:
             return fail("conflicting runtime replay must not overwrite the terminal decision")
 
         other_company_id = str((operator.get("company") or {}).get("company_id") or "")
+        # Valid approvals in the wrong resource scope must still reach the
+        # existing OAuth scope rejection, not fail at the new identity layer.
+        other_approver = operator['user']['user_id']
+        other_approval_store = approval_repo.create_store(company_id=other_company_id,user_id=other_approver,payload={'platform':'ebay'})['store_id']
+        wrong_approval_store = approval_repo.create_store(company_id=owner_company_id,user_id=me['user']['user_id'],payload={'platform':'ebay'})['store_id']
         approval_mismatch_cases = [
             {
                 "label": "wrong company",
                 "company_id": other_company_id,
-                "store_id": store_id,
+                "store_id": other_approval_store,
                 "action_type": "ebay_oauth_scope_change",
                 "requested_step": "new_account_oauth_authorization_gate",
                 "scope_profile": "seller_read_only",
@@ -1447,7 +1483,7 @@ def main() -> int:
             {
                 "label": "wrong store",
                 "company_id": owner_company_id,
-                "store_id": "wrong-approval-store-sentinel",
+                "store_id": wrong_approval_store,
                 "action_type": "ebay_oauth_scope_change",
                 "requested_step": "new_account_oauth_authorization_gate",
                 "scope_profile": "seller_read_only",
@@ -1472,6 +1508,7 @@ def main() -> int:
         if not other_company_id or other_company_id == owner_company_id:
             return fail("OAuth approval matrix requires a distinct wrong company fixture")
         for mismatch in approval_mismatch_cases:
+            mismatch_approver=other_approver if mismatch['company_id']==other_company_id else me['user']['user_id']
             mismatch_confirmation = approval_repo.create_confirmation(
                 company_id=str(mismatch["company_id"]),
                 store_id=str(mismatch["store_id"]),
@@ -1485,15 +1522,16 @@ def main() -> int:
                     "scope_profile": mismatch["scope_profile"],
                     "secret_exposed": False,
                 },
-                created_by=me["user"]["user_id"],
+                created_by=mismatch_approver,
                 default_action="hold",
             )
             mismatch_confirmation = approval_repo.decide_confirmation(
                 company_id=str(mismatch["company_id"]),
                 confirmation_id=mismatch_confirmation["confirmation_id"],
                 decision="approve",
-                decided_by=me["user"]["user_id"],
+                decided_by=mismatch_approver,
                 note="This intentionally does not match the exact OAuth approval boundary.",
+                expected_access_epochs=approval_repo.access_session_epochs(user_id=mismatch_approver,company_id=str(mismatch['company_id'])),
             )
             mismatch_status, mismatch_error = post_json_expect_error(
                 f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
@@ -1597,6 +1635,7 @@ def main() -> int:
             decision="approve",
             decided_by=me["user"]["user_id"],
             note="This intentionally approves the wrong step.",
+            expected_access_epochs=approval_repo.access_session_epochs(user_id=me["user"]["user_id"],company_id=owner_company_id),
         )
         wrong_step_status, _wrong_step_error = post_json_expect_error(
             f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
@@ -1636,6 +1675,7 @@ def main() -> int:
             decision="approve",
             decided_by=me["user"]["user_id"],
             note="This approval is intentionally expired.",
+            expected_access_epochs=approval_repo.access_session_epochs(user_id=me["user"]["user_id"],company_id=owner_company_id),
         )
         expiry_conn = sqlite3.connect(SAAS_DB)
         try:
@@ -1689,6 +1729,7 @@ def main() -> int:
                 decision="approve",
                 decided_by=me["user"]["user_id"],
                 note="This approval timestamp is intentionally invalid for the OAuth boundary.",
+                expected_access_epochs=approval_repo.access_session_epochs(user_id=me["user"]["user_id"],company_id=owner_company_id),
             )
             with sqlite3.connect(SAAS_DB) as invalid_time_conn:
                 invalid_time_conn.execute(
@@ -2130,6 +2171,7 @@ def main() -> int:
             decision="approve",
             decided_by=me["user"]["user_id"],
             note="Approval intentionally expires before an official sync starts.",
+            expected_access_epochs=approval_repo.access_session_epochs(user_id=me["user"]["user_id"],company_id=owner_company_id),
         )
         with sqlite3.connect(SAAS_DB) as sync_recovery_conn:
             sync_recovery_conn.execute(
@@ -2593,6 +2635,33 @@ def main() -> int:
         reports = fetch_json(f"{base_url}/reports?task_id={task_id}", token=token)
         if len(reports.get("reports", [])) < 10:
             return fail("reports endpoint should return persisted reports")
+        market_reports = [
+            report for report in reports.get("reports", [])
+            if report.get("report_type") == "market.report"
+        ]
+        if len(market_reports) != 1:
+            return fail("reports endpoint should return the persisted market report")
+        market_report = market_reports[0]
+        runtime_run_id = worker.get("runtime", {}).get("run_id")
+        if (
+            not market_report.get("report_id")
+            or market_report.get("task_id") != task_id
+            or not runtime_run_id
+            or market_report.get("runtime_run_id") != runtime_run_id
+        ):
+            return fail("persisted market report should belong to this completed workflow run")
+        runtime_result = market_report.get("report", {})
+        if runtime_result.get("task_type") != "market.report":
+            return fail("persisted market report should retain its runtime task type")
+        retrieved_knowledge = runtime_result.get("report", {}).get("runtime_knowledge", [])
+        if (
+            not isinstance(retrieved_knowledge, list)
+            or len(retrieved_knowledge) != 1
+            or not isinstance(retrieved_knowledge[0], dict)
+            or retrieved_knowledge[0].get("item_id") != SYNTHETIC_KNOWLEDGE_ITEM_ID
+            or retrieved_knowledge[0].get("source_ref") != SYNTHETIC_KNOWLEDGE_SOURCE_REF
+        ):
+            return fail("real worker report should retrieve the case-owned synthetic knowledge item")
         steps_payload = fetch_json(f"{base_url}/tasks/{task_id}/steps", token=token)
         if len(steps_payload.get("steps", [])) != 11:
             return fail("task steps endpoint should return 11 persisted steps")

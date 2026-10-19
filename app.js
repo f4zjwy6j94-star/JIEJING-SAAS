@@ -4,6 +4,8 @@ let saasBrowserSessionRefreshPromise = null;
 const SAAS_BROWSER_SESSION_REFRESH_LOCK = "jiejing-browser-session-refresh-v1";
 const SAAS_BROWSER_SESSION_REFRESH_TIMEOUT_MS = 10000;
 const saasBrowserSessionButtonBindings = new WeakMap();
+// Short-lived source URLs stay out of serializable state and saved browser snapshots.
+const saasMediaSourceReviewUrls = new WeakMap();
 
 function ensureJiejingSettingsPanelsLoaded() {
   if (window.JiejingSettingsPanels) return Promise.resolve(window.JiejingSettingsPanels);
@@ -1640,6 +1642,7 @@ const planDetails = {
 const saasExactReadOnlyOAuthConfirmationButtonBindings = new WeakMap();
 let saasVerifiedUnpublishedDraftSaveConfirmations = new WeakSet();
 let saasVerifiedInventoryLocationConfirmations = new WeakSet();
+let saasVerifiedControlledPublishConfirmations = new WeakSet();
 let saasExactReadOnlyOAuthConfirmationRenderGeneration = 0;
 let saasStateRefreshGeneration = 0;
 let saasAccountSessionEpoch = 0;
@@ -3632,6 +3635,15 @@ function bindMediaSourceUploadEvents(view = document.querySelector("#view-media"
   };
   const mediaSourceFileInput = view.querySelector("#mediaSourceFileInput");
   bindOnce(view.querySelector("#mediaBrowseFileButton"), "click", () => mediaSourceFileInput?.click());
+  bindOnce(view.querySelector("#mediaRecoverSourceButton"), "click", () => { void recoverSaasMediaSourceUpload(); });
+  bindOnce(view.querySelector("#mediaIndependentProductName"), "input", (event) => {
+    const scope = saasMediaUploadScope();
+    if (state.mediaTaskEntry !== "single" || !scope) return;
+    state.saasIndependentMediaProduct = { scope_key: scope.key, source_asset_id: state.saasMediaSourceUpload?.asset_id || "",
+      product: String(event.target.value || "").slice(0, 120) };
+    rememberSaasIndependentMediaDraft();
+    syncMediaGenerationActionState();
+  });
   bindOnce(view.querySelector("#mediaProjectSourceButton"), "click", () => {
     const draft = state.saasListingComposerDraft;
     if (!draft?.product || !saasCurrentListingProjectIdentity(draft).key) {
@@ -3677,7 +3689,7 @@ function bindRestoredMediaStudioEvents() {
       const mode = button.dataset.mediaChannel || "flow";
       keepViewportStill(() => {
         if (mode === "independent") {
-          setMediaNewTaskMode();
+          setMediaNewTaskMode({ recover: true });
           return;
         }
         const activeTab = view.querySelector(".media-project-tab.is-active") || view.querySelector(".media-project-tab");
@@ -3784,6 +3796,7 @@ function isLegacySampleProductLabel(value) {
 }
 
 function activeMediaDraftProfileForDisplay() {
+  if (state.mediaTaskEntry === "single") return null;
   const draftKey = String(state.activeMediaDraft || "");
   if (isSaasPublicMvpMode() && (!draftKey || isLegacySampleMediaDraftKey(draftKey))) {
     return null;
@@ -3792,6 +3805,7 @@ function activeMediaDraftProfileForDisplay() {
 }
 
 function activeMediaDraftProductNameForDisplay(ctx = saasMerchantWorkbenchContext()) {
+  if (state.mediaTaskEntry === "single") return "本次上传商品";
   const profile = activeMediaDraftProfileForDisplay();
   if (profile?.name) return profile.name;
   const composer = state.saasListingComposerDraft || {};
@@ -4063,6 +4077,7 @@ function prepareSaasMediaStudioForCurrentListing() {
 }
 
 function resetSaasListingProjectTransientState() {
+  state.saasEbayReapprovalContext = null;
   if (typeof clearSaasPendingProductFactEditor === "function") clearSaasPendingProductFactEditor();
   if (typeof invalidateSaasListingCloudCheckpointContext === "function") invalidateSaasListingCloudCheckpointContext();
   if (typeof clearSaasPendingPublishIntakeSnapshot === "function") clearSaasPendingPublishIntakeSnapshot();
@@ -4124,6 +4139,8 @@ function resetSaasListingProjectTransientState() {
 }
 
 function resetSaasActiveProjectForStoreSwitch() {
+  state.saasEbayRequestEpoch = (state.saasEbayRequestEpoch || 0) + 1;
+  state.saasEbayReapprovalContext = null;
   invalidateSaasSettingsActionContext();
   stopSaasAiCeoCrossDeviceSync();
   stopSaasPendingNewListingProjectReconciliation();
@@ -4208,7 +4225,17 @@ function saasMediaAssetJobRequestedImageCount(job = {}, fallback = 0) {
   return Number.isFinite(safeFallback) && safeFallback > 0 ? Math.min(safeFallback, 4) : 0;
 }
 
+function saasMediaAssetJobMatchesIndependentTask(job = {}) {
+  const facts = saasMediaAssetJobProductFacts(job);
+  if (facts.listing_project_key || facts.listing_draft_id || facts.listing_project_identity?.key) return false;
+  const sourceId = String(state.saasMediaSourceUpload?.asset_id || "");
+  if (sourceId) return String(facts.source_asset_id || "") === sourceId;
+  return Boolean(state.saasIndependentMediaJobId && job.media_job_id === state.saasIndependentMediaJobId);
+}
+
 function latestSaasMediaAssetJobWithManifest(options = {}) {
+  const independent = state.mediaTaskEntry === "single" && !options.draft;
+  if (independent && options.requireCurrentProject === true) return null;
   const jobs = Array.isArray(state.saasMediaAssetJobs) ? state.saasMediaAssetJobs : [];
   const currentDraft = options.draft && typeof options.draft === "object"
     ? options.draft
@@ -4223,7 +4250,7 @@ function latestSaasMediaAssetJobWithManifest(options = {}) {
         job.live_provider_called === true &&
         Array.isArray(job.asset_manifest) &&
         job.asset_manifest.some((asset) => saasSafeListingAssetUrl(asset?.url_or_file_path || asset?.url || asset?.file_path)) &&
-        (!requireCurrentProject || saasMediaAssetJobMatchesListingProject(job, currentDraft)),
+        (independent ? saasMediaAssetJobMatchesIndependentTask(job) : !requireCurrentProject || saasMediaAssetJobMatchesListingProject(job, currentDraft)),
     ) ||
     null
   );
@@ -4307,6 +4334,13 @@ function saasMerchantAssetSpecification(value) {
 
 function saasMediaSourceImageForReview(job = latestSaasMediaAssetJobWithManifest()) {
   const facts = saasMediaAssetJobProductFacts(job || {});
+  const upload = state.saasMediaSourceUpload;
+  const scope = saasMediaUploadScope();
+  if (scope && upload?.scope_key === scope.key && facts.source_asset_id && String(facts.source_asset_id) === String(upload.asset_id)) {
+    if (/^blob:/.test(String(upload.local_preview_url || ""))) return upload.local_preview_url;
+    const recoveredUrl = saasMediaSourceReviewUrls.get(upload);
+    if (recoveredUrl) return recoveredUrl;
+  }
   const references = Array.isArray(facts.reference_images) ? facts.reference_images : [];
   return references.map((url) => saasSafeListingAssetUrl(url)).find(Boolean) || "";
 }
@@ -5070,7 +5104,7 @@ function saasMediaAssetJobsForDisplay(jobs = state.saasMediaAssetJobs || []) {
       (job) =>
         job &&
         typeof job === "object" &&
-        (!requireCurrentProject || saasMediaAssetJobMatchesListingProject(job)),
+        (state.mediaTaskEntry === "single" ? saasMediaAssetJobMatchesIndependentTask(job) : !requireCurrentProject || saasMediaAssetJobMatchesListingProject(job)),
     )
     .slice(0, 8);
 }
@@ -5223,7 +5257,7 @@ function renderSaasMediaGenerationReadinessPanel({ expanded = false } = {}) {
   const videoReady = mediaState.videoReady === true;
   const providerCallEnabled = mediaState.liveReady === true;
   const imageCopy = imageReady ? "图片可真实生成，结果先审核" : "图片先生成需求、脚本和素材清单";
-  const videoCopy = videoReady ? "视频可进入真实生成，完成后先审核" : "视频先生成脚本、分镜和封面需求";
+  const videoCopy = videoReady ? "视频可进入真实生成，完成后先审核" : "视频生成尚未开放（入口保留）";
   const spendCopy = providerCallEnabled
     ? "每次生成可能计入外部素材服务用量"
     : "当前只整理素材需求和审核清单，不调用外部生成服务";
@@ -5248,7 +5282,7 @@ function renderSaasMediaGenerationReadinessPanel({ expanded = false } = {}) {
         <article class="${videoReady ? "is-green" : "is-amber"}">
           <span>视频</span>
           <strong>${escapeHtml(videoCopy)}</strong>
-          <p>短视频脚本、封面和分镜先核对商品事实，再决定是否用于 Listing。</p>
+          <p>当前可先准备脚本和分镜，文字草稿不是视频文件；图片生成独立保留。</p>
         </article>
         <article class="${providerCallEnabled ? "is-green" : "is-amber"}">
           <span>额度</span>
@@ -5494,7 +5528,10 @@ function renderSaasMediaStudioStatus() {
       </button>
     `;
   const activeTab = tabs.querySelector(".media-project-tab.is-active") || tabs.querySelector(".media-project-tab");
-  if (activeTab) syncSaasMediaProjectDraft(activeTab);
+  if (state.mediaTaskEntry === "single") setMediaNewTaskMode();
+  else if (activeTab) syncSaasMediaProjectDraft(activeTab);
+  renderSaasMediaRecoveryChoices();
+  void maybeRecoverSaasMediaSourceUpload();
   ensureSaasMediaFirstRunStrip();
 }
 
@@ -9751,6 +9788,7 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
     missingLabels.length ? `仍缺：${missingLabels.join("、")}` : "",
   ].filter(Boolean).join("；") || "可以继续生成 Listing 文案和发布体检";
   const generationFeedback = renderSaasListingAiGenerationFeedback(draft);
+  const recoveredCheckpoint = renderSaasListingRecoveredCheckpointBody(draft);
   const coreKeys = ["product_name", "condition", "material"];
   const definitions = saasMerchantProductFactDefinitions();
   const renderGroup = (group) => `<section class="saas-product-fact-group">
@@ -9799,6 +9837,7 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
         </div>`}
       </div>
       <div data-saas-listing-ai-feedback-slot ${generationFeedback ? "" : "hidden"}>${generationFeedback}</div>
+      <div data-saas-listing-recovered-checkpoint-slot ${recoveredCheckpoint ? "" : "hidden"}>${recoveredCheckpoint}</div>
     </section>
   `;
 }
@@ -11267,9 +11306,10 @@ function renderSaasListingWizard({ draft, ctx, pendingConfirmations, opportunity
   const step = record?.step || 1;
   const titles = ["商品资料", "Listing 内容", "商品图片", "发布检查与确认"];
   const feedback = renderSaasListingAiGenerationFeedback(draft);
+  const recoveredCheckpoint = renderSaasListingRecoveredCheckpointBody(draft);
   const account = saasSettingsDataSnapshotView(ctx);
   const body = step === 1 ? renderSaasMerchantProductFactsModule(draft, { wizard: true })
-    : step === 2 ? `<div class="saas-listing-wizard-copy-actions"><p>使用已保存的商品资料生成文案，也可以直接编辑已有内容。</p><button type="button" class="primary-action" data-saas-action="listing-generate-ai-draft" ${record?.busy || state.saasListingProductFactSaveStatus === "saving" || saasListingWizardGenerationPending() ? "disabled" : ""}>${saasListingWizardGenerationPending() ? "等待本次生成结果" : "AI 生成 Listing 草稿"}</button><div data-saas-listing-ai-feedback-slot ${feedback ? "" : "hidden"}>${feedback}</div></div>${renderSaasListingDraftEditor(draft)}`
+    : step === 2 ? `<div class="saas-listing-wizard-copy-actions"><p>使用已保存的商品资料生成文案，也可以直接编辑已有内容。</p><button type="button" class="primary-action" data-saas-action="listing-generate-ai-draft" ${record?.busy || state.saasListingProductFactSaveStatus === "saving" || saasListingWizardGenerationPending() ? "disabled" : ""}>${saasListingWizardGenerationPending() ? "等待本次生成结果" : "AI 生成 Listing 草稿"}</button><div data-saas-listing-ai-feedback-slot ${feedback ? "" : "hidden"}>${feedback}</div><div data-saas-listing-recovered-checkpoint-slot ${recoveredCheckpoint ? "" : "hidden"}>${recoveredCheckpoint}</div></div>${renderSaasListingDraftEditor(draft)}`
     : step === 3 ? renderSaasListingWizardImages(draft)
     : `${renderSaasListingVisiblePublishBridge(draft, ctx, pendingConfirmations)}${renderSaasListingUnpublishedDraftReceipt(draft)}${renderSaasListingAdvancedWorkDetails(draft, ctx, pendingConfirmations, opportunity, marketReport, listingReport)}`;
   return `<section class="saas-listing-wizard" data-listing-wizard-step="${step}" data-listing-wizard-scope="${escapeHtml(record?.key || "")}" aria-label="单商品四步上架">
@@ -13580,7 +13620,14 @@ function keepViewportStill(callback) {
   });
 }
 
-function setMediaNewTaskMode() {
+function setMediaNewTaskMode({ recover = false } = {}) {
+  const changed = state.mediaTaskEntry !== "single";
+  if (changed) {
+    state.saasMediaSourceUploadEpoch = Number(state.saasMediaSourceUploadEpoch || 0) + 1;
+    state.saasMediaSourceUpload = null;
+    const sourceImg = document.querySelector(".media-input-thumb");
+    sourceImg?.removeAttribute("src");
+  }
   state.mediaTaskEntry = "single";
   setMediaChannelMode("independent");
   const panel = document.querySelector("#mediaNewTaskDropPanel");
@@ -13599,9 +13646,16 @@ function setMediaNewTaskMode() {
   setText("#mediaFactNote", "拖入后会显示文件名和预览，并把来源关联到当前商品素材任务。");
   setText("#mediaEntryStatus", "独立上传");
   setText("#mediaEntryNote", "未经过市场和刊登流程，只处理本次图片。");
+  setText("#mediaProductionTitle", "本次独立商品素材");
+  if (!state.saasMediaSourceUpload) setText("#mediaProductionStatus", "等待本次来源图 · 不使用旧商品资料");
   setText("#mediaOutputNote", "拖入图片后按你选择的图片要求生成。");
   setText("#mediaDecisionSummary", "当前是独立上传素材单。生成结果只作为素材草稿；如果要变成正式商品，需要再进入市场报告、产品刊登和确认中心。");
   syncMediaGenerationActionState(readMediaGenerationConfig({ entry: "single" }));
+  if (changed) saveSaasProtectedStateSnapshot();
+  if (recover) {
+    renderSaasMediaRecoveryChoices();
+    void maybeRecoverSaasMediaSourceUpload();
+  }
 }
 
 function createSaasMediaMutationGuard(actionIsCurrent = () => true) {
@@ -13647,7 +13701,7 @@ function createSaasMediaMutationGuard(actionIsCurrent = () => true) {
 
 function saasMediaMutationResultIsUncertain(error, guard) {
   const status = Number(error?.status || 0);
-  return guard.submitted && !(status >= 400 && status < 500 && status !== 408);
+  return guard.submitted && (error?.payload?.code === "upload_in_progress" || !(status >= 400 && status < 500 && status !== 408));
 }
 
 function saasMediaMutationUncertainMessage(action) {
@@ -13680,51 +13734,335 @@ async function ensureSaasMediaMutationSession(guard) {
   }
 }
 
+function saasMediaUploadScope() {
+  const user = String(state.saasIdentity?.user_id || state.saasUser?.user_id || "");
+  const company = String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "");
+  const store = String(activeSaasStore()?.store_id || "");
+  if (!user || !company || !store) return null;
+  const entry = state.mediaTaskEntry === "single" ? "single" : "project";
+  const identity = entry === "single" ? null : saasCurrentListingProjectIdentity(state.saasListingComposerDraft || {});
+  const key = `jiejing:media-upload:v1:${JSON.stringify([user, company, store, entry, identity?.key || "", identity?.source_report_id || "", identity?.candidate_id || ""])}`;
+  return { key, store, entry, identity };
+}
+
+function saasMediaUploadReceipt(scope = saasMediaUploadScope()) {
+  if (!scope) return null;
+  const memory = sanitizeSaasMediaUploadReceipt(state.saasMediaUploadReceipts?.[scope.key]);
+  if (memory) return memory;
+  // A reopened tab has no sessionStorage. These are scoped selectors only:
+  // the authenticated GET still verifies uploader/store and source retention.
+  for (const storage of [typeof sessionStorage === "undefined" ? null : sessionStorage,
+    typeof localStorage === "undefined" ? null : localStorage]) {
+    try {
+      const saved = sanitizeSaasMediaUploadReceipt(JSON.parse(storage?.getItem(scope.key) || "null"));
+      if (saved) return saved;
+    } catch { /* One unavailable storage must not hide the other receipt. */ }
+  }
+  return null;
+}
+
+function sanitizeSaasMediaUploadReceipt(receipt) {
+  if (!receipt || !/^[A-Za-z0-9_-]{16,96}$/.test(receipt.upload_id || "") || !["pending", "completed"].includes(receipt.status)) return null;
+  const safe = { upload_id: receipt.upload_id, status: receipt.status,
+    created_at: Number.isFinite(receipt.created_at) ? receipt.created_at : 0 };
+  if (receipt.draft && typeof receipt.draft.source_asset_id === "string") {
+    const selections = {};
+    for (const id of ["mediaPlatformSelect", "mediaSizeSelect", "mediaCountSelect", "mediaTypeSelect", "mediaSceneSelect", "mediaFidelitySelect", "mediaGenerationTierSelect", "mediaTextRuleSelect"]) {
+      if (typeof receipt.draft.selections?.[id] === "string") selections[id] = receipt.draft.selections[id].slice(0, 160);
+    }
+    safe.draft = { source_asset_id: receipt.draft.source_asset_id.slice(0, 120),
+      product: String(receipt.draft.product || "").slice(0, 120), selections };
+  }
+  return safe;
+}
+
+function rememberSaasMediaUploadReceipt(scope, receipt) {
+  if (!scope) return;
+  receipt = sanitizeSaasMediaUploadReceipt(receipt);
+  state.saasMediaUploadReceipts ||= {};
+  if (receipt) state.saasMediaUploadReceipts[scope.key] = receipt;
+  else delete state.saasMediaUploadReceipts[scope.key];
+  for (const storage of [typeof sessionStorage === "undefined" ? null : sessionStorage,
+    typeof localStorage === "undefined" ? null : localStorage]) {
+    try {
+      if (receipt) storage?.setItem(scope.key, JSON.stringify(receipt));
+      else storage?.removeItem(scope.key);
+    } catch { /* Keep the in-memory receipt without retrying an upload. */ }
+  }
+}
+
+function createSaasMediaRecoveryGuard(scope, sourceEpoch) {
+  // GET recovery is not a submission. Unrelated Listing/URL hydration or an
+  // idempotent data-view repaint must not cancel this independent-source GET.
+  // Account, store, task selection, source replacement and leaving still cancel.
+  const accountEpoch = saasAccountSessionEpoch;
+  const view = state.view;
+  let cancelled = false;
+  return {
+    isCurrent: () => !cancelled && accountEpoch === saasAccountSessionEpoch &&
+      state.view === view && saasMediaUploadScope()?.key === scope.key &&
+      Number(state.saasMediaSourceUploadEpoch || 0) === sourceEpoch,
+    cancel: () => { cancelled = true; },
+    dispose() {},
+  };
+}
+
+function saasMediaRecoveryJobs() {
+  const scope = saasMediaUploadScope();
+  if (!scope || scope.entry !== "single") return [];
+  const user = String(state.saasIdentity?.user_id || state.saasUser?.user_id || "");
+  const company = String(state.saasIdentity?.company_id || state.saasCompany?.company_id || "");
+  const groups = new Map();
+  for (const job of state.saasMediaAssetJobs || []) {
+    if (!saasMediaJobHasCurrentSessionBackendEvidence(job) || job.created_by !== user ||
+      job.company_id !== company || job.store_id !== scope.store) continue;
+    const facts = saasMediaAssetJobProductFacts(job);
+    if (!facts.source_asset_id || facts.listing_project_key || facts.listing_draft_id || facts.listing_project_identity?.key) continue;
+    if (!groups.has(facts.source_asset_id)) groups.set(facts.source_asset_id, job);
+  }
+  return [...groups.values()];
+}
+
+function saasMediaRecoveryJob() {
+  const jobs = saasMediaRecoveryJobs();
+  const selected = jobs.find(job => job.media_job_id === state.saasMediaRecoverySelectedJobId);
+  return selected || (jobs.length === 1 ? jobs[0] : null);
+}
+
+function renderSaasMediaRecoveryChoices() {
+  const button = document.querySelector("#mediaRecoverSourceButton");
+  if (!button || !document.createElement) return;
+  let select = document.querySelector("#mediaRecoveryJobSelect");
+  const jobs = saasMediaRecoveryJobs();
+  if (jobs.length < 2 || saasMediaUploadReceipt()) {
+    if (select) select.hidden = true;
+    return;
+  }
+  if (!select) {
+    select = document.createElement("select");
+    select.id = "mediaRecoveryJobSelect";
+    select.setAttribute("aria-label", "选择要恢复的本人历史素材任务");
+    select.addEventListener("change", () => {
+      state.saasMediaRecoverySelectedJobId = select.value;
+      state.saasMediaSourceUploadEpoch = Number(state.saasMediaSourceUploadEpoch || 0) + 1;
+      void recoverSaasMediaSourceUpload();
+    });
+    button.insertAdjacentElement("beforebegin", select);
+  }
+  select.hidden = false;
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = ""; placeholder.textContent = "有多个商品，请选择原任务后恢复";
+  select.append(placeholder);
+  for (const job of jobs) {
+    const option = document.createElement("option");
+    option.value = job.media_job_id;
+    option.textContent = `${String(saasMediaAssetJobProductFacts(job).product || "历史商品").slice(0, 120)} · ${String(job.created_at || "").slice(0, 19)}`;
+    select.append(option);
+  }
+  select.value = state.saasMediaRecoverySelectedJobId || "";
+}
+
+async function maybeRecoverSaasMediaSourceUpload() {
+  const scope = saasMediaUploadScope();
+  if (!scope || state.saasMediaSourceUpload || state.saasMediaUploadRecoveryBusy) return null;
+  const receipt = saasMediaUploadReceipt(scope);
+  const job = receipt ? null : saasMediaRecoveryJob();
+  if (!receipt && !job) return null;
+  const attempt = `${scope.key}:${receipt?.upload_id || job.media_job_id}`;
+  if (state.saasMediaAutomaticRecoveryAttempt === attempt) return null;
+  state.saasMediaAutomaticRecoveryAttempt = attempt;
+  return recoverSaasMediaSourceUpload();
+}
+
+function saasIndependentMediaSelectValues() {
+  const values = {};
+  // Deliberately exclude permissions, video activation, server facts and signed URLs.
+  for (const id of ["mediaPlatformSelect", "mediaSizeSelect", "mediaCountSelect", "mediaTypeSelect", "mediaSceneSelect", "mediaFidelitySelect", "mediaGenerationTierSelect", "mediaTextRuleSelect"]) {
+    const element = document.querySelector(`#${id}`);
+    if (element) values[id] = String(element.value || "").slice(0, 160);
+  }
+  return values;
+}
+
+function rememberSaasIndependentMediaDraft() {
+  const scope = saasMediaUploadScope();
+  const upload = state.saasMediaSourceUpload;
+  const receipt = saasMediaUploadReceipt(scope);
+  if (scope?.entry !== "single" || !upload?.asset_id || upload.scope_key !== scope.key || receipt?.status !== "completed" || receipt.upload_id !== upload.upload_id) return;
+  const record = state.saasIndependentMediaProduct;
+  const product = record?.scope_key === scope.key && record.source_asset_id === upload.asset_id
+    ? String(record.product || "").slice(0, 120)
+    : receipt.draft?.source_asset_id === upload.asset_id ? String(receipt.draft.product || "").slice(0, 120) : "";
+  rememberSaasMediaUploadReceipt(scope, {
+    ...receipt, draft: { source_asset_id: upload.asset_id, product, selections: saasIndependentMediaSelectValues() },
+  });
+}
+
+function restoreSaasIndependentMediaDraft(scope, receipt, started) {
+  const upload = state.saasMediaSourceUpload;
+  const draft = receipt?.draft;
+  if (scope?.entry !== "single" || upload?.scope_key !== scope.key || !upload?.asset_id || draft?.source_asset_id !== upload.asset_id) return;
+  // A merchant typing while the GET is in flight wins over the saved draft.
+  if (state.saasIndependentMediaProduct === started.product) {
+    state.saasIndependentMediaProduct = { scope_key: scope.key, source_asset_id: upload.asset_id, product: String(draft.product || "").slice(0, 120) };
+    const input = document.querySelector("#mediaIndependentProductName");
+    if (input) input.value = state.saasIndependentMediaProduct.product;
+  } else if (state.saasIndependentMediaProduct?.scope_key === scope.key && !state.saasIndependentMediaProduct.source_asset_id) {
+    state.saasIndependentMediaProduct.source_asset_id = upload.asset_id;
+  }
+  for (const [id, initialValue] of Object.entries(started.selections)) {
+    const element = document.querySelector(`#${id}`);
+    const savedValue = draft.selections?.[id];
+    if (element && element.value === initialValue && typeof savedValue === "string" && Array.from(element.options || []).some(option => option.value === savedValue && !option.disabled)) {
+      element.value = savedValue;
+    }
+  }
+}
+
+function saasMediaSourceAssetFromResponse(payload, { scope = null, uploadId = "" } = {}) {
+  const asset = payload?.media_source_asset && typeof payload.media_source_asset === "object" ? payload.media_source_asset : null;
+  const sourceUrl = String(asset?.source_url || "");
+  let sourceHost = "";
+  try { sourceHost = new URL(sourceUrl).hostname; } catch { /* Invalid responses stay unconfirmed. */ }
+  const localDevelopmentSource = ["localhost", "127.0.0.1"].includes(location.hostname) && ["localhost", "127.0.0.1"].includes(sourceHost);
+  if (!asset?.asset_id || (!/^https:\/\//i.test(sourceUrl) && !localDevelopmentSource)) {
+    throw new Error("后端没有返回可供素材服务读取的安全来源图地址。");
+  }
+  const safeAsset = {
+    ...asset, provider_reference_ready: payload?.provider_reference_ready === true,
+    scope_key: scope?.key || "", upload_id: uploadId,
+    listing_project_key: scope?.identity?.key || "",
+    listing_project_identity: scope?.identity?.key ? scope.identity : null,
+  };
+  delete safeAsset.source_url;
+  saasMediaSourceReviewUrls.set(safeAsset, sourceUrl);
+  return safeAsset;
+}
+
+async function recoverSaasMediaSourceUpload() {
+  const scope = saasMediaUploadScope();
+  let receipt = saasMediaUploadReceipt(scope);
+  const recoveryJob = receipt ? null : saasMediaRecoveryJob();
+  if (!scope || (!receipt && !recoveryJob)) {
+    showActionToast(saasMediaRecoveryJobs().length > 1 ? "有多个商品，请先选择要恢复的历史素材任务；不会自动选择其他商品。" : "当前账号、店铺和任务没有可核对的原图回执；不会自动重新上传。");
+    return null;
+  }
+  if (state.saasMediaUploadRecoveryBusy) return null;
+  const draftAtStart = { product: state.saasIndependentMediaProduct, selections: saasIndependentMediaSelectValues() };
+  const epoch = Number(state.saasMediaSourceUploadEpoch || 0);
+  const guard = createSaasMediaRecoveryGuard(scope, epoch);
+  const controller = new AbortController();
+  let timer = null;
+  state.saasMediaUploadRecoveryBusy = true;
+  try {
+    const payload = await Promise.race([
+      saasFetch(receipt ? `/stores/${encodeURIComponent(scope.store)}/media-source-uploads/${encodeURIComponent(receipt.upload_id)}` :
+        `/stores/${encodeURIComponent(scope.store)}/media-asset-jobs/${encodeURIComponent(recoveryJob.media_job_id)}/source`, {
+        method: "GET", signal: controller.signal, saasRequestIsCurrent: guard.isCurrent,
+      }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          if (guard.isCurrent()) setText("#mediaProductionStatus", "本次核对超时 · 上传记录已保留，请稍后核对，不要重复提交");
+          guard.cancel();
+          controller.abort();
+          reject(new Error("上传回执核对超时"));
+        }, 10000);
+      }),
+    ]);
+    if (!guard.isCurrent()) return null;
+    if (recoveryJob) {
+      const facts = saasMediaAssetJobProductFacts(recoveryJob);
+      if (payload.media_job_id !== recoveryJob.media_job_id || payload.media_source_asset?.asset_id !== facts.source_asset_id) throw new Error("原任务和来源图不一致");
+      const inputs = (recoveryJob.job?.job_spec || recoveryJob.job_spec || {}).inputs || {};
+      receipt = sanitizeSaasMediaUploadReceipt({ upload_id: payload.upload_id, status: "completed",
+        created_at: Number(payload.media_source_asset.created_at || 0) * 1000,
+        draft: { source_asset_id: facts.source_asset_id, product: facts.product,
+          selections: { mediaSizeSelect: String(inputs.image_sizes?.[0] || ""),
+            mediaSceneSelect: String(inputs.scene_types?.[0] || ""), mediaCountSelect: `${inputs.image_count || 1} 张` } } });
+      if (!receipt) throw new Error("原任务未返回可核对的上传回执");
+    }
+    const asset = saasMediaSourceAssetFromResponse(payload, { scope, uploadId: receipt.upload_id });
+    state.saasMediaSourceUpload = asset;
+    rememberSaasMediaUploadReceipt(scope, { ...receipt, status: "completed" });
+    if (recoveryJob) state.saasIndependentMediaJobId = recoveryJob.media_job_id;
+    restoreSaasIndependentMediaDraft(scope, receipt, draftAtStart);
+    syncMediaRequirementSummary();
+    syncMediaGenerationActionState();
+    refreshSaasMediaGeneratedAssetSurfaces();
+    setText("#mediaProductionStatus", "已核对来源图上传成功 · 已刷新本商品结果，核对过程不重新生成");
+    setText("#mediaDropHint", "已找回本次来源图，无需重复上传");
+    const sourceImg = document.querySelector(".media-input-thumb");
+    if (sourceImg) {
+      sourceImg.referrerPolicy = "no-referrer";
+      sourceImg.src = saasMediaSourceReviewUrls.get(asset) || "";
+    }
+    showActionToast("已找回来源图并刷新本商品结果；本次核对没有重新上传或生成。");
+    return state.saasMediaSourceUpload;
+  } catch (error) {
+    if (!guard.isCurrent()) return null;
+    if (error?.status === 410 && error?.payload?.code === "asset_expired") {
+      rememberSaasMediaUploadReceipt(scope, null);
+      state.saasMediaSourceUpload = null;
+      syncMediaGenerationActionState();
+      setText("#mediaProductionStatus", "来源图暂存已过期 · 请重新选择图片");
+    } else {
+      setText("#mediaProductionStatus", "仍未取得上传回执 · 请稍后核对，不要重复提交");
+    }
+    return null;
+  } finally {
+    clearTimeout(timer);
+    state.saasMediaUploadRecoveryBusy = false;
+    guard.dispose();
+  }
+}
+
 async function uploadSaasMediaSourceFile(file, { uploadIsCurrent = () => true } = {}) {
   const store = activeSaasStore();
   if (!store?.store_id) throw new Error("请先进入一个店铺工作区，再上传商品来源图。");
   const guard = createSaasMediaMutationGuard(uploadIsCurrent);
-  let payload;
+  const scope = saasMediaUploadScope();
+  let receipt = null;
   try {
     await ensureSaasMediaMutationSession(guard);
-    payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/media-source-assets`, {
+    receipt = { upload_id: crypto.randomUUID(), status: "pending", created_at: Date.now() };
+    rememberSaasMediaUploadReceipt(scope, receipt);
+    const payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/media-source-assets`, {
       method: "POST",
       saasRequestIsCurrent: guard.requestIsCurrent,
       headers: {
         "content-type": file.type || "application/octet-stream",
         "x-jiejing-file-name": encodeURIComponent(file.name || "source-image"),
+        "x-jiejing-upload-id": receipt.upload_id,
       },
       body: file,
     });
+    const asset = saasMediaSourceAssetFromResponse(payload, { scope, uploadId: receipt.upload_id });
+    rememberSaasMediaUploadReceipt(scope, { ...receipt, status: "completed" });
+    return asset;
   } catch (error) {
-    const failure = saasMediaMutationResultIsUncertain(error, guard)
-      ? Object.assign(new Error(saasMediaMutationUncertainMessage("图片上传")), { code: "saas_media_result_uncertain" })
+    const uncertain = saasMediaMutationResultIsUncertain(error, guard);
+    if (!uncertain && receipt) rememberSaasMediaUploadReceipt(scope, null);
+    const failure = uncertain
+      ? Object.assign(new Error("图片上传请求已发送，但回执未能确认。请点击“核对上次上传”，不要重复提交。"), {
+          code: "saas_media_result_uncertain", status: Number(error?.status || 0),
+          failure_kind: error?.status ? "http_error" : "transport_or_response_error",
+        })
       : error;
     if (!guard.isCurrent()) failure.saasMediaMutationContextChanged = true;
     throw failure;
   } finally {
     guard.dispose();
   }
-  const asset = payload?.media_source_asset && typeof payload.media_source_asset === "object" ? payload.media_source_asset : null;
-  const safeAsset = asset ? { ...asset, provider_reference_ready: payload?.provider_reference_ready === true } : null;
-  if (safeAsset) delete safeAsset.source_url;
-  const sourceUrl = String(asset?.source_url || "");
-  const sourceHost = (() => {
-    try {
-      return new URL(sourceUrl).hostname;
-    } catch {
-      return "";
-    }
-  })();
-  const localDevelopmentSource = ["localhost", "127.0.0.1"].includes(location.hostname) && ["localhost", "127.0.0.1"].includes(sourceHost);
-  if (!asset?.asset_id || (!/^https:\/\//i.test(sourceUrl) && !localDevelopmentSource)) {
-    throw new Error("后端没有返回可供素材服务读取的安全来源图地址。");
-  }
-  return safeAsset;
 }
 
 async function handleMediaSourceFile(file, sourceEvent) {
   if (!file) return;
+  if (saasMediaUploadReceipt()?.status === "pending") {
+    showActionToast("上次上传尚未核对；本次只查询回执，不会再次上传。");
+    await recoverSaasMediaSourceUpload();
+    return;
+  }
   if (!/^image\/(png|jpeg|webp)$/i.test(file.type || "")) {
     showActionToast("请选择 PNG、JPG 或 WEBP 商品图片。");
     return;
@@ -13733,12 +14071,12 @@ async function handleMediaSourceFile(file, sourceEvent) {
     showActionToast("图片不能超过 5 MB；请压缩后重新上传。");
     return;
   }
+  const attachToCurrentProject = state.mediaTaskEntry !== "single" && Boolean(state.activeMediaDraft || state.saasListingComposerDraft?.product);
+  if (!attachToCurrentProject) setMediaNewTaskMode();
   const uploadAttemptId = Number(state.saasMediaSourceUploadEpoch || 0) + 1;
   state.saasMediaSourceUploadEpoch = uploadAttemptId;
   const uploadAttemptIsCurrent = () => Number(state.saasMediaSourceUploadEpoch || 0) === uploadAttemptId;
-  const attachToCurrentProject = Boolean(state.activeMediaDraft || state.saasListingComposerDraft?.product);
-  if (!attachToCurrentProject) setMediaNewTaskMode();
-  const uploadStartProject = saasCurrentListingProjectIdentity(state.saasListingComposerDraft || {});
+  const uploadStartProject = attachToCurrentProject ? saasCurrentListingProjectIdentity(state.saasListingComposerDraft || {}) : {};
   const uploadStartedForProject = Boolean(uploadStartProject.key);
   const uploadStartIdentity = {
     key: uploadStartProject.key || "",
@@ -13748,7 +14086,8 @@ async function handleMediaSourceFile(file, sourceEvent) {
   const uploadStartTaskEntry = state.mediaTaskEntry || "project";
   const uploadProjectIsCurrent = () => {
     if (!uploadAttemptIsCurrent()) return false;
-    const currentProject = saasCurrentListingProjectIdentity(state.saasListingComposerDraft || {});
+    if ((state.mediaTaskEntry || "project") !== uploadStartTaskEntry) return false;
+    const currentProject = attachToCurrentProject ? saasCurrentListingProjectIdentity(state.saasListingComposerDraft || {}) : {};
     const currentIdentity = {
       key: currentProject.key || "",
       source_report_id: currentProject.source_report_id || currentProject.source_id || "",
@@ -13762,6 +14101,7 @@ async function handleMediaSourceFile(file, sourceEvent) {
     return uploadStartedForProject || (uploadStartTaskEntry === "single" && state.mediaTaskEntry === "single" && !currentIdentity.key);
   };
   state.saasMediaSourceUpload = null;
+  state.saasIndependentMediaJobId = null;
   const localPath = inferMediaLocalPath(file, sourceEvent);
   const previewUrl = URL.createObjectURL(file);
   if (state.mediaSourceObjectUrl) URL.revokeObjectURL(state.mediaSourceObjectUrl);
@@ -13780,12 +14120,12 @@ async function handleMediaSourceFile(file, sourceEvent) {
   try {
     const asset = await uploadSaasMediaSourceFile(file, { uploadIsCurrent: uploadProjectIsCurrent });
     if (!uploadProjectIsCurrent()) return;
-    state.saasMediaSourceUpload = {
-      ...asset,
-      listing_project_key: uploadStartedForProject ? uploadStartIdentity.key : "",
-      listing_project_identity: uploadStartedForProject ? uploadStartIdentity : null,
-      local_preview_url: previewUrl,
-    };
+    // Reassert the captured identity at the guarded UI boundary without cloning
+    // the asset object used as the short-lived source-URL WeakMap key.
+    asset.listing_project_key = uploadStartedForProject ? uploadStartIdentity.key : "";
+    asset.listing_project_identity = uploadStartedForProject ? uploadStartIdentity : null;
+    asset.local_preview_url = previewUrl;
+    state.saasMediaSourceUpload = asset;
     setText("#mediaDropHint", "真实来源图已上传，可以开始生成素材");
     setText("#mediaProductionStatus", "真实来源图已进入安全暂存 · 选择要求后点击生成素材");
     setText("#mediaSourceNote", "素材服务只读取短时签名来源图；生成结果仍需核对实物一致性和图片权利。");
@@ -13797,6 +14137,7 @@ async function handleMediaSourceFile(file, sourceEvent) {
       showActionToast(error.message);
       if (!error.saasMediaMutationContextChanged && uploadProjectIsCurrent()) {
         setText("#mediaProductionStatus", "图片上传结果待核对 · 请勿重复提交");
+        await recoverSaasMediaSourceUpload();
       }
       return;
     }
@@ -13845,7 +14186,13 @@ function readMediaGenerationConfig(overrides = {}) {
   const fidelity = overrides.fidelity || document.querySelector("#mediaFidelitySelect")?.value || "严格保留实物结构";
   const generationTier =
     overrides.generationTier || document.querySelector("#mediaGenerationTierSelect")?.value || "标准图（推荐） · 80 点/张";
-  const videoPreset = overrides.videoPreset || document.querySelector("#mediaVideoPresetSelect")?.value || "不生成视频";
+  const videoSelect = document.querySelector("#mediaVideoPresetSelect");
+  // Restore an obsolete disabled choice without blocking the image workflow.
+  // Explicit requests remain intact and must still pass the backend/video gate.
+  if (!overrides.videoPreset && !Number.isFinite(overrides.videoDurationSeconds) && videoSelect?.selectedOptions?.[0]?.disabled) {
+    videoSelect.value = "不生成视频";
+  }
+  const videoPreset = overrides.videoPreset || videoSelect?.value || "不生成视频";
   return {
     entry,
     entryLabel: entry === "single" ? "独立上传素材单" : "流程导入商品草稿",
@@ -13874,6 +14221,7 @@ function readMediaGenerationConfig(overrides = {}) {
 
 function syncMediaRequirementSummary() {
   const config = readMediaGenerationConfig();
+  rememberSaasIndependentMediaDraft();
   const imageCount = Math.max(1, Number.parseInt(String(config.count || "1"), 10) || 1);
   const unitPoints = mediaPointsByGenerationTier[config.generationTierKey] || mediaPointsByGenerationTier.standard;
   const tierLabel = config.generationTierKey === "draft" ? "草稿图" : config.generationTierKey === "high_quality" ? "高清图" : "标准图";
@@ -14438,14 +14786,22 @@ function saasMediaSourceAssetForListingDraft(draft = {}) {
   };
 }
 
+function saasIndependentMediaProductName() {
+  const record = state.saasIndependentMediaProduct;
+  if (!record || record.scope_key !== saasMediaUploadScope()?.key || record.source_asset_id !== (state.saasMediaSourceUpload?.asset_id || "")) return "";
+  const product = String(record.product || "").trim();
+  return /^(当前商品|待补|待补充|待确认|未填写|未知|unknown|todo|pending|n\/a)$/i.test(product) ? "" : product;
+}
+
 function currentMediaStudioProductFacts(config = {}) {
+  const independent = (config.entry || state.mediaTaskEntry) === "single";
   const ctx = isSaasPublicMvpMode() ? saasMerchantWorkbenchContext() : {};
-  const activeDraftRaw = typeof activeListingDraft === "function" ? activeListingDraft() : null;
+  const activeDraftRaw = !independent && typeof activeListingDraft === "function" ? activeListingDraft() : null;
   const activeDraft =
     isSaasPublicMvpMode() && isLegacySampleMediaDraftKey(activeDraftRaw?.id || state.activeListingDraft)
       ? null
       : activeDraftRaw;
-  const composer = state.saasListingComposerDraft || {};
+  const composer = independent ? {} : state.saasListingComposerDraft || {};
   const merchantPacket =
     composer.merchant_product_fact_packet && typeof composer.merchant_product_fact_packet === "object"
       ? composer.merchant_product_fact_packet
@@ -14461,9 +14817,10 @@ function currentMediaStudioProductFacts(config = {}) {
       ? merchantPacket.merchant_confirmed_facts
       : {}),
   };
-  const listingProject = saasCurrentListingProjectIdentity(composer);
-  const latestReport = latestSaasReportByTypes(["listing.package", "product.listing", "ai_ceo.market_research", "market.report"]);
+  const listingProject = independent ? {} : saasCurrentListingProjectIdentity(composer);
+  const latestReport = independent ? null : latestSaasReportByTypes(["listing.package", "product.listing", "ai_ceo.market_research", "market.report"]);
   const productName = publicRuntimeText(
+    (independent ? saasIndependentMediaProductName() : "") ||
     composer.product ||
       composer.title ||
       activeDraft?.titleCn ||
@@ -14485,7 +14842,7 @@ function currentMediaStudioProductFacts(config = {}) {
   const standaloneUploadMatches = Boolean(
     upload &&
       state.mediaTaskEntry === "single" &&
-      config.entry === "single" &&
+      independent &&
       !listingProject.key &&
       !structuredListingProject &&
       !uploadHasProjectBinding,
@@ -14528,7 +14885,7 @@ function currentMediaStudioProductFacts(config = {}) {
     listing_source_id: listingProject.source_report_id || listingProject.source_id || "",
     selected_candidate_id: listingProject.candidate_id,
     marketplace: store?.marketplace || "EBAY_US",
-    source: config.entry === "single" ? "merchant_upload_or_local_image" : "listing_or_ai_ceo_workflow",
+    source: independent ? "merchant_upload_or_local_image" : "listing_or_ai_ceo_workflow",
     supplier_facts: {
       material,
       package_dimensions_cm: dimensions,
@@ -14573,10 +14930,29 @@ function saasMediaGenerationGroundingGate(productFacts = {}, config = {}) {
   };
 }
 
+function saasMediaVideoGenerationGate(config = {}) {
+  if (!(Number(config.videoDurationSeconds || 0) > 0)) return { allowed: true, reason: "" };
+  const capability = state.saasMediaCapabilities?.image_generation;
+  const blockers = Array.isArray(capability?.video_generation_blocked_by) ? capability.video_generation_blocked_by : [];
+  const allowed = capability?.live_video_generation_enabled === true && capability?.live_provider_calls_allowed === true &&
+    capability?.video_pricing_approved === true && blockers.length === 0;
+  return { allowed, reason: allowed ? "" : "视频生成尚未开放（入口保留）。当前请使用图片生成；脚本和分镜不代表视频成片。" };
+}
+
 function syncMediaGenerationActionState(config = readMediaGenerationConfig()) {
   const button = document.querySelector("#mediaGenerateImagesDraft");
   if (!button) return null;
-  const groundingGate = saasMediaGenerationGroundingGate(currentMediaStudioProductFacts(config), config);
+  const productFacts = currentMediaStudioProductFacts(config);
+  const groundingGate = saasMediaGenerationGroundingGate(productFacts, config);
+  const independent = (config.entry || state.mediaTaskEntry) === "single";
+  if (independent && groundingGate.hasGroundedSource) {
+    setText("#mediaSourceLabel", "本次来源图");
+    setText("#mediaSourceTitle", productFacts.product && productFacts.product !== "当前商品" ? productFacts.product : "已关联本次图片");
+    setText("#mediaSourceNote", "来源图已关联；不会借用旧商品资料。图片使用权及生成结果仍需核对。");
+    setText("#mediaFactLabel", "来源凭据");
+    setText("#mediaFactTitle", productFacts.source_asset_id ? "后端来源图已核对" : "本次参考图已关联");
+    setText("#mediaFactNote", "仅用于本次独立任务；材质、尺寸和其他规格不作推测。");
+  }
   const sourceButton = document.querySelector("#mediaProjectSourceButton");
   if (sourceButton) {
     const draft = state.saasListingComposerDraft;
@@ -14642,13 +15018,35 @@ function syncMediaGenerationActionState(config = readMediaGenerationConfig()) {
   } else if (groundingGate.conceptOnly) {
     setText(
       "#mediaDecisionSummary",
-      `当前任务：${config.entryLabel}，${config.count}概念参考图。没有真实商品来源图；结果只用于判断构图和场景方向，不可回写 Listing。`,
+      `当前任务：${config.entryLabel || "素材任务"}，${config.count || ""}概念参考图。${groundingGate.hasGroundedSource ? "已关联参考图，但当前选择概念探索" : "没有真实商品来源图"}；结果只用于判断构图和场景方向，不可回写 Listing。`,
     );
     setText("#mediaProductionTarget", "只作概念方向参考，不进入产品刊登");
   } else if (!groundingGate.allowed) {
     setText("#mediaProductionTarget", "上传真实来源图后再生成待审核素材");
   } else {
-    setText("#mediaProductionTarget", "审核实物一致性后回写产品刊登草稿");
+    setText("#mediaDecisionSummary", independent
+      ? "本次来源图已核对，只生成本次独立素材候选；结果需要审核实物一致性和使用权，不会覆盖旧商品或自动刊登。"
+      : "当前商品已关联来源图；生成后需审核实物一致性、使用权和平台规则，审核通过才能回写 Listing 草稿。");
+    setText("#mediaProductionTarget", independent ? "先生成并审核独立素材，不写入旧商品" : "审核实物一致性后回写产品刊登草稿");
+  }
+  const videoGate = saasMediaVideoGenerationGate(config);
+  if (!videoGate.allowed) {
+    button.disabled = true;
+    button.textContent = "视频生成暂未开放";
+    button.title = videoGate.reason;
+    button.dataset.mediaGenerationGate = "video_unavailable";
+    setText("#mediaDecisionSummary", videoGate.reason);
+  }
+  if ((config.entry || state.mediaTaskEntry) === "single") {
+    const productName = saasIndependentMediaProductName();
+    const productInput = document.querySelector("#mediaIndependentProductName");
+    if (productInput && productInput.value.trim() !== productName) productInput.value = productName;
+    if (!productName) {
+      button.disabled = true;
+      button.textContent = "先填写本次商品名称";
+      button.title = "请按实物填写商品名称；不会带入旧商品资料，也不会猜测材质或尺寸。";
+      button.dataset.mediaGenerationGate = "needs_product_identity";
+    }
   }
   return groundingGate;
 }
@@ -14765,17 +15163,28 @@ async function pollSaasMediaAssetJobUntilReview({ mediaJobId, sourceText, config
   if (!cleanMediaJobId) return null;
   state.saasMediaAssetJobPolls = state.saasMediaAssetJobPolls || {};
   if (state.saasMediaAssetJobPolls[cleanMediaJobId]) return null;
-  state.saasMediaAssetJobPolls[cleanMediaJobId] = true;
+  const polls = state.saasMediaAssetJobPolls;
+  const pollToken = {};
+  polls[cleanMediaJobId] = pollToken;
+  const sourceEpoch = Number(state.saasMediaSourceUploadEpoch || 0);
+  const scopeKey = saasMediaUploadScope()?.key;
+  const factsSnapshot = JSON.stringify(currentMediaStudioProductFacts(config));
+  const guard = createSaasMediaMutationGuard(() =>
+    sourceEpoch === Number(state.saasMediaSourceUploadEpoch || 0) && scopeKey === saasMediaUploadScope()?.key &&
+    factsSnapshot === JSON.stringify(currentMediaStudioProductFacts(config)));
   try {
     for (let attempt = 0; attempt < 240; attempt += 1) {
       if (attempt) await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      if (!guard.isCurrent()) return null; // Backend job remains; only stop this obsolete view's polling.
       let response;
       try {
-        response = await saasFetch(`/media-asset-jobs/${encodeURIComponent(cleanMediaJobId)}`);
+        response = await saasFetch(`/media-asset-jobs/${encodeURIComponent(cleanMediaJobId)}`, { saasRequestIsCurrent: guard.isCurrent });
       } catch (error) {
+        if (!guard.isCurrent()) return null;
         if (attempt < 239) continue;
         throw error;
       }
+      if (!guard.isCurrent()) return null;
       const mediaJob = response?.media_asset_job && typeof response.media_asset_job === "object" ? response.media_asset_job : null;
       if (!mediaJob) continue;
       markSaasMediaJobsAsCurrentSessionBackendEvidence(mediaJob);
@@ -14816,11 +15225,13 @@ async function pollSaasMediaAssetJobUntilReview({ mediaJobId, sourceText, config
     setText("#mediaPreviewNote", "任务没有被取消；生成完成后会进入素材清单，未审核前不会回写 Listing。");
     return null;
   } catch (error) {
+    if (!guard.isCurrent()) return null;
     console.warn(`[JIEJING media job polling skipped] ${error?.message || error}`);
     setText("#mediaProductionStatus", "暂时无法刷新素材进度 · 稍后重试");
     return null;
   } finally {
-    delete state.saasMediaAssetJobPolls[cleanMediaJobId];
+    guard.dispose();
+    if (polls[cleanMediaJobId] === pollToken) delete polls[cleanMediaJobId];
   }
 }
 
@@ -14891,6 +15302,7 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}, accepte
     });
     const mediaJob = response.media_asset_job && typeof response.media_asset_job === "object" ? response.media_asset_job : null;
     if (!mediaJob?.media_job_id) throw new Error("media asset job missing from backend response");
+    if (config.entry === "single" && guard.isCurrent()) state.saasIndependentMediaJobId = mediaJob.media_job_id;
     markSaasMediaJobsAsCurrentSessionBackendEvidence(mediaJob);
     upsertSaasMediaAssetJobForDisplay(mediaJob, optimisticId);
     const liveAssetsReturned = mediaJob.live_provider_called === true && Array.isArray(mediaJob.asset_manifest) && mediaJob.asset_manifest.length > 0;
@@ -14959,6 +15371,19 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}, accepte
 async function handleMediaGenerateImagesDraftClick() {
   if (pendingMediaGenerationAcceptance) return;
   const config = readMediaGenerationConfig();
+  const videoGate = saasMediaVideoGenerationGate(config);
+  if (!videoGate.allowed) {
+    setText("#mediaProductionStatus", "视频生成暂未开放 · 未调用生成服务");
+    setText("#mediaPreviewNote", videoGate.reason);
+    showActionToast(videoGate.reason);
+    return;
+  }
+  if ((config.entry || state.mediaTaskEntry) === "single" && !saasIndependentMediaProductName()) {
+    setText("#mediaProductionStatus", "先填写本次商品名称 · 未调用生成服务");
+    showActionToast("请按实物填写本次商品名称，不会使用旧商品信息。材质和尺寸不确定时继续保留待补。");
+    document.querySelector("#mediaIndependentProductName")?.focus();
+    return;
+  }
   const productFacts = currentMediaStudioProductFacts(config);
   const groundingGate = saasMediaGenerationGroundingGate(productFacts, config);
   if (!groundingGate.allowed) {
@@ -15957,6 +16382,15 @@ function shouldAttachSaasBearerToken() {
 
 function saasBackendErrorMessage(status, detail = "", payload = null) {
   const body = payload && typeof payload === "object" ? payload : {};
+  const recovery = body.execution_recovery;
+  if (recovery?.secret_exposed === false && recovery.automatic_retry_allowed === false) {
+    if (recovery.status === "execution_authority_blocked" && recovery.zero_write_proven === true) {
+      return "本次权限或内容已变化，未发送。请返回这件商品重新准备并确认。";
+    }
+    if (recovery.status === "execution_reconciliation_required") return "执行结果尚未确定或已有部分操作提交。请先只读核对，不要重复执行。";
+    if (recovery.status === "execution_in_progress") return "原请求仍在处理，请等待结果，不要重复执行或另建确认单。";
+    if (recovery.status === "execution_completed") return "本次操作已完成，请查看原回执，不要重复执行。";
+  }
   const candidates = [
     body.merchant_message,
     body.error,
@@ -15968,6 +16402,270 @@ function saasBackendErrorMessage(status, detail = "", payload = null) {
   ].filter(Boolean);
   const reason = candidates.length ? candidates.map((item) => saasModelBlockedReasonText(item)).join(" / ") : publicRuntimeText(detail).slice(0, 180);
   return `捷境后端接口 ${status}: ${reason || "请求失败，后端没有返回可展示原因。"}`;
+}
+
+function saasEbayRecoveryCard(confirmationId = "") {
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "");
+  const storeId = String(activeSaasStore()?.store_id || "");
+  const matches = (state.saasConfirmations || []).filter(card =>
+    card.confirmation_id === confirmationId && card.company_id === companyId && card.store_id === storeId);
+  return companyId && storeId && matches.length === 1 ? matches[0] : null;
+}
+
+function saasEbayRecoveryContext(card) {
+  return { accountEpoch: saasAccountSessionEpoch, requestEpoch: state.saasEbayRequestEpoch || 0,
+    companyId: card?.company_id || "", storeId: card?.store_id || "",
+    confirmationId: card?.confirmation_id || "" };
+}
+
+function saasEbayStoreRequestGuard(storeId, { interaction = false } = {}) {
+  const epoch = saasAccountSessionEpoch;
+  const requestEpoch = state.saasEbayRequestEpoch || 0;
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "");
+  const storeIsCurrent = () => epoch === saasAccountSessionEpoch && requestEpoch === (state.saasEbayRequestEpoch || 0) && Boolean(companyId && storeId) &&
+    companyId === String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "") &&
+    storeId === String(activeSaasStore()?.store_id || "");
+  if (!interaction) return storeIsCurrent;
+  // Preparing/reconciling an old card may finish after another same-store
+  // selection. Bind UI publication to that exact interaction, including null
+  // recovery context for an ordinary prepare and view/project ABA transitions.
+  const request = {};
+  state.saasEbayInteractionRequest = request;
+  const projectKey = () => typeof saasCurrentListingProjectIdentity === "function" ? saasCurrentListingProjectIdentity()?.key || "" : "";
+  const initialProject = projectKey();
+  const projectGeneration = state.saasMerchantProjectStatusRequestGeneration || 0;
+  let context = state.saasEbayReapprovalContext;
+  let view = state.view;
+  let viewEpoch = state.saasEbayViewEpoch || 0;
+  const isCurrent = () => storeIsCurrent() && state.saasEbayInteractionRequest === request &&
+    state.saasEbayReapprovalContext === context && projectKey() === initialProject &&
+    (state.saasMerchantProjectStatusRequestGeneration || 0) === projectGeneration &&
+    state.view === view && (state.saasEbayViewEpoch || 0) === viewEpoch;
+  isCurrent.storeIsCurrent = storeIsCurrent;
+  const refreshGeneration = () => typeof saasStateRefreshGeneration === "number" ? saasStateRefreshGeneration : 0;
+  const settingsRequest = () => typeof saasSettingsActionRequest === "undefined" ? null : saasSettingsActionRequest;
+  const aiRequest = () => typeof saasListingAiGenerationRequest === "undefined" ? null : saasListingAiGenerationRequest;
+  let loadingGeneration, loadingSettings, loadingAi;
+  isCurrent.beginLoading = (generation = refreshGeneration()) => {
+    loadingGeneration = generation; loadingSettings = settingsRequest(); loadingAi = aiRequest();
+    state.saasEbayLoadingRequest = request;
+    state.saasLoading = true;
+  };
+  // Selection/navigation invalidates publication, not ownership of the spinner.
+  // Only a request that actually starts loading can take this ownership away.
+  isCurrent.releaseLoading = () => {
+    if (!storeIsCurrent() || state.saasEbayLoadingRequest !== request || loadingGeneration !== refreshGeneration() ||
+        loadingSettings !== settingsRequest() || loadingAi !== aiRequest()) return false;
+    state.saasEbayLoadingRequest = null;
+    const wasLoading = state.saasLoading === true;
+    state.saasLoading = false;
+    if (wasLoading && state.view === "connect") syncSaasSettingsOwnedLoadingControls();
+    return wasLoading;
+  };
+  // Only the synchronous successful completion consumes its own selection and
+  // navigates. Rebase those two fields for its finally/timer, never after await.
+  isCurrent.completed = () => { context = state.saasEbayReapprovalContext; view = state.view; viewEpoch = state.saasEbayViewEpoch || 0; };
+  return isCurrent;
+}
+
+function syncSaasSettingsOwnedLoadingControls() {
+  if (state.view !== "connect") return;
+  const root = document.querySelector("#view-connect");
+  root?.querySelectorAll?.("[data-saas-settings-loading-blocked]").forEach((button) => {
+    // Only explicitly eligible controls may unlock. Never read or rebuild form inputs.
+    let blocked = button.dataset.saasSettingsLoadingBlocked !== "false";
+    if (button.dataset.saasSettingsLoadingRenewal === "true") {
+      const billing = saasMerchantBillingGuardrailState();
+      const activeUntil = String(state.saasBillingUsage?.subscription?.active_until || "").trim();
+      blocked = blocked || !billing.entitlementActive || billing.previewEntitlement === true ||
+        !/^\d{4}-\d{2}-\d{2}T/.test(activeUntil) || !Number.isFinite(Date.parse(activeUntil)) || Date.parse(activeUntil) <= Date.now();
+    }
+    button.disabled = state.saasLoading || blocked;
+    if (!state.saasLoading && button.dataset.saasSettingsLoadingIdleLabel === "刷新状态") button.textContent = "刷新状态";
+  });
+}
+
+function isSaasEbayRecoveryContextCurrent(context) {
+  const card = context && saasEbayRecoveryCard(context.confirmationId);
+  return Boolean(card && context.accountEpoch === saasAccountSessionEpoch &&
+    context.requestEpoch === (state.saasEbayRequestEpoch || 0) &&
+    context.companyId === card.company_id && context.storeId === card.store_id);
+}
+
+function rememberSaasEbayExecutionRecovery(summary, context) {
+  if (!isSaasEbayRecoveryContextCurrent(context) || !summary || summary.secret_exposed !== false ||
+      summary.automatic_retry_allowed !== false || summary.company_id !== context.companyId ||
+      summary.store_id !== context.storeId || summary.confirmation_id !== context.confirmationId) return false;
+  const card = saasEbayRecoveryCard(context.confirmationId);
+  if (summary.action_type !== card.action_type) return false;
+  card.execution_recovery = summary;
+  return true;
+}
+
+function saasEbaySubmittedOutcome(card) {
+  if (!card || saasEbayRecoveryCard(card.confirmation_id) !== card) return null;
+  const userId = String(state.saasIdentity?.user_id || state.saasUser?.user_id || "");
+  if (!userId) return null;
+  return (state.saasEbaySubmittedOutcomes || []).find(record => record.userId === userId &&
+    record.companyId === card.company_id && record.storeId === card.store_id &&
+    record.confirmationId === card.confirmation_id && record.actionType === card.action_type) || null;
+}
+
+function rememberSaasEbaySubmittedOutcome(card) {
+  const existing = saasEbaySubmittedOutcome(card);
+  if (existing) return existing;
+  const userId = String(state.saasIdentity?.user_id || state.saasUser?.user_id || "");
+  if (!userId || saasEbayRecoveryCard(card?.confirmation_id) !== card) return null;
+  // Memory-only submission bookkeeping, not a backend status or recovery receipt.
+  // Its scope survives view/project/account ABA; only UI publication uses epochs.
+  const record = Object.freeze({ userId, companyId: card.company_id, storeId: card.store_id,
+    confirmationId: card.confirmation_id, actionType: card.action_type });
+  state.saasEbaySubmittedOutcomes = [...(state.saasEbaySubmittedOutcomes || []), record];
+  return record;
+}
+
+function resolveSaasEbaySubmittedOutcomes(cards, submittedAtReadStart) {
+  for (const record of submittedAtReadStart) {
+    const card = saasEbayRecoveryCard(record.confirmationId);
+    if (!card || saasEbaySubmittedOutcome(card) !== record ||
+        !isSaasEbayExecutionRecoveryDisplayCard(card, cards)) continue;
+    const completed = card.execution_recovery.status === "execution_completed";
+    if (completed !== (card.status === "executed")) continue;
+    // A successful GET, stale pending, or an unbound execution.status is not proof.
+    state.saasEbaySubmittedOutcomes = state.saasEbaySubmittedOutcomes.filter(item => item !== record);
+  }
+}
+
+function renderSaasEbaySubmittedOutcome(card) {
+  if (!saasEbaySubmittedOutcome(card)) return "";
+  return `<div class="runtime-confirm-actions"><small>本次提交结果待核对，请勿重复批准或执行。</small><button type="button" class="secondary-action" data-saas-action="check-ebay-submitted-outcome" data-saas-confirmation="${escapeHtml(card.confirmation_id)}">只读核对这次结果</button></div>`;
+}
+
+async function checkSaasEbaySubmittedOutcome(confirmationId) {
+  if (!requireSaasProtectedSessionForAction()) return false;
+  const card = saasEbayRecoveryCard(confirmationId), submitted = saasEbaySubmittedOutcome(card);
+  if (!submitted) return false;
+  const context = saasEbayRecoveryContext(card);
+  const interactionIsCurrent = saasEbayStoreRequestGuard(card.store_id, { interaction: true });
+  const refreshGeneration = saasStateRefreshGeneration;
+  const requestIsCurrent = () => refreshGeneration === saasStateRefreshGeneration &&
+    interactionIsCurrent() && isSaasEbayRecoveryContextCurrent(context);
+  try {
+    // This action reads the existing SaaS projection only; never auth-refresh,
+    // platform recovery, re-preparation, decision, preflight, or execute POST.
+    const payload = await saasFetch("/confirmations?limit=40", {
+      method: "GET", saasRequestRetriedAfterRefresh: true, saasRequestIsCurrent: requestIsCurrent,
+    });
+    if (!requestIsCurrent()) return false;
+    const cards = payload.confirmations;
+    const matches = Array.isArray(cards) ? cards.filter(item => item?.confirmation_id === confirmationId) : [];
+    if (matches.length !== 1 || matches[0].company_id !== submitted.companyId ||
+        matches[0].store_id !== submitted.storeId || matches[0].action_type !== submitted.actionType) {
+      throw new Error("本次确认单的结果尚未返回有效绑定记录");
+    }
+    const draftQualifications = await verifySaasUnpublishedDraftSaveConfirmations(cards);
+    const locationQualifications = await verifySaasInventoryLocationConfirmations(cards);
+    if (!requestIsCurrent() || saasEbaySubmittedOutcome(card) !== submitted) return false;
+    saasVerifiedUnpublishedDraftSaveConfirmations = draftQualifications.draftSave;
+    saasVerifiedControlledPublishConfirmations = draftQualifications.controlledPublish;
+    saasVerifiedInventoryLocationConfirmations = locationQualifications;
+    state.saasConfirmations = cards;
+    state.saasConfirmationsLiveLoaded = true;
+    resolveSaasEbaySubmittedOutcomes(cards, [submitted]);
+    const unresolved = Boolean(saasEbaySubmittedOutcome(saasEbayRecoveryCard(confirmationId)));
+    renderSaasConfirmPanel();
+    showActionToast(unresolved ? "结果仍待核对；没有再次批准或执行，请稍后只读核对。" : "已读取当前结果，请查看原记录；不会自动重试执行。");
+    return !unresolved;
+  } catch (error) {
+    if (!requestIsCurrent()) return false;
+    renderSaasConfirmPanel();
+    showActionToast("结果读取暂未完成，仍待核对；没有再次批准或执行。");
+    return false;
+  }
+}
+
+function renderSaasEbayExecutionRecovery(card) {
+  const recovery = card?.execution_recovery;
+  if (!saasEbayRecoveryCard(card?.confirmation_id) || !recovery || recovery.secret_exposed !== false ||
+      recovery.automatic_retry_allowed !== false || recovery.company_id !== card.company_id || recovery.store_id !== card.store_id ||
+      recovery.confirmation_id !== card.confirmation_id || recovery.action_type !== card.action_type || card.status === "pending" ||
+      (card.status === "approved" && !recovery.reason_code)) return "";
+  const id = escapeHtml(card.confirmation_id);
+  if (recovery.next_action === "view_replacement" && recovery.replacement_confirmation_id) {
+    return `<div class="runtime-confirm-actions"><small>旧决定已保留，新单仍需独立确认。</small><button type="button" class="secondary-action" data-saas-action="view-ebay-replacement" data-saas-confirmation="${id}">查看关联的新确认单</button></div>`;
+  }
+  if (recovery.zero_write_proven === true && recovery.next_action === "prepare_reapproval") {
+    const recoveryNote = recovery.status === "execution_prewrite_recovery_available"
+      ? "本次尚未提交且等待已超时。重新准备时将取消旧请求，新确认单仍需单独确认。"
+      : "本次未发送，旧确认单不会再次执行。";
+    return `<div class="runtime-confirm-actions"><small>${recoveryNote}</small><button type="button" class="secondary-action" data-saas-action="reprepare-ebay-execution" data-saas-confirmation="${id}">${card.action_type === "cleanup_test_listing" ? "重新准备这次清理计划" : card.action_type === "create_ebay_inventory_location" ? "返回这个库存位置重新准备" : "返回这件商品重新准备"}</button></div>`;
+  }
+  if (recovery.next_action === "reconcile_read_only") {
+    return `<div class="runtime-confirm-actions"><small>已有提交或结果尚不确定，不可重复执行。</small><button type="button" class="secondary-action" data-saas-action="reconcile-ebay-execution" data-saas-confirmation="${id}">只读核对这次结果</button></div>`;
+  }
+  return `<div class="runtime-confirm-actions"><small>${recovery.next_action === "view_receipt" ? "本次已完成，请查看原回执。" : "原请求仍在处理，请等待结果；不会自动重试。"}</small></div>`;
+}
+
+function saasEbayReapprovalId(actionType, facts = {}) {
+  const context = state.saasEbayReapprovalContext;
+  if (!context) return "";
+  if (!isSaasEbayRecoveryContextCurrent(context)) { state.saasEbayReapprovalContext = null; return ""; }
+  const card = saasEbayRecoveryCard(context.confirmationId), item = card.item || {};
+  const recovery = card.execution_recovery || {};
+  const original = item.publish_payload || {}, draft = original.existing_ebay_draft || item.existing_ebay_draft || {};
+  const sku = String(facts.listing?.sku || facts.sku || "");
+  let exact = actionType === card.action_type && recovery.zero_write_proven === true && recovery.next_action === "prepare_reapproval";
+  if (["publish_listing", "save_ebay_listing_draft"].includes(actionType)) {
+    exact = exact && sku === String(original.listing?.sku || "") && Boolean(sku) &&
+      (!draft.offer_id || String(facts.offer_id || "") === String(draft.offer_id)) &&
+      (!item.listing_project_identity?.key || String(facts.listing_project_identity?.key || saasCurrentListingProjectIdentity()?.key || "") === item.listing_project_identity.key);
+  } else if (actionType === "create_ebay_inventory_location") {
+    exact = exact && String(facts.merchant_location_key || "") === String(item.merchant_location_key || "");
+  } else exact = false;
+  if (!exact) throw new Error("恢复对象已变化，请回到原商品或原库存位置重新核对；没有创建确认单。");
+  return card.confirmation_id;
+}
+
+async function handleSaasEbayExecutionRecovery(confirmationId, mode) {
+  if (!requireSaasProtectedSessionForAction()) return false;
+  const card = saasEbayRecoveryCard(confirmationId), recovery = card?.execution_recovery;
+  if (!card || !recovery || recovery.confirmation_id !== confirmationId || recovery.store_id !== card.store_id ||
+      recovery.company_id !== card.company_id || recovery.secret_exposed !== false || recovery.automatic_retry_allowed !== false) {
+    showActionToast("原确认项不属于当前账号和店铺，请刷新核对；没有执行任何动作。"); return false;
+  }
+  if (mode === "replacement") {
+    const replacement = saasEbayRecoveryCard(recovery.replacement_confirmation_id);
+    if (!replacement || replacement.item?.replaces_confirmation_id !== card.confirmation_id) return false;
+    state.confirmFilter = replacement.status === "pending" ? "immediate" : "all";
+    setView("confirm"); renderSaasConfirmPanel(); return true;
+  }
+  if (mode === "reconcile" && recovery.next_action === "reconcile_read_only") {
+    if (card.action_type === "create_ebay_inventory_location") return reconcileSaasInventoryLocation(card.confirmation_id);
+    const sourceId = card.action_type === "cleanup_test_listing" ? card.item?.source_publish_confirmation_id : card.confirmation_id;
+    if (!saasEbayRecoveryCard(sourceId)) return false;
+    return recoverSaasPublishState(sourceId);
+  }
+  if (mode !== "prepare" || recovery.zero_write_proven !== true || recovery.next_action !== "prepare_reapproval") return false;
+  if (card.action_type === "cleanup_test_listing") {
+    if (!saasEbayRecoveryCard(card.item?.source_publish_confirmation_id)) return false;
+    return createSaasTestListingCleanupPlan(card.item.source_publish_confirmation_id, card.confirmation_id);
+  }
+  if (card.action_type !== "create_ebay_inventory_location") {
+    const item = card.item || {}, projectKey = item.listing_project_identity?.key || "";
+    const sku = String(item.publish_payload?.listing?.sku || "");
+    const matches = () => Boolean(sku && sku === String(saasListingDraftAuthoritativeSku() || "") &&
+      (!projectKey || projectKey === saasCurrentListingProjectIdentity()?.key));
+    if (!matches() && projectKey) {
+      const tasks = saasRecentProductWorkflowTasks().filter(task => task.store_id === card.store_id &&
+        saasRecentProductTaskReports(task).some(report => saasListingProjectIdentityFromReport(report)?.key === projectKey));
+      if (tasks.length === 1) openSaasRecentProductTask(tasks[0].task_id);
+    }
+    if (!matches()) { showActionToast("请先从最近商品任务打开这件商品的原草稿，再重新准备；没有选择其他商品，也没有执行写入。"); return false; }
+  }
+  state.saasEbayReapprovalContext = saasEbayRecoveryContext(card);
+  setView("product"); renderSaasBackendPanel();
+  showActionToast("已返回原对象。请核对当前资料并点击原准备入口；只会建立新的待确认单，不会自动批准或执行。");
+  return true;
 }
 
 async function optionalSaasFetch(path, fallback) {
@@ -18913,21 +19611,29 @@ async function saasSha256Hex(value = "") {
 
 async function verifySaasUnpublishedDraftSaveConfirmations(confirmations = []) {
   const verified = new WeakSet();
+  const controlled = new WeakSet();
   for (const card of Array.isArray(confirmations) ? confirmations : []) {
     const item = card?.item && typeof card.item === "object" && !Array.isArray(card.item) ? card.item : {};
     const payload = item.publish_payload && typeof item.publish_payload === "object" && !Array.isArray(item.publish_payload)
       ? item.publish_payload
       : null;
     const expected = String(item.publish_payload_sha256 || "").trim().toLowerCase();
-    if (String(card?.action_type || "") !== "save_ebay_listing_draft" || !payload || !/^[a-f0-9]{64}$/.test(expected)) continue;
+    const draftSave = String(card?.action_type || "") === "save_ebay_listing_draft";
+    const controlledPublish = isSaasControlledExistingDraftPublishConfirmation(card);
+    if ((!draftSave && !controlledPublish) || !payload || !/^[a-f0-9]{64}$/.test(expected)) continue;
     try {
       const actual = await saasSha256Hex(JSON.stringify(saasCanonicalJsonValue(payload)));
-      if (actual && actual === expected) verified.add(card);
+      if (actual && actual === expected) {
+        if (draftSave) verified.add(card);
+        if (controlledPublish) controlled.add(card);
+      }
     } catch (_error) {
       // A malformed payload or unavailable digest implementation is never display-safe.
     }
   }
-  saasVerifiedUnpublishedDraftSaveConfirmations = verified;
+  // Build locally across awaits. Only the owning, still-current refresh may
+  // publish these object-bound qualifications together with its card batch.
+  return { draftSave: verified, controlledPublish: controlled };
 }
 
 function isSaasInventoryLocationSensitiveConfirmation(card = {}) {
@@ -19037,7 +19743,7 @@ async function verifySaasInventoryLocationConfirmations(confirmations = []) {
       // A malformed payload or unavailable digest implementation is never display-safe.
     }
   }
-  saasVerifiedInventoryLocationConfirmations = verified;
+  return verified;
 }
 
 function isSaasExactInventoryLocationConfirmation(card = {}, companyId = "", storeId = "", allowedStatuses = ["pending", "approved"]) {
@@ -19457,6 +20163,7 @@ function renderSaasDomesticRefundConfirmationAction(card = {}) {
 }
 
 function saasConfirmationActionAttributes(card = {}) {
+  if (saasEbaySubmittedOutcome(card)) return 'disabled aria-disabled="true"';
   if (isSaasControlledExistingDraftPublishConfirmation(card)) {
     return isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card, state.saasConfirmations || [])
       ? `data-saas-confirmation="${escapeHtml(card.confirmation_id || "")}" data-saas-confirmation-flow="ebay-existing-draft-publish-current-store"`
@@ -20778,6 +21485,72 @@ function saasConfirmationMatchesActiveListingContext(card = {}, scope = null) {
   return Boolean(activeSku && cardSkus.includes(activeSku));
 }
 
+function isSaasEbayExecutionRecoveryDisplayCard(card = {}, cards = state.saasConfirmations || []) {
+  const recovery = card?.execution_recovery;
+  if (!recovery || recovery.secret_exposed !== false || recovery.automatic_retry_allowed !== false ||
+      !["approved", "needs_revision", "expired", "external_execution_claimed_prewrite", "external_execution_processing_manual_reconcile", "executed"].includes(card?.status) ||
+      (card.status === "approved" && !(typeof recovery.reason_code === "string" && recovery.reason_code))) return false;
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(activeSaasStore()?.store_id || "").trim();
+  const id = String(card.confirmation_id || "").trim();
+  const allCards = Array.isArray(cards) ? cards : [];
+  if (!companyId || !storeId || !id || card.company_id !== companyId || card.store_id !== storeId ||
+      allCards.filter(row => String(row?.confirmation_id || "").trim() === id).length !== 1 ||
+      recovery.company_id !== companyId || recovery.store_id !== storeId || recovery.confirmation_id !== id ||
+      recovery.action_type !== card.action_type) return false;
+  const next = recovery.next_action;
+  const validNext =
+    (next === "prepare_reapproval" && recovery.zero_write_proven === true &&
+      ["execution_authority_blocked", "execution_prewrite_recovery_available"].includes(recovery.status)) ||
+    (next === "reconcile_read_only" && recovery.zero_write_proven === false && recovery.status === "execution_reconciliation_required") ||
+    (next === "view_receipt" && recovery.zero_write_proven === false && recovery.status === "execution_completed") ||
+    (next === "wait_for_current_attempt" && recovery.zero_write_proven === true && recovery.status === "execution_in_progress") ||
+    (next === "view_replacement" && recovery.zero_write_proven === true && Boolean(recovery.replacement_confirmation_id));
+  if (!validNext) return false;
+  if (next === "view_replacement") {
+    const replacements = allCards.filter(row => row?.confirmation_id === recovery.replacement_confirmation_id);
+    if (replacements.length !== 1 || replacements[0].company_id !== companyId || replacements[0].store_id !== storeId ||
+        replacements[0].action_type !== card.action_type || replacements[0].item?.replaces_confirmation_id !== id) return false;
+  }
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  if (card.action_type === "create_ebay_inventory_location") {
+    return isSaasExactInventoryLocationConfirmation(card, companyId, storeId, [card.status]);
+  }
+  const scope = saasActiveListingConfirmationScope(allCards);
+  if (!saasConfirmationMatchesActiveListingContext(card, scope)) return false;
+  if (card.action_type === "save_ebay_listing_draft") {
+    return isSaasExactUnpublishedDraftSaveConfirmation(card, companyId, storeId);
+  }
+  const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
+  if (isSaasControlledExistingDraftPublishConfirmation(card)) {
+    const draft = item.existing_ebay_draft || {}, original = payload.existing_ebay_draft || {};
+    const receipt = saasControlledExistingDraftPublishReceipt(card);
+    return Boolean(saasVerifiedControlledPublishConfirmations.has(card) && receipt &&
+      item.company_id === companyId && item.store_id === storeId && item.secret_exposed === false &&
+      item.creates_public_listing === true && item.requires_publish_offer_call === true &&
+      draft.offer_id === receipt.offerId && draft.sku === receipt.sku && draft.source_execution_id === receipt.executionId &&
+      original.offer_id === draft.offer_id && original.sku === draft.sku && original.source_execution_id === draft.source_execution_id &&
+      payload.listing?.sku === draft.sku && Boolean(payload.listing?.title));
+  }
+  if (card.action_type === "publish_listing") return Boolean(payload.listing?.sku && payload.listing?.title &&
+    (!scope.sku || payload.listing.sku === scope.sku));
+  if (card.action_type === "cleanup_test_listing") {
+    const sources = allCards.filter(row => row?.confirmation_id === item.source_publish_confirmation_id &&
+      row.company_id === companyId && row.store_id === storeId && row.action_type === "publish_listing");
+    const operations = item.cleanup_plan?.operations;
+    return sources.length === 1 && Boolean(item.sku) && item.sku === sources[0].item?.publish_payload?.listing?.sku &&
+      (!scope.sku || item.sku === scope.sku) && item.secret_exposed === false &&
+      item.cleanup_plan?.status === "plan_only" && item.cleanup_plan.confirmation_required === true &&
+      item.cleanup_plan.secret_exposed === false && Array.isArray(operations) && operations.length > 0 &&
+      item.operation_count === operations.length && operations.every(operation =>
+        operation?.writes_to_ebay === true && (
+          (operation.operation === "end_listing" && Boolean(item.listing_id) && operation.listing_id === item.listing_id) ||
+          (operation.operation === "delete_offer" && Boolean(item.offer_id) && operation.offer_id === item.offer_id) ||
+          (operation.operation === "delete_inventory_item" && operation.sku === item.sku)));
+  }
+  return false;
+}
+
 function saasConfirmationsForDisplay(confirmations = []) {
   confirmations = Array.isArray(confirmations) ? confirmations : [];
   const activeListingScope = saasActiveListingConfirmationScope(confirmations);
@@ -20861,6 +21634,9 @@ function saasConfirmationsForDisplay(confirmations = []) {
         saasConfirmationMatchesActiveListingContext(card, activeListingScope),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
+  const currentStoreExecutionRecoveries = confirmations.filter(card =>
+    isUniqueConfirmation(card) && isSaasEbayExecutionRecoveryDisplayCard(card, confirmations));
+  const executionRecoveryIds = new Set(currentStoreExecutionRecoveries.map(card => card.confirmation_id));
   const protectedIds = new Set(
     [
       ...currentStoreOauth,
@@ -20869,17 +21645,19 @@ function saasConfirmationsForDisplay(confirmations = []) {
       ...currentStoreInventoryLocations,
       ...currentStoreControlledPublishes,
       ...currentStoreControlledPublishRecoveries,
+      ...currentStoreExecutionRecoveries,
     ]
       .map((card) => String(card?.confirmation_id || "").trim()),
   );
   return [
+    ...currentStoreExecutionRecoveries,
     ...currentStoreOauth,
     ...currentStoreSync,
-    ...currentStoreDraftSaves,
-    ...currentStoreInventoryLocations,
-    ...currentStoreControlledPublishes,
-    ...currentStoreControlledPublishRecoveries,
-    ...dedupeSaasConfirmations(ordinarySource).filter((card) => {
+    ...currentStoreDraftSaves.filter(card => !executionRecoveryIds.has(card.confirmation_id)),
+    ...currentStoreInventoryLocations.filter(card => !executionRecoveryIds.has(card.confirmation_id)),
+    ...currentStoreControlledPublishes.filter(card => !executionRecoveryIds.has(card.confirmation_id)),
+    ...currentStoreControlledPublishRecoveries.filter(card => !executionRecoveryIds.has(card.confirmation_id)),
+    ...dedupeSaasConfirmations(ordinarySource.filter(card => !protectedIds.has(String(card?.confirmation_id || "").trim()))).filter((card) => {
       const confirmationId = String(card?.confirmation_id || "").trim();
       return (
         isUniqueConfirmation(card) &&
@@ -21692,6 +22470,11 @@ function saasWorkbenchStatusLabel(status = "") {
       rejected: "已拒绝",
       failed: "失败",
       cancelled: "已取消",
+      needs_revision: "待重新准备",
+      expired: "已过期",
+      external_execution_claimed_prewrite: "执行请求已接收",
+      external_execution_processing_manual_reconcile: "待核对",
+      executed: "已执行",
       saved: "已保存",
     }[status] ||
     status ||
@@ -23575,15 +24358,23 @@ function saasDecisionCenterVisibleConfirmations(cards = [], allCards = cards) {
   const safeCards = Array.isArray(cards) ? cards : [];
   const safeAllCards = Array.isArray(allCards) ? allCards : safeCards;
   const recoveries = safeCards.filter((card) =>
+    saasEbaySubmittedOutcome(card) ||
+    (card.execution_recovery && isSaasEbayExecutionRecoveryDisplayCard(card, safeAllCards)) ||
     isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, safeAllCards),
   );
   const recoveryIds = new Set(recoveries.map((card) => String(card?.confirmation_id || "").trim()));
+  const legacyManual = recoveries.filter((card) => !card.execution_recovery &&
+    isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, safeAllCards));
+  const legacyIds = new Set(legacyManual.map((card) => String(card?.confirmation_id || "").trim()));
   const pending = safeCards.filter((card) => String(card?.status || "") === "pending");
-  const ordinary = pending.length ? pending : safeCards;
+  const linkedIds = new Set(recoveries.filter(card => card.execution_recovery?.next_action === "view_replacement")
+    .map(card => card.execution_recovery.replacement_confirmation_id));
+  const ordinary = pending.length ? safeCards.filter(card => card.status === "pending" || linkedIds.has(card.confirmation_id)) : safeCards;
   return [
-    ...recoveries,
+    ...legacyManual,
     ...ordinary.filter((card) => !recoveryIds.has(String(card?.confirmation_id || "").trim())),
-  ].slice(0, 8);
+    ...recoveries.filter((card) => !legacyIds.has(String(card?.confirmation_id || "").trim())),
+  ]; // The fetched batch is already bounded; do not hide its pending or linked history.
 }
 
 function saasDecisionCenterHeadline(productLabel = "", pendingCount = 0) {
@@ -23621,11 +24412,11 @@ function renderSaasConfirmPanel() {
   const allCards = state.saasConfirmations || [];
   const cards = saasConfirmationsForDisplay(allCards);
   const mergedDuplicateCount = Math.max(0, allCards.length - cards.length);
-  const pending = cards.filter((card) => card.status === "pending");
+  const pending = cards.filter((card) => card.status === "pending" && !saasEbaySubmittedOutcome(card));
   const approved = cards.filter((card) => card.status === "approved");
-  const blocked = cards.filter((card) => ["rejected", "failed", "cancelled"].includes(card.status));
+  const blocked = cards.filter((card) => ["rejected", "failed", "cancelled", "needs_revision", "expired", "external_execution_processing_manual_reconcile"].includes(card.status));
   const visible = saasDecisionCenterVisibleConfirmations(cards, allCards);
-  const allPendingCount = cards.filter((card) => card.status === "pending").length;
+  const allPendingCount = pending.length;
   const latestTask = saasLatestProductWorkflowTask();
   const currentProject = saasCurrentListingProjectIdentity();
   const activeListingScope = saasActiveListingConfirmationScope(allCards);
@@ -23664,7 +24455,7 @@ function renderSaasConfirmPanel() {
       <article>
         <span>未执行或未完成</span>
         <strong>${blocked.length}</strong>
-        <small>已拒绝、已取消或执行失败</small>
+        <small>未完成的动作请按原记录核对或重新准备</small>
       </article>
     </div>
     ${visible.length ? `<details class="saas-confirm-safety-detail"><summary>哪些操作需要确认？</summary><section class="saas-confirm-action-model" aria-label="确认中心处理边界">
@@ -23691,21 +24482,25 @@ function renderSaasConfirmPanel() {
               .map((card) => {
                 const status = card.status || "pending";
                 const cardProduct = saasConfirmationCardProductLabel(card, productLabel);
+                const submittedMarkup = renderSaasEbaySubmittedOutcome(card);
+                const recoveryMarkup = submittedMarkup || (card.execution_recovery && isSaasEbayExecutionRecoveryDisplayCard(card, allCards)
+                  ? renderSaasEbayExecutionRecovery(card) : "");
                 return `
                   <article class="runtime-confirm-card saas-confirm-card">
                     <div class="saas-confirm-card-top">
                       <span>${escapeHtml(saasWorkbenchActionLabel(card.action_type))}</span>
-                      <b class="pill ${saasWorkbenchStatusTone(status)}">${escapeHtml(saasWorkbenchStatusLabel(status))}</b>
+                      <b class="pill ${saasWorkbenchStatusTone(status)}">${escapeHtml(submittedMarkup ? "结果待核对" : saasWorkbenchStatusLabel(status))}</b>
                     </div>
                     <strong>${escapeHtml(saasTitleWithProduct(saasWorkbenchConfirmationTitle(card) || card.title, cardProduct))}</strong>
                     <p>${escapeHtml(saasWorkbenchConfirmationReason(card))}</p>
                     ${renderSaasConfirmationReplyPreview(card)}
+                    ${recoveryMarkup}
                     <div class="saas-confirm-meta">
                       <small>${escapeHtml(saasWorkbenchDefaultActionLabel(card.default_action))}</small>
                       <small>${card.high_risk ? "重要动作" : "普通确认"}</small>
                       <small>${escapeHtml(saasTimestampLabel(card.created_at))}</small>
                     </div>
-                    ${status === "pending" ? `<div class="saas-confirm-card-decision">
+                    ${status === "pending" && !submittedMarkup ? `<div class="saas-confirm-card-decision">
                       <span>本次确认</span>
                       <strong>${card.high_risk ? "是否允许这次高风险动作" : "是否按建议继续"}</strong>
                       <p>${escapeHtml(saasConfirmationAfterApprovalText(card))} 未确认不会执行。</p>
@@ -23724,7 +24519,7 @@ function renderSaasConfirmPanel() {
                       }
                     </details>
                     ${
-                      isSaasDomesticBillingRefundConfirmation(card)
+                      submittedMarkup ? "" : isSaasDomesticBillingRefundConfirmation(card)
                         ? renderSaasDomesticRefundConfirmationAction(card)
                         : status === "pending"
                         ? `<div class="runtime-confirm-actions">
@@ -23735,15 +24530,16 @@ function renderSaasConfirmPanel() {
                                     isSaasUniqueCurrentUnpublishedDraftOAuthConfirmation(card, cards) ||
                                     isSaasUniqueCurrentInventoryLocationConfirmation(card, cards)
                                   )
-                                  ? `<button class="primary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(card)}>${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>`
+                                  ? `<button class="primary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(card)} ${saasReviseConfirmationBlocksApproval(card) ? 'disabled data-saas-revise-blocked="true"' : ""}>${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>`
                                   : '<button class="secondary-action" type="button" data-saas-action="approve-confirmation" data-saas-confirmation-flow="ebay-oauth-blocked" disabled>确认信息异常，请刷新</button>'
-                                : `<button class="secondary-action" type="button" data-saas-action="revise-confirmation" data-saas-confirmation="${escapeHtml(card.confirmation_id)}">回去补资料</button>
-                                   <button class="primary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(card)}>${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>`
+                                : `<button class="secondary-action" type="button" data-saas-action="revise-confirmation" data-saas-confirmation="${escapeHtml(card.confirmation_id)}">${escapeHtml(saasReviseConfirmationButtonLabel(card))}</button>
+                                   <button class="primary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(card)} ${saasReviseConfirmationBlocksApproval(card) ? 'disabled data-saas-revise-blocked="true"' : ""}>${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>`
                             }
                           </div>`
                         : status === "approved" && isSaasDomesticBillingRefundConfirmation(card)
                           ? renderSaasDomesticRefundConfirmationAction(card)
                         : status === "external_execution_processing_manual_reconcile" &&
+                            !recoveryMarkup &&
                             isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, allCards)
                           ? `<div class="runtime-confirm-actions">
                               <small>上次执行结果不确定，必须先读取 eBay 官方状态；不会自动重试。</small>
@@ -29730,9 +30526,8 @@ function saasMediaGenerationState() {
   const liveReady = backendStateKnown
     ? capability.live_image_generation_enabled === true && capability.live_provider_calls_allowed === true
     : liveImageObserved;
-  const videoReady = backendStateKnown
-    ? capability.live_video_generation_enabled === true && capability.live_provider_calls_allowed === true
-    : Boolean(latestManifestJob && latestManifestJob.resource_type === "video" && liveImageObserved);
+  const videoGate = saasMediaVideoGenerationGate({ videoDurationSeconds: 6 });
+  const videoReady = backendStateKnown && capability.live_video_generation_enabled === true && videoGate.allowed;
   if (liveReady) {
     return {
       configured: true,
@@ -29740,7 +30535,7 @@ function saasMediaGenerationState() {
       videoReady,
       tone: "green",
       title: videoReady ? "图片和视频已接入" : "图片生成已接入",
-      detail: "输出会先进入素材清单，核对实物一致、图片权利和平台规则后，才能回写 Listing。",
+      detail: `${videoReady ? "" : `${videoGate.reason} `}输出会先进入素材清单，核对实物一致、图片权利和平台规则后，才能回写 Listing。`,
     };
   }
   if (configured) {
@@ -30022,7 +30817,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
       <header class="saas-model-overview">
         <h3>${readFailed ? "AI 连接状态暂时无法读取" : merchantModelConfigured ? "账号 AI 已连接" : platformTrial.allowed === true ? "可先试用，再连接账号自己的 AI" : "连接一次，当前账号下的店铺都能使用"}</h3>
         ${active?.model ? `<p class="saas-model-current-model">${escapeHtml(active.model)}</p>` : ""}
-        <p>${readFailed ? "暂时无法确认当前连接状态，已有商品资料和生成结果仍会保留。" : merchantModelConfigured ? "AI CEO、市场报告与上架文案优先使用账号 AI，不消耗捷境试用额度。" : "连接账号 AI 后，用于对话、市场报告与上架文案；未配置时，可用的捷境试用 AI 会消耗试用额度。"}图片和视频仍由素材工坊生成并审核，单独计量。</p>
+        <p>${readFailed ? "暂时无法确认当前连接状态，已有商品资料和生成结果仍会保留。" : merchantModelConfigured ? "AI CEO、市场报告与上架文案优先使用账号 AI，不消耗捷境试用额度。" : "连接账号 AI 后，用于对话、市场报告与上架文案；未配置时，可用的捷境试用 AI 会消耗试用额度。"}图片由素材工坊生成并审核、单独计量；视频生成尚未开放，入口保留。</p>
       </header>
       <details class="saas-model-connection-details" ${connectionReady ? "" : "open"}>
         <summary>连接检测详情</summary>
@@ -30036,10 +30831,10 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
           <li class="${connectionAttempt.verified ? "is-done" : ""}"><span>2</span><strong>服务商检测</strong></li>
           <li class="${connectionAttempt.accountDefault ? "is-done" : ""}"><span>3</span><strong>账号默认</strong></li>
         </ol>`}
-        ${readFailed ? `<button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>重新读取状态</button>` : ""}
+        ${readFailed ? `<button class="secondary-action" type="button" data-saas-action="refresh" data-saas-settings-loading-blocked="false" ${state.saasLoading ? "disabled" : ""}>重新读取状态</button>` : ""}
         ${
           connectionAttempt.canRetry
-            ? `<button class="secondary-action" type="button" data-saas-action="verify-model-connection" ${state.saasLoading || !ctx.store ? "disabled" : ""}>重新检测连接</button>`
+            ? `<button class="secondary-action" type="button" data-saas-action="verify-model-connection" data-saas-settings-loading-blocked="${!ctx.store}" ${state.saasLoading || !ctx.store ? "disabled" : ""}>重新检测连接</button>`
             : ""
         }
         </div>
@@ -30084,7 +30879,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
             </label>
           </div>
           <div class="runtime-bridge-actions">
-            <button class="primary-action" type="button" data-saas-action="save-model-api-key" ${readFailed || state.saasLoading || !ctx.store ? "disabled" : ""}>保存并检测 AI 连接</button>
+            <button class="primary-action" type="button" data-saas-action="save-model-api-key" data-saas-settings-loading-blocked="${readFailed || !ctx.store}" ${readFailed || state.saasLoading || !ctx.store ? "disabled" : ""}>保存并检测 AI 连接</button>
           </div>
         </div>
       </details>
@@ -30095,8 +30890,8 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
       <details class="saas-model-more-tools">
         <summary>更多 AI 工具</summary>
         <div class="runtime-bridge-actions saas-model-live-actions">
-          <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelAvailable ? "disabled" : ""}>生成报告和上架资料</button>
-          <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" ${state.saasLoading || !ctx.store ? "disabled" : ""}>更新经营记录</button>
+          <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" data-saas-settings-loading-blocked="${!ctx.hasPacket || !modelAvailable}" ${state.saasLoading || !ctx.hasPacket || !modelAvailable ? "disabled" : ""}>生成报告和上架资料</button>
+          <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" data-saas-settings-loading-blocked="${!ctx.store}" ${state.saasLoading || !ctx.store ? "disabled" : ""}>更新经营记录</button>
         </div>
       </details>
     </section>
@@ -30263,7 +31058,7 @@ function renderSaasCostAndRunLedgerPanel() {
         <article class="is-amber">
           <span>素材生成</span>
           <strong>素材工坊资产</strong>
-          <small>生成图片和视频素材后进入素材清单，单独计量。</small>
+          <small>生成图片后进入素材清单，单独计量。视频生成尚未开放，入口保留。</small>
         </article>
         <article class="${ledger.reportCount ? "is-green" : "is-amber"}">
           <span>报告运行</span>
@@ -31093,11 +31888,16 @@ function commitSaasActiveListingProjectContext(view = state.view || "product") {
 }
 
 async function refreshSaasState(options = {}) {
-  const { silent = false } = options;
+  const { silent = false, saasRequestIsCurrent = () => true } = options;
+  if (!saasRequestIsCurrent()) return;
   const refreshGeneration = ++saasStateRefreshGeneration;
-  const isCurrentRefresh = () => refreshGeneration === saasStateRefreshGeneration;
+  const isCurrentRefresh = () => refreshGeneration === saasStateRefreshGeneration && saasRequestIsCurrent();
   const canFetchProtectedState = hasSaasProtectedSessionCandidate();
   const activeAccountAliasesBeforeRefresh = new Set(saasAccountStorageAliases());
+  const submittedAtReadStart = [...(state.saasEbaySubmittedOutcomes || [])];
+  let confirmationStateAtReadStart = state.saasConfirmations;
+  let confirmationStateApplied = false;
+  saasRequestIsCurrent.beginLoading?.(refreshGeneration);
   state.saasLoading = true;
   if (canFetchProtectedState && !hasSaasProtectedBackendState()) {
     state.saasProtectedStateReady = false;
@@ -31188,7 +31988,12 @@ async function refreshSaasState(options = {}) {
     state.saasRoles = corePermissions.roles || [];
     state.saasStores = coreStores.stores || [];
     state.saasConnections = coreConnections.connections || [];
-    const restoredCachedState = hydrateSaasProtectedStateFromCache({ me: coreMe, stores: state.saasStores, storeId: store.store_id });
+    const canRestoreCachedState = state.saasConfirmations === confirmationStateAtReadStart;
+    const restoredCachedState = canRestoreCachedState &&
+      hydrateSaasProtectedStateFromCache({ me: coreMe, stores: state.saasStores, storeId: store.store_id });
+    // Only this refresh's synchronous cache hydration may replace its starting
+    // batch. A newer read-only result already owns any other array.
+    if (canRestoreCachedState) confirmationStateAtReadStart = state.saasConfirmations;
     state.saasMerchantOnboarding = coreMerchantOnboarding.merchant_onboarding || null;
     syncSaasOnboardingCompletionFromBackend(state.saasMerchantOnboarding);
     state.saasEbayWriteAdapter = coreEbayWriteAdapter.ebay_write_adapter || null;
@@ -31199,11 +32004,20 @@ async function refreshSaasState(options = {}) {
     state.saasTasks = coreTasks.tasks || [];
     state.saasBrowserSessions = Array.isArray(coreBrowserSessions.sessions) ? coreBrowserSessions.sessions : [];
     const coreLiveConfirmations = coreConfirmations.confirmations || [];
-    await verifySaasUnpublishedDraftSaveConfirmations(coreLiveConfirmations);
-    await verifySaasInventoryLocationConfirmations(coreLiveConfirmations);
-    if (!isCurrentRefresh()) return;
-    state.saasConfirmations = coreLiveConfirmations;
-    state.saasConfirmationsLiveLoaded = true;
+    if (state.saasConfirmations === confirmationStateAtReadStart) {
+      const coreDraftQualifications = await verifySaasUnpublishedDraftSaveConfirmations(coreLiveConfirmations);
+      const coreLocationQualifications = await verifySaasInventoryLocationConfirmations(coreLiveConfirmations);
+      if (!isCurrentRefresh()) return;
+      if (state.saasConfirmations === confirmationStateAtReadStart) {
+        saasVerifiedUnpublishedDraftSaveConfirmations = coreDraftQualifications.draftSave;
+        saasVerifiedControlledPublishConfirmations = coreDraftQualifications.controlledPublish;
+        saasVerifiedInventoryLocationConfirmations = coreLocationQualifications;
+        state.saasConfirmations = coreLiveConfirmations;
+        state.saasConfirmationsLiveLoaded = true;
+        resolveSaasEbaySubmittedOutcomes(coreLiveConfirmations, submittedAtReadStart);
+        confirmationStateApplied = true;
+      }
+    }
     state.saasServiceHealth = coreServiceHealth && typeof coreServiceHealth === "object" ? coreServiceHealth : state.saasServiceHealth;
     state.saasProtectedStateFromCache = false;
     state.saasProtectedStateCachedAt = "";
@@ -31243,7 +32057,8 @@ async function refreshSaasState(options = {}) {
     markSaasProductFeedbackLiveIdentity(coreMe);
     saveSaasProtectedStateSnapshot();
     prepareSaasProductFeedbackScopeAfterIdentity();
-    state.saasLoading = false;
+    if (saasRequestIsCurrent.releaseLoading) saasRequestIsCurrent.releaseLoading();
+    else state.saasLoading = false;
     document.documentElement.classList.remove("app-auth-pending");
     const coreStartupView = consumeSaasStartupRequestedView("cockpit");
     if (isSaasPublicMvpMode() && isProtectedSaasAppRoute()) {
@@ -31451,12 +32266,21 @@ async function refreshSaasState(options = {}) {
     }
     restoreSaasFreshListingCloudProjection();
     restoreSaasExpiredListingGeneration(me, stores.stores);
-    const liveConfirmations = confirmations.confirmations || [];
-    await verifySaasUnpublishedDraftSaveConfirmations(liveConfirmations);
-    await verifySaasInventoryLocationConfirmations(liveConfirmations);
-    if (!isCurrentRefresh()) return;
-    state.saasConfirmations = liveConfirmations;
-    state.saasConfirmationsLiveLoaded = true;
+    // Extended endpoints reuse the core batch. A newer read-only verification
+    // may already have published its bound receipt while those endpoints waited.
+    if (confirmationStateApplied && state.saasConfirmations === coreLiveConfirmations) {
+      const liveConfirmations = confirmations.confirmations || [];
+      const draftQualifications = await verifySaasUnpublishedDraftSaveConfirmations(liveConfirmations);
+      const locationQualifications = await verifySaasInventoryLocationConfirmations(liveConfirmations);
+      if (!isCurrentRefresh()) return;
+      if (state.saasConfirmations === coreLiveConfirmations) {
+        saasVerifiedUnpublishedDraftSaveConfirmations = draftQualifications.draftSave;
+        saasVerifiedControlledPublishConfirmations = draftQualifications.controlledPublish;
+        saasVerifiedInventoryLocationConfirmations = locationQualifications;
+        state.saasConfirmations = liveConfirmations;
+        state.saasConfirmationsLiveLoaded = true;
+      }
+    }
     state.saasMerchantMemory = merchantMemory.merchant_memory || [];
     state.saasExecutionResults = executions.execution_results || state.saasExecutionResults || [];
     state.saasAuditLogs = audit.audit_logs || state.saasAuditLogs || [];
@@ -31507,8 +32331,12 @@ async function refreshSaasState(options = {}) {
     state.saasError = `工作台部分状态读取失败：${error.message}`;
     if (!silent) showActionToast("工作台已保持登录；部分状态读取失败，请刷新重试。");
   } finally {
-    if (!isCurrentRefresh()) return;
-    state.saasLoading = false;
+    if (!isCurrentRefresh()) {
+      if (refreshGeneration === saasStateRefreshGeneration && saasRequestIsCurrent.releaseLoading?.()) renderSaasBackendPanel();
+      return;
+    }
+    if (saasRequestIsCurrent.releaseLoading) saasRequestIsCurrent.releaseLoading();
+    else state.saasLoading = false;
     syncAppStartVisibleShellGuard();
     syncSaasPublicMvpMode();
     renderSaasBackendPanel();
@@ -31517,6 +32345,7 @@ async function refreshSaasState(options = {}) {
     setView(activeSaasRefreshView("cockpit"), { preserveFlowKey: true });
     if (state.saasProtectedStateReady) state.saasStartupRequestedView = "";
   }
+  return { confirmationStateApplied };
 }
 
 const SAAS_PRODUCT_FEEDBACK_ACCOUNT_WIDE_SCOPE = "__account_wide__";
@@ -32656,6 +33485,7 @@ async function createSaasInventoryLocationConfirmation() {
   const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
   const storeId = String(store?.store_id || "").trim();
   const input = readSaasInventoryLocationInput();
+  const requestIsCurrent = saasEbayStoreRequestGuard(storeId, { interaction: true });
   if (!companyId || !storeId || String(store?.platform || "").toLowerCase() !== "ebay") {
     showActionToast("当前没有精确绑定的 eBay 店铺，不能创建库存位置确认单。");
     return false;
@@ -32673,14 +33503,19 @@ async function createSaasInventoryLocationConfirmation() {
     return false;
   }
   saasPendingPublishIntakeFormValues = snapshotSaasPublishIntakeFormValues();
-  state.saasLoading = true;
+  requestIsCurrent.beginLoading();
   state.saasError = "";
   renderSaasBackendPanel();
   try {
+    const replacesId = saasEbayReapprovalId("create_ebay_inventory_location", input);
+    const consumedRecoveryContext = replacesId ? state.saasEbayReapprovalContext : null;
+    if (replacesId) input.replaces_confirmation_id = replacesId;
     const payload = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-inventory-location/confirmation`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify(input),
     });
+    if (!requestIsCurrent()) return false;
     const safe = payload.inventory_location_confirmation || {};
     if (
       !String(safe.confirmation_id || "").trim() ||
@@ -32698,25 +33533,32 @@ async function createSaasInventoryLocationConfirmation() {
     ) {
       throw new Error("inventory_location_confirmation_response_invalid");
     }
-    await refreshSaasState({ silent: true });
+    await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent });
+    if (!requestIsCurrent()) return requestIsCurrent.storeIsCurrent();
     const pending = (state.saasConfirmations || []).filter(
       (card) => String(card?.status || "") === "pending" && isSaasUniqueCurrentInventoryLocationConfirmation(card, state.saasConfirmations || []),
     );
     if (pending.length !== 1 || String(pending[0]?.item?.merchant_location_key || "") !== input.merchant_location_key) {
       throw new Error("inventory_location_confirmation_not_live_exact");
     }
+    if (consumedRecoveryContext && state.saasEbayReapprovalContext === consumedRecoveryContext) {
+      state.saasEbayReapprovalContext = null;
+    }
     state.confirmFilter = "immediate";
     setView("confirm");
+    requestIsCurrent.completed();
     renderSaasConfirmPanel();
     showActionToast("库存位置确认单已创建。批准只记录决定，不会立即写入 eBay。");
     return true;
   } catch (error) {
+    if (!requestIsCurrent()) return false;
     state.saasError = `创建库存位置确认单失败：${error.message}`;
     showActionToast("库存位置确认单创建失败，已停止；没有写入 eBay。");
     return false;
   } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
+    if (requestIsCurrent.releaseLoading()) {
+      renderSaasBackendPanel();
+    }
   }
 }
 
@@ -32731,6 +33573,8 @@ async function executeSaasApprovedInventoryLocation() {
     return false;
   }
   const confirmationId = String(confirmation.confirmation_id || "").trim();
+  const recoveryContext = saasEbayRecoveryContext(confirmation);
+  const requestIsCurrent = saasEbayStoreRequestGuard(storeId, { interaction: true });
   const expectedKey = String(confirmation.item?.merchant_location_key || "").trim();
   const attemptKey = `${companyId}:${storeId}:${confirmationId}`;
   if (!confirmationId || !expectedKey || saasInventoryLocationExecutionAttemptKeys.has(attemptKey)) {
@@ -32739,14 +33583,16 @@ async function executeSaasApprovedInventoryLocation() {
   }
   saasInventoryLocationExecutionAttemptKeys.add(attemptKey);
   saasPendingPublishIntakeFormValues = snapshotSaasPublishIntakeFormValues() || saasPendingPublishIntakeFormValues;
-  state.saasLoading = true;
+  requestIsCurrent.beginLoading();
   state.saasError = "";
   renderSaasBackendPanel();
   try {
     const payload = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-inventory-location/execute`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify({ confirmation_id: confirmationId }),
     });
+    if (!requestIsCurrent()) return false;
     const execution = payload.inventory_location_execution || {};
     if (
       String(execution.status || "") !== "inventory_location_created" ||
@@ -32772,27 +33618,34 @@ async function executeSaasApprovedInventoryLocation() {
     showActionToast("eBay 库存位置已创建并回填。现在可以继续生成未发布草稿确认单。");
     return true;
   } catch (error) {
+    if (!requestIsCurrent()) return false;
+    const recovery = error.payload?.execution_recovery;
+    rememberSaasEbayExecutionRecovery(recovery, recoveryContext);
     state.saasError = `库存位置执行未确认成功：${error.message}`;
-    await refreshSaasState({ silent: true }).catch(() => false);
-    showActionToast("库存位置执行未确认成功。为避免重复写入，本页不会自动重试；请先只读核对 eBay 状态。");
+    await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent }).catch(() => false);
+    if (!requestIsCurrent()) return false;
+    showActionToast(recovery?.zero_write_proven === true ? "本次未发送。请在确认中心返回这个库存位置重新准备，新单仍需明确批准。" : "库存位置执行未确认成功。为避免重复写入，本页不会自动重试；请先只读核对 eBay 状态。");
     return false;
   } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
+    if (requestIsCurrent.releaseLoading()) {
+      renderSaasBackendPanel();
+    }
   }
 }
 
-async function reconcileSaasInventoryLocation() {
+async function reconcileSaasInventoryLocation(confirmationId = "") {
   if (!requireSaasProtectedSessionForAction()) return false;
   const store = activeSaasStore();
   const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
   const storeId = String(store?.store_id || "").trim();
-  const confirmation = saasExactManualReconcileInventoryLocationConfirmation();
-  if (!companyId || !storeId || !confirmation || String(store?.platform || "").toLowerCase() !== "ebay") {
+  const confirmation = confirmationId ? saasEbayRecoveryCard(confirmationId) : saasExactManualReconcileInventoryLocationConfirmation();
+  if (!companyId || !storeId || !confirmation || confirmation.action_type !== "create_ebay_inventory_location" ||
+      confirmation.status !== "external_execution_processing_manual_reconcile" || String(store?.platform || "").toLowerCase() !== "ebay") {
     showActionToast("当前没有唯一、精确且属于当前店铺的待核对库存位置；系统没有重试写入。");
     return false;
   }
-  const confirmationId = String(confirmation.confirmation_id || "").trim();
+  confirmationId = String(confirmation.confirmation_id || "").trim();
+  const requestIsCurrent = saasEbayStoreRequestGuard(storeId, { interaction: true });
   const expectedKey = String(confirmation.item?.merchant_location_key || "").trim();
   const attemptKey = `${companyId}:${storeId}:${confirmationId}`;
   if (!confirmationId || !expectedKey || saasInventoryLocationReconciliationAttemptKeys.has(attemptKey)) {
@@ -32801,14 +33654,16 @@ async function reconcileSaasInventoryLocation() {
   }
   saasInventoryLocationReconciliationAttemptKeys.add(attemptKey);
   saasPendingPublishIntakeFormValues = snapshotSaasPublishIntakeFormValues() || saasPendingPublishIntakeFormValues;
-  state.saasLoading = true;
+  requestIsCurrent.beginLoading();
   state.saasError = "";
   renderSaasBackendPanel();
   try {
     const payload = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-inventory-location/reconcile`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify({ confirmation_id: confirmationId }),
     });
+    if (!requestIsCurrent()) return false;
     const reconciliation = payload.inventory_location_reconciliation || {};
     if (
       String(reconciliation.status || "") !== "inventory_location_created" ||
@@ -32839,13 +33694,16 @@ async function reconcileSaasInventoryLocation() {
     showActionToast("已通过 eBay 只读查询确认库存位置存在并回填；没有发起第二次写入。");
     return true;
   } catch (error) {
+    if (!requestIsCurrent()) return false;
     state.saasError = `库存位置只读核对未能确认：${error.message}`;
-    await refreshSaasState({ silent: true }).catch(() => false);
+    await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent }).catch(() => false);
+    if (!requestIsCurrent()) return false;
     showActionToast("只读核对仍无法确认库存位置。系统保持暂停，不会自动重试写入。");
     return false;
   } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
+    if (requestIsCurrent.releaseLoading()) {
+      renderSaasBackendPanel();
+    }
   }
 }
 
@@ -32856,6 +33714,7 @@ async function createSaasExistingDraftPublishConfirmation(button = null) {
   const offerId = String(button?.dataset?.saasOfferId || "").trim();
   const sku = String(button?.dataset?.saasSku || "").trim();
   const executionId = String(button?.dataset?.saasExecutionId || "").trim();
+  const requestIsCurrent = saasEbayStoreRequestGuard(String(store?.store_id || ""), { interaction: true });
   if (
     !store?.store_id ||
     !receipt ||
@@ -32866,17 +33725,21 @@ async function createSaasExistingDraftPublishConfirmation(button = null) {
     showActionToast("当前 eBay 草稿回执已变化或不属于这个 Listing；系统没有创建正式发布确认单。");
     return false;
   }
-  state.saasLoading = true;
+  requestIsCurrent.beginLoading();
   state.saasError = "";
   renderSaasBackendPanel();
   try {
+    const replacesId = saasEbayReapprovalId("publish_listing", { offer_id: offerId, sku });
+    const consumedRecoveryContext = replacesId ? state.saasEbayReapprovalContext : null;
     const result = await saasFetch(
       `/stores/${encodeURIComponent(store.store_id)}/existing-draft-publish-confirmation`,
       {
         method: "POST",
-        body: JSON.stringify({ offer_id: offerId, sku, execution_id: executionId }),
+        saasRequestIsCurrent: requestIsCurrent,
+        body: JSON.stringify({ offer_id: offerId, sku, execution_id: executionId, ...(replacesId ? { replaces_confirmation_id: replacesId } : {}) }),
       },
     );
+    if (!requestIsCurrent()) return false;
     const confirmation = result.confirmation && typeof result.confirmation === "object" ? result.confirmation : {};
     const item = confirmation.item && typeof confirmation.item === "object" ? confirmation.item : {};
     const draft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
@@ -32917,19 +33780,26 @@ async function createSaasExistingDraftPublishConfirmation(button = null) {
       secret_exposed: false,
       captured_at: new Date().toISOString(),
     };
-    await refreshSaasState({ silent: true });
+    await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent });
+    if (!requestIsCurrent()) return requestIsCurrent.storeIsCurrent();
+    if (consumedRecoveryContext && state.saasEbayReapprovalContext === consumedRecoveryContext) {
+      state.saasEbayReapprovalContext = null;
+    }
     state.confirmFilter = "immediate";
     setView("confirm");
+    requestIsCurrent.completed();
     renderSaasConfirmPanel();
     showActionToast("正式发布确认单已创建：它只绑定当前 Offer；你未明确同意前不会公开发布。");
     return true;
   } catch (error) {
+    if (!requestIsCurrent()) return false;
     state.saasError = `创建正式发布确认单失败：${error.message}`;
     showActionToast("正式发布确认单创建失败，已停住；没有调用 publishOffer。");
     return false;
   } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
+    if (requestIsCurrent.releaseLoading()) {
+      renderSaasBackendPanel();
+    }
   }
 }
 
@@ -33084,19 +33954,25 @@ async function createSaasPublishConfirmationFromIntakeForm(mode = "publish") {
     return false;
   }
   const payload = readSaasPublishIntakeForm();
+  const requestIsCurrent = saasEbayStoreRequestGuard(store.store_id, { interaction: true });
   if (!payload?.listing?.title || !payload?.listing?.category_id || !payload?.listing?.price?.value) {
     showActionToast("先填写标题、类目 ID 和价格；缺口会进入发布体检报告。");
     return false;
   }
-  state.saasLoading = true;
+  requestIsCurrent.beginLoading();
   state.saasError = "";
   renderSaasBackendPanel();
   try {
     const endpoint = draftSave ? "ebay-draft-confirmation" : "publish-confirmation";
+    const replacesId = saasEbayReapprovalId(draftSave ? "save_ebay_listing_draft" : "publish_listing", payload);
+    const consumedRecoveryContext = replacesId ? state.saasEbayReapprovalContext : null;
+    if (replacesId) payload.replaces_confirmation_id = replacesId;
     const result = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/${endpoint}`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify(payload),
     });
+    if (!requestIsCurrent()) return false;
     const publishReadiness = result.publish_readiness || state.saasLastPublishReadiness || null;
     state.saasLastPublishReadiness = publishReadiness;
     if (result.confirmation && typeof result.confirmation === "object") {
@@ -33123,11 +33999,17 @@ async function createSaasPublishConfirmationFromIntakeForm(mode = "publish") {
       secret_exposed: false,
       captured_at: new Date().toISOString(),
     };
-    await refreshSaasState({ silent: true });
+    await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent });
+    if (!requestIsCurrent()) return requestIsCurrent.storeIsCurrent();
+    if (consumedRecoveryContext && state.saasEbayReapprovalContext === consumedRecoveryContext) {
+      state.saasEbayReapprovalContext = null;
+    }
     state.saasLastPublishReadiness = publishReadiness || state.saasLastPublishReadiness || null;
     state.confirmFilter = "immediate";
     setView("product");
+    requestIsCurrent.completed();
     window.setTimeout(() => {
+      if (!requestIsCurrent() || state.view !== "product") return;
       const target =
         document.querySelector('[data-listing-visible-publish-bridge="listing_visible_publish_bridge_v1"]') ||
         document.querySelector('[data-listing-publish-feedback="listing_publish_feedback_visible_v1"]') ||
@@ -33142,13 +34024,15 @@ async function createSaasPublishConfirmationFromIntakeForm(mode = "publish") {
     );
     return true;
   } catch (error) {
+    if (!requestIsCurrent()) return false;
     state.saasError = `${draftSave ? "创建 eBay 草稿确认单" : "创建发布确认单"}失败：${error.message}`;
     showActionToast(`${draftSave ? "创建 eBay 草稿确认单" : "创建发布确认单"}失败，已停住，没有写入 eBay。`);
     renderSaasBackendPanel();
     return false;
   } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
+    if (requestIsCurrent.releaseLoading()) {
+      renderSaasBackendPanel();
+    }
   }
 }
 
@@ -33167,31 +34051,177 @@ function continueSaasMvpAfterAuth() {
   window.setTimeout(() => openOnboarding(), 0);
 }
 
+function saasReviseConfirmationAttemptKey(confirmation) {
+  return JSON.stringify([String(state.saasIdentity?.user_id || ""), ...["company_id", "store_id", "confirmation_id", "task_id", "action_type"]
+    .map((key) => String(confirmation?.[key] || ""))]);
+}
+
+function saasReviseConfirmationButtonLabel(confirmation) {
+  const attempt = state.saasReviseConfirmationAttempts?.get(saasReviseConfirmationAttemptKey(confirmation));
+  return attempt?.inFlight ? "正在核对退回状态" : attempt ? "只读核对退回状态" : "回去补资料";
+}
+
+function saasReviseConfirmationBlocksApproval(confirmation) {
+  const attempt = state.saasReviseConfirmationAttempts?.get(saasReviseConfirmationAttemptKey(confirmation));
+  return Boolean(attempt && (attempt.inFlight || attempt.outcome !== "rejected_and_confirmed"));
+}
+
+function syncSaasReviseConfirmationButtons(confirmation) {
+  const attempt = state.saasReviseConfirmationAttempts?.get(saasReviseConfirmationAttemptKey(confirmation));
+  document.querySelectorAll?.('[data-saas-action="revise-confirmation"]').forEach((button) => {
+    if (button.dataset.saasConfirmation !== confirmation.confirmation_id) return;
+    button.textContent = saasReviseConfirmationButtonLabel(confirmation);
+    button.disabled = attempt?.inFlight === true;
+  });
+  document.querySelectorAll?.('[data-saas-action="approve-confirmation"]').forEach((button) => {
+    if (button.dataset.saasConfirmation !== confirmation.confirmation_id) return;
+    if (saasReviseConfirmationBlocksApproval(confirmation)) {
+      if (!button.disabled) button.dataset.saasReviseBlocked = "true";
+      button.disabled = true;
+    } else if (button.dataset.saasReviseBlocked === "true") {
+      delete button.dataset.saasReviseBlocked;
+      button.disabled = false;
+    }
+  });
+}
+
+function saasCompanyReviseRequestGuard() {
+  const accountEpoch = saasAccountSessionEpoch;
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "");
+  const userId = String(state.saasIdentity?.user_id || "");
+  const storeId = String(activeSaasStore()?.store_id || "");
+  const requestEpoch = state.saasEbayRequestEpoch || 0;
+  const request = {};
+  state.saasEbayInteractionRequest = request;
+  const projectKey = () => typeof saasCurrentListingProjectIdentity === "function" ? saasCurrentListingProjectIdentity()?.key || "" : "";
+  const project = projectKey();
+  const projectGeneration = state.saasMerchantProjectStatusRequestGeneration || 0;
+  const view = state.view;
+  const viewEpoch = state.saasEbayViewEpoch || 0;
+  return () => accountEpoch === saasAccountSessionEpoch && companyId === String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "") &&
+    userId === String(state.saasIdentity?.user_id || "") && storeId === String(activeSaasStore()?.store_id || "") &&
+    requestEpoch === (state.saasEbayRequestEpoch || 0) && state.saasEbayInteractionRequest === request &&
+    project === projectKey() && projectGeneration === (state.saasMerchantProjectStatusRequestGeneration || 0) &&
+    view === state.view && viewEpoch === (state.saasEbayViewEpoch || 0);
+}
+
+function saasRevisedConfirmationMatches(confirmation, card, expectedStatus = "needs_revision") {
+  return card && ["confirmation_id", "company_id", "store_id", "task_id", "action_type"]
+    .every((key) => String(card[key] || "") === String(confirmation[key] || "")) && card.status === expectedStatus;
+}
+
+async function refreshSaasRevisedConfirmation(confirmation, decision, requestIsCurrent, rejectedRequest = false) {
+  if (decision && !saasRevisedConfirmationMatches(confirmation, decision.confirmation)) throw new Error("退回回执与原确认项不一致，请只读核对原记录。");
+  const payload = await saasFetch("/confirmations?limit=40", { saasRequestIsCurrent: requestIsCurrent });
+  if (!requestIsCurrent()) return false;
+  const matches = (payload.confirmations || []).filter((card) => card.confirmation_id === confirmation.confirmation_id);
+  if (!decision && rejectedRequest && matches.length === 1 && saasRevisedConfirmationMatches(confirmation, matches[0], "pending")) return confirmation;
+  if (matches.length !== 1 || !saasRevisedConfirmationMatches(confirmation, matches[0])) throw new Error("确认项回读尚未核对一致，请勿重复提交。");
+  let task = null;
+  if (confirmation.task_id) {
+    const detail = await saasFetch(`/tasks/${encodeURIComponent(confirmation.task_id)}`, { saasRequestIsCurrent: requestIsCurrent });
+    if (!requestIsCurrent()) return false;
+    task = detail.task;
+    if (!task || ["task_id", "company_id", "store_id"].some((key) => String(task[key] || "") !== String(confirmation[key] || "")) ||
+        typeof task.status !== "string" || !task.status || ["queued", "waiting_confirmation"].includes(task.status))
+      throw new Error("关联任务回读尚未核对一致，请勿重复提交。");
+  }
+  if (!requestIsCurrent()) return false;
+  state.saasConfirmations = state.saasConfirmations.map((card) => card === confirmation ? matches[0] : card);
+  if (task) state.saasTasks = (state.saasTasks || []).map((item) =>
+    ["task_id", "company_id", "store_id"].every((key) => String(item[key] || "") === String(task[key] || "")) ? task : item);
+  return matches[0];
+}
+
 async function reviseSaasConfirmation(confirmationId = "") {
-  const confirmation =
-    (confirmationId && (state.saasConfirmations || []).find((item) => item.confirmation_id === confirmationId)) ||
-    (state.saasConfirmations || []).find((item) => item.status === "pending");
-  if (!confirmation || confirmation.status !== "pending") {
+  const id = typeof confirmationId === "string" ? confirmationId.trim() : "";
+  const matches = (state.saasConfirmations || []).filter((item) => item.confirmation_id === id);
+  const confirmation = matches.length === 1 ? matches[0] : null;
+  if (!id || !confirmation || confirmation.status !== "pending") {
     showActionToast("当前没有可退回补资料的确认项。");
     return false;
   }
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "");
+  const userId = String(state.saasIdentity?.user_id || "");
+  if (!companyId || !userId || confirmation.company_id !== companyId) {
+    showActionToast("请从当前公司的确认单明确选择；没有提交退回请求。");
+    return false;
+  }
+  const ebayAction = ["publish_listing", "save_ebay_listing_draft", "cleanup_test_listing", "create_ebay_inventory_location"].includes(confirmation.action_type) ||
+    String(confirmation.action_type || "").startsWith("ebay_");
+  if ((ebayAction && !confirmation.store_id) ||
+      (confirmation.store_id && confirmation.store_id !== String(activeSaasStore()?.store_id || ""))) {
+    showActionToast("请从当前店铺的确认单明确选择；没有提交退回请求。");
+    return false;
+  }
+  const attempts = state.saasReviseConfirmationAttempts || (state.saasReviseConfirmationAttempts = new Map());
+  const attemptKey = saasReviseConfirmationAttemptKey(confirmation);
+  const previousAttempt = attempts.get(attemptKey);
+  if (previousAttempt?.inFlight) {
+    showActionToast("这张确认单正在退回或核对中，请勿重复点击。");
+    return false;
+  }
+  const interactionIsCurrent = confirmation.store_id
+    ? saasEbayStoreRequestGuard(confirmation.store_id, { interaction: true })
+    : saasCompanyReviseRequestGuard();
+  const refreshGeneration = saasStateRefreshGeneration;
+  const contextIsCurrent = () => interactionIsCurrent() && saasStateRefreshGeneration === refreshGeneration &&
+    userId === String(state.saasIdentity?.user_id || "");
+  const originalFields = ["confirmation_id", "company_id", "store_id", "task_id", "action_type", "status"]
+    .map((key) => [key, String(confirmation[key] || "")]);
+  const exactCurrentCard = (expected) => {
+    const current = (state.saasConfirmations || []).filter((card) => card.confirmation_id === id);
+    return current.length === 1 && current[0] === expected;
+  };
+  const requestIsCurrent = () => contextIsCurrent() && exactCurrentCard(confirmation) &&
+    originalFields.every(([key, value]) => String(confirmation[key] || "") === value);
+  if (!requestIsCurrent()) return false;
+  const attempt = previousAttempt || { inFlight: false, sent: false, outcome: "unknown", decision: null };
+  attempt.inFlight = true;
+  attempts.set(attemptKey, attempt);
+  let decisionAccepted = Boolean(attempt.decision);
+  let appliedCard = null;
+  let posting = false;
+  syncSaasReviseConfirmationButtons(confirmation);
   try {
-    await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/decision`, {
+    if (!attempt.sent) {
+      attempt.sent = true;
+      posting = true;
+      const decision = await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/decision`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify({
         decision: "modify",
         note: "Merchant returned this item for more facts. No preflight or execution was requested.",
       }),
-    });
-    await refreshSaasState({ silent: true });
+      });
+      if (!saasRevisedConfirmationMatches(confirmation, decision?.confirmation)) throw new Error("退回回执与原确认项不一致，请只读核对原记录。");
+      attempt.decision = decision;
+      attempt.outcome = "accepted";
+      decisionAccepted = true;
+    }
+    if (!requestIsCurrent()) return false;
+    const refreshed = await refreshSaasRevisedConfirmation(confirmation, attempt.decision, requestIsCurrent, ["rejected", "rejected_and_confirmed"].includes(attempt.outcome));
+    if (!refreshed || !contextIsCurrent() || !exactCurrentCard(refreshed)) return false;
+    appliedCard = refreshed;
+    attempt.outcome = refreshed.status === "pending" ? "rejected_and_confirmed" : decisionAccepted ? "accepted_and_confirmed" : "readback_confirmed";
+    if (state.saasError === attempt.lastError) state.saasError = "";
     renderSaasBackendPanel();
-    showActionToast("已退回补资料；没有执行发布、付款或其他平台动作。");
+    showActionToast(attempt.outcome === "rejected_and_confirmed" ? "已核对：退回请求被拒绝，原确认单仍待确认；没有自动批准或执行。" : "已退回补资料；没有执行发布、付款或其他平台动作。");
     return true;
   } catch (error) {
-    state.saasError = `退回补资料失败：${error.message}`;
+    if (posting && !decisionAccepted) attempt.outcome = [400, 401, 403, 404].includes(Number(error?.status)) ? "rejected" : "unknown";
+    if (!requestIsCurrent()) return false;
+    state.saasError = decisionAccepted ? "退回请求已提交，回读尚未确认；请只读核对原记录，勿重复提交。" :
+      attempt.outcome === "rejected" ? "退回请求被后端拒绝；请核对权限与原记录，不会自动重发。" :
+      "退回请求结果待核对；尚不能确认是否已提交，请只读核对原记录，勿重复提交。";
+    attempt.lastError = state.saasError;
     renderSaasBackendPanel();
-    showActionToast("退回补资料失败，已停止；没有执行平台动作。");
+    showActionToast(state.saasError);
     return false;
+  } finally {
+    attempt.inFlight = false;
+    if (contextIsCurrent() && exactCurrentCard(appliedCard || confirmation)) syncSaasReviseConfirmationButtons(confirmation);
   }
 }
 
@@ -33204,6 +34234,22 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
     showActionToast("当前没有需要确认的动作。");
     return;
   }
+  if (saasReviseConfirmationBlocksApproval(confirmation)) {
+    showActionToast("这张确认单的退回结果尚需核对；当前不能同时批准，请先只读核对原记录。");
+    return false;
+  }
+  const ebayWrite = ["publish_listing", "save_ebay_listing_draft", "cleanup_test_listing", "create_ebay_inventory_location"].includes(confirmation.action_type);
+  if (ebayWrite && (!confirmationId || !saasEbayRecoveryCard(confirmationId))) {
+    showActionToast("请从当前店铺的这张确认单明确选择；系统没有批准或执行。"); return;
+  }
+  if (ebayWrite && (confirmation.status !== "pending" || saasEbaySubmittedOutcome(confirmation))) {
+    showActionToast("这次请求不可重复批准；结果待核对时请只读核对原记录。"); return;
+  }
+  const recoveryContext = saasEbayRecoveryContext(confirmation);
+  const interactionIsCurrent = ebayWrite ? saasEbayStoreRequestGuard(confirmation.store_id, { interaction: true }) : null;
+  const requestIsCurrent = () => !ebayWrite || (interactionIsCurrent() && isSaasEbayRecoveryContextCurrent(recoveryContext));
+  requestIsCurrent.beginLoading = interactionIsCurrent?.beginLoading;
+  requestIsCurrent.releaseLoading = interactionIsCurrent?.releaseLoading;
   if (
     (isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) || isSaasInventoryLocationSensitiveConfirmation(confirmation)) &&
     (!confirmationId || String(confirmation.confirmation_id || "") !== String(confirmationId))
@@ -33245,6 +34291,7 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
     };
     await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/decision`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify({
         decision: "approve",
         note: isDomesticBillingRefund
@@ -33262,6 +34309,7 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
             : "Merchant confirmation recorded from the SaaS workbench. Backend must run execution preflight before any eBay write.",
       }),
     });
+    if (!requestIsCurrent()) return;
     if (isExactReadOnlyOAuth) {
       await refreshSaasState({ silent: true });
       const approved = saasExactReadOnlyOAuthConfirmationForStore(currentStoreId);
@@ -33293,7 +34341,8 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
       return;
     }
     if (isExactInventoryLocation) {
-      await refreshSaasState({ silent: true });
+      await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent });
+      if (!requestIsCurrent()) return;
       const approved = saasExactApprovedInventoryLocationConfirmation();
       if (!approved || !isSaasFreshApprovedInventoryLocationConfirmation(approved)) {
         throw new Error("inventory_location_confirmation_approval_not_current");
@@ -33310,8 +34359,10 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
     }
     const preflight = await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/preflight`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify(executionPayload),
     });
+    if (!requestIsCurrent()) return;
     state.saasPreflightResults = [preflight.preflight, ...(state.saasPreflightResults || [])].filter(Boolean).slice(0, 5);
     state.saasLastPublishReadiness = preflight.publish_readiness || state.saasLastPublishReadiness || null;
     if (!["ready_for_platform_adapter", "ready_low_risk"].includes(preflight.preflight?.status)) {
@@ -33320,19 +34371,37 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
         : "";
       const missing = readinessBlockers || (Array.isArray(preflight.preflight?.missing_fields) ? preflight.preflight.missing_fields.slice(0, 5).join(" / ") : "execution facts");
       state.saasError = `确认已记录，但发布前检查未通过：缺 ${missing}`;
-      await refreshSaasState({ silent: true });
+      await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent });
+      if (!requestIsCurrent()) return;
       renderSaasBackendPanel();
       showActionToast("确认已记录；发布前检查未通过，缺少发布资料。");
       return;
     }
+    if (ebayWrite) {
+      if (!rememberSaasEbaySubmittedOutcome(confirmation)) throw new Error("提交对象已变化，请只读刷新核对");
+      renderSaasConfirmPanel();
+    }
     const executionResponse = await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/execute`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify(executionPayload),
     });
+    if (!requestIsCurrent()) return;
     const execution = executionResponse.execution || {};
-    await refreshSaasState({ silent: true });
+    const recovery = executionResponse.execution_recovery || execution.execution_recovery;
+    rememberSaasEbayExecutionRecovery(recovery, recoveryContext);
+    const refreshed = await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent });
+    if (!requestIsCurrent()) return;
+    if (ebayWrite && (refreshed?.confirmationStateApplied !== true || saasEbaySubmittedOutcome(saasEbayRecoveryCard(confirmationId)))) {
+      showActionToast("请求已提交，结果待核对；请只读核对，不要再次批准或执行。");
+      return;
+    }
+    if (recovery) {
+      showActionToast(saasBackendErrorMessage(409, "", {execution_recovery:recovery}));
+      return;
+    }
     if (execution.status === "blocked_platform_error") {
-      showActionToast("eBay 返回平台错误，已记录到确认中心；先核对平台状态再决定是否重试。");
+      showActionToast("eBay 返回平台错误，已记录到确认中心；请先只读核对平台状态，不要重复执行。");
     } else {
       showActionToast(
         state.saasEbayWriteAdapter?.real_platform_writes_enabled === true ||
@@ -33342,9 +34411,11 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
       );
     }
   } catch (error) {
+    if (!requestIsCurrent()) return;
+    rememberSaasEbayExecutionRecovery(error.payload?.execution_recovery, recoveryContext);
     state.saasError = `确认处理失败：${error.message}`;
     renderSaasBackendPanel();
-    showActionToast("确认处理失败，已停住。");
+    showActionToast(error.payload?.execution_recovery ? error.message : "确认处理失败，已停住。不会自动重试执行。");
   }
 }
 
@@ -33385,26 +34456,29 @@ async function loginSaasBackendSession(button = null) {
 }
 
 async function recoverSaasPublishState(confirmationId = "") {
-  const confirmation =
-    saasLatestPublishConfirmation(confirmationId) ||
-    state.saasConfirmations[0];
+  const selected = confirmationId ? saasEbayRecoveryCard(confirmationId) : saasLatestPublishConfirmation();
+  const confirmation = selected && saasEbayRecoveryCard(selected.confirmation_id);
   if (!confirmation) {
     showActionToast("当前没有可核对的发布确认项。");
     return;
   }
-  state.saasLoading = true;
+  const requestIsCurrent = saasEbayStoreRequestGuard(confirmation.store_id, { interaction: true });
+  requestIsCurrent.beginLoading();
   renderSaasBackendPanel();
   try {
     const payload = await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/publish-recovery`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify({
         platform: "ebay",
         idempotency_key: `recovery-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       }),
     });
+    if (!requestIsCurrent()) return false;
     state.saasLastPublishRecovery = payload.publish_recovery || null;
     state.saasLastPublishReadiness = payload.publish_readiness || state.saasLastPublishReadiness || null;
-    await refreshSaasState({ silent: true });
+    await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent });
+    if (!requestIsCurrent()) return false;
     const recovery = payload.publish_recovery || {};
     showActionToast(
       payload.fresh_confirmation_required === true && recovery.safe_to_request_fresh_confirmation === true
@@ -33414,33 +34488,38 @@ async function recoverSaasPublishState(confirmationId = "") {
           : "已核对 eBay 平台状态：禁止盲目重试，按恢复建议处理。",
     );
   } catch (error) {
+    if (!requestIsCurrent()) return false;
     state.saasError = `发布恢复核对失败：${error.message}`;
     renderSaasBackendPanel();
     showActionToast("发布恢复核对失败，未执行任何 eBay 写入。");
   } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
+    if (requestIsCurrent.releaseLoading()) {
+      renderSaasBackendPanel();
+    }
   }
 }
 
-async function createSaasTestListingCleanupPlan(confirmationId = "") {
-  const confirmation =
-    saasLatestPublishConfirmation(confirmationId) ||
-    state.saasConfirmations[0];
+async function createSaasTestListingCleanupPlan(confirmationId = "", replacesConfirmationId = "") {
+  const selected = confirmationId ? saasEbayRecoveryCard(confirmationId) : saasLatestPublishConfirmation();
+  const confirmation = selected && saasEbayRecoveryCard(selected.confirmation_id);
   if (!confirmation) {
     showActionToast("当前没有可生成清理计划的发布确认项。");
     return;
   }
-  state.saasLoading = true;
+  const requestIsCurrent = saasEbayStoreRequestGuard(confirmation.store_id, { interaction: true });
+  requestIsCurrent.beginLoading();
   renderSaasBackendPanel();
   try {
     const payload = await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/publish-cleanup-plan`, {
       method: "POST",
+      saasRequestIsCurrent: requestIsCurrent,
       body: JSON.stringify({
+        ...(replacesConfirmationId ? {replaces_confirmation_id:replacesConfirmationId} : {}),
         platform: "ebay",
         idempotency_key: `cleanup-plan-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       }),
     });
+    if (!requestIsCurrent()) return false;
     state.saasLastPublishRecovery = payload.publish_recovery || state.saasLastPublishRecovery || null;
     if (payload.cleanup_confirmation) {
       const existing = new Set((state.saasConfirmations || []).map((item) => item.confirmation_id));
@@ -33450,19 +34529,22 @@ async function createSaasTestListingCleanupPlan(confirmationId = "") {
           )
         : [payload.cleanup_confirmation, ...(state.saasConfirmations || [])];
     }
-    await refreshSaasState({ silent: true });
+    await refreshSaasState({ silent: true, saasRequestIsCurrent: requestIsCurrent });
+    if (!requestIsCurrent()) return false;
     showActionToast(
       payload.created
         ? "已生成测试 listing 清理确认单：不会静默删除，必须在确认中心留痕后再执行。"
         : "已核对平台状态：当前没有可生成的清理动作。",
     );
   } catch (error) {
+    if (!requestIsCurrent()) return false;
     state.saasError = `生成测试 listing 清理确认单失败：${error.message}`;
     renderSaasBackendPanel();
     showActionToast("生成清理确认单失败；未执行任何 eBay 写入。");
   } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
+    if (requestIsCurrent.releaseLoading()) {
+      renderSaasBackendPanel();
+    }
   }
 }
 
@@ -34990,6 +36072,7 @@ function invalidateSaasListingCloudCheckpointContext() {
     record.timer = null;
     record.loaded = false;
   }
+  updateSaasListingRecoveredCheckpointSlots();
 }
 
 function applySaasListingCloudFields(record) {
@@ -35033,6 +36116,39 @@ function syncSaasListingCloudEditorFields() {
   syncSaasListingDraftHeading();
 }
 
+function renderSaasListingRecoveredCheckpointBody(draft = state.saasListingComposerDraft) {
+  const context = saasListingCloudContext();
+  if (!context || draft !== state.saasListingComposerDraft) return "";
+  // A cached receipt alone is not an authenticated recovery. Match the same
+  // fresh projection evidence as restoreSaasFreshListingCloudProjection, but
+  // never call apply or change the wizard/form just to display saved copy.
+  const record = saasListingCloudRecords.get(context.key);
+  const baseId = saasListingCloudBaseReport(context)?.report_id;
+  if (!record || !record.loaded || record.observedRefreshGeneration !== saasStateRefreshGeneration ||
+      record.observedBaseReportId !== baseId || record.baseReportId !== baseId ||
+      record.status !== "saved" || record.dirty || record.pending || record.conflict || record.read || record.write) return "";
+  const receipt = saasListingCloudReceipt(record.receipt, context);
+  if (!receipt || receipt.revision !== record.revision || receipt.base_report_id !== baseId ||
+      JSON.stringify(receipt.fields) !== JSON.stringify(record.fields) ||
+      JSON.stringify(receipt.fields) !== JSON.stringify(saasListingCloudFields(draft?.fields)) ||
+      !saasListingCloudSamePublishIntake(receipt.publish_intake, record.publishIntake) ||
+      JSON.stringify(receipt.merchant_edited_fields) !== JSON.stringify(record.edited) ||
+      JSON.stringify(receipt.merchant_edited_fields) !== JSON.stringify(saasListingMerchantEditedFields(draft))) return "";
+  const fields = [["title", "商品标题"], ["selling_points", "商品卖点"], ["description", "商品描述"]];
+  return `<section class="saas-product-facts-simulation-note" data-saas-listing-recovered-checkpoint aria-label="已恢复的云端文案">
+    <strong>已恢复的云端文案</strong><span>只读查看已保存内容；不改变当前步骤，也不代表生成或发布已完成。</span>
+    <dl style="min-width:0;max-width:100%">${fields.map(([key, label]) => `<dt>${label}</dt><dd data-saas-listing-recovered-field="${key}" style="margin:0 0 0.6em;white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(receipt.fields[key] === "" ? "已清空" : receipt.fields[key])}</dd>`).join("")}</dl>
+  </section>`;
+}
+
+function updateSaasListingRecoveredCheckpointSlots() {
+  const html = renderSaasListingRecoveredCheckpointBody();
+  document.querySelectorAll("[data-saas-listing-recovered-checkpoint-slot]").forEach((slot) => {
+    if (slot.innerHTML !== html) slot.innerHTML = html;
+    slot.hidden = !html;
+  });
+}
+
 function renderSaasListingCloudCheckpointStatus() {
   const record = saasListingCloudRecord();
   if (!record) return "";
@@ -35071,6 +36187,7 @@ function updateSaasListingCloudStatus(record) {
   document.querySelectorAll("[data-saas-listing-cloud-slot]").forEach((slot) => { slot.innerHTML = renderSaasListingCloudCheckpointStatus(); });
   document.querySelectorAll("[data-saas-publish-intake-draft-status]").forEach((slot) => { slot.textContent = saasPublishIntakeDraftStatusText(); });
   document.querySelectorAll("[data-saas-publish-cloud-slot]").forEach((slot) => { slot.innerHTML = record.conflict || record.backups.length || ["error", "forbidden", "unavailable"].includes(record.status) ? renderSaasListingCloudCheckpointStatus() : ""; });
+  updateSaasListingRecoveredCheckpointSlots();
 }
 
 function ensureSaasListingCloudCheckpoint() {
@@ -35218,7 +36335,8 @@ async function hydrateSaasListingCloudCheckpoint(options = {}) {
       updateSaasListingCloudStatus(record);
       return false;
     } finally {
-      if (record.readEpoch === epoch && record.readRefreshGeneration === refreshGeneration) record.read = null;
+      const retiredRead = record.readEpoch === epoch && record.readRefreshGeneration === refreshGeneration;
+      if (retiredRead) record.read = null;
       if (scopeCurrent()) syncSaasPublishIntakeAfterCloudRead();
       if (scopeCurrent() && record.observedBaseReportId !== (saasListingCloudBaseReport(context)?.report_id || "") && !record.read) {
         record.loaded = false;
@@ -35229,8 +36347,10 @@ async function hydrateSaasListingCloudCheckpoint(options = {}) {
       if (scopeCurrent() && record.dirty && record.status === "pending" && !record.write && !record.timer) {
         record.timer = setTimeout(() => { record.timer = null; void flushSaasListingCloudCheckpoint(); }, 1000);
       }
+      if (retiredRead && current()) updateSaasListingRecoveredCheckpointSlots();
     }
   })();
+  updateSaasListingRecoveredCheckpointSlots();
   return record.read;
 }
 
@@ -38436,6 +39556,10 @@ function handleSaasAction(button) {
     "approve-confirmation",
     "revise-confirmation",
     "recover-publish",
+    "reprepare-ebay-execution",
+    "reconcile-ebay-execution",
+    "view-ebay-replacement",
+    "check-ebay-submitted-outcome",
     "create-cleanup-plan",
     "manual-beta-create-order",
     "manual-beta-confirm-order",
@@ -38582,6 +39706,14 @@ function handleSaasAction(button) {
   }
   if (action === "recover-publish") {
     recoverSaasPublishState(button.dataset.saasConfirmation || "");
+    return;
+  }
+  if (["reprepare-ebay-execution", "reconcile-ebay-execution", "view-ebay-replacement"].includes(action)) {
+    handleSaasEbayExecutionRecovery(button.dataset.saasConfirmation || "", action === "reprepare-ebay-execution" ? "prepare" : action === "reconcile-ebay-execution" ? "reconcile" : "replacement");
+    return;
+  }
+  if (action === "check-ebay-submitted-outcome") {
+    checkSaasEbaySubmittedOutcome(button.dataset.saasConfirmation || "");
     return;
   }
   if (action === "create-cleanup-plan") {
@@ -40069,8 +41201,8 @@ function assetVisualMarkup(asset) {
         </div>
         <div class="script-strip">
           <span>下一步</span>
-          <strong>补商品事实，再进入视频生成</strong>
-          <small>素材生成服务返回视频文件后，才会进入素材清单审核。</small>
+          <strong>保留脚本，视频生成尚未开放</strong>
+          <small>当前可继续生成和审核商品图片；这里的脚本与分镜不是视频文件。</small>
         </div>
       </div>
     `;
@@ -40084,7 +41216,7 @@ function assetVisualMarkup(asset) {
     const poster = asset.image ? ` poster="${escapeHtml(asset.image)}"` : "";
     const sourceImage = asset.sourceImage || asset.secondaryImage || "";
     const sourceComparison = sourceImage
-      ? `<article><span>来源图</span><img src="${escapeHtml(sourceImage)}" alt="商品来源图"><small>对照外形、结构、颜色、Logo 与配件</small></article>`
+      ? `<article><span>来源图</span><img src="${escapeHtml(sourceImage)}" referrerpolicy="no-referrer" alt="商品来源图"><small>对照外形、结构、颜色、Logo 与配件</small></article>`
       : `<article class="is-source-private"><span>来源依据</span><strong>来源图已在后端安全边界绑定</strong><small>当前签名地址不可展示时，不伪造预览；请回到来源资料核对实物。</small></article>`;
     const frameLabels = [
       ["首帧", "确认商品主体"],
@@ -40138,7 +41270,7 @@ function assetVisualMarkup(asset) {
   const sourcePanel = asset.conceptOnly && !asset.hasGroundedSource && !hasVisibleSource
     ? `<figure class="is-source-private"><figcaption>来源依据</figcaption><strong>未提供真实商品来源图</strong><small>本次只根据商品方向生成概念参考，不代表供应商实物。</small></figure>`
     : hasVisibleSource
-    ? `<figure><figcaption>来源图</figcaption><img class="real-asset-image source" src="${escapeHtml(sourceImage)}" alt="商品来源图"></figure>`
+    ? `<figure><figcaption>来源图</figcaption><img class="real-asset-image source" src="${escapeHtml(sourceImage)}" referrerpolicy="no-referrer" alt="商品来源图"></figure>`
     : `<figure class="is-source-private"><figcaption>来源依据</figcaption><strong>来源图已安全绑定</strong><small>当前不可展示时不生成假的对照图，请结合实物或供应商资料核对。</small></figure>`;
   return `
     <div class="generated-asset generated-real-asset ${asset.visualClass}">
@@ -40841,6 +41973,7 @@ function sanitizeSaasInactiveMerchantViews(activeView = "") {
 function setView(nextView, options = {}) {
   nextView = normalizeSaasProtectedView(nextView);
   const previousView = state.view;
+  if (nextView !== previousView) state.saasEbayViewEpoch = (state.saasEbayViewEpoch || 0) + 1;
   if (nextView === "bulk") {
     state.saasListingMode = "bulk";
   } else if (nextView === "product") {
@@ -41095,7 +42228,7 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
     {
       label: "AI / 素材用量",
       title: billing.blocksNow ? "高成本任务暂停" : billing.entitlementActive ? "额度受保护" : "按用量另算",
-      detail: "文本模型、联网报告、长任务、生图和视频生成按套餐额度或实际消耗核算。",
+      detail: "文本模型、联网报告、长任务和生图按套餐额度或实际消耗核算。视频生成尚未开放。",
       tone: billing.blocksNow ? "red" : billing.entitlementActive ? "green" : "amber",
     },
     {
@@ -41491,7 +42624,8 @@ function renderSaasMerchantMediaCreditsPanel() {
   const checkout = state.saasDomesticBillingCheckout?.purchase_type === "media_points" && state.saasDomesticBillingCheckout?.qr_image_data_url
     ? state.saasDomesticBillingCheckout
     : null;
-  const purchaseAvailable = purchaseOpen && !checkout && !state.saasLoading;
+  const purchaseEligible = purchaseOpen && !checkout;
+  const purchaseAvailable = purchaseEligible && !state.saasLoading;
   return `
     <section class="saas-settings-card saas-merchant-media-credits" data-media-credit-contract="merchant_media_points_v2" aria-label="素材点余额与记录">
       <div class="saas-settings-card-head">
@@ -41539,7 +42673,7 @@ function renderSaasMerchantMediaCreditsPanel() {
                       <strong>${escapeHtml(pack.label || `${points} 素材点`)}</strong>
                       <small>¥${escapeHtml(amount)} · 充值后进入当前账号空间，不随套餐到期</small>
                     </div>
-                    <button class="secondary-action compact-action" type="button" ${purchaseAvailable ? `data-saas-action="media-credit-purchase" data-media-credit-pack-key="${escapeHtml(pack.key || "")}"` : "disabled"}>购买素材点</button>
+                    <button class="secondary-action compact-action" type="button" data-saas-settings-loading-blocked="${!purchaseEligible}" ${purchaseEligible ? `data-saas-action="media-credit-purchase" data-media-credit-pack-key="${escapeHtml(pack.key || "")}"` : ""} ${purchaseAvailable ? "" : "disabled"}>购买素材点</button>
                   </article>
                 `;
               })
@@ -41759,8 +42893,8 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
             <strong>${escapeHtml(activeUntilLabel)}</strong>
             <p>现有权益继续保留，不会静默降级。再次购买时请明确选择“有店铺”或“多店铺”，系统不会把历史套餐自动映射成 99 元套餐。</p>
             <div class="saas-domestic-order-actions">
-              <button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="starter" ${state.saasLoading ? "disabled" : ""}>选择有店铺 · ¥99</button>
-              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="operator" ${state.saasLoading ? "disabled" : ""}>选择多店铺 · ¥199</button>
+              <button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="starter" data-saas-settings-loading-blocked="false" ${state.saasLoading ? "disabled" : ""}>选择有店铺 · ¥99</button>
+              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="operator" data-saas-settings-loading-blocked="false" ${state.saasLoading ? "disabled" : ""}>选择多店铺 · ¥199</button>
             </div>
           </div>
         </div>
@@ -41771,17 +42905,17 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
             <strong>${escapeHtml(activeUntilLabel)}</strong>
             <p>${renewalReady ? "续购当前套餐会把新的 30 天顺延到现有有效期之后，不覆盖剩余天数；每次仍需主动扫码确认，不会自动扣款。" : "套餐期限待核对，暂不提供续购；请刷新套餐状态，仍未恢复时联系支持。"}</p>
             <div class="saas-domestic-order-actions">
-              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="${escapeHtml(checkoutPlanKey)}" ${state.saasLoading || !renewalReady ? "disabled" : ""}>续购当前套餐</button>
+              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="${escapeHtml(checkoutPlanKey)}" data-saas-settings-loading-blocked="${!renewalReady}" data-saas-settings-loading-renewal="true" ${state.saasLoading || !renewalReady ? "disabled" : ""}>续购当前套餐</button>
             </div>
           </div>
         </div>
       ` : online && !entitlementActive && !pendingPayment ? `
         <div class="saas-manual-beta-payment-actions">
-          <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="${escapeHtml(checkoutPlanKey)}" ${state.saasLoading ? "disabled" : ""}>微信扫码开通 ${escapeHtml(checkoutPlan.title)}</button>
+          <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="${escapeHtml(checkoutPlanKey)}" data-saas-settings-loading-blocked="false" ${state.saasLoading ? "disabled" : ""}>微信扫码开通 ${escapeHtml(checkoutPlan.title)}</button>
         </div>
       ` : !online ? `
         <div class="saas-manual-beta-payment-actions">
-          <button class="secondary-action compact-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新付款状态</button>
+          <button class="secondary-action compact-action" type="button" data-saas-action="refresh" data-saas-settings-loading-blocked="false" ${state.saasLoading ? "disabled" : ""}>刷新付款状态</button>
         </div>
       ` : ""}
       ${orderMarkup ? `
@@ -46317,7 +47451,7 @@ function renderSaasMerchantOnboardingPanel(options = {}) {
           </div>
         </div>
         <div class="saas-backend-preflight-actions">
-          <button class="primary-action" type="button" ${actionAttribute} ${state.saasLoading ? "disabled" : ""}>${escapeHtml(action.label)}</button>
+          <button class="primary-action" type="button" ${actionAttribute} data-saas-settings-loading-blocked="false" ${state.saasLoading ? "disabled" : ""}>${escapeHtml(action.label)}</button>
           <small>${escapeHtml(action.note)}</small>
         </div>
         <div hidden aria-hidden="true">
@@ -46359,7 +47493,7 @@ function renderSaasMerchantOnboardingPanel(options = {}) {
           .join("")}
       </div>`}
       <div class="saas-backend-preflight-actions">
-        <button class="primary-action" type="button" data-saas-action="${escapeHtml(action.key)}" ${state.saasLoading ? "disabled" : ""}>${escapeHtml(action.label)}</button>
+        <button class="primary-action" type="button" data-saas-action="${escapeHtml(action.key)}" data-saas-settings-loading-blocked="false" ${state.saasLoading ? "disabled" : ""}>${escapeHtml(action.label)}</button>
         <small>${escapeHtml(action.note)}</small>
       </div>
       <div hidden aria-hidden="true">
@@ -46700,7 +47834,7 @@ function renderSaasSettingsAccountPolicies(ctx = saasMerchantWorkbenchContext())
     <summary>配送、付款与退货政策<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></summary>
     <dl class="saas-account-policy-list">${[["fulfillment", "配送政策"], ["payment", "付款政策"], ["return", "退货政策"]].map(([key, label]) => `<div><dt>${label}</dt><dd>${policies[key] === true ? "已读取" : policies[key] === false ? "待补齐" : "待核实"}</dd></div>`).join("")}</dl>
     <p class="saas-account-policy-note">Listing 会引用店铺已有政策。修改后，更新店铺数据以读取最新设置。</p>
-    <button class="secondary-action compact-action" type="button" data-saas-action="open-official-ebay-business-policies" ${state.saasLoading ? "disabled" : ""}>管理 eBay 政策</button>
+    <button class="secondary-action compact-action" type="button" data-saas-action="open-official-ebay-business-policies" data-saas-settings-loading-blocked="false" ${state.saasLoading ? "disabled" : ""}>管理 eBay 政策</button>
   </details>`;
 }
 
@@ -46727,7 +47861,7 @@ function renderSaasSettingsAccountWorkspace(ctx = saasMerchantWorkbenchContext()
     </section>
     <section class="saas-account-section" aria-labelledby="saas-account-stores-heading">
       <div class="saas-account-section-heading"><div><h3 id="saas-account-stores-heading">eBay 店铺</h3><p>查看店铺状态，管理连接与权限。</p></div>
-        <button class="secondary-action compact-action" type="button" data-saas-action="refresh" ${state.saasLoading || !account.connected ? "disabled" : ""}>${state.saasLoading ? "正在刷新…" : "刷新状态"}</button>
+        <button class="secondary-action compact-action" type="button" data-saas-action="refresh" data-saas-settings-loading-blocked="${!account.connected}" data-saas-settings-loading-idle-label="刷新状态" ${state.saasLoading || !account.connected ? "disabled" : ""}>${state.saasLoading ? "正在刷新…" : "刷新状态"}</button>
       </div>
       <div class="saas-account-store-list">
         ${stores.length ? `<div class="saas-account-store-columns" aria-hidden="true"><span>店铺</span><span>站点</span><span>账号状态</span><span></span></div>${stores.map((store) => {
@@ -46741,7 +47875,7 @@ function renderSaasSettingsAccountWorkspace(ctx = saasMerchantWorkbenchContext()
           const row = `<span class="saas-account-store-name"><strong>${escapeHtml(name)}</strong>${selected ? '<small>当前店铺</small>' : ""}</span><span class="saas-account-store-market">${escapeHtml(market)}</span><span class="saas-account-store-status is-${escapeHtml(status.tone)}">${escapeHtml(status.label)}</span>`;
           return selected
             ? `<details class="saas-account-store-detail" data-saas-account-disclosure="store"><summary class="saas-account-store-row">${row}<span class="saas-account-summary-action">查看详情${chevron}</span></summary><div class="saas-account-expanded">${renderSaasSettingsAccountPanel(ctx, options)}${renderSaasSettingsAccountPolicies(ctx)}<details class="saas-account-check-details" data-saas-account-disclosure="health"><summary>账号检查详情${chevron}</summary>${renderSaasAccountHealthPanel()}</details></div></details>`
-            : `<div class="saas-account-store-row">${row}<button class="secondary-action compact-action" type="button" data-saas-account-store="${escapeHtml(store.store_id)}" ${state.saasLoading ? "disabled" : ""}>切换店铺</button></div>`;
+            : `<div class="saas-account-store-row">${row}<button class="secondary-action compact-action" type="button" data-saas-account-store="${escapeHtml(store.store_id)}" data-saas-settings-loading-blocked="false" ${state.saasLoading ? "disabled" : ""}>切换店铺</button></div>`;
         }).join("")}` : `<div class="saas-account-empty"><strong>尚未关联 eBay 店铺</strong><p>连接店铺后，可读取商品、订单和政策，继续准备 Listing。</p></div>`}
       </div>
       <p class="saas-account-store-notice is-${escapeHtml(storeStatus.tone)}" role="status">${escapeHtml(storeStatus.detail)}</p>
@@ -46795,7 +47929,7 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
             <strong>验证当前连接</strong>
             <small class="saas-oauth-confirmation-guidance is-${escapeHtml(refreshProofView.status)}" data-ebay-refresh-proof-status="${escapeHtml(refreshProofView.status)}">${escapeHtml(refreshProofView.detail)}</small>
           </div>
-          <button class="secondary-action compact-action" type="button" data-saas-action="verify-ebay-credential-proof" ${!hasSessionCandidate || !ebayAuthorized || refreshProofView.ready || state.saasLoading ? "disabled" : ""}>${escapeHtml(refreshProofView.label)}</button>
+          <button class="secondary-action compact-action" type="button" data-saas-action="verify-ebay-credential-proof" data-saas-settings-loading-blocked="${Boolean(!hasSessionCandidate || !ebayAuthorized || refreshProofView.ready)}" ${!hasSessionCandidate || !ebayAuthorized || refreshProofView.ready || state.saasLoading ? "disabled" : ""}>${escapeHtml(refreshProofView.label)}</button>
         </article>
       </div>
     </section>
@@ -46912,7 +48046,7 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
           <strong>店铺资料与账号状态</strong>
           <p>已保存的资料和账号状态分别展示。更新数据只读取 eBay，不会修改商品或订单。</p>
         </div>
-        <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected || !connectionReady ? "disabled" : ""}>${connectionReady ? "更新 eBay 数据" : "连接店铺后更新"}</button>
+        <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" data-saas-settings-loading-blocked="${!state.saasConnected || !connectionReady}" ${state.saasLoading || !state.saasConnected || !connectionReady ? "disabled" : ""}>${connectionReady ? "更新 eBay 数据" : "连接店铺后更新"}</button>
       </div>
       <div class="saas-settings-status-list">
         <article>
@@ -47163,7 +48297,7 @@ function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext(
   return renderSaasSettingsFocusPanel({
     eyebrow: "套餐与付款",
     title: "基础订阅保留工作台，AI 用量和素材生成单独核算",
-    detail: "订阅负责打开核心经营功能；大模型、生图生视频和高成本联网任务按实际消耗或套餐额度计算。收款密钥和上线检查不会出现在日常工作流里。",
+    detail: "订阅负责打开核心经营功能；大模型、生图和高成本联网任务按实际消耗或套餐额度计算。视频生成尚未开放，入口保留。收款密钥和上线检查不会出现在日常工作流里。",
     rows: [
       {
         label: "基础订阅",
@@ -47174,7 +48308,7 @@ function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext(
       {
         label: "AI 与素材用量",
         title: billing.blocksNow ? "已暂停" : "受额度保护",
-        detail: "模型调用、联网报告、生图生视频和长任务按实际消耗或套餐额度核算。",
+        detail: "模型调用、联网报告、生图和长任务按实际消耗或套餐额度核算；视频生成尚未开放。",
         tone: billing.tone,
       },
       {
@@ -50442,7 +51576,7 @@ function bindEvents() {
       const mode = button.dataset.mediaChannel || "flow";
       keepViewportStill(() => {
         if (mode === "independent") {
-          setMediaNewTaskMode();
+          setMediaNewTaskMode({ recover: true });
           return;
         }
         const activeTab =

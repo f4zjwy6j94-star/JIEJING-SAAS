@@ -14,7 +14,7 @@
     <meta name="twitter:title" content="捷境 · 跨境电商 AI 经营工作台" />
     <meta name="twitter:description" content="捷境是 eBay 商家的 AI 经营工作台：整理商品资料、生成草稿，重要操作由商家确认。" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20261005-quality-699d704f43e1" as="script" />
+    <link rel="prefetch" href="./app.js?v=20261005-quality-fc39fbb61ddc" as="script" />
     <link rel="prefetch" href="./styles.css?v=20261005-quality-12c42c3b6650" as="style" />
     <title>捷境 · 跨境电商 AI 经营工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
@@ -136,7 +136,7 @@
           <article><span>市场调研</span><strong>判断机会与风险</strong><p>整理需求、竞品、价格带和候选方向，说明依据与尚未确认的假设。</p></article>
           <article><span>商品资料</span><strong>整理来源与规格</strong><p>接收图片、链接和规格，区分商家资料、公开来源与 AI 建议。</p></article>
           <article><span>Listing</span><strong>自动生成可编辑文案</strong><p>依据商品资料生成标题、描述、类目与属性建议；已连接店铺的政策按条件预填。</p></article>
-          <article><span>图片与视频</span><strong>生成图片与视频脚本</strong><p>生成或处理主图、场景图、详情内容和视频脚本，审核后选用。</p></article>
+          <article><span>图片与视频</span><strong>生成图片与视频脚本</strong><p>生成或处理主图、场景图与详情内容，审核后选用。视频生成尚未开放，入口保留；脚本与分镜是文字，不是视频文件。</p></article>
           <article><span>客服与订单</span><strong>生成客服回复草稿</strong><p>基于订单和商品资料生成回复建议；退款、补偿和敏感承诺交商家确认。</p></article>
           <article><span>发布确认</span><strong>关键动作由商家决定</strong><p>发布、退款、预算和敏感承诺等动作，统一在执行前核对与确认。</p></article>
         </div>
@@ -484,7 +484,7 @@
       function warmWorkspaceAssets() {
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
-          ["preload", "./app.js?v=20261005-quality-699d704f43e1", "script"],
+          ["preload", "./app.js?v=20261005-quality-fc39fbb61ddc", "script"],
           ["preload", "./styles.css?v=20261005-quality-12c42c3b6650", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
@@ -877,7 +877,7 @@
               options: [
                 ["先做 Listing 优化草稿", "只出标题、图片、参数和描述建议，不写回店铺。", "推荐"],
                 ["先补商品参数", "优先补材质、颜色、尺寸、类型等平台字段。", "基础"],
-                ["先重做素材包", "主图、场景图、详情页和视频先生成候选。", "素材"],
+                ["先重做素材包", "先生成主图、场景图、详情页候选与文字视频脚本；视频生成尚未开放。", "素材"],
                 ["先筛暂不建议动的商品", "销量稳定或风险高的 Listing 先不碰。", "稳妥"],
               ],
             },

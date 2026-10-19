@@ -901,7 +901,14 @@ async function main() {
         publicPublish.item.publish_payload_sha256 = payloadSha256;
         malformed.item.publish_payload_sha256 = payloadSha256;
         state.saasConfirmations = [...before, draftCard, wrongStore, publicPublish, malformed];
-        await verifySaasUnpublishedDraftSaveConfirmations(state.saasConfirmations);
+        const uniqueBatch = state.saasConfirmations;
+        const uniqueIsCurrent = saasEbayStoreRequestGuard(storeId);
+        const uniqueQualifications = await verifySaasUnpublishedDraftSaveConfirmations(uniqueBatch);
+        const uniqueLocations = await verifySaasInventoryLocationConfirmations(uniqueBatch);
+        if (!uniqueIsCurrent() || state.saasConfirmations !== uniqueBatch) throw new Error("obsolete draft display fixture batch");
+        saasVerifiedUnpublishedDraftSaveConfirmations = uniqueQualifications.draftSave;
+        saasVerifiedControlledPublishConfirmations = uniqueQualifications.controlledPublish;
+        saasVerifiedInventoryLocationConfirmations = uniqueLocations;
         const uniqueDisplayed = saasConfirmationsForDisplay(state.saasConfirmations);
         const uniqueCount = uniqueDisplayed.filter((card) => card.confirmation_id === draftCard.confirmation_id).length;
         const unsafeCount = uniqueDisplayed.filter((card) => [wrongStore, publicPublish, malformed].some((unsafe) => unsafe.confirmation_id === card.confirmation_id)).length;
@@ -909,7 +916,14 @@ async function main() {
           ...state.saasConfirmations,
           { ...draftCard, task_id: "latest-product-task-fixture", action_type: "publish_listing", item: { source: "ordinary-latest-task" } },
         ];
-        await verifySaasUnpublishedDraftSaveConfirmations(state.saasConfirmations);
+        const duplicateBatch = state.saasConfirmations;
+        const duplicateIsCurrent = saasEbayStoreRequestGuard(storeId);
+        const duplicateQualifications = await verifySaasUnpublishedDraftSaveConfirmations(duplicateBatch);
+        const duplicateLocations = await verifySaasInventoryLocationConfirmations(duplicateBatch);
+        if (!duplicateIsCurrent() || state.saasConfirmations !== duplicateBatch) throw new Error("obsolete duplicate display fixture batch");
+        saasVerifiedUnpublishedDraftSaveConfirmations = duplicateQualifications.draftSave;
+        saasVerifiedControlledPublishConfirmations = duplicateQualifications.controlledPublish;
+        saasVerifiedInventoryLocationConfirmations = duplicateLocations;
         const duplicateCount = saasConfirmationsForDisplay(state.saasConfirmations).filter((card) => card.confirmation_id === draftCard.confirmation_id).length;
         const savedTasks = state.saasTasks;
         state.saasTasks = [{ ...savedTasks[0], task_id: "latest-task-with-no-confirmations", created_at: "2026-08-11T02:00:00Z" }];

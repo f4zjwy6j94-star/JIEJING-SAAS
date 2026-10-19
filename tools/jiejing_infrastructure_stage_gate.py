@@ -204,8 +204,10 @@ def _check_postgres_migration_shape() -> dict[str, Any]:
         for path in migration_paths
         if path.exists()
     )
-    missing_tables = [table for table in CRITICAL_TABLES if f"create table if not exists {table}" not in text]
-    missing_indexes = [index for index in CRITICAL_INDEXES if f"create index if not exists {index}" not in text]
+    support_tables = ["support_messages_v1", "support_sync_v1", "support_drafts_v1", "support_send_intents_v1"]
+    support_indexes = ["idx_support_messages_scope_order", "idx_support_sync_scope_order"]
+    missing_tables = [table for table in CRITICAL_TABLES + support_tables if f"create table if not exists {table}" not in text]
+    missing_indexes = [index for index in CRITICAL_INDEXES + support_indexes if f"create index if not exists {index}" not in text]
     return {
         "key": "postgres_migration_shape",
         "pass": all(path.exists() for path in migration_paths) and not missing_tables and not missing_indexes,

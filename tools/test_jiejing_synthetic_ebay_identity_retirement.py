@@ -109,6 +109,7 @@ def main() -> int:
             return fail("fixture must begin with one duplicate eBay identity owner")
 
         ambiguous = repo.accept_ebay_account_deletion_event(
+            verification={"verified": True, "status": "verified"},
             event={
                 "event_key": "b" * 64,
                 "payload_sha256": "c" * 64,
@@ -263,6 +264,7 @@ def main() -> int:
             return fail("only the merchant eBay refresh secret reference should remain active")
 
         merchant_only_deletion = repo.accept_ebay_account_deletion_event(
+            verification={"verified": True, "status": "verified"},
             event={
                 "event_key": "e" * 64,
                 "payload_sha256": "f" * 64,

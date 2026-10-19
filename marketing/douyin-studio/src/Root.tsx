@@ -1,4 +1,22 @@
 import "./index.css";
+import {JiejingV18} from './v18-listing/Film';
+import {v18Timing} from './v18-listing/timing';
+import {V18Hook} from './v18-listing/Hook';
+import {V18Scattered} from './v18-listing/Scattered';
+import {V18Collect} from './v18-listing/Collect';
+import {V18Draft} from './v18-listing/Draft';
+import {V18Edit} from './v18-listing/Edit';
+import {V18Result} from './v18-listing/Result';
+import {V18Close} from './v18-listing/Close';
+import {JiejingV17Refined} from './v17-refined/Film';
+import {V17RefinedCover,V17RefinedCoverHorizontal} from './v17-refined/Cover';
+import {RefinedHook} from './v17-refined/Hook';
+import {RefinedFriction} from './v17-refined/Friction';
+import {RefinedReveal} from './v17-refined/Reveal';
+import {RefinedConnected} from './v17-refined/Connected';
+import {RefinedDecision} from './v17-refined/Decision';
+import {RefinedClose} from './v17-refined/Close';
+import {JiejingV17} from './v17-common-pain/Film';
 import {JiejingV16} from "./noon-v16/Film";
 import {JiejingV15Recut} from "./v15-recut/Film";
 import {V15Hook} from "./v15-recut/Hook";
@@ -64,6 +82,16 @@ import { JiejingAvatar } from "./stills/JiejingAvatar";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Still id="V17RefinedCover" component={V17RefinedCover} width={1080} height={1440}/>
+      <Still id="V17RefinedCoverHorizontal" component={V17RefinedCoverHorizontal} width={1440} height={1080}/>
+      <Composition id="JiejingV17Refined" component={JiejingV17Refined} durationInFrames={840} fps={30} width={1080} height={1920} defaultProps={{withAudio:false}}/>
+      <Composition id="V17RefinedHook" component={RefinedHook} durationInFrames={136} fps={30} width={1080} height={1920}/>
+      <Composition id="V17RefinedFriction" component={RefinedFriction} durationInFrames={153} fps={30} width={1080} height={1920}/>
+      <Composition id="V17RefinedReveal" component={RefinedReveal} durationInFrames={132} fps={30} width={1080} height={1920}/>
+      <Composition id="V17RefinedConnected" component={RefinedConnected} durationInFrames={136} fps={30} width={1080} height={1920}/>
+      <Composition id="V17RefinedDecision" component={RefinedDecision} durationInFrames={110} fps={30} width={1080} height={1920}/>
+      <Composition id="V17RefinedClose" component={RefinedClose} durationInFrames={173} fps={30} width={1080} height={1920}/>
+      <Composition id="JiejingV17" component={JiejingV17} durationInFrames={840} fps={30} width={1080} height={1920} defaultProps={{withAudio:false}}/>
       <Composition id="JiejingV16" component={JiejingV16} durationInFrames={660} fps={30} width={1080} height={1920} defaultProps={{withAudio:false}}/>
       <Composition id="JiejingV15Recut" component={JiejingV15Recut} durationInFrames={708} fps={30} width={1080} height={1920}/>
       <Composition id="V15Hook" component={V15Hook} durationInFrames={88} fps={30} width={1080} height={1920} defaultProps={{durationFrames:88}}/>
@@ -95,6 +123,14 @@ export const RemotionRoot: React.FC = () => {
       <Composition id="ReviewClose" component={ReviewClose} durationInFrames={210} fps={30} width={1080} height={1920}/>
       <Composition id="ReviewDraft" component={ReviewDraft} durationInFrames={198} fps={30} width={1080} height={1920}/>
       <Composition id="DouyinFlowV13" component={DouyinFlowV13} durationInFrames={720} fps={30} width={1080} height={1920}/>
+      <Composition id="JiejingV18" component={JiejingV18} durationInFrames={v18Timing.total} fps={30} width={1080} height={1920} defaultProps={{withAudio:true}}/>
+      <Composition id="V18Hook" component={V18Hook} durationInFrames={v18Timing.hook} fps={30} width={1080} height={1920}/>
+      <Composition id="V18Scattered" component={V18Scattered} durationInFrames={v18Timing.scattered} fps={30} width={1080} height={1920}/>
+      <Composition id="V18Collect" component={V18Collect} durationInFrames={v18Timing.collect} fps={30} width={1080} height={1920}/>
+      <Composition id="V18Draft" component={V18Draft} durationInFrames={v18Timing.draft} fps={30} width={1080} height={1920}/>
+      <Composition id="V18Edit" component={V18Edit} durationInFrames={v18Timing.edit} fps={30} width={1080} height={1920}/>
+      <Composition id="V18Result" component={V18Result} durationInFrames={v18Timing.result} fps={30} width={1080} height={1920}/>
+      <Composition id="V18Close" component={V18Close} durationInFrames={v18Timing.close} fps={30} width={1080} height={1920}/>
       <Composition id="FlowIngest" component={FlowIngest} durationInFrames={228} fps={30} width={1080} height={1920}/>
       <Composition id="FlowDraft" component={FlowDraft} durationInFrames={180} fps={30} width={1080} height={1920}/>
       <Composition id="FlowEdit" component={FlowEdit} durationInFrames={228} fps={30} width={1080} height={1920}/>

@@ -1,0 +1,18 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {spawnSync} from 'node:child_process';
+const [video,voice,out,durationText='28']=process.argv.slice(2);
+const duration=Number(durationText);
+const hash=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+if(![12,28].includes(duration)||!video||!path.isAbsolute(video)||!fs.statSync(video).isFile())throw new Error('Existing V17 render required');
+if(!voice||hash(voice)!=='05a8f82b45a0a44178350ef0d17353cc0f5e70ca48e67c41742bb9edf4396e5b')throw new Error('Expected exact new normalized narration');
+if(!out||!path.isAbsolute(out)||fs.existsSync(out))throw new Error('Fresh absolute output directory required');
+fs.mkdirSync(out,{recursive:true});
+const linux=p=>`/mnt/${p[0].toLowerCase()}${p.slice(2).replaceAll('\\','/')}`;
+const file=path.join(out,`jiejing-v17-${duration}s-common-pain-review.mp4`);
+const result=spawnSync('wsl.exe',['-d','Ubuntu','--exec','/usr/bin/ffmpeg','-v','error','-i',linux(video),'-i',linux(voice),'-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-t',String(duration),'-movflags','+faststart','-n',linux(file)],{encoding:'utf8',windowsHide:true,maxBuffer:2*1024*1024});
+if(result.status!==0)throw new Error(result.stderr.slice(-1200));
+const receipt={source:video,source_sha256:hash(video),voice_sha256:hash(voice),file,sha256:hash(file),bytes:fs.statSync(file).size,duration_seconds:duration,video_reencoded:false,audio_source_reused_without_speed_or_pitch_change:true,ready_to_publish:false};
+fs.writeFileSync(path.join(out,'FINISH.safe.json'),JSON.stringify(receipt,null,2)+'\n',{flag:'wx'});
+console.log(JSON.stringify(receipt,null,2));

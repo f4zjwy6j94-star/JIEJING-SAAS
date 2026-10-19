@@ -20,7 +20,7 @@ from jiejing_saas.api_server import (  # noqa: E402
     _controlled_existing_draft_publish_preflight,
 )
 from jiejing_saas.config import SaaSSettings  # noqa: E402
-from jiejing_saas.ebay_write_adapter import EbayWriteHttpAdapter, build_publish_readiness  # noqa: E402
+from jiejing_saas.ebay_write_adapter import EbayWriteHttpAdapter, build_publish_readiness, build_ebay_execution_plan  # noqa: E402
 from jiejing_saas.ebay_oauth import UNPUBLISHED_DRAFT_SCOPES  # noqa: E402
 
 
@@ -370,12 +370,19 @@ def main() -> int:
             return 200, {"content-type": "application/json"}, json.dumps({"listingId": "listing_987"}).encode()
         return 500, {"content-type": "application/json"}, b"{}"
 
+    from test_jiejing_ebay_execution_authority import approved_adapter_case
+    repo,request,record,epochs,boundary = approved_adapter_case(OUT,'controlled-publish',request)
+    preflight = ExecutionService(demo_mode=False).preflight(request)
+    claimed = repo.claim_external_execution(company_id=request.company_id,confirmation_id=request.confirmation_id,
+        user_id=request.user_id,expected_access_epochs=epochs,operation_plan=build_ebay_execution_plan(
+            request=request,marketplace_id='EBAY_US',credential_boundary=boundary))
     result = EbayWriteHttpAdapter(settings, transport=transport).publish_existing_listing_draft(
         request=request,
         preflight=preflight,
-        credential_boundary=credential_boundary(),
+        credential_boundary=boundary,
         marketplace_id="EBAY_US",
         expected_offer_id=OFFER_ID,
+        execution_permit=claimed['_execution_permit'],
     )
     if result.get("status") != "published_to_ebay" or result.get("platform_result", {}).get("offer_id") != OFFER_ID:
         return fail(f"exact existing offer should publish successfully: {result}; calls={calls}")
@@ -416,7 +423,7 @@ def main() -> int:
     kyc_blocked = EbayWriteHttpAdapter(settings, transport=kyc_blocked_transport).publish_existing_listing_draft(
         request=request,
         preflight=preflight,
-        credential_boundary=credential_boundary(),
+        credential_boundary=boundary,
         marketplace_id="EBAY_US",
         expected_offer_id=OFFER_ID,
     )
@@ -448,7 +455,7 @@ def main() -> int:
     blocked = EbayWriteHttpAdapter(settings, transport=mismatch_transport).publish_existing_listing_draft(
         request=request,
         preflight=preflight,
-        credential_boundary=credential_boundary(),
+        credential_boundary=boundary,
         marketplace_id="EBAY_US",
         expected_offer_id=OFFER_ID,
     )
@@ -478,7 +485,6 @@ def main() -> int:
             ).encode()
         return 500, {"content-type": "application/json"}, b"{}"
 
-    boundary = credential_boundary()
     recovery = EbayWriteHttpAdapter(settings, transport=recovery_transport).inspect_publish_state(
         request=request,
         connections=[boundary["connection"]],

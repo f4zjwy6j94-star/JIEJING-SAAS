@@ -48,7 +48,7 @@ def main() -> None:
             "the second action must call the one-shot execution route",
         ),
         (
-            'async function reconcileSaasInventoryLocation()',
+            'async function reconcileSaasInventoryLocation(confirmationId = "")',
             "the frontend must implement the read-only reconciliation step",
         ),
         (
@@ -108,7 +108,7 @@ def main() -> None:
     ):
         raise AssertionError("the page-local one-shot claim must happen before the execution POST")
 
-    reconcile_start = app.index("async function reconcileSaasInventoryLocation()")
+    reconcile_start = app.index('async function reconcileSaasInventoryLocation(confirmationId = "")')
     reconcile_end = app.index("async function", reconcile_start + 20)
     reconcile_flow = app[reconcile_start:reconcile_end]
     if "/ebay-inventory-location/execute" in reconcile_flow:

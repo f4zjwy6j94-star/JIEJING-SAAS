@@ -24,6 +24,10 @@ from jiejing_runtime.execution_preflight import finite_publish_number, publish_p
 from .config import SaaSSettings
 from .ebay_http_client import EbayReadOnlyHttpClient, HttpTransport, _urlopen_transport
 from .ebay_oauth import UNPUBLISHED_DRAFT_SCOPES
+from .ebay_execution_authority import (
+    EbayOperationPlan, EbayWritePermit, _PLAN_MINT, item_digest,
+    legacy_credential, scoped_credential, segment,
+)
 from .listing_draft_generation import (
     _COMPATIBILITY_ASPECT_KEY_PATTERN,
     _UNVERIFIED_DEVICE_PRODUCT_TYPE_PATTERN,
@@ -709,6 +713,80 @@ def build_publish_readiness(
     }
 
 
+def build_ebay_execution_plan(*, request, marketplace_id, connections=None, credential_boundary=None,
+                              draft_offer_id=None, prepared_at_epoch=None):
+    """Pure fixed-plan factory. Input is the server's approved request snapshot."""
+    payload = request.payload
+    action = request.action_type
+    listing = payload.get('listing') or {}
+    credential = scoped_credential(credential_boundary) if credential_boundary else legacy_credential(
+        _find_publish_connection(connections or []) or {})
+    def operation(kind, method, target, body, **extra):
+        return {'kind': kind, 'method': method, 'target': target, 'payload_sha256': item_digest(body), **extra}
+    if action in {'publish_listing', 'save_ebay_listing_draft'}:
+        sku = segment(str(listing.get('sku') or '').strip())
+        existing = payload.get('existing_ebay_draft') or {}
+        if action == 'publish_listing' and existing:
+            operations = [operation('publish_offer', 'POST', '/sell/inventory/v1/offer/' + segment(existing.get('offer_id')) + '/publish', {})]
+        else:
+            operations = [operation('inventory', 'PUT', '/sell/inventory/v1/inventory_item/' + sku, _inventory_item_body(payload))]
+            if action == 'save_ebay_listing_draft' and draft_offer_id is None:
+                raise PermissionError('ebay_draft_preparation_plan_required')
+            if action == 'save_ebay_listing_draft' and draft_offer_id:
+                operations.append(operation('update_offer', 'PUT', '/sell/inventory/v1/offer/' + segment(draft_offer_id),
+                                            _offer_body(payload, marketplace_id=marketplace_id)))
+            else:
+                operations.append(operation('create_offer', 'POST', '/sell/inventory/v1/offer',
+                                            _offer_body(payload, marketplace_id=marketplace_id)))
+            if action == 'publish_listing':
+                operations.append(operation('publish_offer', 'POST', '/sell/inventory/v1/offer/{offer_id}/publish', {}, offer_from=1))
+    elif action == 'cleanup_test_listing':
+        cleanup = payload.get('cleanup_plan') or {}
+        approved = cleanup.get('operations')
+        if cleanup.get('confirmation_required') is not True or not isinstance(approved, list) or not approved:
+            raise PermissionError('cleanup_plan_invalid')
+        operations = []
+        # End-listing compatibility may refer only to the one unambiguous offer
+        # already present in this exact approved list, never a store search.
+        offer_ids = {str(item.get('offer_id') or '').strip() for item in approved if isinstance(item, dict)} - {''}
+        for item in approved:
+            if not isinstance(item, dict):
+                raise PermissionError('cleanup_plan_invalid')
+            kind = item.get('operation')
+            if kind in {'end_listing', 'withdraw_offer'}:
+                target = str(item.get('offer_id') or '').strip()
+                if not target and len(offer_ids) == 1:
+                    target = next(iter(offer_ids))
+                operations.append(operation('withdraw', 'POST', '/sell/inventory/v1/offer/' + segment(target) + '/withdraw', {}))
+            elif kind == 'delete_offer':
+                operations.append(operation('delete_offer', 'DELETE', '/sell/inventory/v1/offer/' + segment(item.get('offer_id')), {}))
+            elif kind == 'delete_inventory_item':
+                operations.append(operation('delete_inventory', 'DELETE', '/sell/inventory/v1/inventory_item/' + segment(item.get('sku')), {}))
+            else:
+                raise PermissionError('cleanup_plan_invalid')
+        if len({(op['method'], op['target']) for op in operations}) != len(operations):
+            raise PermissionError('cleanup_plan_duplicate_operation')
+    else:
+        raise PermissionError('ebay_execution_plan_action_unsupported')
+    return EbayOperationPlan({'version': 1, 'company_id': request.company_id, 'store_id': request.store_id,
+        'confirmation_id': request.confirmation_id, 'task_id': request.task_id, 'action_type': action,
+        'marketplace_id': marketplace_id, 'payload_sha256': item_digest(payload),
+        'product_sku': str(listing.get('sku') or '').strip() if action in {'publish_listing','save_ebay_listing_draft'} else '',
+        **({'preparation_expires_at_epoch': (time.time() if prepared_at_epoch is None else prepared_at_epoch) + 30}
+           if action == 'save_ebay_listing_draft' else {}),
+        'credential': credential, 'operations': operations}, mint_token=_PLAN_MINT)
+
+
+def _inventory_execution_plan(confirmation, location_payload, marketplace_id, credential, *, prepared_at_epoch=None):
+    body = dict(location_payload)
+    key = body.pop('merchantLocationKey')
+    return EbayOperationPlan({**{key: confirmation.get(key) for key in ('company_id','store_id','confirmation_id','task_id','action_type')},
+        'version': 1, 'marketplace_id': marketplace_id, 'payload_sha256': item_digest(location_payload),
+        'preparation_expires_at_epoch': (time.time() if prepared_at_epoch is None else prepared_at_epoch) + 30,
+        'credential': scoped_credential(credential), 'operations': [{'kind': 'location', 'method': 'POST',
+            'target': '/sell/inventory/v1/location/' + segment(key), 'payload_sha256': item_digest(body)}]}, mint_token=_PLAN_MINT)
+
+
 class _DraftPreparationState:
     """Private request-local state; deliberately not a dataclass/serializer."""
 
@@ -751,11 +829,15 @@ class _DraftPreparationState:
 class _DraftPreparationHandle:
     """Opaque process-local handle; prepared token and bodies stay in adapter memory."""
 
-    __slots__ = ("_handle", "_safe_binding")
+    __slots__ = ("_handle", "_safe_binding", "_plan")
 
-    def __init__(self, *, handle: str, safe_binding: dict[str, str]) -> None:
+    def __init__(self, *, handle: str, safe_binding: dict[str, str], operation_plan=None) -> None:
         self._handle = handle
         self._safe_binding = dict(safe_binding)
+        self._plan = operation_plan
+
+    def execution_plan(self):
+        return self._plan
 
     def claim_binding(self) -> dict[str, str]:
         return dict(self._safe_binding)
@@ -800,11 +882,15 @@ class _InventoryLocationPreparationState:
 
 
 class _InventoryLocationPreparationHandle:
-    __slots__ = ("_handle", "_safe_binding")
+    __slots__ = ("_handle", "_safe_binding", "_plan")
 
-    def __init__(self, *, handle: str, safe_binding: dict[str, str]) -> None:
+    def __init__(self, *, handle: str, safe_binding: dict[str, str], operation_plan=None) -> None:
         self._handle = handle
         self._safe_binding = dict(safe_binding)
+        self._plan = operation_plan
+
+    def execution_plan(self):
+        return self._plan
 
     def claim_binding(self) -> dict[str, str]:
         return dict(self._safe_binding)
@@ -910,6 +996,8 @@ class EbayWriteHttpAdapter:
             self._inventory_location_registry[handle] = state
         return _InventoryLocationPreparationHandle(
             handle=handle,
+            operation_plan=_inventory_execution_plan(confirmation, location_payload, marketplace_id, credential,
+                prepared_at_epoch=state.prepared_at_epoch),
             safe_binding={
                 "confirmation_id": state.confirmation_id,
                 "company_id": state.company_id,
@@ -928,6 +1016,7 @@ class EbayWriteHttpAdapter:
         confirmation: dict[str, Any],
         prepared: _InventoryLocationPreparationHandle,
         marketplace_id: str,
+        execution_permit: EbayWritePermit | None = None,
     ) -> dict[str, Any]:
         """Create one location from a process-local, one-shot preparation."""
 
@@ -957,7 +1046,9 @@ class EbayWriteHttpAdapter:
         provider_payload = json.loads(state.location_payload_json.decode("utf-8"))
         provider_payload.pop("merchantLocationKey", None)
         location_path = f"/sell/inventory/v1/location/{urllib.parse.quote(state.merchant_location_key, safe='')}"
-        write_result = self._send_json(
+        write_result = self._send_authorized(
+            execution_permit=execution_permit, operation_index=0,
+            credential=scoped_credential(dict(state.credential_binding_items)),
             method="POST",
             url=f"{_base_url(self.settings)}{location_path}",
             access_token=state.access_token,
@@ -1087,6 +1178,7 @@ class EbayWriteHttpAdapter:
         connections: list[dict[str, Any]],
         secret_refs: list[dict[str, Any]],
         marketplace_id: str,
+        execution_permit: EbayWritePermit | None = None,
     ) -> dict[str, Any]:
         if not self.settings.effective_real_platform_writes_enabled:
             return _blocked("real_platform_writes_disabled", ["JIEJING_ENABLE_REAL_PLATFORM_WRITES_OR_JIEJING_EBAY_WRITE_LIVE"])
@@ -1115,7 +1207,7 @@ class EbayWriteHttpAdapter:
         if not connection:
             return _blocked("ebay_publish_scope_missing", ["seller_must_authorize_sell.inventory_scope"], preflight=preflight)
 
-        secret_ref_id = str(connection.get("secret_ref") or _first_secret_ref(secret_refs) or "")
+        secret_ref_id = str(connection.get("secret_ref") or "")
         token = self._resolve_access_token(
             secret_ref_id=secret_ref_id,
             company_id=str(getattr(request, "company_id", "") or ""),
@@ -1134,7 +1226,8 @@ class EbayWriteHttpAdapter:
         access_token = str(token["access_token"])
         steps: list[dict[str, Any]] = []
         inventory_path = f"/sell/inventory/v1/inventory_item/{urllib.parse.quote(sku, safe='')}"
-        inventory_result = self._send_json(
+        inventory_result = self._send_authorized(
+            execution_permit=execution_permit, operation_index=0, credential=legacy_credential(connection),
             method="PUT",
             url=f"{base_url}{inventory_path}",
             access_token=access_token,
@@ -1146,7 +1239,8 @@ class EbayWriteHttpAdapter:
             return _write_result("blocked_platform_error", "eBay inventory item write failed.", steps, preflight=preflight)
 
         offer_path = "/sell/inventory/v1/offer"
-        offer_result = self._send_json(
+        offer_result = self._send_authorized(
+            execution_permit=execution_permit, operation_index=1, credential=legacy_credential(connection),
             method="POST",
             url=f"{base_url}{offer_path}",
             access_token=access_token,
@@ -1162,7 +1256,8 @@ class EbayWriteHttpAdapter:
             return _write_result("blocked_missing_offer_id", "eBay did not return an offerId.", steps, preflight=preflight)
 
         publish_path = f"/sell/inventory/v1/offer/{urllib.parse.quote(offer_id, safe='')}/publish"
-        publish_result = self._send_json(
+        publish_result = self._send_authorized(
+            execution_permit=execution_permit, operation_index=2, credential=legacy_credential(connection),
             method="POST",
             url=f"{base_url}{publish_path}",
             access_token=access_token,
@@ -1215,6 +1310,7 @@ class EbayWriteHttpAdapter:
         credential_boundary: dict[str, Any],
         marketplace_id: str,
         expected_offer_id: str,
+        execution_permit: EbayWritePermit | None = None,
     ) -> dict[str, Any]:
         """Publish one exact, already saved eBay Offer without recreating it."""
 
@@ -1363,7 +1459,8 @@ class EbayWriteHttpAdapter:
             )
 
         publish_path = f"/sell/inventory/v1/offer/{urllib.parse.quote(expected_offer_id, safe='')}/publish"
-        publish_result = self._send_json(
+        publish_result = self._send_authorized(
+            execution_permit=execution_permit, operation_index=0, credential=scoped_credential(credential),
             method="POST",
             url=f"{base_url}{publish_path}",
             access_token=access_token,
@@ -1589,6 +1686,8 @@ class EbayWriteHttpAdapter:
             self._draft_prepared_registry[handle] = state
         return _DraftPreparationHandle(
             handle=handle,
+            operation_plan=build_ebay_execution_plan(request=request, marketplace_id=marketplace_id,
+                credential_boundary=credential, draft_offer_id=existing_offer_id, prepared_at_epoch=state.prepared_at_epoch),
             safe_binding={
                 "confirmation_id": state.confirmation_id,
                 "company_id": state.company_id,
@@ -1679,6 +1778,8 @@ class EbayWriteHttpAdapter:
             )
         try:
             consumed_claim = claim_capability.consume()
+        except PermissionError:
+            raise
         except Exception:
             try:
                 claim_capability.abort(reason_code="claim_consume_failed")
@@ -1701,7 +1802,9 @@ class EbayWriteHttpAdapter:
             )
         existing_offer = _unpublished_offer(recheck_offers, marketplace_id=marketplace_id)
         inventory_path = f"/sell/inventory/v1/inventory_item/{urllib.parse.quote(sku, safe='')}"
-        inventory_result = self._send_json(
+        inventory_result = self._send_authorized(
+            execution_permit=claim_capability.execution_permit(), operation_index=0,
+            credential=scoped_credential(dict(state.credential_binding_items)),
             method="PUT",
             url=f"{base_url}{inventory_path}",
             access_token=access_token,
@@ -1715,7 +1818,9 @@ class EbayWriteHttpAdapter:
         if existing_offer:
             offer_id = str(existing_offer.get("offer_id") or "").strip()
             offer_path = f"/sell/inventory/v1/offer/{urllib.parse.quote(offer_id, safe='')}"
-            offer_result = self._send_json(
+            offer_result = self._send_authorized(
+                execution_permit=claim_capability.execution_permit(), operation_index=1,
+                credential=scoped_credential(dict(state.credential_binding_items)),
                 method="PUT",
                 url=f"{base_url}{offer_path}",
                 access_token=access_token,
@@ -1725,7 +1830,9 @@ class EbayWriteHttpAdapter:
             operation = "update_unpublished_offer"
         else:
             offer_path = "/sell/inventory/v1/offer"
-            offer_result = self._send_json(
+            offer_result = self._send_authorized(
+                execution_permit=claim_capability.execution_permit(), operation_index=1,
+                credential=scoped_credential(dict(state.credential_binding_items)),
                 method="POST",
                 url=f"{base_url}{offer_path}",
                 access_token=access_token,
@@ -1901,6 +2008,7 @@ class EbayWriteHttpAdapter:
         connections: list[dict[str, Any]],
         secret_refs: list[dict[str, Any]],
         marketplace_id: str,
+        execution_permit: EbayWritePermit | None = None,
     ) -> dict[str, Any]:
         """Execute only an explicitly confirmed, fixed-shape publish cleanup plan."""
 
@@ -1929,7 +2037,7 @@ class EbayWriteHttpAdapter:
         connection = _find_publish_connection(connections)
         if not connection:
             return _cleanup_blocked("ebay_publish_scope_missing", ["seller_must_authorize_sell.inventory_scope"], preflight=preflight)
-        secret_ref_id = str(connection.get("secret_ref") or _first_secret_ref(secret_refs) or "")
+        secret_ref_id = str(connection.get("secret_ref") or "")
         token = self._resolve_access_token(
             secret_ref_id=secret_ref_id,
             company_id=str(getattr(request, "company_id", "") or ""),
@@ -1938,18 +2046,16 @@ class EbayWriteHttpAdapter:
         if not token.get("ok"):
             return _cleanup_blocked("token_resolution_failed", token.get("blocked_by") or ["access_token_unavailable"], preflight=preflight)
 
-        offer_id = next((str(item.get("offer_id") or "").strip() for item in normalized if str(item.get("offer_id") or "").strip()), "")
+        fixed = build_ebay_execution_plan(request=request, marketplace_id=marketplace_id, connections=connections).document()['operations']
         access_token = str(token["access_token"])
         base_url = _base_url(self.settings)
         steps: list[dict[str, Any]] = []
-        for item in normalized:
+        for operation_index, item in enumerate(normalized):
             operation = str(item.get("operation") or "")
             if operation in {"end_listing", "withdraw_offer"}:
-                target = str(item.get("offer_id") or offer_id).strip()
-                if not target:
-                    return _cleanup_blocked("cleanup_plan_invalid", ["withdraw_offer_id_missing"], preflight=preflight)
-                path = f"/sell/inventory/v1/offer/{urllib.parse.quote(target, safe='')}/withdraw"
-                result = self._send_json(
+                path = fixed[operation_index]['target']
+                result = self._send_authorized(
+                    execution_permit=execution_permit, operation_index=operation_index, credential=legacy_credential(connection),
                     method="POST",
                     url=f"{base_url}{path}",
                     access_token=access_token,
@@ -1961,7 +2067,8 @@ class EbayWriteHttpAdapter:
                 if not target:
                     return _cleanup_blocked("cleanup_plan_invalid", ["delete_offer_id_missing"], preflight=preflight)
                 path = f"/sell/inventory/v1/offer/{urllib.parse.quote(target, safe='')}"
-                result = self._send_json(
+                result = self._send_authorized(
+                    execution_permit=execution_permit, operation_index=operation_index, credential=legacy_credential(connection),
                     method="DELETE",
                     url=f"{base_url}{path}",
                     access_token=access_token,
@@ -1973,7 +2080,8 @@ class EbayWriteHttpAdapter:
                 if not target:
                     return _cleanup_blocked("cleanup_plan_invalid", ["delete_inventory_sku_missing"], preflight=preflight)
                 path = f"/sell/inventory/v1/inventory_item/{urllib.parse.quote(target, safe='')}"
-                result = self._send_json(
+                result = self._send_authorized(
+                    execution_permit=execution_permit, operation_index=operation_index, credential=legacy_credential(connection),
                     method="DELETE",
                     url=f"{base_url}{path}",
                     access_token=access_token,
@@ -2025,6 +2133,20 @@ class EbayWriteHttpAdapter:
             company_id=company_id,
             store_id=store_id,
         )
+
+    def _send_authorized(self, *, execution_permit, operation_index, credential, method, url, access_token, marketplace_id, body):
+        if not isinstance(execution_permit, EbayWritePermit) or not execution_permit._minted:
+            raise PermissionError('ebay_execution_permit_required')
+        base = _base_url(self.settings)
+        if not url.startswith(base + '/'):
+            raise PermissionError('ebay_execution_target_invalid')
+        execution_permit.admit(operation_index=operation_index, method=method, path=url[len(base):],
+                               body=body, marketplace_id=marketplace_id, credential=credential)
+        result = self._send_json(method=method, url=url, access_token=access_token, marketplace_id=marketplace_id, body=body)
+        outcome = execution_permit.record(operation_index=operation_index, result=result)
+        if not outcome['definite_success']:
+            result = {**result, 'status': 'submission_unknown', 'execution_recovery': outcome['execution_recovery']}
+        return result
 
     def _send_json(self, *, method: str, url: str, access_token: str, marketplace_id: str, body: dict[str, Any]) -> dict[str, Any]:
         data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

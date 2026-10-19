@@ -56,8 +56,8 @@ def main() -> int:
         "real_write_allowed_without_confirmation: false",
         "state.saasLastPublishConfirmationEvidence",
         "renderSaasPublishConfirmationEvidencePanel(readiness, ctx)",
-        "Backend confirmation evidence",
-        "direct_write_without_confirmation=false",
+        "确认单与系统体检",
+        "真实 eBay 写入仍必须走确认中心",
         "敏感连接信息不会显示在页面里",
         "renderSaasPublishTrafficLightReport(readiness)",
         "renderSaasBackendPublishPreflightPanel(readiness, ctx, options)",
@@ -65,7 +65,7 @@ def main() -> int:
         'data-preflight-key="${escapeHtml(check.key || "")}"',
         'check.blocking ? "is-red"',
         "saas-publish-traffic-summary",
-        "后端 preflight 已回填，先修红项，再进确认中心",
+        "系统体检已回填，先修红项，再进确认中心",
     ]
     for marker in required_app_markers:
         if marker not in app_js:

@@ -152,6 +152,7 @@ def main() -> int:
         job_data={"kind": "runtime_workflow", "source": "standard_data_packet"},
     )
     repo.accept_ebay_account_deletion_event(
+        verification={"verified": True, "status": "verified"},
         event={
             "event_key": "a" * 64,
             "notification_id_hash": "a" * 64,
@@ -235,6 +236,7 @@ def main() -> int:
         decision="approve",
         decided_by=user["user_id"],
         note="migration rehearsal approval only",
+        expected_access_epochs=repo.access_session_epochs(user_id=user["user_id"],company_id=company["company_id"]),
     )
     repo.save_execution_result(
         confirmation=decided,

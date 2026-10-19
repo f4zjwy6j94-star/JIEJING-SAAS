@@ -19,7 +19,7 @@ from jiejing_saas.billing_domestic import (  # noqa: E402
     request_domestic_billing_refund_review,
 )
 from jiejing_saas.config import SaaSSettings  # noqa: E402
-from jiejing_saas.repository import SaaSRepository  # noqa: E402
+from jiejing_saas.repository import SaaSRepository, now_iso  # noqa: E402
 
 
 OUT = ROOT / "output" / "jiejing-domestic-billing-refund-test"
@@ -147,13 +147,19 @@ def main() -> int:
             "update confirmations set item_json = ? where company_id = ? and confirmation_id = ?",
             (json.dumps(tampered_item, ensure_ascii=False), company_id, confirmation_id),
         )
-    repository.decide_confirmation(
-        company_id=company_id,
-        confirmation_id=confirmation_id,
-        decision="approve",
-        decided_by=user_id,
-        note="Adversarial approval fixture.",
-    )
+    try:
+        repository.decide_confirmation(company_id=company_id, confirmation_id=confirmation_id,
+            decision="approve", decided_by=user_id, note="Adversarial approval fixture.",
+            expected_access_epochs=repository.access_session_epochs(user_id=user_id,company_id=company_id))
+    except PermissionError as exc:
+        if 'domestic_refund' not in str(exc):
+            raise
+    else:
+        return fail("merchant decision must reject a domestic refund even with valid identity epochs")
+    # Explicit pre-fix/adversarial persistence, not a permitted approval path.
+    with repository._connect() as conn:
+        conn.execute("update confirmations set status='approved',decided_by=?,decided_at=? where company_id=? and confirmation_id=?",
+            (user_id,now_iso(),company_id,confirmation_id))
     provider_calls: list[str] = []
 
     def forbidden_provider_refund(**_: object) -> dict[str, object]:

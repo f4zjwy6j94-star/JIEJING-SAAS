@@ -9,6 +9,7 @@ import io
 import os
 import pickle
 import sys
+from copy import deepcopy
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request
@@ -22,10 +23,7 @@ from jiejing_runtime import ExecutionRequest, ExecutionService  # noqa: E402
 from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.ebay_oauth import UNPUBLISHED_DRAFT_SCOPES  # noqa: E402
 from jiejing_saas.ebay_write_adapter import EbayWriteHttpAdapter  # noqa: E402
-from jiejing_saas.repository import (  # noqa: E402
-    UnpublishedDraftClaimCapability,
-    _UNPUBLISHED_DRAFT_CLAIM_MINT_TOKEN,
-)
+from jiejing_saas.repository import UnpublishedDraftClaimCapability  # noqa: E402
 
 
 OUT = ROOT / "output" / "test-jiejing-ebay-draft-save-adapter"
@@ -238,47 +236,20 @@ def _credential_boundary() -> dict[str, object]:
     }
 
 
-class _TestClaimRepository:
-    def __init__(self, binding: dict[str, str]) -> None:
-        self.binding = dict(binding)
-        self.consumed = False
-        self.aborted = False
-
-    def consume_unpublished_draft_execution_claim(self, *, capability: object) -> dict[str, object]:
-        del capability
-        if self.consumed or self.aborted:
-            raise RuntimeError("test claim already terminal")
-        self.consumed = True
-        return {
-            "status": "external_execution_processing_manual_reconcile",
-            "external_execution_claimed": True,
-            "external_execution_claim_binding": dict(self.binding),
-            "secret_exposed": False,
-        }
-
-    def abort_unpublished_draft_execution_claim(self, *, capability: object, reason_code: str) -> dict[str, object]:
-        del capability, reason_code
-        if self.consumed or self.aborted:
-            raise RuntimeError("test claim already terminal")
-        self.aborted = True
-        return {"status": "approved", "writes_to_ebay": False, "secret_exposed": False}
-
-
-def _capability_for(prepared: object) -> UnpublishedDraftClaimCapability:
-    safe = prepared.claim_binding()  # type: ignore[attr-defined]
-    repository = _TestClaimRepository(safe)
-    return UnpublishedDraftClaimCapability(
-        claim_id="draftclaim_unit_test",
-        nonce=b"unit-test-nonce-is-never-a-production-secret",
-        binding=safe,
-        repository=repository,  # type: ignore[arg-type]
-        mint_token=_UNPUBLISHED_DRAFT_CLAIM_MINT_TOKEN,
-    )
+def _capability_for(prepared: object, repo, request, epochs) -> UnpublishedDraftClaimCapability:
+    _, capability = repo.claim_unpublished_draft_execution(company_id=request.company_id,
+        confirmation_id=request.confirmation_id,user_id=request.user_id,
+        expected_binding=prepared.claim_binding(),expected_access_epochs=epochs,operation_plan=prepared.execution_plan())
+    return capability
 
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
-    request = _request()
+    from test_jiejing_ebay_execution_authority import approved_adapter_case
+    repo,request,_,epochs,boundary = approved_adapter_case(OUT,'draft-missing-offer',_request())
+    def _credential_boundary(): return deepcopy(boundary)
+    def _draft_connection(**overrides): return {**deepcopy(boundary['connection']),**overrides}
+    def _draft_secret_ref(**overrides): return {**deepcopy(boundary['secret_reference']),**overrides}
     settings = _settings()
     if settings.effective_real_platform_writes_enabled:
         return fail("the controlled draft capability must not enable broad eBay writes")
@@ -341,7 +312,7 @@ def main() -> int:
         request=request,
         preflight=preflight,
         prepared=missing_offer_prepared,
-        claim_capability=_capability_for(missing_offer_prepared),
+        claim_capability=_capability_for(missing_offer_prepared,repo,request,epochs),
         marketplace_id="EBAY_US",
     )
     if missing_offer_created.get("status") != "saved_to_ebay_draft":
@@ -404,6 +375,8 @@ def main() -> int:
             return 201, {"content-type": "application/json"}, json.dumps({"offerId": "offer_draft_001"}).encode("utf-8")
         raise AssertionError(f"unexpected eBay draft-save request: {http_request.get_method()} {http_request.full_url}")
 
+    repo,request,_,epochs,boundary = approved_adapter_case(OUT,'draft-create',_request())
+    preflight = ExecutionService(demo_mode=False).preflight(request)
     adapter = EbayWriteHttpAdapter(settings, transport=create_transport)
     adapter._resolve_access_token = lambda **_: {  # type: ignore[attr-defined]
         "ok": True,
@@ -439,11 +412,12 @@ def main() -> int:
         return fail("opaque preparation handle must not be serializable")
     if [call.get("method") for call in calls] != ["GET"]:
         return fail(f"prepare must perform only the deterministic offer inspection GET: {calls}")
+    created_capability=_capability_for(prepared,repo,request,epochs)
     created = adapter.execute_prepared_listing_draft(
         request=request,
         preflight=preflight,
         prepared=prepared,
-        claim_capability=_capability_for(prepared),
+        claim_capability=created_capability,
         marketplace_id="EBAY_US",
     )
     if created.get("status") != "saved_to_ebay_draft":
@@ -462,7 +436,8 @@ def main() -> int:
     if created.get("platform_result", {}).get("contract_version") != "2026-08-13-unpublished-draft-credential-v1":
         return fail("draft receipt must retain the versioned credential binding contract")
     serialized_created = json.dumps(created, ensure_ascii=False, sort_keys=True)
-    for sentinel in ("vault://ebay/draft-exact", "oauth_unpublished_draft_exact", "backend-only-test-token"):
+    for sentinel in ("vault://ebay/draft-exact", "oauth_unpublished_draft_exact", "backend-only-test-token",
+                     boundary['connection']['secret_ref'],boundary['connection']['metadata']['oauth_request_id']):
         if sentinel in serialized_created:
             return fail("draft result must contain only value-free credential hashes")
     replay_calls = len(calls)
@@ -470,7 +445,7 @@ def main() -> int:
         request=request,
         preflight=preflight,
         prepared=prepared,
-        claim_capability=_capability_for(prepared),
+        claim_capability=created_capability,
         marketplace_id="EBAY_US",
     )
     if replay.get("status") != "prepared_draft_binding_invalid" or len(calls) != replay_calls:
@@ -557,6 +532,8 @@ def main() -> int:
             return 204, {}, b""
         raise AssertionError(f"unexpected eBay draft update request: {http_request.get_method()} {http_request.full_url}")
 
+    repo,request,_,epochs,boundary = approved_adapter_case(OUT,'draft-update',_request())
+    preflight = ExecutionService(demo_mode=False).preflight(request)
     update_adapter = EbayWriteHttpAdapter(_settings(), transport=update_transport)
     update_adapter._resolve_access_token = adapter._resolve_access_token  # type: ignore[attr-defined]
     update_prepared = update_adapter.prepare_listing_draft(
@@ -571,7 +548,7 @@ def main() -> int:
         request=request,
         preflight=preflight,
         prepared=update_prepared,
-        claim_capability=_capability_for(update_prepared),
+        claim_capability=_capability_for(update_prepared,repo,request,epochs),
         marketplace_id="EBAY_US",
     )
     if updated.get("status") != "saved_to_ebay_draft":
@@ -634,6 +611,8 @@ def main() -> int:
         ]
         return 200, {}, json.dumps({"offers": offers}).encode("utf-8")
 
+    repo,request,_,epochs,boundary = approved_adapter_case(OUT,'draft-changed',_request())
+    preflight = ExecutionService(demo_mode=False).preflight(request)
     changed_adapter = EbayWriteHttpAdapter(_settings(), transport=changed_transport)
     changed_adapter._resolve_access_token = adapter._resolve_access_token  # type: ignore[attr-defined]
     changed_prepared = changed_adapter.prepare_listing_draft(
@@ -642,7 +621,7 @@ def main() -> int:
         credential_boundary=_credential_boundary(),
         marketplace_id="EBAY_US",
     )
-    changed_capability = _capability_for(changed_prepared)
+    changed_capability = _capability_for(changed_prepared,repo,request,epochs)
     changed = changed_adapter.execute_prepared_listing_draft(
         request=request,
         preflight=preflight,
@@ -654,8 +633,13 @@ def main() -> int:
         return fail(f"offer becoming published after prepare must block the write: {changed}")
     if [call.get("method") for call in changed_calls] != ["GET", "GET"]:
         return fail(f"offer-state change may perform the second GET but no PUT/POST: {changed_calls}")
-    if not changed_capability._repository.aborted or changed_capability._repository.consumed:  # type: ignore[attr-defined]
+    with repo._connect() as conn:
+        claim = conn.execute('select status,consumed_at from external_execution_claims where claim_id=?',
+            (changed_capability._claim_id,)).fetchone()
+    if claim['status'] != 'aborted' or claim['consumed_at'] is not None:
         return fail("offer-state change must abort, not consume, the DB-backed claim")
+    if repo.get_confirmation(company_id=request.company_id,confirmation_id=request.confirmation_id)['status'] != 'needs_revision':
+        return fail('a retired zero-write claim requires a new separately approved confirmation')
 
     print("PASS jiejing_ebay_draft_save_adapter")
     return 0

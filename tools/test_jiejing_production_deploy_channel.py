@@ -2213,6 +2213,53 @@ echo CANDIDATE_MAY_START
     return failures
 
 
+
+def validate_bound_ssh_transport() -> list[str]:
+    """Only a process-local source address may change; no trust/target relaxation."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    import argparse
+
+    module = load_deploy_module()
+    if not hasattr(module, "ssh_bind_options"):
+        return ["explicit process-only SSH/SCP source-address option is missing"]
+    failures = []
+    base = dict(ssh_key=Path("synthetic.key"), known_hosts=Path("synthetic.known_hosts"), timeout=12)
+    for value in (None, "192.0.2.10"):
+        args = SimpleNamespace(**base, ssh_bind_address=value)
+        captured = []
+        with patch.object(module, "run", side_effect=lambda command, **kw: captured.append(command)):
+            module.upload(args, Path("synthetic.zip"), "/tmp/jiejing-synthetic.uploading")
+        commands = [module.ssh_base(args), *captured]
+        expected = [] if value is None else ["-o", "BindAddress=192.0.2.10"]
+        if module.ssh_bind_options(args) != expected:
+            failures.append("bind option differs from exact validated IPv4 address")
+        for command in commands:
+            if any(x in command for x in ("-F", "-J", "StrictHostKeyChecking=no")):
+                failures.append("bind option relaxed trust or selected alternate transport")
+            if command.count("StrictHostKeyChecking=yes") != 1 or command.count("IdentitiesOnly=yes") != 1:
+                failures.append("existing identity/host trust options changed")
+            bound = [x for x in command if x.startswith("BindAddress=")]
+            if bound != ([] if value is None else ["BindAddress=192.0.2.10"]):
+                failures.append("SSH and SCP must use exactly the same explicit bind option")
+            if command[-1].split(":")[0] != "ubuntu@43.129.169.223":
+                failures.append("bind option changed fixed deployment target")
+    if module.ssh_bind_options(SimpleNamespace(**base)) != []:
+        failures.append("old programmatic callers must retain default routing")
+    for value in ("", " ", "WLAN", "127.0.0.1", "0.0.0.0", "224.0.0.1",
+                  "192.0.2.10 -o ProxyCommand=bad", "192.0.2.10\n", "::1", "192.0.2.10/24"):
+        try:
+            module.ssh_bind_options(SimpleNamespace(**base, ssh_bind_address=value))
+        except (ValueError, argparse.ArgumentTypeError):
+            pass
+        else:
+            failures.append("unsafe/non-explicit source address accepted:" + repr(value))
+    with patch.object(sys, "argv", ["deploy", "--bundle", "a.zip", "--manifest", "a.json",
+                                   "--ssh-bind-address", "192.0.2.10"]):
+        if module.parse_args().ssh_bind_address != "192.0.2.10":
+            failures.append("CLI did not preserve explicit source address")
+    return failures
+
 def main(
     bash_resolver=shutil.which,
     *,
@@ -2226,6 +2273,9 @@ def main(
         prerequisite_failures = validate_missing_bash_fails_whole_test()
         if prerequisite_failures:
             return fail("; ".join(prerequisite_failures))
+    bind_failures = validate_bound_ssh_transport()
+    if bind_failures:
+        return fail("; ".join(bind_failures))
     evidence_failures = validate_runtime_evidence_bootstrap()
     if evidence_failures:
         return fail("; ".join(evidence_failures))

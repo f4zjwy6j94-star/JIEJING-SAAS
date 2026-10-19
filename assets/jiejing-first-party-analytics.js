@@ -5,6 +5,7 @@
   const sessionStorageKey = "jiejing_analytics_session_v1";
   const sourceStorageKey = "jiejing_analytics_source_v1";
   const internalPreviewKey = "jiejing_analytics_internal_preview_until_v1";
+  const internalBrowserKey = "jiejing_analytics_internal_browser_v1";
   const sourceTags = Object.freeze({"#from-douyin": "douyin", "#from-wechat": "wechat", "#from-xiaohongshu": "xiaohongshu", "#from-bilibili": "bilibili"});
   const sourceLifetimeMs = 30 * 60 * 1000;
   const sourceTagExpiresAt = Date.now() + sourceLifetimeMs;
@@ -26,8 +27,44 @@
   let cumulativeLayoutShift = 0;
   let performanceSampleSent = false;
   const performanceObservers = [];
+  let internalBrowserPagePause = false;
+  let lastKnownInternalBrowser = false;
+
+  // Explicit opt-out for this origin/browser only; never infer it from a merchant role.
+  // Read on every event so another tab's successful set/cancel takes effect immediately.
+  function getInternalBrowserStatus() {
+    try {
+      const persistent = window.localStorage.getItem(internalBrowserKey) === "1";
+      lastKnownInternalBrowser = persistent;
+      return { internal: persistent || internalBrowserPagePause, persistent, storage_available: true, page_only: internalBrowserPagePause && !persistent, error: null };
+    } catch (error) {
+      const paused = internalBrowserPagePause || lastKnownInternalBrowser;
+      return { internal: paused, persistent: false, storage_available: false, page_only: paused, error: "storage_unavailable" };
+    }
+  }
+
+  function setInternalBrowser(enabled) {
+    if (typeof enabled !== "boolean") {
+      return { ok: false, ...getInternalBrowserStatus(), error: "invalid_internal_browser_setting" };
+    }
+    if (enabled) internalBrowserPagePause = true;
+    try {
+      if (enabled) window.localStorage.setItem(internalBrowserKey, "1");
+      else window.localStorage.removeItem(internalBrowserKey);
+      const verified = getInternalBrowserStatus();
+      if (!verified.storage_available || verified.persistent !== enabled) {
+        return { ok: false, ...verified, error: verified.error || "storage_write_not_verified" };
+      }
+      internalBrowserPagePause = false;
+      return { ok: true, ...verified, internal: verified.persistent, page_only: false };
+    } catch (error) {
+      return { ok: false, ...getInternalBrowserStatus(), error: "storage_unavailable" };
+    }
+  }
 
   function analyticsCollectionAllowed() {
+    // Even explicit test mode must not bypass the browser's own persistent opt-out.
+    if (getInternalBrowserStatus().internal) return false;
     if (window.__JIEJING_ANALYTICS_TEST_MODE__ === true) return true;
     if (window.location.hash === "#internal-test") {
       try { window.sessionStorage.setItem(internalPreviewKey, String(Date.now() + sourceLifetimeMs)); } catch (error) { /* No storage required for this page. */ }
@@ -55,8 +92,9 @@
     return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
   }
 
-  function storedRandomId(storage, key) {
+  function storedRandomId(storageName, key) {
     try {
+      const storage = window[storageName];
       const current = String(storage.getItem(key) || "").trim();
       if (current) return current;
       const created = randomId();
@@ -93,8 +131,8 @@
     return window.location.origin;
   }
 
-  const visitorId = storedRandomId(window.localStorage, visitorStorageKey);
-  const sessionId = storedRandomId(window.sessionStorage, sessionStorageKey);
+  const visitorId = storedRandomId("localStorage", visitorStorageKey);
+  const sessionId = storedRandomId("sessionStorage", sessionStorageKey);
 
   function currentPageKey() {
     const path = String(window.location.pathname || "").toLowerCase();
@@ -236,6 +274,8 @@
     markAppShellReady,
     context,
     currentPageKey,
+    getInternalBrowserStatus,
+    setInternalBrowser,
   });
 
   function bindEvents() {

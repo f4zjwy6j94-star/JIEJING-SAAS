@@ -449,12 +449,12 @@
       </section>`;
   }
 
-  function measurementScope(period = {}) {
+  function measurementScope(period = {}, note = "期间指标按以上窗口；商家总数、当前订阅和额度余额为累计或当前快照。UV 是浏览器标识，不等于新客户，不能直接归因抖音。") {
     const stamp = (value) => {
       if (!value || !Number.isFinite(Date.parse(value))) return "未提供";
       return new Intl.DateTimeFormat("zh-CN", {timeZone: "Asia/Shanghai", dateStyle: "short", timeStyle: "short", hour12: false}).format(new Date(value));
     };
-    return `<section class="ops-measurement-scope" aria-label="统计口径"><strong>北京时间 · 含今日未结束时段</strong><span>${escapeHtml(stamp(period.started_at))} — ${escapeHtml(stamp(period.ended_at))}</span><p>期间指标按以上窗口；商家总数、当前订阅和额度余额为累计或当前快照。UV 是浏览器标识，不等于新客户，不能直接归因抖音。</p></section>`;
+    return `<section class="ops-measurement-scope" aria-label="统计口径"><strong>北京时间 · 含今日未结束时段</strong><span>${escapeHtml(stamp(period.started_at))} — ${escapeHtml(stamp(period.ended_at))}</span><p>${escapeHtml(note)}</p></section>`;
   }
 
   function renderTrafficSources(traffic) {
@@ -617,7 +617,7 @@
       payment: "支付链路",
     };
     const reasonLabels = {
-      high_latency: "高延迟",
+      high_latency: "完整生成耗时偏高",
       high_failure_rate: "失败率偏高",
       high_timeout_rate: "超时率偏高",
     };
@@ -648,7 +648,9 @@
         ? actionLabels[item.action_key]
         : "按内部可靠性流程排查并保留无值证据";
       const status = item.status === "critical" ? "严重" : "关注";
-      return `<article class="ops-reliability-item"><header><strong>${escapeHtml(scope)}</strong>${pill(item.status, status)}</header><dl><div><dt>触发原因</dt><dd>${escapeHtml(reasons.join("、") || "未分类原因")}</dd></div><div><dt>建议动作</dt><dd>${escapeHtml(action)}</dd></div><div><dt>安全指标</dt><dd>样本 ${formatNumber(item.request_count)} · P75 ${formatNumber(item.p75_duration_ms)} ms · 失败 ${escapeHtml(safePercent(item.failure_rate_percent))} · 超时 ${escapeHtml(safePercent(item.timeout_rate_percent))}</dd></div></dl></article>`;
+      const firstOutput = item.p75_first_output_ms == null ? "未知" : `${formatNumber(item.p75_first_output_ms)} ms`;
+      const duration = item.p75_duration_ms == null ? "未知" : `${formatNumber(item.p75_duration_ms)} ms`;
+      return `<article class="ops-reliability-item"><header><strong>${escapeHtml(scope)}</strong>${pill(item.status, status)}</header><dl><div><dt>触发原因</dt><dd>${escapeHtml(reasons.join("、") || "未分类原因")}</dd></div><div><dt>建议动作</dt><dd>${escapeHtml(action)}</dd></div><div><dt>安全指标</dt><dd>请求 ${formatNumber(item.request_count)} · 耗时样本 ${formatNumber(item.sample_count)} · 完整生成 P75 ${duration} · 失败 ${escapeHtml(safePercent(item.failure_rate_percent))} · 超时 ${escapeHtml(safePercent(item.timeout_rate_percent))}</dd></div><div><dt>首次出字 P75</dt><dd>${firstOutput} · ${formatNumber(item.first_output_sample_count)} 个流式样本</dd></div><div><dt>最近样本</dt><dd>${formatDate(item.latest_sample_at)}</dd></div></dl></article>`;
     }).join("");
     return `<section class="ops-panel ops-reliability-alert-detail"><div class="ops-section-head"><div><h2>告警明细</h2><p>只展示供应商中性、无原始请求内容的安全诊断。</p></div></div><div class="ops-reliability-list">${cards}</div></section>`;
   }
@@ -664,10 +666,10 @@
       const successRate = total ? `${((success / total) * 100).toFixed(1)}%` : "暂无样本";
       const firstOutput = item.p75_first_output_ms == null ? "-" : `${formatNumber(item.p75_first_output_ms)} ms`;
       const fullDuration = item.p75_duration_ms == null ? "-" : `${formatNumber(item.p75_duration_ms)} ms`;
-      return `<article class="ops-reliability-item"><header><strong>${escapeHtml(label)}</strong>${pill(item.status, item.status === "instrumented" ? "已采集" : "暂无样本")}</header><dl><div><dt>成功率</dt><dd>${escapeHtml(successRate)}</dd></div><div><dt>首段 P75</dt><dd>${firstOutput}</dd></div><div><dt>完整 P75</dt><dd>${fullDuration}</dd></div><div><dt>超时</dt><dd>${formatNumber(item.timeout_count)}</dd></div></dl></article>`;
+      return `<article class="ops-reliability-item"><header><strong>${escapeHtml(label)}</strong>${pill(total > 0 ? "instrumented" : item.status, total > 0 ? "已采集" : item.status === "ready_no_samples" ? "暂无样本" : "未提供")}</header><dl><div><dt>成功率</dt><dd>${escapeHtml(successRate)} · ${formatNumber(total)} 个请求</dd></div><div><dt>首次出字 P75</dt><dd>${firstOutput} · ${formatNumber(item.streamed_request_count)} 个流式样本</dd></div><div><dt>完整 P75</dt><dd>${fullDuration} · ${formatNumber(item.sample_count)} 个耗时样本</dd></div><div><dt>最近样本</dt><dd>${formatDate(item.latest_sample_at)}</dd></div><div><dt>超时</dt><dd>${formatNumber(item.timeout_count)}</dd></div></dl></article>`;
     }).join("");
     const alerts = reliability.alerts || {};
-    elements.content.innerHTML = `<div class="ops-metrics">${metric("严重告警", formatNumber(alerts.critical_count), "达到严重阈值的链路", Number(alerts.critical_count) ? "is-critical" : "")}${metric("关注告警", formatNumber(alerts.attention_count), "需要观察或处理", Number(alerts.attention_count) ? "is-attention" : "")}${metric("模型计量健康", statusLabel(overview.model_cost_analytics?.current_metering_health), "只统计当前计量窗口")}${metric("页面性能样本", formatNumber(overview.performance_analytics?.sample_count), "真实浏览器性能采样")}</div>${reliabilityAlertDetails(alerts)}<section class="ops-panel"><div class="ops-section-head"><div><h2>核心链路</h2><p>供应商中性指标；不记录原始错误、查询或回复。</p></div></div><div class="ops-reliability-list">${cards}</div></section>`;
+    elements.content.innerHTML = `${measurementScope(overview.period, "请求指标按此窗口汇总；完整耗时和首次出字的样本数分别列出。数据更新不代表发起了实时测速。")}<p class="ops-evidence-note">以下是所选窗口内已记录请求的统计，不是实时速度测试。完整生成耗时包含持续输出；首次出字只统计流式请求。最近样本较早时，不代表今天仍以相同速度运行，切换窗口也不等于完成优化。</p><div class="ops-metrics">${metric("严重告警", formatNumber(alerts.critical_count), "达到严重阈值的链路", Number(alerts.critical_count) ? "is-critical" : "")}${metric("关注告警", formatNumber(alerts.attention_count), "所选窗口的历史请求", Number(alerts.attention_count) ? "is-attention" : "")}${metric("模型计量健康", statusLabel(overview.model_cost_analytics?.current_metering_health), "只统计当前计量窗口")}${metric("页面性能样本", formatNumber(overview.performance_analytics?.sample_count), "真实浏览器性能采样")}</div>${reliabilityAlertDetails(alerts)}<section class="ops-panel"><div class="ops-section-head"><div><h2>核心链路</h2><p>供应商中性指标；不记录原始错误、查询或回复。缺少样本显示未知，不记作零耗时。</p></div></div><div class="ops-reliability-list">${cards}</div></section>`;
   }
 
   function renderSettings() {

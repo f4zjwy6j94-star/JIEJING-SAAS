@@ -134,6 +134,9 @@ def _check_stage_gate_migrations() -> str:
     exit_code, report = run_gate()
     migration = next(item for item in report["checks"] if item["key"] == "postgres_migration_shape")
     expected_paths = [str(spec.path.relative_to(ROOT)) for spec in POSTGRES_MIGRATION_MANIFEST]
+    support_migration = ROOT / "jiejing_saas" / "migrations" / "006_support_conversations_postgres.sql"
+    if str(support_migration.relative_to(ROOT)) not in expected_paths:
+        return "support migration 006 must be reachable through the normal reviewed deployment manifest"
     if exit_code != 0 or migration["pass"] is not True:
         return "infrastructure stage gate must accept every checked-in canonical migration"
     if migration["migration_paths"] != expected_paths:
@@ -149,7 +152,13 @@ def _check_stage_gate_migrations() -> str:
         return "missing migration 005 must remain in the manifest and be reported as unavailable"
     if set(migration["missing_tables"]) != {"listing_draft_edit_heads", "listing_draft_edit_revisions"}:
         return "missing migration 005 must still fail the critical Listing table checks"
-    print("PASS infrastructure_stage_gate_manifest_regressions 2/2")
+    exit_code, report = run_gate(support_migration)
+    migration = next(item for item in report["checks"] if item["key"] == "postgres_migration_shape")
+    if exit_code != 1 or migration["pass"] is not False:
+        return "infrastructure stage gate must fail closed when support migration 006 is unavailable"
+    if set(migration["missing_tables"]) != {"support_messages_v1", "support_sync_v1", "support_drafts_v1", "support_send_intents_v1"}:
+        return "missing support migration must fail all four support table checks"
+    print("PASS infrastructure_stage_gate_manifest_regressions 3/3")
     return ""
 
 

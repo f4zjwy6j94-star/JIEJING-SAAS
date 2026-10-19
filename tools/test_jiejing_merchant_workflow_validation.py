@@ -87,6 +87,7 @@ def _create_path(
                 decision="modify" if index % 2 else "approve",
                 decided_by=user_id,
                 note="Merchant reviewed the generated package.",
+                expected_access_epochs=repository.access_session_epochs(user_id=user_id,company_id=company_id),
             )
     return {"company_id": company_id, "user_id": user_id}
 

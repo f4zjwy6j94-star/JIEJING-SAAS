@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 import shlex
@@ -62,6 +63,21 @@ REMOTE_BOOLEAN_CONTRACT = {
 }
 
 
+def parse_local_bind_address(value: str) -> str:
+    try:
+        address = ipaddress.IPv4Address(value) if isinstance(value, str) else None
+    except ipaddress.AddressValueError:
+        address = None
+    if address is None or address.is_unspecified or address.is_multicast or address.is_loopback or address.is_link_local or address.is_reserved:
+        raise argparse.ArgumentTypeError("ssh bind address must be an explicit non-loopback IPv4 source address")
+    return str(address)
+
+
+def ssh_bind_options(args: argparse.Namespace) -> list[str]:
+    value = getattr(args, "ssh_bind_address", None)
+    return [] if value is None else ["-o", "BindAddress=" + parse_local_bind_address(value)]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Confirmation-gated atomic deploy to the Jiejing production host."
@@ -72,6 +88,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--confirm", default="")
     parser.add_argument("--ssh-key", type=Path, default=DEFAULT_KEY)
     parser.add_argument("--known-hosts", type=Path, default=DEFAULT_KNOWN_HOSTS)
+    parser.add_argument("--ssh-bind-address", type=parse_local_bind_address, default=None,
+                        help="Optional process-only local IPv4 source for both SSH and SCP; changes no network configuration.")
     parser.add_argument("--timeout", type=int, default=30)
     return parser.parse_args()
 
@@ -795,6 +813,7 @@ def upload(args: argparse.Namespace, source: Path, remote_path: str) -> None:
         f"UserKnownHostsFile={args.known_hosts}",
         "-o",
         f"ConnectTimeout={args.timeout}",
+        *ssh_bind_options(args),
         str(source),
         target,
     ]
@@ -825,6 +844,7 @@ def ssh_base(args: argparse.Namespace) -> list[str]:
         f"UserKnownHostsFile={args.known_hosts}",
         "-o",
         f"ConnectTimeout={args.timeout}",
+        *ssh_bind_options(args),
         f"{DEFAULT_USER}@{DEFAULT_HOST}",
     ]
 

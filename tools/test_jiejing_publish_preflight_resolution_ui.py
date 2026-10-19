@@ -29,7 +29,7 @@ def main() -> int:
         "data-preflight-confirm-route",
         "证据可信度",
         "修复入口",
-        "确认中心路由",
+        "确认方式",
         "source_records_visible",
         "no_secret_fields_rendered",
         "decision_center_required",

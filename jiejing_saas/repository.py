@@ -37,6 +37,8 @@ from .operations_metering import (
     reconcile_reliability_alert_state,
 )
 from .permissions import permissions_for_role, valid_role
+from .confirmation_authority import create_approval, initialize_sqlite_authorities, require_approval_binding, require_execution_principals
+from .ebay_execution_authority import create_attempt, validate_unconsumed_permit, close_zero_attempt, EbayExecutionDenied, EXECUTION_DENIAL_CODES, recovery as execution_recovery, canonical, load_operation_state, require_no_unresolved_confirmation_resources
 from .postgres_repository_runtime import connect_postgres_repository
 from .product_feedback import (
     ProductFeedbackIdempotencyConflict,
@@ -57,6 +59,7 @@ from .workflow_plan import step_status_from_runtime
 
 
 HIGH_RISK_ACTIONS = {
+    "buyer_message_send",
     "ebay_oauth_scope_change",
     "create_ebay_inventory_location",
     "save_ebay_listing_draft",
@@ -289,6 +292,15 @@ def _operations_feedback_text(value: Any, *, limit: int) -> str:
     return re.sub(r"\s+", " ", text).strip()[:limit]
 
 
+def _utc_stamp_for_operations(value: Any) -> str:
+    """Safe timestamp only, never raw ledger text or an invented sample time."""
+    try:
+        stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return stamp.astimezone(timezone.utc).isoformat() if stamp.tzinfo else ""
+    except (ValueError, TypeError):
+        return ""
+
+
 def _operations_time_window_sql(column: str, database_engine: str) -> str:
     """Internal fixed SQL expressions only; UTC and +08:00 fixtures compare alike."""
     if database_engine == "postgres":
@@ -310,6 +322,10 @@ _PRODUCT_FACT_CONTEXT_ABSENT = object()
 
 class ProductFactSaveValidationError(ValueError):
     pass
+
+
+class SessionAccessRevoked(ValueError):
+    """Authentication was invalidated between verification and session issuance."""
 
 
 class ProductFactSaveConflict(Exception):
@@ -440,6 +456,13 @@ class SaaSRepository:
                   expires_epoch integer not null,
                   revoked_at text,
                   created_at text not null
+                );
+
+                create table if not exists access_revocation_epochs (
+                  user_id text not null,
+                  company_id text not null,
+                  generation integer not null check (generation >= 0),
+                  primary key (user_id, company_id)
                 );
 
                 create table if not exists user_refresh_sessions (
@@ -990,6 +1013,7 @@ class SaaSRepository:
             self._ensure_account_scoped_confirmations(conn)
             self._ensure_user_session_refresh_column(conn)
             self._ensure_platform_model_trial_reservation_lifecycle(conn)
+            initialize_sqlite_authorities(conn)
             self._ensure_indexes(conn)
             self._record_schema_migration(
                 conn,
@@ -1190,17 +1214,27 @@ class SaaSRepository:
         return {"user": self.get_user(user_id), "company": self.get_company(company_id)}
 
     def authenticate_user(self, *, email: str, password: str) -> dict[str, Any]:
+        user, _epochs = self.authenticate_user_for_session(email=email, password=password)
+        return user
+
+    def authenticate_user_for_session(self, *, email: str, password: str) -> tuple[dict[str, Any], dict[str, int]]:
+        """Password proof plus a separate internal snapshot, never embedded in user DTO."""
         self.initialize()
         user = self.get_user_by_email(email.strip().lower())
         if not user:
             verify_password(password, AUTH_DUMMY_PASSWORD_SALT, AUTH_DUMMY_PASSWORD_HASH)
             raise ValueError("invalid email or password")
         with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            suffix = " for update" if self.database_engine == "postgres" else ""
             row = conn.execute(
-                "select password_salt, password_hash from users where user_id = ?",
+                f"select password_salt, password_hash, status from users where user_id = ?{suffix}",
                 (user["user_id"],),
             ).fetchone()
-        if not row or not verify_password(password, row["password_salt"], row["password_hash"]):
+            epochs = self._access_epochs(conn, user_id=user["user_id"], company_id=user["default_company_id"])
+        # Keep password work and the public failure identical for inactive users.
+        if not row or not verify_password(password, row["password_salt"], row["password_hash"]) or row["status"] != "active":
             raise ValueError("invalid email or password")
         self.write_audit(
             company_id=user["default_company_id"],
@@ -1211,7 +1245,119 @@ class SaaSRepository:
             summary="User logged in.",
             details={"email": user["email"], "secret_exposed": False},
         )
-        return user
+        return user, epochs
+
+    def _access_principal_state(self, conn: Any, *, user_id: str, company_id: str) -> str:
+        """Recheck the current account and tenant membership, never token claims alone."""
+        lock_suffix = " for update" if self.database_engine == "postgres" else ""
+        user = conn.execute(f"select status from users where user_id = ?{lock_suffix}", (user_id,)).fetchone()
+        if not user or user["status"] != "active":
+            return "user_inactive_or_missing"
+        member = conn.execute(
+            f"select role from team_members where user_id = ? and company_id = ?{lock_suffix}",
+            (user_id, company_id),
+        ).fetchone()
+        if not member or not valid_role(str(member["role"] or "")):
+            return "membership_missing_or_invalid"
+        return "active"
+
+    def _revoke_principal_sessions(self, conn: Any, *, user_id: str, company_id: str = "") -> None:
+        """Persist revocation so re-enabling an account cannot revive known sessions."""
+        scope = "user_id = ?" + (" and company_id = ?" if company_id else "")
+        params = (user_id, company_id) if company_id else (user_id,)
+        revoked_at = now_iso()
+        conn.execute(
+            f"update user_sessions set revoked_at = ? where {scope} and revoked_at is null",
+            (revoked_at, *params),
+        )
+        conn.execute(
+            f"update user_refresh_sessions set status = 'revoked', revoked_at = ? where {scope} and status = 'active'",
+            (revoked_at, *params),
+        )
+        conn.execute(
+            f"""update user_refresh_token_history set status = 'expired'
+                where session_id in (select session_id from user_refresh_sessions where {scope})
+                  and status in ('active', 'rotated')""",
+            params,
+        )
+
+    def _check_access_principal(self, conn: Any, *, user_id: str, company_id: str) -> bool:
+        state = self._access_principal_state(conn, user_id=user_id, company_id=company_id)
+        if state == "active":
+            return True
+        self._revoke_principal_sessions(
+            conn, user_id=user_id,
+            company_id=company_id if state == "membership_missing_or_invalid" else "",
+        )
+        return False
+
+    @staticmethod
+    def _access_epochs(conn: Any, *, user_id: str, company_id: str) -> dict[str, int]:
+        rows = conn.execute(
+            "select company_id, generation from access_revocation_epochs "
+            "where user_id = ? and company_id in ('', ?)", (user_id, company_id),
+        ).fetchall()
+        values = {str(row["company_id"]): int(row["generation"]) for row in rows}
+        return {"user_epoch": values.get("", 0), "member_epoch": values.get(company_id, 0)}
+
+    @staticmethod
+    def _advance_access_epoch(conn: Any, *, user_id: str, company_id: str = "") -> None:
+        # The caller holds the user row (and company lock for membership edits).
+        # Keep this row after member deletion: it is a durable revocation tombstone.
+        conn.execute("insert or ignore into access_revocation_epochs (user_id, company_id, generation) "
+                     "values (?, ?, 0)", (user_id, company_id))
+        conn.execute("update access_revocation_epochs set generation = generation + 1 "
+                     "where user_id = ? and company_id = ?", (user_id, company_id))
+
+    def access_session_epochs(self, *, user_id: str, company_id: str) -> dict[str, int]:
+        """Internal signing snapshot. Callers must already authenticate the user."""
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            if self._access_principal_state(conn, user_id=user_id, company_id=company_id) != "active":
+                raise ValueError("session_refresh_invalid")
+            return self._access_epochs(conn, user_id=user_id, company_id=company_id)
+
+    def _identity_epochs_match(self, conn: Any, identity: dict[str, Any]) -> bool:
+        if ("user_epoch" in identity) != ("member_epoch" in identity):
+            return False
+        current = self._access_epochs(conn, user_id=str(identity.get("user_id") or ""),
+                                      company_id=str(identity.get("company_id") or ""))
+        # Missing claims mean the historical baseline, never the current version.
+        return all(type(identity.get(key, 0)) is int and identity.get(key, 0) == value
+                   for key, value in current.items())
+
+    def set_user_access_status(self, *, user_id: str, status: str) -> None:
+        """Internal administration primitive, not a public authorization endpoint.
+
+        The calling administrative workflow must authorize the operator. Keep the
+        account transition and session revocation atomic, including re-enablement.
+        """
+        if status not in {"active", "disabled"} or not user_id:
+            raise ValueError("invalid account status transition")
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            user = conn.execute(
+                f"select status, default_company_id from users where user_id = ?{lock_suffix}", (user_id,),
+            ).fetchone()
+            if not user:
+                raise ValueError("account not found")
+            if user["status"] == status:
+                return
+            self._advance_access_epoch(conn, user_id=user_id)
+            self._revoke_principal_sessions(conn, user_id=user_id)
+            conn.execute("update users set status = ? where user_id = ?", (status, user_id))
+            self._insert_audit(
+                conn, company_id=str(user["default_company_id"]), store_id=None, user_id=user_id,
+                actor_type="system", action_type="auth.account_access_status_changed",
+                target_type="user", target_id=user_id,
+                summary="Account access status changed and existing sessions revoked.",
+                details={"previous_status": str(user["status"]), "status": status, "secret_exposed": False},
+            )
 
     def ensure_user_session(self, identity: dict[str, Any]) -> dict[str, Any]:
         self.initialize()
@@ -1224,7 +1370,15 @@ class SaaSRepository:
         if not jti or not user_id or not company_id or expires_epoch <= 0:
             return {"active": False, "status": "invalid_session_identity", "secret_exposed": False}
         with self._connect() as conn:
-            conn.execute("delete from user_sessions where expires_epoch <= ?", (int(time.time()),))
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            if not self._check_access_principal(conn, user_id=user_id, company_id=company_id):
+                return {"active": False, "status": "principal_access_revoked", "secret_exposed": False}
+            if not self._identity_epochs_match(conn, identity):
+                return {"active": False, "status": "principal_generation_revoked", "secret_exposed": False}
+            # The principal lock covers only this user, not every expired row.
+            conn.execute("delete from user_sessions where user_id = ? and expires_epoch <= ?",
+                         (user_id, int(time.time())))
             conn.execute(
                 """
                 insert or ignore into user_sessions (
@@ -1276,6 +1430,10 @@ class SaaSRepository:
     def revoke_user_session(self, *, jti: str, user_id: str) -> bool:
         self.initialize()
         with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            else:
+                conn.execute("select user_id from users where user_id = ? for update", (user_id,)).fetchone()
             cursor = conn.execute(
                 """
                 update user_sessions set revoked_at = ?
@@ -1285,6 +1443,35 @@ class SaaSRepository:
             )
         return int(getattr(cursor, "rowcount", 0) or 0) > 0
 
+    def _authorizing_session_active(self, conn: Any, identity: dict[str, Any]) -> bool:
+        """Called under the user lock, also used by every session revocation path.
+
+        Epochs alone cannot represent logout/device revocation. A company switch
+        must still possess its already authenticated access row and live family.
+        It must not register an unseen source token as part of delegation.
+        """
+        user_id = str(identity.get("user_id") or "")
+        company_id = str(identity.get("company_id") or "")
+        jti, sid = str(identity.get("jti") or ""), str(identity.get("sid") or "")
+        now_epoch = int(time.time())
+        try:
+            if not jti or int(identity.get("exp") or 0) <= now_epoch:
+                return False
+        except (TypeError, ValueError):
+            return False
+        row = conn.execute("select user_id, company_id, refresh_session_id, expires_epoch, revoked_at "
+                           "from user_sessions where jti = ?", (jti,)).fetchone()
+        if not row or str(row["user_id"]) != user_id or str(row["company_id"]) != company_id:
+            return False
+        if str(row["refresh_session_id"] or "") != sid or row["revoked_at"] or int(row["expires_epoch"]) <= now_epoch:
+            return False
+        if not sid:
+            return True
+        family = conn.execute("select user_id, company_id, status, expires_epoch from user_refresh_sessions "
+                              "where session_id = ?", (sid,)).fetchone()
+        return bool(family and str(family["user_id"]) == user_id and str(family["company_id"]) == company_id
+                    and family["status"] == "active" and int(family["expires_epoch"]) > now_epoch)
+
     def create_browser_refresh_session(
         self,
         *,
@@ -1292,6 +1479,8 @@ class SaaSRepository:
         company_id: str,
         device_class: str,
         ttl_seconds: int,
+        expected_access_epochs: dict[str, int] | None = None,
+        authorizing_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         normalized_device_class = self._browser_device_class(device_class)
@@ -1305,24 +1494,44 @@ class SaaSRepository:
         now_epoch = int(time.time())
         expires_epoch = now_epoch + normalized_ttl
         with self._connect() as conn:
-            membership = conn.execute(
-                "select 1 from team_members where user_id = ? and company_id = ?",
-                (user_id, company_id),
-            ).fetchone()
-            if not membership:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            if self._access_principal_state(conn, user_id=user_id, company_id=company_id) != "active":
                 raise ValueError("session_refresh_invalid")
-            conn.execute("delete from user_sessions where expires_epoch <= ?", (now_epoch,))
-            conn.execute("delete from user_refresh_token_history where expires_epoch <= ?", (now_epoch,))
+            access_epochs = self._access_epochs(conn, user_id=user_id, company_id=company_id)
+            if expected_access_epochs is not None and (
+                set(expected_access_epochs) != {"user_epoch", "member_epoch"}
+                or any(type(expected_access_epochs.get(key)) is not int
+                       or expected_access_epochs[key] != value for key, value in access_epochs.items())
+            ):
+                raise SessionAccessRevoked("session_access_revoked")
+            if authorizing_identity is not None and (
+                str(authorizing_identity.get("user_id") or "") != user_id
+                or not self._identity_epochs_match(conn, authorizing_identity)
+                or self._access_principal_state(conn, user_id=user_id,
+                    company_id=str(authorizing_identity.get("company_id") or "")) != "active"
+                or not self._authorizing_session_active(conn, authorizing_identity)
+            ):
+                raise SessionAccessRevoked("session_access_revoked")
+            # Only this user's mutations are serialized by the principal lock.
+            # Global cleanup here can deadlock another user's family revocation.
+            # Delete dependants before families, keeping every step user-scoped.
+            conn.execute("delete from user_sessions where user_id = ? and expires_epoch <= ?", (user_id, now_epoch))
+            conn.execute(
+                "delete from user_refresh_token_history where expires_epoch <= ? and session_id in "
+                "(select session_id from user_refresh_sessions where user_id = ?)",
+                (now_epoch, user_id),
+            )
             conn.execute(
                 """
                 delete from user_refresh_sessions
-                where expires_epoch <= ?
+                where user_id = ? and expires_epoch <= ?
                   and not exists (
                     select 1 from user_sessions us
                     where us.refresh_session_id = user_refresh_sessions.session_id
                   )
                 """,
-                (now_epoch,),
+                (user_id, now_epoch),
             )
             conn.execute(
                 """
@@ -1360,6 +1569,7 @@ class SaaSRepository:
                 current=True,
             ),
             "refresh_token": refresh_token,
+            "access_epochs": access_epochs,
         }
 
     def browser_refresh_session_identity(self, *, refresh_token: str) -> dict[str, Any]:
@@ -1370,6 +1580,8 @@ class SaaSRepository:
         presented_hash = self._browser_refresh_token_hash(presented_token)
         now_epoch = int(time.time())
         with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
             row = conn.execute(
                 """
                 select h.token_hash, h.status as token_status, h.expires_epoch as token_expires_epoch,
@@ -1378,12 +1590,19 @@ class SaaSRepository:
                        u.email, tm.role
                 from user_refresh_token_history h
                 join user_refresh_sessions s on s.session_id = h.session_id
-                join users u on u.user_id = s.user_id
-                join team_members tm on tm.user_id = s.user_id and tm.company_id = s.company_id
+                left join users u on u.user_id = s.user_id
+                left join team_members tm on tm.user_id = s.user_id and tm.company_id = s.company_id
                 where h.token_hash = ?
                 """,
                 (presented_hash,),
             ).fetchone()
+            principal_active = bool(row) and self._check_access_principal(
+                conn, user_id=str(row["user_id"]), company_id=str(row["company_id"]),
+            )
+            access_epochs = self._access_epochs(conn, user_id=str(row["user_id"]),
+                company_id=str(row["company_id"])) if principal_active else {}
+        if not principal_active:
+            raise ValueError("session_refresh_invalid")
         if (
             row
             and hmac.compare_digest(str(row["token_hash"] or ""), presented_hash)
@@ -1407,6 +1626,7 @@ class SaaSRepository:
             "company_id": str(row["company_id"]),
             "email": str(row["email"]),
             "session_ref": str(row["session_id"]),
+            "access_epochs": access_epochs,
             "secret_exposed": False,
         }
 
@@ -1430,6 +1650,17 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            # Account administration locks the user before revoking session rows.
+            # Follow the same order here, before locking token history, so a
+            # simultaneous disable/refresh cannot deadlock or mint after disable.
+            if self.database_engine == "postgres":
+                owner = conn.execute(
+                    "select s.user_id from user_refresh_token_history h "
+                    "join user_refresh_sessions s on s.session_id = h.session_id where h.token_hash = ?",
+                    (presented_hash,),
+                ).fetchone()
+                if owner:
+                    conn.execute("select user_id from users where user_id = ? for update", (owner["user_id"],)).fetchone()
             history = conn.execute(
                 f"select * from user_refresh_token_history where token_hash = ?{lock_suffix}",
                 (presented_hash,),
@@ -1489,11 +1720,12 @@ class SaaSRepository:
                         )
                     error_code = "session_refresh_invalid"
                 else:
-                    if access_identity is not None and not self._valid_rotated_access_identity(
-                        access_identity,
-                        session=session,
-                        now_epoch=now_epoch,
+                    if not self._check_access_principal(
+                        conn, user_id=str(session["user_id"]), company_id=str(session["company_id"]),
                     ):
+                        error_code = "session_refresh_invalid"
+                    elif access_identity is not None and (not self._identity_epochs_match(conn, access_identity)
+                        or not self._valid_rotated_access_identity(access_identity, session=session, now_epoch=now_epoch)):
                         error_code = "session_refresh_invalid"
                         session = None
                 if not error_code and session:
@@ -1612,6 +1844,8 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            if self.database_engine == "postgres":
+                conn.execute("select user_id from users where user_id = ? for update", (user_id,)).fetchone()
             row = conn.execute(
                 f"""
                 select session_id from user_refresh_sessions
@@ -1659,6 +1893,12 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            if self.database_engine == "postgres":
+                owner = conn.execute("select s.user_id from user_refresh_token_history h "
+                    "join user_refresh_sessions s on s.session_id = h.session_id where h.token_hash = ?",
+                    (presented_hash,)).fetchone()
+                if owner:
+                    conn.execute("select user_id from users where user_id = ? for update", (owner["user_id"],)).fetchone()
             row = conn.execute(
                 f"""
                 select h.token_hash, h.session_id, s.status
@@ -1706,6 +1946,8 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            if self.database_engine == "postgres":
+                conn.execute("select user_id from users where user_id = ? for update", (user_id,)).fetchone()
             rows = conn.execute(
                 f"""
                 select session_id from user_refresh_sessions
@@ -1892,8 +2134,11 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            # Serializes company administration without blocking the KEY SHARE
+            # acquired by session/audit foreign keys while a user lock is held.
+            company_lock_suffix = " for no key update" if self.database_engine == "postgres" else ""
             company = conn.execute(
-                f"select company_id from companies where company_id = ?{lock_suffix}",
+                f"select company_id from companies where company_id = ?{company_lock_suffix}",
                 (company_id,),
             ).fetchone()
             if not company:
@@ -1902,6 +2147,20 @@ class SaaSRepository:
                 "select user_id from users where lower(email) = ?",
                 (email,),
             ).fetchone()
+            # Match member-change and support-claim ordering. The actor check is
+            # repeated inside this transaction, including the existing-user path.
+            for principal in sorted({invited_by, str(existing_user["user_id"]) if existing_user else invited_by}):
+                conn.execute(f"select user_id from users where user_id = ?{lock_suffix}", (principal,)).fetchone()
+            if self._access_principal_state(conn, user_id=invited_by, company_id=company_id) != "active":
+                raise ValueError("team management not allowed")
+            actor = conn.execute("select role from team_members where company_id = ? and user_id = ?",
+                                 (company_id, invited_by)).fetchone()
+            if not actor or "manage_team" not in permissions_for_role(str(actor["role"])):
+                raise ValueError("team management not allowed")
+            if existing_user:
+                target = conn.execute("select status from users where user_id = ?", (existing_user["user_id"],)).fetchone()
+                if not target or target["status"] != "active":
+                    raise ValueError("invited account is unavailable")
             existing_member = conn.execute(
                 """
                 select tm.role, tm.created_at from team_members tm
@@ -1996,6 +2255,65 @@ class SaaSRepository:
                 details={"email": email, "role": role, "status": status},
             )
         return record
+
+    def set_team_member_access(self, *, company_id: str, user_id: str,
+                               role: str | None, actor_user_id: str) -> dict[str, Any]:
+        """Internal tenant service, not a newly exposed management HTTP route.
+
+        The trusted caller supplies the authenticated actor; unlike the platform
+        account-state primitive this service also enforces tenant permissions.
+        Joining/rejoining still goes through the existing seat-checked invitation.
+        """
+        if not company_id or not user_id or not actor_user_id or (role is not None and not valid_role(role)):
+            raise ValueError("invalid member access transition")
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            suffix = " for update" if self.database_engine == "postgres" else ""
+            company_suffix = " for no key update" if self.database_engine == "postgres" else ""
+            if not conn.execute(f"select company_id from companies where company_id = ?{company_suffix}",
+                                (company_id,)).fetchone():
+                raise ValueError("company not found")
+            # Company administration serializes first; all user locks then share
+            # the sorted order used by support claims. NO KEY UPDATE still blocks
+            # other administrators but permits auth/audit FK KEY SHARE locks
+            # acquired after a user lock; FOR UPDATE here would create a cycle.
+            for principal in sorted({user_id, actor_user_id}):
+                conn.execute(f"select user_id from users where user_id = ?{suffix}", (principal,)).fetchone()
+            if self._access_principal_state(conn, user_id=actor_user_id, company_id=company_id) != "active":
+                raise ValueError("team management not allowed")
+            actor = conn.execute("select role from team_members where company_id = ? and user_id = ?",
+                                 (company_id, actor_user_id)).fetchone()
+            if not actor or "manage_team" not in permissions_for_role(str(actor["role"])):
+                raise ValueError("team management not allowed")
+            member = conn.execute(f"select role from team_members where company_id = ? and user_id = ?{suffix}",
+                                  (company_id, user_id)).fetchone()
+            if not member:
+                if role is None:
+                    return {"changed": False, "membership_removed": True, "secret_exposed": False}
+                raise ValueError("member not found; use invitation")
+            previous = str(member["role"])
+            if previous == role:
+                return {"changed": False, "role": role, "secret_exposed": False}
+            if previous == "owner" and role != "owner":
+                remaining = conn.execute("select count(*) as count from team_members tm join users u "
+                    "on u.user_id = tm.user_id where tm.company_id = ? and tm.user_id <> ? "
+                    "and tm.role = 'owner' and u.status = 'active'", (company_id, user_id)).fetchone()
+                if int(remaining["count"]) < 1:
+                    raise ValueError("last active owner cannot be removed or demoted")
+            self._advance_access_epoch(conn, user_id=user_id, company_id=company_id)
+            self._revoke_principal_sessions(conn, user_id=user_id, company_id=company_id)
+            if role is None:
+                conn.execute("delete from team_members where company_id = ? and user_id = ?", (company_id, user_id))
+            else:
+                conn.execute("update team_members set role = ? where company_id = ? and user_id = ?",
+                             (role, company_id, user_id))
+            self._insert_audit(conn, company_id=company_id, store_id=None, user_id=actor_user_id,
+                actor_type="user", action_type="team.member_access_changed", target_type="user", target_id=user_id,
+                summary="Company membership changed and scoped sessions revoked.",
+                details={"previous_role": previous, "role": role, "secret_exposed": False})
+        return {"changed": True, "membership_removed": role is None, "role": role, "secret_exposed": False}
 
     def list_team_invitations(self, *, company_id: str) -> list[dict[str, Any]]:
         self.initialize()
@@ -2399,6 +2717,191 @@ class SaaSRepository:
                 tuple(params),
             ).fetchall()
         return [self._connection_row_to_dict(row) for row in rows]
+
+    def get_support_connection_boundary(self, *, company_id: str, store_id: str) -> dict[str, Any]:
+        """Internal, metadata-only Message API credential selector.
+
+        Never initialize a schema, resolve secrets, refresh tokens or make provider
+        requests here. A verified callback binding is distinct from a verified
+        message scope; neither enables network I/O. The stored username hash is
+        a candidate selector, not proof of the current live owner identity.
+        HTTP callers must project via _public_support_connection_boundary,
+        never return the internal record.
+        """
+        message_scope = "https://api.ebay.com/oauth/api_scope/commerce.message"
+        result: dict[str, Any] = {
+            "contract_version": "2026-10-12-support-connection-boundary-v1",
+            "status": "blocked", "ready": False, "connection_bound": False,
+            "requested_message_scope_present": False, "granted_message_scope_verified": False,
+            "scope_verification_source": "", "scope_verified_at": None,
+            "read_enabled": False, "send_enabled": False, "live_end_to_end_verified": False,
+            "requires_live_owner_check": True, "owner_identity_verified": False,
+            "live_scope_check_required": True, "external_request_performed": False,
+            "schema_write_performed": False, "secret_exposed": False, "blocked_by": [],
+        }
+
+        def blocked(code: str) -> dict[str, Any]:
+            return {**result, "status": "blocked", "ready": False,
+                    "granted_message_scope_verified": False,
+                    "scope_verification_source": "", "scope_verified_at": None,
+                    "read_enabled": False, "send_enabled": False,
+                    "live_end_to_end_verified": False, "blocked_by": [code]}
+
+        if any(type(value) is not str or not value.strip() or len(value) > 200 for value in (company_id, store_id)):
+            return blocked("support_invalid_scope")
+        if self.database_engine == "sqlite" and not Path(self.db_path).is_file():
+            return blocked("support_metadata_unavailable")
+        conn = None
+        try:
+            conn = self._connect()
+            with conn:
+                store = conn.execute("select store_json from stores where company_id = ? and store_id = ?",
+                                     (company_id, store_id)).fetchone()
+                if not store:
+                    return blocked("support_store_not_accessible")
+                store_record = _load_json_field(store["store_json"])
+                if not isinstance(store_record, dict) or str(store_record.get("platform") or "").lower() != "ebay":
+                    return blocked("support_store_platform_not_ebay")
+                connections = conn.execute("""select connection_id, connection_type, status, scopes_json,
+                        secret_ref, metadata_json, created_by from platform_connections
+                    where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                      and status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized')
+                    order by created_at desc limit 2""", (company_id, store_id)).fetchall()
+                if not connections:
+                    return blocked("support_connection_missing")
+                if len(connections) != 1:
+                    return blocked("support_connection_ambiguous")
+                connection = connections[0]
+                metadata = _load_json_field(connection["metadata_json"])
+                scopes = _load_json_field(connection["scopes_json"])
+                if (not isinstance(metadata, dict) or not isinstance(scopes, list)
+                        or any(type(scope) is not str or not scope for scope in scopes)
+                        or len(scopes) != len(set(scopes))):
+                    return blocked("support_connection_metadata_invalid")
+                if connection["connection_type"] != "oauth" or metadata.get("credential_source") != "jiejing_vault_secret_ref":
+                    return blocked("support_connection_not_backend_oauth")
+                if metadata.get("environment") != "production":
+                    return blocked("support_message_environment_not_production")
+                endpoint = metadata.get("token_endpoint")
+                if endpoint and endpoint != "https://api.ebay.com/identity/v1/oauth2/token":
+                    return blocked("support_message_environment_not_production")
+                connection_id = str(connection["connection_id"] or "")
+                secret_ref = str(connection["secret_ref"] or "")
+                request_id = str(metadata.get("oauth_request_id") or "")
+                seller_hash = str(metadata.get("ebay_user_id_hash") or "")
+                username_hash = str(metadata.get("ebay_username_hash") or "")
+                if (metadata.get("account_deletion_identity_mapping_status") != "identity_mapping_ready"
+                        or not re.fullmatch(r"[0-9a-f]{64}", seller_hash)
+                        or not re.fullmatch(r"[0-9a-f]{64}", username_hash)):
+                    return blocked("support_owner_identity_binding_missing")
+                if not connection_id or not secret_ref or not request_id:
+                    return blocked("support_connection_binding_missing")
+                request = conn.execute("""select platform, status, state_nonce, scopes_json, request_json,
+                        created_by, updated_at from oauth_authorization_requests
+                    where company_id = ? and store_id = ? and oauth_request_id = ?""",
+                    (company_id, store_id, request_id)).fetchone()
+                if (not request or request["platform"] != "ebay" or request["status"] != "callback_exchange_completed"
+                        or not request["state_nonce"] or request["created_by"] != connection["created_by"]):
+                    return blocked("support_oauth_request_not_trusted")
+                request_payload = _load_json_field(request["request_json"])
+                request_scopes = _load_json_field(request["scopes_json"])
+                if (not isinstance(request_payload, dict) or request_scopes != scopes
+                        or request_payload.get("environment", "production") != "production"):
+                    return blocked("support_oauth_request_binding_invalid")
+                result["requested_message_scope_present"] = message_scope in scopes
+                events = request_payload.get("callback_events")
+                matches = [event for event in events if isinstance(event, dict)
+                    and event.get("status") == "callback_exchange_completed"
+                    and isinstance(event.get("connection"), dict)
+                    and event["connection"].get("connection_id") == connection_id] if isinstance(events, list) else []
+                if len(matches) != 1:
+                    return blocked("support_callback_not_exact")
+                event = matches[0]
+                event_connection = event["connection"]
+                binding = event.get("backend_connection_binding")
+                if not (
+                    event.get("token_exchange_performed") is True and event.get("secret_exposed") is False
+                    and event_connection.get("company_id") == company_id and event_connection.get("store_id") == store_id
+                    and event_connection.get("platform") == "ebay" and event_connection.get("connection_type") == "oauth"
+                    and event_connection.get("status") == connection["status"]
+                    # Callback event secrets are redacted; its backend-written
+                    # credential_ref_sha256 below is the authoritative binding.
+                    and event_connection.get("scopes") == scopes
+                    and isinstance(binding, dict)
+                    and binding.get("contract_version") == "2026-08-10-oauth-callback-connection-binding-v1"
+                    and binding.get("oauth_request_id") == request_id and binding.get("connection_id") == connection_id
+                    and binding.get("connection_id_sha256") == hashlib.sha256(connection_id.encode()).hexdigest()
+                    and binding.get("credential_ref_sha256") == hashlib.sha256(secret_ref.encode()).hexdigest()
+                    and binding.get("seller_identity_sha256") == hashlib.sha256(seller_hash.encode()).hexdigest()
+                    and binding.get("created_by_backend_callback") is True and binding.get("secret_exposed") is False
+                ):
+                    return blocked("support_callback_binding_invalid")
+                secret = conn.execute("""select provider, purpose, status, created_by, metadata_json from secret_refs
+                    where company_id = ? and store_id = ? and secret_ref = ?""",
+                    (company_id, store_id, secret_ref)).fetchone()
+                if not secret:
+                    return blocked("support_secret_ref_not_bound")
+                if secret["provider"] != "ebay" or secret["purpose"] != "ebay_refresh_token":
+                    return blocked("support_secret_ref_wrong_purpose")
+                if secret["status"] not in {"managed_vault_stored", "local_secret_resolver_stored"}:
+                    return blocked("support_secret_ref_not_available")
+                secret_metadata = _load_json_field(secret["metadata_json"])
+                if (not isinstance(secret_metadata, dict) or secret_metadata.get("oauth_request_id") != request_id
+                        or secret_metadata.get("credential_owner") != "jiejing_saas_backend"
+                        or secret["created_by"] != request["created_by"]):
+                    return blocked("support_secret_ref_binding_invalid")
+                audit = conn.execute("""select actor_type, user_id, created_at, audit_json from audit_logs
+                    where company_id = ? and store_id = ? and action_type = 'oauth.callback.received'
+                      and target_type = 'oauth_authorization_request' and target_id = ?
+                    order by created_at desc limit 1""", (company_id, store_id, request_id)).fetchone()
+                audit_payload = _load_json_field(audit["audit_json"]) if audit else {}
+                details = audit_payload.get("details") if isinstance(audit_payload, dict) else None
+                if not (audit and audit["actor_type"] == "system" and audit["user_id"] == request["created_by"]
+                        and isinstance(details, dict) and details.get("status") == "callback_exchange_completed"
+                        and details.get("token_exchange_performed") is True and details.get("secret_exposed") is False
+                        and _timestamp_within_seconds(_parse_iso_datetime(str(audit["created_at"] or "")),
+                                                      _parse_iso_datetime(str(request["updated_at"] or "")), 300)
+                        and _timestamp_within_seconds(_parse_iso_datetime(str(event.get("created_at") or "")),
+                                                      _parse_iso_datetime(str(request["updated_at"] or "")), 300)):
+                    return blocked("support_callback_audit_not_trusted")
+                # Binding is now proven independently of the scope outcome. Only
+                # trusted backend code may use these references for explicit verification.
+                result["connection_bound"] = True
+                result["internal"] = {
+                    "company_id": company_id, "store_id": store_id, "connection_id": connection_id,
+                    "oauth_request_id": request_id, "secret_ref": secret_ref,
+                    "seller_identity_hash": seller_hash, "owner_username_hash": username_hash,
+                    "owner_binding_kind": "sha256_casefold_ebay_username", "environment": "production",
+                }
+                verification = event.get("granted_scope_verification")
+                source = metadata.get("granted_scope_verification_source")
+                event_metadata = event_connection.get("metadata")
+                verified = bool(result["requested_message_scope_present"]
+                    and metadata.get("actual_granted_scope_verified") is True
+                    and source in {"token_response", "ebay_token_introspection"}
+                    and isinstance(verification, dict) and verification.get("source") == source
+                    and verification.get("active") is True and verification.get("client_id_matched") is True
+                    and verification.get("exact_scope_matched") is True and verification.get("secret_exposed") is False
+                    and isinstance(event_metadata, dict) and event_metadata.get("actual_granted_scope_verified") is True
+                    and event_metadata.get("granted_scope_verification_source") == source)
+                result["granted_message_scope_verified"] = verified
+                if not result["requested_message_scope_present"]:
+                    return blocked("support_message_scope_missing")
+                if not verified:
+                    return blocked("support_message_scope_unverified")
+                result.update(status="metadata_ready", ready=True, scope_verification_source=source,
+                              scope_verified_at=str(event["created_at"]))
+                return result
+        except Exception:
+            # Metadata/DB errors are not an empty connection or permission grant;
+            # never echo raw driver errors, DSNs or row values.
+            result.pop("internal", None)
+            result["connection_bound"] = False
+            result["requested_message_scope_present"] = False
+            return blocked("support_metadata_unavailable")
+        finally:
+            if conn is not None and self.database_engine == "sqlite":
+                conn.close()
 
     def create_oauth_authorization_request(
         self,
@@ -6896,7 +7399,15 @@ class SaaSRepository:
             params.append(int(limit))
         with self._connect() as conn:
             rows = conn.execute(f"select * from confirmations where {where} order by created_at {order_direction} {limit_clause}", tuple(params)).fetchall()
-        return [self._confirmation_row_to_dict(row) for row in rows]
+            records = [self._confirmation_row_to_dict(row) for row in rows]
+            link_field = "item_json ->> 'replaces_confirmation_id'" if self.database_engine == 'postgres' else "json_extract(item_json, '$.replaces_confirmation_id')"
+            replacements = {row['replaces_id']:row['confirmation_id'] for row in conn.execute(
+                f'select confirmation_id,{link_field} as replaces_id from confirmations where company_id=? and {link_field} is not null',
+                (company_id,)).fetchall()}
+            for record in records:
+                if record['action_type'] in {'publish_listing','save_ebay_listing_draft','cleanup_test_listing','create_ebay_inventory_location'}:
+                    record['execution_recovery'] = self._ebay_execution_recovery_conn(conn, record, replacements=replacements)
+        return records
 
     def test_data_governance_snapshot(self, *, company_id: str) -> dict[str, Any]:
         """Return current-company test-data evidence without exposing other tenants."""
@@ -7565,6 +8076,7 @@ class SaaSRepository:
         user_id: str,
         location_payload: dict[str, Any],
         payload_sha256: str,
+        replaces_confirmation_id: str | None = None,
     ) -> dict[str, Any]:
         """Create one active location confirmation and its task atomically."""
 
@@ -7622,6 +8134,10 @@ class SaaSRepository:
             ).fetchone()
             if not store_row:
                 raise ConfirmationDecisionConflict("ebay_inventory_location_store_required")
+            if replaces_confirmation_id:
+                self._prepare_ebay_replacement_conn(conn, company_id=company_id, store_id=store_id,
+                    action_type='create_ebay_inventory_location', item=safe_item, replaces_confirmation_id=replaces_confirmation_id)
+                safe_item['replaces_confirmation_id'] = replaces_confirmation_id
             active = conn.execute(
                 f"""
                 select * from confirmations
@@ -7685,17 +8201,17 @@ class SaaSRepository:
                     raise ConfirmationDecisionConflict("ebay_inventory_location_confirmation_already_active")
                 expired = conn.execute(
                     """
-                    update confirmations set status = 'expired', decision_note = ?
+                    update confirmations set status = 'expired'
                     where company_id = ? and confirmation_id = ? and status = 'approved'
                     """,
                     (
-                        "Expired system-side after the exact unclaimed inventory-location approval exceeded 15 minutes.",
                         company_id,
                         existing_confirmation_id,
                     ),
                 ).rowcount
                 if expired != 1:
                     raise ConfirmationDecisionConflict("ebay_inventory_location_confirmation_already_active")
+                safe_item['replaces_confirmation_id'] = existing_confirmation_id
                 self._insert_audit(
                     conn,
                     company_id=company_id,
@@ -7824,8 +8340,11 @@ class SaaSRepository:
         created_by: str | None = None,
         confirmation_id: str | None = None,
         default_action: str = "hold",
+        replaces_confirmation_id: str | None = None,
     ) -> dict[str, Any]:
         self.initialize()
+        if isinstance(item, dict) and item.get('replaces_confirmation_id'):
+            raise PermissionError('ebay_reapproval_backend_link_required')
         record_id = confirmation_id or _id("confirm")
         created_at = now_iso()
         safe_item = _redact_secret_like(
@@ -7839,6 +8358,12 @@ class SaaSRepository:
             }
         )
         with self._connect() as conn:
+            if replaces_confirmation_id:
+                if self.database_engine != 'postgres':
+                    conn.execute('begin immediate')
+                self._prepare_ebay_replacement_conn(conn, company_id=company_id, store_id=store_id,
+                    action_type=action_type, item=safe_item, replaces_confirmation_id=replaces_confirmation_id)
+                safe_item['replaces_confirmation_id'] = replaces_confirmation_id
             try:
                 conn.execute(
                     """
@@ -7916,6 +8441,7 @@ class SaaSRepository:
         decision: str,
         decided_by: str,
         note: str | None,
+        expected_access_epochs: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         if decision not in {"approve", "reject", "modify"}:
@@ -7926,6 +8452,13 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            # The narrow store lifecycle lock precedes confirmation/user locks,
+            # so verified deletion cannot deadlock against a new approval.
+            scope = conn.execute("select store_id from confirmations where company_id=? and confirmation_id=?",
+                                 (company_id,confirmation_id)).fetchone()
+            if scope and scope["store_id"]:
+                conn.execute(f"select store_id from stores where company_id=? and store_id=?{lock_suffix}",
+                             (company_id,scope["store_id"])).fetchone()
             existing_row = conn.execute(
                 f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
                 (company_id, confirmation_id),
@@ -7933,15 +8466,22 @@ class SaaSRepository:
             if not existing_row:
                 raise KeyError("confirmation not found")
             existing = self._confirmation_row_to_dict(existing_row)
+            self._require_merchant_confirmation(existing)
             if str(existing.get("status") or "") != "pending":
                 raise ConfirmationDecisionConflict("confirmation_decision_conflict")
+            authority_id = None
+            if decision == "approve":
+                authority_id = create_approval(self, conn, confirmation=existing, user_id=decided_by,
+                    expected_epochs=expected_access_epochs,
+                    permission="approve_high_risk" if existing["action_type"] in HIGH_RISK_ACTIONS else "create_task",
+                    approved_at=decided_at)
             transitioned = conn.execute(
                 """
                 update confirmations
-                set status = ?, decided_by = ?, decided_at = ?, decision_note = ?
+                set status = ?, decided_by = ?, decided_at = ?, decision_note = ?, approval_authority_id = ?
                 where company_id = ? and confirmation_id = ? and status = 'pending'
                 """,
-                (status, decided_by, decided_at, note, company_id, confirmation_id),
+                (status, decided_by, decided_at, note, authority_id, company_id, confirmation_id),
             ).rowcount
             if transitioned != 1:
                 raise ConfirmationDecisionConflict("confirmation_decision_conflict")
@@ -7969,6 +8509,15 @@ class SaaSRepository:
                 details={"action_type": existing["action_type"], "note": note},
             )
         return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+
+    @staticmethod
+    def _require_merchant_confirmation(confirmation: dict[str, Any]) -> None:
+        # Platform refund reviewers may belong to another company. A merchant
+        # decision or generic claim must never substitute for that dedicated lane.
+        item = confirmation.get("item") or {}
+        if (item.get("source") == "domestic_billing_refund_review"
+                or str(confirmation.get("runtime_run_id") or "").startswith("billing_refund:")):
+            raise PermissionError("domestic_refund_review_requires_platform_operations")
 
     def review_platform_refund_confirmation(
         self, *, company_id: str, order_id: str, confirmation_id: str,
@@ -8212,6 +8761,252 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def _lock_execution_confirmation(self, conn: Any, *, company_id: str, confirmation_id: str, require_live_store: bool = True) -> Any:
+        """All eBay claims/admissions share store -> confirmation -> claim order."""
+        lock = " for update" if self.database_engine == "postgres" else ""
+        scope = conn.execute("select store_id from confirmations where company_id=? and confirmation_id=?",
+                             (company_id, confirmation_id)).fetchone()
+        if scope and scope['store_id'] is not None:
+            store = conn.execute(f"select stage from stores where company_id=? and store_id=?{lock}",
+                                 (company_id, scope['store_id'])).fetchone()
+            deleting = conn.execute("select 1 from ebay_account_deletion_events where company_id=? and store_id=? "
+                                    "and status in ('processing','completed')", (company_id, scope['store_id'])).fetchone()
+            if require_live_store and (not store or store['stage'] == 'account_deleted' or deleting):
+                raise PermissionError('execution_store_deletion_in_progress')
+        row = conn.execute(f"select * from confirmations where company_id=? and confirmation_id=?{lock}",
+                           (company_id, confirmation_id)).fetchone()
+        if row and (not scope or row['store_id'] != scope['store_id']):
+            raise PermissionError('execution_confirmation_scope_changed')
+        return row
+
+    def _ebay_execution_connection_conn(self, conn, row, *, lock_rows=False):
+        """Backend-only connection snapshot; never return this to a browser."""
+        lock = ' for update' if lock_rows and self.database_engine == 'postgres' else ''
+        secret = conn.execute(f'select secret_ref,company_id,store_id,provider,status from secret_refs '
+                              f'where company_id=? and store_id=? and secret_ref=?{lock}',
+                              (row['company_id'], row['store_id'], row['secret_ref'])).fetchone()
+        if not secret or secret['provider'] != 'ebay' or secret['status'] not in ACTIVE_SECRET_REF_STATUSES:
+            raise PermissionError('ebay_execution_credential_changed')
+        current = self._connection_row_to_dict(row)
+        current['metadata'] = _load_json_field(row['metadata_json'])
+        current['_execution_secret_boundary_sha256'] = _canonical_payload_sha256(dict(secret))
+        return current
+
+    def ebay_execution_connections(self, *, company_id, store_id):
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute("select * from platform_connections where company_id=? and store_id=? and platform='ebay' "
+                                "and connection_type='oauth' and status in ('publish_authorized','draft_save_authorized','read_only_authorized') "
+                                "order by created_at,connection_id", (company_id, store_id)).fetchall()
+            return [self._ebay_execution_connection_conn(conn, row) for row in rows]
+
+    def ebay_execution_recovery(self, *, company_id, confirmation_id, reason_code=''):
+        """Exact durable summary; never infer zero writes from an HTTP failure."""
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute('select * from confirmations where company_id=? and confirmation_id=?',
+                               (company_id, confirmation_id)).fetchone()
+            confirmation = self._confirmation_row_to_dict(row) if row else {'company_id':company_id,'confirmation_id':confirmation_id}
+            return self._ebay_execution_recovery_conn(conn, confirmation, reason_code=reason_code)
+
+    @staticmethod
+    def _ebay_preclaim_denial_binding(confirmation):
+        snapshot = {key: confirmation.get(key) for key in
+            ('company_id','store_id','confirmation_id','action_type','task_id','decided_by','decided_at','decision_note')}
+        # Normalize only this new audit digest's copy, not the original decision.
+        # PG timestamptz and the API's explicit-zone ISO text bind one instant.
+        decided_at = _parse_explicit_timezone_iso_datetime(snapshot['decided_at'])
+        if decided_at is None:
+            raise PermissionError('approval_authority_binding_changed_reapproval_required')
+        snapshot['decided_at'] = decided_at.isoformat()
+        return {
+            'action_type': confirmation.get('action_type'),
+            'item_sha256': _canonical_payload_sha256(confirmation.get('item') or {}),
+            'approval_snapshot_sha256': _canonical_payload_sha256(snapshot),
+        }
+
+    def _ebay_preclaim_denial_reason_conn(self, conn, confirmation):
+        rows = conn.execute("select audit_json from audit_logs where company_id=? and store_id=? and target_id=? "
+            "and target_type='confirmation' and action_type='external_execution.preclaim_denied' limit 2",
+            (confirmation['company_id'], confirmation.get('store_id'), confirmation['confirmation_id'])).fetchall()
+        if not rows:
+            return ''
+        try:
+            audit = _load_json_field(rows[0]['audit_json'])
+        except (TypeError, ValueError, UnicodeDecodeError):
+            return 'approval_authority_binding_changed_reapproval_required'
+        details = audit.get('details') if isinstance(audit, dict) else None
+        if (len(rows) != 1 or not isinstance(details, dict) or not isinstance(details.get('reason_code'), str)
+                or details['reason_code'] not in EXECUTION_DENIAL_CODES
+                or details.get('secret_exposed') is not False
+                or any(not re.fullmatch(r'[a-f0-9]{64}', str(details.get(key) or ''))
+                       for key in ('item_sha256','approval_snapshot_sha256'))):
+            # A damaged denial record cannot restore an old executable approval.
+            return 'approval_authority_binding_changed_reapproval_required'
+        expected = self._ebay_preclaim_denial_binding(confirmation)
+        if any(details.get(key) != value for key, value in expected.items()):
+            return 'approval_authority_binding_changed_reapproval_required'
+        return details['reason_code']
+
+    def _record_ebay_preclaim_denial(self, *, company_id, store_id, confirmation_id, expected_confirmation, reason_code):
+        """Bounded safe denial evidence after a failed claim; never creates authority."""
+        if reason_code not in EXECUTION_DENIAL_CODES:
+            raise PermissionError('ebay_execution_denial_reason_invalid')
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != 'postgres':
+                conn.execute('begin immediate')
+            row = self._lock_execution_confirmation(conn, company_id=company_id, confirmation_id=confirmation_id,
+                                                    require_live_store=False)
+            if not row:
+                raise KeyError('confirmation not found')
+            current = self._confirmation_row_to_dict(row)
+            if (current['store_id'] != store_id or expected_confirmation.get('company_id') != company_id
+                    or expected_confirmation.get('store_id') != store_id
+                    or expected_confirmation.get('confirmation_id') != confirmation_id
+                    or self._ebay_preclaim_denial_binding(current) != self._ebay_preclaim_denial_binding(expected_confirmation)
+                    or current['action_type'] not in {'publish_listing','save_ebay_listing_draft','cleanup_test_listing','create_ebay_inventory_location'}):
+                raise PermissionError('ebay_reapproval_scope_changed')
+            lock = ' for update' if self.database_engine == 'postgres' else ''
+            attempts = conn.execute(f'select attempt_id from confirmation_execution_authorities_v1 '
+                f'where company_id=? and confirmation_id=?{lock}', (company_id, confirmation_id)).fetchall()
+            summary = self._ebay_execution_recovery_conn(conn, current)
+            if (current['status'] == 'approved' and not attempts and summary['zero_write_proven']
+                    and not self._ebay_preclaim_denial_reason_conn(conn, current)):
+                self._insert_audit(conn, company_id=company_id, store_id=store_id, user_id=None, actor_type='system',
+                    action_type='external_execution.preclaim_denied', target_type='confirmation', target_id=confirmation_id,
+                    summary='The original approval requires a separately approved replacement before execution.',
+                    details={**self._ebay_preclaim_denial_binding(current), 'reason_code':reason_code,
+                             'secret_exposed':False})
+            return self._ebay_execution_recovery_conn(conn, current)
+
+    def _ebay_execution_recovery_conn(self, conn, confirmation, *, reason_code='', replacements=None):
+        company_id, confirmation_id = confirmation['company_id'], confirmation['confirmation_id']
+        rows = conn.execute('select * from confirmation_execution_authorities_v1 where company_id=? and confirmation_id=?',
+                            (company_id, confirmation_id)).fetchall()
+        if rows:
+            row = dict(rows[0])
+            state = load_operation_state(row['operation_state_json']) if len(rows) == 1 else None
+            summary = execution_recovery(row, state, reason=reason_code)
+        else:
+            recorded = conn.execute('select 1 from execution_results where confirmation_id=? limit 1', (confirmation_id,)).fetchone()
+            claimed = conn.execute('select 1 from external_execution_claims where company_id=? and confirmation_id=? limit 1',
+                                   (company_id, confirmation_id)).fetchone()
+            claim_audit = conn.execute("select 1 from audit_logs where company_id=? and target_id=? and action_type in "
+                "('external_execution.claimed','external_execution.prewrite_claimed','ebay.inventory_location.execution_claimed') limit 1",
+                (company_id, confirmation_id)).fetchone()
+            zero = confirmation.get('status') in {'pending','approved','needs_revision','expired'} and not (recorded or claimed or claim_audit)
+            complete = confirmation.get('status') == 'executed'
+            if zero:
+                reason_code = self._ebay_preclaim_denial_reason_conn(conn, confirmation) or reason_code
+            summary = {'status':'execution_completed' if complete else 'execution_authority_blocked' if zero else 'execution_reconciliation_required',
+                'zero_write_proven':bool(zero),'provider_result_unknown':not zero and not complete,
+                'automatic_retry_allowed':False,'next_action':'view_receipt' if complete else 'prepare_reapproval' if zero else 'reconcile_read_only',
+                'merchant_message':'本次操作已有历史回执，请查看原记录。' if complete else '本次未发送。请重新准备并确认。' if zero else
+                    '执行结果尚未确定，请先只读核对，不要重复执行。','reason_code':reason_code,'secret_exposed':False}
+        summary.update(company_id=company_id, confirmation_id=confirmation_id, store_id=confirmation.get('store_id'),
+                       action_type=confirmation.get('action_type'))
+        if replacements is None:
+            field = "item_json ->> 'replaces_confirmation_id'" if self.database_engine == 'postgres' else "json_extract(item_json, '$.replaces_confirmation_id')"
+            replacement = conn.execute(f'select confirmation_id from confirmations where company_id=? and store_id=? and {field}=? limit 1',
+                (company_id, confirmation.get('store_id'), confirmation_id)).fetchone()
+            replacement_id = replacement['confirmation_id'] if replacement else None
+        else:
+            replacement_id = replacements.get(confirmation_id)
+        if replacement_id:
+            summary['replacement_confirmation_id'] = replacement_id
+            summary['next_action'] = 'view_replacement'
+            summary['merchant_message'] = '旧确认单已保留；请查看关联的新待确认记录，不要重复提交。'
+        elif not rows and summary['zero_write_proven']:
+            # An unclaimed new ID cannot hide an older unresolved write for the
+            # same resource. A retired old ID with its exact replacement above
+            # remains a history link, not a new execution/retry opportunity.
+            try:
+                require_no_unresolved_confirmation_resources(self, conn, confirmation)
+            except PermissionError as error:
+                if str(error) not in {'ebay_execution_prior_outcome_unresolved','ebay_execution_target_invalid'}:
+                    raise
+                summary.update(status='execution_reconciliation_required', zero_write_proven=False,
+                    provider_result_unknown=True, next_action='reconcile_read_only',
+                    reason_code='ebay_execution_prior_outcome_unresolved',
+                    merchant_message='同一操作对象仍有未确认结果，请先只读核对，不要重复执行。')
+        return summary
+
+    @staticmethod
+    def _ebay_replacement_identity(action_type, item):
+        if action_type in {'publish_listing','save_ebay_listing_draft'}:
+            payload = item.get('publish_payload') or {}
+            sku = str((payload.get('listing') or {}).get('sku') or '').strip()
+            draft = payload.get('existing_ebay_draft') or item.get('existing_ebay_draft') or {}
+            project = item.get('listing_project_identity') or {}
+            return (sku, str(draft.get('offer_id') or ''), str(project.get('key') or '')) if sku else None
+        if action_type == 'create_ebay_inventory_location':
+            key = str((item.get('location_payload') or {}).get('merchantLocationKey') or item.get('merchant_location_key') or '')
+            return (key,) if key else None
+        if action_type == 'cleanup_test_listing':
+            source = str(item.get('source_publish_confirmation_id') or '')
+            return (source,) if source else None
+        return None
+
+    def _prepare_ebay_replacement_conn(self, conn, *, company_id, store_id, action_type, item, replaces_confirmation_id, retire=True):
+        row = self._lock_execution_confirmation(conn, company_id=company_id, confirmation_id=replaces_confirmation_id)
+        if not row:
+            raise PermissionError('ebay_reapproval_confirmation_not_found')
+        old = self._confirmation_row_to_dict(row)
+        identity = self._ebay_replacement_identity(action_type, item)
+        if (old['store_id'] != store_id or old['action_type'] != action_type or not identity
+                or identity != self._ebay_replacement_identity(action_type, old['item'])):
+            raise PermissionError('ebay_reapproval_scope_changed')
+        lock = ' for update' if self.database_engine == 'postgres' else ''
+        conn.execute(f'select attempt_id from confirmation_execution_authorities_v1 where company_id=? and confirmation_id=?{lock}',
+                     (company_id, replaces_confirmation_id)).fetchall()
+        summary = self._ebay_execution_recovery_conn(conn, old)
+        expired_prewrite = (summary['status'] == 'execution_prewrite_recovery_available'
+            and old['status'] in {EXTERNAL_EXECUTION_PROCESSING_STATUS, 'external_execution_claimed_prewrite'})
+        if old['status'] not in {'approved','needs_revision','expired'} and not expired_prewrite:
+            raise PermissionError('ebay_reapproval_zero_write_required')
+        if not summary.get('zero_write_proven') or summary['next_action'] != 'prepare_reapproval':
+            raise PermissionError('ebay_reapproval_zero_write_required')
+        if retire:
+            if expired_prewrite:
+                close_zero_attempt(self, conn, company_id=company_id, confirmation_id=replaces_confirmation_id,
+                    reason='ebay_prewrite_retired_by_explicit_reapproval')
+            # Approval identity/content/history is immutable; retire only its
+            # executable projection and link a separately approved new record.
+            conn.execute("update confirmations set status='needs_revision' where company_id=? and confirmation_id=?",
+                         (company_id, replaces_confirmation_id))
+        return old
+
+    def validate_ebay_replacement(self, *, company_id, store_id, action_type, item, replaces_confirmation_id):
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != 'postgres':
+                conn.execute('begin immediate')
+            return self._prepare_ebay_replacement_conn(conn, company_id=company_id, store_id=store_id,
+                action_type=action_type, item=item, replaces_confirmation_id=replaces_confirmation_id, retire=False)
+
+    def finish_ebay_prewrite_failure(self, *, company_id, confirmation_id, reason_code):
+        """Called only when the owning adapter has returned without success."""
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != 'postgres':
+                conn.execute('begin immediate')
+            row = self._lock_execution_confirmation(conn, company_id=company_id, confirmation_id=confirmation_id, require_live_store=False)
+            if not row:
+                raise KeyError('confirmation not found')
+            try:
+                close_zero_attempt(self, conn, company_id=company_id, confirmation_id=confirmation_id, reason=reason_code)
+            except PermissionError as error:
+                # Prior admission or incomplete state remains conservative.
+                if str(error) != 'ebay_execution_zero_write_not_proven':
+                    raise
+            else:
+                conn.execute("update confirmations set status='needs_revision' where company_id=? and confirmation_id=?",
+                             (company_id, confirmation_id))
+                _transition_confirmation_task_status(conn, company_id=company_id, task_id=row['task_id'],
+                    status='needs_revision', expected_statuses={'approved_waiting_execution','manual_reconcile_required','execution_blocked'})
+            return self._ebay_execution_recovery_conn(conn, self._confirmation_row_to_dict(row), reason_code=reason_code)
+
     def claim_external_execution(
         self,
         *,
@@ -8219,6 +9014,8 @@ class SaaSRepository:
         confirmation_id: str,
         user_id: str,
         expected_binding: dict[str, str] | None = None,
+        expected_access_epochs: dict[str, int] | None = None,
+        operation_plan: Any = None,
     ) -> dict[str, Any]:
         """Claim one approved external write before its platform adapter runs.
 
@@ -8232,13 +9029,11 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
-            row = conn.execute(
-                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
-                (company_id, confirmation_id),
-            ).fetchone()
+            row = self._lock_execution_confirmation(conn, company_id=company_id, confirmation_id=confirmation_id)
             if not row:
                 raise KeyError("confirmation not found")
             confirmation = self._confirmation_row_to_dict(row)
+            self._require_merchant_confirmation(confirmation)
             if str(confirmation.get("status") or "") != "approved":
                 raise ConfirmationDecisionConflict("external_execution_claim_conflict")
             if str(confirmation.get("action_type") or "") == "save_ebay_listing_draft":
@@ -8247,6 +9042,8 @@ class SaaSRepository:
                 # would let an internal caller bypass the one-shot capability
                 # and the final read-only offer-state recheck.
                 raise ConfirmationDecisionConflict("unpublished_draft_claim_capability_required")
+            permit = create_attempt(self, conn, confirmation=confirmation, executor_user_id=user_id,
+                                    expected_epochs=expected_access_epochs, operation_plan=operation_plan)
             claim_binding: dict[str, str] = {}
             transitioned = conn.execute(
                 """
@@ -8285,6 +9082,7 @@ class SaaSRepository:
             **confirmation,
             "status": EXTERNAL_EXECUTION_PROCESSING_STATUS,
             "external_execution_claimed": True,
+            "_execution_permit": permit,
             **({"external_execution_claim_binding": claim_binding} if claim_binding else {}),
         }
 
@@ -8318,16 +9116,14 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
-            row = conn.execute(
-                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
-                (company_id, confirmation_id),
-            ).fetchone()
+            row = self._lock_execution_confirmation(conn, company_id=company_id, confirmation_id=confirmation_id)
             confirmation = self._confirmation_row_to_dict(row) if row else {}
             if not (
                 str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
                 and str(confirmation.get("action_type") or "") == "publish_listing"
             ):
                 raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            close_zero_attempt(self, conn, company_id=company_id, confirmation_id=confirmation_id, reason=safe_reason)
             transitioned = conn.execute(
                 """
                 update confirmations set status = 'needs_revision'
@@ -8445,129 +9241,37 @@ class SaaSRepository:
         }
 
     def retire_external_execution_after_verified_noop(
-        self,
-        *,
-        company_id: str,
-        confirmation_id: str,
-        user_id: str,
-        action_type: str,
-        evidence: dict[str, Any],
+        self, *, company_id: str, confirmation_id: str, user_id: str,
+        action_type: str, evidence: dict[str, Any],
     ) -> dict[str, Any]:
-        """Retire an uncertain confirmation only after a read-only no-op proof.
+        """Compatibility readback only, never a second retirement authority.
 
-        This never retries the provider action.  It makes the consumed
-        confirmation non-executable so a later attempt must receive a fresh
-        merchant confirmation.
+        A provider GET or caller-supplied no-op claim cannot recall admission.
+        Expired active zero attempts retire only with their explicit linked new
+        pending confirmation, atomically in create_confirmation.
         """
-
-        if not (
-            isinstance(evidence, dict)
-            and evidence.get("provider_read_only") is True
-            and evidence.get("external_state_unchanged") is True
-            and evidence.get("automatic_retry_allowed") is False
-            and evidence.get("secret_exposed") is False
-        ):
-            raise ValueError("verified_external_noop_evidence_required")
+        del user_id, evidence
         self.initialize()
         with self._connect() as conn:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
-            lock_suffix = " for update" if self.database_engine == "postgres" else ""
-            row = conn.execute(
-                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
-                (company_id, confirmation_id),
-            ).fetchone()
+            row = self._lock_execution_confirmation(conn, company_id=company_id,
+                confirmation_id=confirmation_id, require_live_store=False)
             if not row:
                 raise KeyError("confirmation not found")
             confirmation = self._confirmation_row_to_dict(row)
-            if not (
-                str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
-                and str(confirmation.get("action_type") or "") == str(action_type or "")
-            ):
-                raise ConfirmationDecisionConflict("external_execution_reconciliation_conflict")
-            executions = conn.execute(
-                "select execution_id, action_type, status, result_json from execution_results where confirmation_id = ?",
-                (confirmation_id,),
-            ).fetchall()
-            recorded_failure_statuses: list[str] = []
-            for execution in executions:
-                try:
-                    result_value = _load_json_field(execution["result_json"])
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    result_value = {}
-                result = result_value if isinstance(result_value, dict) else {}
-                audit = result.get("audit") if isinstance(result.get("audit"), dict) else {}
-                real_execution = (
-                    audit.get("real_execution")
-                    if isinstance(audit.get("real_execution"), dict)
-                    else {}
-                )
-                platform_result = (
-                    result.get("platform_result")
-                    if isinstance(result.get("platform_result"), dict)
-                    else {}
-                )
-                steps = result.get("steps") if isinstance(result.get("steps"), list) else []
-                rejected_publish_step = any(
-                    isinstance(step, dict)
-                    and str(step.get("step") or "") == "publish_existing_offer"
-                    and str(step.get("status") or "") == "http_error"
-                    for step in steps
-                )
-                verified_recorded_failure = bool(
-                    str(execution["action_type"] or "") == str(action_type or "")
-                    and str(execution["status"] or "") == "blocked_platform_error"
-                    and str(result.get("status") or "") == "blocked_platform_error"
-                    and real_execution.get("published_to_ebay") is False
-                    and platform_result.get("published_to_ebay") is not True
-                    and platform_result.get("public_listing_created") is not True
-                    and not str(platform_result.get("listing_id") or platform_result.get("item_id") or "")
-                    and rejected_publish_step
-                )
-                if not verified_recorded_failure:
-                    raise ConfirmationDecisionConflict("external_execution_already_recorded")
-                recorded_failure_statuses.append(str(execution["status"] or ""))
-            transitioned = conn.execute(
-                """
-                update confirmations set status = 'needs_revision'
-                where company_id = ? and confirmation_id = ? and status = ?
-                """,
-                (company_id, confirmation_id, EXTERNAL_EXECUTION_PROCESSING_STATUS),
-            ).rowcount
-            if transitioned != 1:
-                raise ConfirmationDecisionConflict("external_execution_reconciliation_conflict")
-            _transition_confirmation_task_status(
-                conn,
-                company_id=company_id,
-                task_id=confirmation.get("task_id"),
-                status="needs_revision",
-                expected_statuses={"manual_reconcile_required", "execution_blocked"},
-            )
-            self._insert_audit(
-                conn,
-                company_id=company_id,
-                store_id=confirmation.get("store_id"),
-                user_id=user_id,
-                actor_type="system",
-                action_type="external_execution.reconciled_verified_noop",
-                target_type="confirmation",
-                target_id=confirmation_id,
-                summary="A read-only provider check proved no external change; the consumed confirmation was retired.",
-                details={
-                    "action_type": action_type,
-                    "status": "needs_revision",
-                    "fresh_confirmation_required": True,
-                    "automatic_retry_allowed": False,
-                    "provider_read_only": True,
-                    "external_state_unchanged": True,
-                    "offer_id": str(evidence.get("offer_id") or ""),
-                    "sku": str(evidence.get("sku") or ""),
-                    "recorded_execution_count": len(executions),
-                    "recorded_failure_statuses": recorded_failure_statuses,
-                    "secret_exposed": False,
-                },
-            )
-        return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+            lock = ' for update' if self.database_engine == 'postgres' else ''
+            attempts = conn.execute(f'select * from confirmation_execution_authorities_v1 where company_id=? and confirmation_id=?{lock}',
+                (company_id, confirmation_id)).fetchall()
+            if len(attempts) != 1:
+                raise PermissionError('ebay_execution_zero_write_not_proven')
+            attempt = dict(attempts[0])
+            summary = execution_recovery(attempt, load_operation_state(attempt['operation_state_json']))
+            if (confirmation['action_type'] != action_type or confirmation['status'] != 'needs_revision'
+                    or attempt['phase'] != 'blocked_before_call'
+                    or summary.get('zero_write_proven') is not True):
+                raise PermissionError('ebay_execution_zero_write_not_proven')
+            return confirmation
 
     def claim_ebay_inventory_location_execution(
         self,
@@ -8579,6 +9283,8 @@ class SaaSRepository:
         expected_payload_sha256: str,
         expected_claim_binding: dict[str, Any],
         marketplace_id: str,
+        expected_access_epochs: dict[str, int] | None = None,
+        operation_plan: Any = None,
     ) -> dict[str, Any]:
         """Atomically consume one fresh exact inventory-location approval."""
 
@@ -8587,10 +9293,7 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
-            row = conn.execute(
-                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
-                (company_id, confirmation_id),
-            ).fetchone()
+            row = self._lock_execution_confirmation(conn, company_id=company_id, confirmation_id=confirmation_id)
             if not row:
                 raise ConfirmationDecisionConflict("ebay_inventory_location_approval_required")
             confirmation = self._confirmation_row_to_dict(row)
@@ -8657,6 +9360,8 @@ class SaaSRepository:
             )
             if not exact:
                 raise ConfirmationDecisionConflict("ebay_inventory_location_approval_required")
+            permit = create_attempt(self, conn, confirmation=confirmation, executor_user_id=user_id,
+                                    expected_epochs=expected_access_epochs, operation_plan=operation_plan)
             transitioned = conn.execute(
                 """
                 update confirmations set status = ?
@@ -8695,6 +9400,7 @@ class SaaSRepository:
             **confirmation,
             "status": EXTERNAL_EXECUTION_PROCESSING_STATUS,
             "external_execution_claimed": True,
+            "_execution_permit": permit,
         }
 
     def claim_unpublished_draft_execution(
@@ -8704,6 +9410,8 @@ class SaaSRepository:
         confirmation_id: str,
         user_id: str,
         expected_binding: dict[str, str],
+        expected_access_epochs: dict[str, int] | None = None,
+        operation_plan: Any = None,
     ) -> tuple[dict[str, Any], UnpublishedDraftClaimCapability]:
         """Atomically claim exact draft execution and mint a process-local nonce capability."""
 
@@ -8717,10 +9425,7 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
-            row = conn.execute(
-                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
-                (company_id, confirmation_id),
-            ).fetchone()
+            row = self._lock_execution_confirmation(conn, company_id=company_id, confirmation_id=confirmation_id)
             confirmation = self._confirmation_row_to_dict(row) if row else {}
             if str(confirmation.get("status") or "") != "approved":
                 raise ConfirmationDecisionConflict("external_execution_claim_conflict")
@@ -8732,6 +9437,14 @@ class SaaSRepository:
             )
             if not binding:
                 raise ConfirmationDecisionConflict("external_execution_claim_binding_invalid")
+            prior_claim = conn.execute(
+                f"select status from external_execution_claims where confirmation_id = ?{lock_suffix}",
+                (confirmation_id,),
+            ).fetchone()
+            if prior_claim:
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            permit = create_attempt(self, conn, confirmation=confirmation, executor_user_id=user_id,
+                                    expected_epochs=expected_access_epochs, operation_plan=operation_plan)
             credential = self._unpublished_draft_execution_credential_boundary_conn(
                 conn,
                 company_id=company_id,
@@ -8762,12 +9475,6 @@ class SaaSRepository:
                 and str(store_row["marketplace"] or "") == binding["marketplace_id"]
             ):
                 raise ConfirmationDecisionConflict("external_execution_claim_binding_invalid")
-            prior_claim = conn.execute(
-                f"select status from external_execution_claims where confirmation_id = ?{lock_suffix}",
-                (confirmation_id,),
-            ).fetchone()
-            if prior_claim and str(prior_claim["status"] or "") != "aborted":
-                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
             transitioned = conn.execute(
                 "update confirmations set status = ? where company_id = ? and confirmation_id = ? and status = 'approved'",
                 ("external_execution_claimed_prewrite", company_id, confirmation_id),
@@ -8838,6 +9545,8 @@ class SaaSRepository:
                     "secret_exposed": False,
                 },
             )
+            conn.execute('update external_execution_claims set authority_json=? where claim_id=?',
+                         (json.dumps({'attempt_id': permit._attempt}), claim_id))
         claimed = {
             **confirmation,
             "status": "external_execution_claimed_prewrite",
@@ -8849,11 +9558,38 @@ class SaaSRepository:
             nonce=nonce,
             binding=binding,
             repository=self,
+            execution_permit=permit,
             mint_token=_UNPUBLISHED_DRAFT_CLAIM_MINT_TOKEN,
         )
         return claimed, capability
 
     def consume_unpublished_draft_execution_claim(
+        self, *, capability: UnpublishedDraftClaimCapability,
+    ) -> dict[str, Any]:
+        try:
+            return self._consume_unpublished_draft_execution_claim(capability=capability)
+        except PermissionError as error:
+            if str(error) not in EXECUTION_DENIAL_CODES:
+                raise
+            # The failed transaction has rolled back. Retire the exact nonce
+            # using durable operation facts; never restore an old approval.
+            try:
+                self.abort_unpublished_draft_execution_claim(capability=capability, reason_code='claim_consume_failed')
+            except ConfirmationDecisionConflict:
+                pass
+            except PermissionError as abort_error:
+                if str(abort_error) != 'ebay_execution_zero_write_not_proven':
+                    raise
+            if str(error) == 'ebay_execution_credential_changed':
+                # Preserve the existing one-shot nonce API's exact credential
+                # drift conflict; unrelated permission failures remain distinct.
+                raise ConfirmationDecisionConflict('external_execution_claim_binding_invalid') from error
+            scope = capability.claim_binding()
+            summary = self.ebay_execution_recovery(company_id=scope['company_id'],
+                confirmation_id=scope['confirmation_id'], reason_code=str(error))
+            raise EbayExecutionDenied(str(error), summary) from error
+
+    def _consume_unpublished_draft_execution_claim(
         self,
         *,
         capability: UnpublishedDraftClaimCapability,
@@ -8870,6 +9606,8 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            confirmation_row = self._lock_execution_confirmation(conn,
+                company_id=capability._binding['company_id'], confirmation_id=capability._binding['confirmation_id'])
             row = conn.execute(
                 f"select * from external_execution_claims where claim_id = ?{lock_suffix}",
                 (capability._claim_id,),
@@ -8889,10 +9627,6 @@ class SaaSRepository:
                 and datetime.now(timezone.utc) <= expires_at
             ):
                 raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
-            confirmation_row = conn.execute(
-                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
-                (row["company_id"], row["confirmation_id"]),
-            ).fetchone()
             confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
             current_binding = _exact_draft_execution_claim_binding(
                 confirmation=confirmation,
@@ -8903,6 +9637,10 @@ class SaaSRepository:
                 and current_binding == binding
             ):
                 raise ConfirmationDecisionConflict("external_execution_claim_binding_invalid")
+            authority = _load_json_field(row['authority_json'])
+            if not isinstance(authority, dict) or authority.get('attempt_id') != capability.execution_permit()._attempt:
+                raise PermissionError('ebay_execution_permit_required')
+            validate_unconsumed_permit(capability.execution_permit(), conn, confirmation)
             credential = self._unpublished_draft_execution_credential_boundary_conn(
                 conn,
                 company_id=str(row["company_id"] or ""),
@@ -8964,13 +9702,7 @@ class SaaSRepository:
         capability: UnpublishedDraftClaimCapability,
         reason_code: str = "prewrite_check_blocked",
     ) -> dict[str, Any]:
-        """One-shot zero-write abort for a claim that was never consumed.
-
-        An unchanged confirmation is restored to ``approved`` so the merchant
-        is not trapped by a deterministic pre-write failure.  If its approved
-        payload changed after claim, it is moved to ``needs_revision`` instead
-        of silently approving different business facts.
-        """
+        """One-shot zero-write retirement. A new pending needs a new decision."""
 
         if not (
             isinstance(capability, UnpublishedDraftClaimCapability)
@@ -8991,6 +9723,8 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            confirmation_row = self._lock_execution_confirmation(conn,
+                company_id=capability._binding['company_id'], confirmation_id=capability._binding['confirmation_id'])
             row = conn.execute(
                 f"select * from external_execution_claims where claim_id = ?{lock_suffix}",
                 (capability._claim_id,),
@@ -9009,10 +9743,6 @@ class SaaSRepository:
                 and binding == capability._binding
             ):
                 raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
-            confirmation_row = conn.execute(
-                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
-                (row["company_id"], row["confirmation_id"]),
-            ).fetchone()
             confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
             unchanged = bool(
                 str(confirmation.get("status") or "") == "external_execution_claimed_prewrite"
@@ -9022,13 +9752,8 @@ class SaaSRepository:
                 )
                 == binding
             )
-            restored_status = (
-                "needs_revision"
-                if safe_reason == "publish_evidence_changed"
-                else "approved"
-                if unchanged
-                else "needs_revision"
-            )
+            close_zero_attempt(self, conn, company_id=row['company_id'], confirmation_id=row['confirmation_id'], reason=safe_reason)
+            restored_status = 'needs_revision'
             aborted = conn.execute(
                 "update external_execution_claims set status = 'aborted' where claim_id = ? and status = 'claimed'",
                 (capability._claim_id,),
@@ -9080,15 +9805,7 @@ class SaaSRepository:
         confirmation_id: str,
         user_id: str,
     ) -> dict[str, Any]:
-        """Recover a crashed pre-write claim only after its one-shot lease expires.
-
-        A ``claimed`` row proves that the adapter had not crossed the first
-        eBay-write boundary: consumption changes both the claim and the
-        confirmation in the same transaction.  Recovery therefore invalidates
-        the abandoned nonce and restores only the exact approved snapshot.  A
-        stale approval goes back to ``pending`` and must be approved again;
-        changed business facts remain ``needs_revision``.
-        """
+        """Retire an expired zero-write lease without clearing any old decision."""
 
         self.initialize()
         recovered_at = datetime.now(timezone.utc)
@@ -9096,6 +9813,7 @@ class SaaSRepository:
             if self.database_engine != "postgres":
                 conn.execute("begin immediate")
             lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            confirmation_row = self._lock_execution_confirmation(conn, company_id=company_id, confirmation_id=confirmation_id)
             row = conn.execute(
                 f"""
                 select * from external_execution_claims
@@ -9111,10 +9829,6 @@ class SaaSRepository:
                 and recovered_at > expires_at
             ):
                 raise ConfirmationDecisionConflict("external_execution_prewrite_claim_not_expired")
-            confirmation_row = conn.execute(
-                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
-                (company_id, confirmation_id),
-            ).fetchone()
             confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
             if str(confirmation.get("status") or "") != "external_execution_claimed_prewrite":
                 raise ConfirmationDecisionConflict("external_execution_claim_conflict")
@@ -9131,15 +9845,9 @@ class SaaSRepository:
                 )
                 == binding
             )
-            if unchanged and _is_exact_fresh_draft_execution_confirmation(
-                confirmation=confirmation,
-                company_id=company_id,
-            ):
-                restored_status = "approved"
-            elif unchanged:
-                restored_status = "pending"
-            else:
-                restored_status = "needs_revision"
+            close_zero_attempt(self, conn, company_id=company_id, confirmation_id=confirmation_id,
+                               reason='expired_prewrite_reapproval_required')
+            restored_status = 'needs_revision'
             aborted = conn.execute(
                 """
                 update external_execution_claims set status = 'aborted'
@@ -9147,30 +9855,10 @@ class SaaSRepository:
                 """,
                 (row["claim_id"], company_id, confirmation_id),
             ).rowcount
-            if restored_status == "pending":
-                transitioned = conn.execute(
-                    """
-                    update confirmations
-                    set status = 'pending', decided_by = null, decided_at = null,
-                        decision_note = ?
-                    where company_id = ? and confirmation_id = ?
-                      and status = 'external_execution_claimed_prewrite'
-                    """,
-                    (
-                        "The pre-write execution lease expired before any eBay write; a fresh approval is required.",
-                        company_id,
-                        confirmation_id,
-                    ),
-                ).rowcount
-            else:
-                transitioned = conn.execute(
-                    """
-                    update confirmations set status = ?
-                    where company_id = ? and confirmation_id = ?
-                      and status = 'external_execution_claimed_prewrite'
-                    """,
-                    (restored_status, company_id, confirmation_id),
-                ).rowcount
+            transitioned = conn.execute(
+                "update confirmations set status = ? where company_id = ? and confirmation_id = ? "
+                "and status = 'external_execution_claimed_prewrite'",
+                (restored_status, company_id, confirmation_id)).rowcount
             if aborted != 1 or transitioned != 1:
                 raise ConfirmationDecisionConflict("external_execution_claim_conflict")
             self._insert_audit(
@@ -9187,7 +9875,7 @@ class SaaSRepository:
                     "restored_status": restored_status,
                     "writes_to_ebay": False,
                     "automatic_retry_allowed": restored_status == "approved",
-                    "reapproval_required": restored_status == "pending",
+                    "reapproval_required": True,
                     "secret_exposed": False,
                 },
             )
@@ -9195,7 +9883,7 @@ class SaaSRepository:
             "status": restored_status,
             "writes_to_ebay": False,
             "automatic_retry_allowed": restored_status == "approved",
-            "reapproval_required": restored_status == "pending",
+            "reapproval_required": True,
             "secret_exposed": False,
         }
 
@@ -9343,6 +10031,16 @@ class SaaSRepository:
                 task_status = "completed_no_platform_write"
             else:
                 task_status = "execution_blocked"
+                attempts = conn.execute('select * from confirmation_execution_authorities_v1 where company_id=? and confirmation_id=?',
+                    (confirmation['company_id'], confirmation['confirmation_id'])).fetchall()
+                if attempts:
+                    attempt = dict(attempts[0])
+                    state = load_operation_state(attempt['operation_state_json']) if len(attempts) == 1 else None
+                    durable = execution_recovery(attempt, state)
+                    if not durable['zero_write_proven'] and durable['status'] != 'execution_completed':
+                        # A failed-looking adapter result cannot turn an admitted
+                        # or incomplete durable outcome into a retryable task.
+                        task_status = 'manual_reconcile_required'
             _transition_confirmation_task_status(
                 conn,
                 company_id=confirmation["company_id"],
@@ -14067,10 +14765,13 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
-    def accept_ebay_account_deletion_event(self, *, event: dict[str, Any]) -> dict[str, Any]:
+    def accept_ebay_account_deletion_event(self, *, event: dict[str, Any],
+                                         verification: dict[str, Any] | None = None) -> dict[str, Any]:
         """Persist one sanitized eBay deletion receipt and at most one compliance job."""
 
         self.initialize()
+        if not isinstance(verification, dict) or verification.get("verified") is not True or verification.get("status") != "verified":
+            raise PermissionError("ebay_account_deletion_verified_event_required")
         event_key = str(event.get("event_key") or "")
         payload_sha256 = str(event.get("payload_sha256") or "")
         if not re.fullmatch(r"[0-9a-f]{64}", event_key) or not re.fullmatch(r"[0-9a-f]{64}", payload_sha256):
@@ -14220,6 +14921,9 @@ class SaaSRepository:
                     created_at, created_at, json.dumps(record, ensure_ascii=False),
                 ),
             )
+            conn.execute("update ebay_account_deletion_events set verification_json=? where event_key=?",
+                         (json.dumps({"version":1,"verified":True,"payload_sha256":payload_sha256,
+                                      "verified_at":created_at}),event_key))
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -14243,22 +14947,112 @@ class SaaSRepository:
             row = conn.execute("select count(*) as count from ebay_account_deletion_events").fetchone()
         return int(row["count"] if row else 0)
 
+    def claim_ebay_account_deletion_processing(self, *, event_key: str, company_id: str,
+                                              store_id: str, connection_id: str,
+                                              task_id: str, job_id: str) -> dict[str, Any]:
+        """Verify durable system authority before any credential or asset effect.
+
+        Claimed/start phases are not automatically replayable. Only a completed
+        external phase can resume to the remaining local transaction.
+        """
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock = " for update" if self.database_engine == "postgres" else ""
+            store = conn.execute(f"select store_id from stores where company_id=? and store_id=?{lock}",
+                                 (company_id,store_id)).fetchone()
+            row = conn.execute(f"select * from ebay_account_deletion_events where event_key=? and company_id=?{lock}",
+                               (event_key,company_id)).fetchone()
+            if not store or not row or any(str(row[k] or '') != v for k,v in (
+                ('store_id',store_id),('connection_id',connection_id),('task_id',task_id),('job_id',job_id))):
+                raise PermissionError("ebay_account_deletion_event_binding_invalid")
+            if row['status'] == 'completed':
+                return {'phase':'completed','result':_load_json_field(row['deletion_event_json'])}
+            event = _load_json_field(row['deletion_event_json'])
+            proof = _load_json_field(row['verification_json'])
+            task = conn.execute(f"select * from tasks where company_id=? and task_id=?{lock}",(company_id,task_id)).fetchone()
+            job = conn.execute(f"select * from queue_jobs where company_id=? and job_id=?{lock}",(company_id,job_id)).fetchone()
+            connection = conn.execute("select * from platform_connections where company_id=? and store_id=? and connection_id=?",
+                                      (company_id,store_id,connection_id)).fetchone()
+            if (proof.get('version') != 1 or proof.get('verified') is not True
+                    or not proof.get('verified_at') or proof.get('payload_sha256') != event.get('payload_sha256')
+                    or event.get('topic') != 'MARKETPLACE_ACCOUNT_DELETION'
+                    or event.get('schema_version') != '1.0' or event.get('signature_present') is not True
+                    or not re.fullmatch(r'[a-f0-9]{64}',str(proof.get('payload_sha256') or ''))
+                    or any(event.get(k) != v for k,v in (('event_key',event_key),('company_id',company_id),
+                        ('store_id',store_id),('connection_id',connection_id),('task_id',task_id),('job_id',job_id)))
+                    or not task or task['task_type'] != 'ebay_account_deletion_compliance' or task['store_id'] != store_id
+                    or task['status'] not in {'queued','running'}
+                    or not job or job['task_id'] != task_id or job['status'] != 'running'
+                    or not connection or str(connection['platform']).lower() != 'ebay'):
+                raise PermissionError('ebay_account_deletion_verified_binding_required')
+            for body,kind in ((_load_json_field(task['input_json']),False),(_load_json_field(job['job_json']),True)):
+                if (body.get('signature_verified') is not True or body.get('event_key') != event_key
+                        or body.get('connection_id') != connection_id
+                        or (kind and body.get('kind') != 'ebay_account_deletion')):
+                    raise PermissionError('ebay_account_deletion_job_binding_invalid')
+            state = _load_json_field(row['processing_json'])
+            if row['status'] == 'processing':
+                if state.get('phase') != 'assets_purged':
+                    raise PermissionError('ebay_account_deletion_processing_reconciliation_required')
+                phase = 'assets_purged'
+            elif row['status'] == 'queued':
+                phase = 'claimed'
+            else:
+                raise PermissionError('ebay_account_deletion_event_state_invalid')
+            token = secrets.token_hex(32)
+            state = {**state,'version':1,'token':token,'phase':phase,'started_at':state.get('started_at') or now_iso()}
+            conn.execute("update ebay_account_deletion_events set status='processing', updated_at=?, processing_json=? where event_key=?",
+                         (now_iso(),json.dumps(state),event_key))
+            return {'phase':phase,'processing_token':token}
+
+    def advance_ebay_account_deletion_processing(self, *, event_key: str, company_id: str,
+                                               processing_token: str, expected_phase: str, phase: str) -> None:
+        transitions = {('claimed','revocation_started'),('revocation_started','credentials_revoked'),
+                       ('credentials_revoked','purge_started'),('purge_started','assets_purged')}
+        if (expected_phase,phase) not in transitions:
+            raise ValueError('invalid_deletion_processing_transition')
+        with self._connect() as conn:
+            if self.database_engine != 'postgres':
+                conn.execute('begin immediate')
+            lock = ' for update' if self.database_engine == 'postgres' else ''
+            row = conn.execute(f"select status,processing_json from ebay_account_deletion_events where company_id=? and event_key=?{lock}",
+                               (company_id,event_key)).fetchone()
+            state = _load_json_field(row['processing_json']) if row else {}
+            if (not row or row['status'] != 'processing' or state.get('phase') != expected_phase
+                    or not processing_token or not hmac.compare_digest(str(state.get('token') or ''),processing_token)):
+                raise PermissionError('ebay_account_deletion_processing_permit_invalid')
+            conn.execute('update ebay_account_deletion_events set processing_json=?,updated_at=? where event_key=?',
+                         (json.dumps({**state,'phase':phase}),now_iso(),event_key))
+
     def process_ebay_account_deletion_event(
         self,
         *,
         event_key: str,
         company_id: str,
         connection_id: str,
+        processing_token: str | None = None,
     ) -> dict[str, Any]:
         """Irreversibly purge one matched eBay store while preserving a minimal receipt."""
 
         self.initialize()
         completed_at = now_iso()
         with self._connect() as conn:
+            if self.database_engine != 'postgres':
+                conn.execute('begin immediate')
+            lock = ' for update' if self.database_engine == 'postgres' else ''
+            # Same narrow order as approval and the processing claim: store,
+            # event, then scoped children. No provider call holds these locks.
+            scope = conn.execute('select store_id from ebay_account_deletion_events where event_key=? and company_id=? and connection_id=?',
+                                 (event_key,company_id,connection_id)).fetchone()
+            if scope:
+                conn.execute(f'select store_id from stores where company_id=? and store_id=?{lock}',
+                             (company_id,scope['store_id'])).fetchone()
             event_row = conn.execute(
-                """
+                f"""
                 select * from ebay_account_deletion_events
-                where event_key = ? and company_id = ? and connection_id = ?
+                where event_key = ? and company_id = ? and connection_id = ?{lock}
                 """,
                 (event_key, company_id, connection_id),
             ).fetchone()
@@ -14267,6 +15061,10 @@ class SaaSRepository:
             if str(event_row["status"]) == "completed":
                 existing = _load_json_field(event_row["deletion_event_json"])
                 return {**existing, "status": "completed", "duplicate": True, "secret_exposed": False}
+            processing = _load_json_field(event_row["processing_json"])
+            if (event_row["status"] != "processing" or processing.get("phase") != "assets_purged"
+                    or not processing_token or not hmac.compare_digest(str(processing.get("token") or ""), processing_token)):
+                raise PermissionError("ebay_account_deletion_processing_permit_required")
             connection = conn.execute(
                 """
                 select * from platform_connections
@@ -14298,16 +15096,19 @@ class SaaSRepository:
                 cursor = conn.execute(f"delete from {table} where {where}", params)
                 deleted_counts[table] = int(cursor.rowcount if cursor.rowcount >= 0 else 0)
 
+            authority_lifecycle = self._delete_store_confirmation_authorities(
+                conn, company_id=company_id, store_id=store_id)
             if task_ids:
                 placeholders = ",".join("?" for _ in task_ids)
-                ids = tuple(task_ids)
-                delete_where("execution_results", f"task_id in ({placeholders})", ids)
-                delete_where("confirmations", f"task_id in ({placeholders})", ids)
-                delete_where("reports", f"task_id in ({placeholders})", ids)
-                delete_where("media_asset_jobs", f"task_id in ({placeholders})", ids)
-                delete_where("task_steps", f"task_id in ({placeholders})", ids)
-                delete_where("queue_jobs", f"task_id in ({placeholders})", ids)
-                delete_where("tasks", f"task_id in ({placeholders})", ids)
+                ids = (company_id,*task_ids)
+                # Existing draft claims also reference confirmations in PG.
+                # Remove only those whose original parent is being deleted.
+                delete_where("external_execution_claims", f"company_id=? and confirmation_id in (select confirmation_id from confirmations where company_id=? and store_id=? and task_id in ({placeholders}))",
+                             (company_id,company_id,store_id,*task_ids))
+                delete_where('execution_results', f'task_id in (select task_id from tasks where company_id=? and task_id in ({placeholders}))', ids)
+                delete_where('reports', f'task_id in (select task_id from tasks where company_id=? and task_id in ({placeholders}))', ids)
+                for table in ('confirmations','media_asset_jobs','task_steps','queue_jobs','tasks'):
+                    delete_where(table, f"company_id=? and task_id in ({placeholders})", ids)
             delete_where("platform_data_packets", "company_id = ? and store_id = ?", (company_id, store_id))
             delete_where("merchant_memory", "company_id = ? and store_id = ?", (company_id, store_id))
             delete_where("merchant_ceo_commands", "company_id = ? and store_id = ?", (company_id, store_id))
@@ -14392,6 +15193,7 @@ class SaaSRepository:
                 "task_id": compliance_task_id,
                 "job_id": compliance_job_id,
                 "completed_at": completed_at,
+                "authority_lifecycle": authority_lifecycle,
                 "deleted_record_counts": deleted_counts,
                 "secret_ref_present": bool(secret_refs),
                 "secret_value_deleted_by_worker": False,
@@ -14403,10 +15205,12 @@ class SaaSRepository:
             conn.execute(
                 """
                 update ebay_account_deletion_events
-                set status = ?, updated_at = ?, deletion_event_json = ?
+                set status = ?, updated_at = ?, deletion_event_json = ?, processing_json = ?
                 where event_key = ?
                 """,
-                ("completed", completed_at, json.dumps(result, ensure_ascii=False), event_key),
+                ("completed", completed_at, json.dumps(result, ensure_ascii=False),
+                 json.dumps({'version':1,'phase':'completed','started_at':processing.get('started_at'),
+                             'completed_at':completed_at}), event_key),
             )
             if compliance_task_id:
                 conn.execute(
@@ -14445,6 +15249,38 @@ class SaaSRepository:
                 },
             )
         return result
+
+    def _delete_store_confirmation_authorities(self, conn: Any, *, company_id: str, store_id: str) -> dict[str, Any]:
+        """Called only inside the verified compliance transaction; no new purge policy.
+
+        Taskless legacy parents and support receipts keep their existing retention
+        policy, but cannot retain a live pointer to deleted authorization data.
+        """
+        scope=(company_id,store_id)
+        rows=conn.execute('select phase from confirmation_execution_authorities_v1 where company_id=? and store_id=?',scope).fetchall()
+        receipt={'version':1,'possible_in_flight':any(r['phase'] in {'admitted','reconciliation_required'} for r in rows)}
+        conn.execute('update confirmations set approval_authority_id=null where company_id=? and store_id=?',scope)
+        removed=conn.execute('delete from confirmation_execution_authorities_v1 where company_id=? and store_id=?',scope)
+        receipt['execution_records_removed']=max(0,removed.rowcount)
+        # Old internal claim records may survive their parent under existing
+        # policy. Revoke only their new authority extension here.
+        changed=conn.execute('update external_execution_claims set authority_json=null where company_id=? and store_id=? and authority_json is not null',scope)
+        receipt['draft_authority_refs_removed']=max(0,changed.rowcount)
+        exists=(conn.execute("select 1 from information_schema.tables where table_schema='public' and table_name='support_send_intents_v1'").fetchone()
+                if self.database_engine=='postgres' else conn.execute("select 1 from sqlite_master where type='table' and name='support_send_intents_v1'").fetchone())
+        cleared=0
+        if exists:
+            for row in conn.execute('select owner_id,draft_id,record_text from support_send_intents_v1 where company_id=? and store_id=?',scope).fetchall():
+                record=_load_json_field(row['record_text'])
+                if 'authority' in record:
+                    record.pop('authority')
+                    conn.execute('update support_send_intents_v1 set record_text=? where company_id=? and store_id=? and owner_id=? and draft_id=?',
+                                 (json.dumps(record,ensure_ascii=False),*scope,row['owner_id'],row['draft_id']))
+                    cleared+=1
+        receipt['support_authority_refs_removed']=cleared
+        removed=conn.execute('delete from confirmation_approval_authorities_v1 where company_id=? and store_id=?',scope)
+        receipt['approval_records_removed']=max(0,removed.rowcount)
+        return receipt
 
     def plan_synthetic_ebay_identity_conflict_retirement(self) -> dict[str, Any]:
         """Return a value-free dry-run for narrowly eligible synthetic OAuth fixtures."""
@@ -15834,7 +16670,7 @@ class SaaSRepository:
             ).fetchall()
             model_reliability_rows = conn.execute(
                 f"""
-                select usage_json
+                select usage_json, created_at
                 from model_usage_ledger m
                 where {_operations_time_window_sql('created_at', self.database_engine)} and (
                   company_id is null or exists (
@@ -15868,7 +16704,7 @@ class SaaSRepository:
             ).fetchall()
             provider_reliability_rows = conn.execute(
                 f"""
-                select cost_json
+                select cost_json, created_at
                 from provider_cost_ledger c
                 where {_operations_time_window_sql('created_at', self.database_engine)} and (
                   company_id is null or exists (
@@ -16131,6 +16967,7 @@ class SaaSRepository:
                 "blocked_count": 0,
                 "durations": [],
                 "first_outputs": [],
+                "latest_sample_at": "",
                 "error_classes": {},
             }
             for scope in ("model", "public_search", "media_generation", "payment")
@@ -16143,6 +16980,9 @@ class SaaSRepository:
             if not reliability:
                 continue
             bucket = reliability_buckets["model"]
+            sample_at = _utc_stamp_for_operations(row["created_at"])
+            if sample_at and (not bucket["latest_sample_at"] or datetime.fromisoformat(sample_at) > datetime.fromisoformat(bucket["latest_sample_at"])):
+                bucket["latest_sample_at"] = sample_at
             request_count = nonnegative_int(reliability.get("request_count"))
             success_count = min(request_count, nonnegative_int(reliability.get("success_count")))
             timeout_count = min(request_count, nonnegative_int(reliability.get("timeout_count")))
@@ -16182,6 +17022,9 @@ class SaaSRepository:
             if outcome not in {"success", "partial", "error", "timeout", "blocked"}:
                 outcome = "error"
             bucket = reliability_buckets[scope]
+            sample_at = _utc_stamp_for_operations(row["created_at"])
+            if sample_at and (not bucket["latest_sample_at"] or datetime.fromisoformat(sample_at) > datetime.fromisoformat(bucket["latest_sample_at"])):
+                bucket["latest_sample_at"] = sample_at
             bucket["request_count"] += 1
             bucket["success_count"] += 1 if outcome == "success" else 0
             bucket["failure_count"] += 0 if outcome == "success" else 1
@@ -18082,6 +18925,7 @@ class SaaSRepository:
             return connect_postgres_repository(self.database_url)  # type: ignore[return-value]
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("pragma foreign_keys=on")
         return conn
 
     def _store_id_for_task(self, *, company_id: str, task_id: str) -> str | None:
@@ -18929,6 +19773,25 @@ def _is_exact_fresh_draft_execution_confirmation(*, confirmation: dict[str, Any]
     )
 
 
+def _public_support_connection_boundary(boundary: Any) -> dict[str, Any]:
+    """Explicit public allowlist; never serialize the internal selector object."""
+    value = boundary if isinstance(boundary, dict) else {}
+    booleans = ("ready", "connection_bound", "requested_message_scope_present", "granted_message_scope_verified",
+                "read_enabled", "send_enabled", "live_end_to_end_verified", "live_scope_check_required",
+                "external_request_performed", "schema_write_performed")
+    public = {key: value.get(key) is True for key in booleans}
+    public.update(contract_version="2026-10-12-support-connection-boundary-v1",
+                  status="metadata_ready" if value.get("ready") is True else "blocked", secret_exposed=False,
+                  requires_live_owner_check=True, owner_identity_verified=False)
+    source = value.get("scope_verification_source")
+    public["scope_verification_source"] = source if source in {"token_response", "ebay_token_introspection"} else ""
+    stamp = value.get("scope_verified_at")
+    public["scope_verified_at"] = stamp if isinstance(stamp, str) and _parse_iso_datetime(stamp) else None
+    blockers = value.get("blocked_by") if isinstance(value.get("blocked_by"), list) else []
+    public["blocked_by"] = [code for code in blockers[:12] if isinstance(code, str) and re.fullmatch(r"support_[a-z0-9_]{1,90}", code)]
+    return public
+
+
 def _public_connection_metadata(value: Any) -> dict[str, Any]:
     metadata = value if isinstance(value, dict) else {}
     hidden = {
@@ -19123,6 +19986,7 @@ class UnpublishedDraftClaimCapability:
         "_repository",
         "_minted",
         "_terminal_status",
+        "_execution_permit",
     )
 
     def __init__(
@@ -19133,6 +19997,7 @@ class UnpublishedDraftClaimCapability:
         binding: dict[str, str],
         repository: SaaSRepository | None = None,
         mint_token: object | None = None,
+        execution_permit: Any = None,
     ) -> None:
         self._claim_id = claim_id
         self._nonce = bytes(nonce)
@@ -19140,6 +20005,12 @@ class UnpublishedDraftClaimCapability:
         self._repository = repository
         self._minted = mint_token is _UNPUBLISHED_DRAFT_CLAIM_MINT_TOKEN
         self._terminal_status = "active"
+        self._execution_permit = execution_permit
+
+    def execution_permit(self):
+        if not self._minted or self._execution_permit is None:
+            raise PermissionError('ebay_execution_permit_required')
+        return self._execution_permit
 
     def claim_binding(self) -> dict[str, str]:
         """Return value-free binding fields for backend adapter validation."""

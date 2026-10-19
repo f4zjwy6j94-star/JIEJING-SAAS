@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 import json
@@ -10,6 +11,7 @@ import re
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -24,6 +26,7 @@ MAX_ACTIVE_BYTES_PER_COMPANY = 100 * 1024 * 1024
 MAX_IMAGE_EDGE_PIXELS = 12_000
 MAX_IMAGE_TOTAL_PIXELS = 80_000_000
 _ASSET_ID_PATTERN = re.compile(r"^media_src_[A-Za-z0-9_-]{16,80}$")
+_UPLOAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,96}$")
 
 
 class MediaSourceAssetError(ValueError):
@@ -95,6 +98,7 @@ class MediaSourceAssetStore:
         content_type: str,
         filename: str,
         content: bytes,
+        upload_id: str = "",
     ) -> tuple[MediaSourceAsset, str]:
         if not company_id or not store_id or not user_id:
             raise MediaSourceAssetError("identity_missing", "upload identity is incomplete")
@@ -104,8 +108,12 @@ class MediaSourceAssetStore:
             raise MediaSourceAssetError("file_too_large", "source image exceeds the 5 MB limit")
         normalized_type, extension, width, height = _validated_image_type(content_type=content_type, content=content)
 
+        upload_id = str(upload_id or "")
         created_at = int(self.now())
-        asset_id = f"media_src_{secrets.token_urlsafe(18)}"
+        asset_id = self._upload_asset_id(company_id=company_id, store_id=store_id, user_id=user_id,
+                                         upload_id=upload_id) if upload_id else f"media_src_{secrets.token_urlsafe(18)}"
+        # Fail before any blob/metadata write, not after a source was saved without a usable receipt.
+        source_url = self.signed_url(asset_id)
         directory = self.root / asset_id[-2:]
         directory.mkdir(parents=True, exist_ok=True)
         file_path = directory / f"{asset_id}.{extension}"
@@ -115,6 +123,7 @@ class MediaSourceAssetStore:
             "company_id": company_id,
             "store_id": store_id,
             "user_id": user_id,
+            "upload_id": upload_id,
             "content_type": normalized_type,
             "size_bytes": len(content),
             "sha256": hashlib.sha256(content).hexdigest(),
@@ -126,7 +135,15 @@ class MediaSourceAssetStore:
             "file_name": file_path.name,
             "secret_exposed": False,
         }
-        with self._lock:
+        with self._company_write_lock(company_id):
+            if upload_id and metadata_path.exists():
+                existing, existing_url = self.get_by_upload_id(company_id=company_id, store_id=store_id,
+                    user_id=user_id, upload_id=upload_id)
+                if not hmac.compare_digest(existing.sha256, metadata["sha256"]):
+                    raise MediaSourceAssetError("upload_id_conflict", "upload attempt already belongs to different image bytes")
+                return existing, existing_url
+            if upload_id and any(directory.joinpath(f"{asset_id}.{suffix}").exists() for suffix in ("png", "jpg", "webp")):
+                raise MediaSourceAssetError("upload_receipt_incomplete", "upload data exists without a complete receipt; do not resubmit")
             self._cleanup_expired_locked(now=created_at)
             active_count, active_bytes = self._company_usage_locked(company_id=company_id, now=created_at)
             if active_count >= self.max_assets_per_company or active_bytes + len(content) > self.max_bytes_per_company:
@@ -137,7 +154,110 @@ class MediaSourceAssetStore:
             _atomic_write(file_path, content)
             _atomic_write(metadata_path, json.dumps(metadata, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         asset = _asset_from_metadata(metadata, file_path=file_path)
-        return asset, self.signed_url(asset_id)
+        return asset, source_url
+
+    def get_by_upload_id(
+        self, *, company_id: str, store_id: str, user_id: str, upload_id: str,
+    ) -> tuple[MediaSourceAsset, str]:
+        """Read only this authenticated uploader's exact attempt; never list or create assets."""
+        asset_id = self._upload_asset_id(company_id=company_id, store_id=store_id, user_id=user_id,
+                                         upload_id=upload_id)
+        metadata_path = self._metadata_path(asset_id)
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            if any(metadata_path.with_suffix(f".{suffix}").exists() for suffix in ("png", "jpg", "webp")):
+                raise MediaSourceAssetError("upload_receipt_incomplete", "upload data exists without a complete receipt; do not resubmit") from exc
+            raise MediaSourceAssetError("upload_not_found", "upload receipt is not available; do not automatically resubmit") from exc
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MediaSourceAssetError("asset_unavailable", "upload receipt is unavailable") from exc
+        if not isinstance(metadata, dict) or any(not hmac.compare_digest(str(metadata.get(key) or ""), expected)
+            for key, expected in (("company_id", company_id), ("store_id", store_id), ("user_id", user_id),
+                                  ("upload_id", upload_id), ("asset_id", asset_id))):
+            raise MediaSourceAssetError("upload_not_found", "upload receipt is not available; do not automatically resubmit")
+        asset, _ = self.read_for_provider(asset_id=asset_id, company_id=company_id, store_id=store_id)
+        return asset, self.signed_url(asset.asset_id)
+
+    def recover_owned_asset(self, *, company_id: str, store_id: str, user_id: str,
+                            asset_id: str) -> tuple[MediaSourceAsset, str, str]:
+        """Recover a known job's source, never enumerate uploads or widen ownership."""
+        try:
+            metadata = json.loads(self._metadata_path(asset_id).read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise MediaSourceAssetError("upload_not_found", "original source receipt unavailable") from exc
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MediaSourceAssetError("asset_unavailable", "original source receipt unavailable") from exc
+        if not isinstance(metadata, dict) or any(not hmac.compare_digest(str(metadata.get(key) or ""), expected)
+            for key, expected in (("company_id", company_id), ("store_id", store_id), ("user_id", user_id), ("asset_id", asset_id))):
+            raise MediaSourceAssetError("upload_not_found", "original source receipt unavailable")
+        upload_id = str(metadata.get("upload_id") or "")
+        asset, url = self.get_by_upload_id(company_id=company_id, store_id=store_id,
+                                          user_id=user_id, upload_id=upload_id)
+        if asset.asset_id != asset_id:
+            raise MediaSourceAssetError("upload_not_found", "original source receipt unavailable")
+        return asset, url, upload_id
+
+    @staticmethod
+    def _upload_asset_id(*, company_id: str, store_id: str, user_id: str, upload_id: str) -> str:
+        if not company_id or not store_id or not user_id:
+            raise MediaSourceAssetError("identity_missing", "upload identity is incomplete")
+        if not _UPLOAD_ID_PATTERN.fullmatch(str(upload_id or "")):
+            raise MediaSourceAssetError("invalid_upload_id", "upload attempt id must be 16 to 96 URL-safe characters")
+        scope = json.dumps(["media-source-upload-v1", company_id, store_id, user_id, upload_id], separators=(",", ":"))
+        return "media_src_" + hashlib.sha256(scope.encode("utf-8")).hexdigest()
+
+    @contextmanager
+    def _company_write_lock(self, company_id: str):
+        """OS-owned lock covers this company's quota check and write, including legacy uploads.
+
+        Lock files deliberately persist: file existence never means lock ownership. Closing the
+        descriptor or terminating a process releases the lock on Windows and POSIX. Never unlink
+        the lock file, which could split concurrent callers onto different locked inodes.
+        """
+        lock_directory = self.root / ".source-upload-locks"
+        lock_directory.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_directory / (hashlib.sha256(company_id.encode("utf-8")).hexdigest() + ".lock")
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        deadline = time.monotonic() + 2.0
+        acquired = False
+        try:
+            if os.fstat(descriptor).st_size == 0:
+                try:
+                    os.write(descriptor, b"\0")  # Windows byte-range lock uses a stable first byte.
+                except OSError as exc:
+                    # Another creator can initialize and lock that byte after our size check.
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                        raise
+            while not acquired:
+                try:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise MediaSourceAssetError("upload_in_progress", "upload attempt is still being reconciled; query its receipt")
+                    time.sleep(0.02)
+            with self._lock:
+                yield
+        finally:
+            try:
+                if acquired:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
     def signed_url(self, asset_id: str, *, ttl_seconds: int = SIGNED_URL_TTL_SECONDS) -> str:
         if not self.signing_secret:

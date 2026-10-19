@@ -1896,6 +1896,9 @@
                     <small id="mediaDropHint">也可以直接从桌面拖入</small>
                   </div>
                 </section>
+                <label class="field-label" for="mediaIndependentProductName">本次商品名称（请按实物填写）</label>
+                <input id="mediaIndependentProductName" type="text" maxlength="120" autocomplete="off" placeholder="例如：两层抽屉收纳盒" aria-describedby="mediaIndependentProductNote">
+                <p id="mediaIndependentProductNote">只用于本次素材，不修改已有商品。未确认的材质、尺寸不推测；更换原图后需重新填写。</p>
               </section>
 
               <div class="media-workbench">
@@ -1920,6 +1923,7 @@
                       <span id="mediaFactLabel">本次要做</span>
                       <strong id="mediaFactTitle">等待主图、场景图、详情页和视频脚本需求</strong>
                       <p id="mediaFactNote">素材先作为草稿生成，不触发真实发布；缺图片授权、尺寸、重量、材质或包装信息时先停住。</p>
+                      <button class="secondary-action compact-action" id="mediaRecoverSourceButton" type="button">核对上次上传（不重传）</button>
                       <div class="media-flow-channel">
                         <button class="secondary-action compact-action" id="mediaProjectSourceButton" type="button" aria-describedby="mediaProjectSourceStatus">上传本商品来源图</button>
                         <p id="mediaProjectSourceStatus" role="status">选择实拍图或有权使用的供应商图片。保留当前商品和 Listing，上传后不会自动生图。</p>
@@ -2041,7 +2045,7 @@
                       <button class="media-template-card" type="button" data-media-template="scene" data-template-size="方图 1200×1200" data-template-count="4 张" data-template-type="只做场景图：家居 / 户外 / 使用场景" data-template-scene="家居/礼品/使用场景" data-template-video="不生成视频" data-template-note="适合测试购买场景，先生成 4 张候选图；不会自动产生视频费用。">
                         <span>场景</span><strong>场景种草</strong><small>4 张候选 · 默认不生成视频</small>
                       </button>
-                      <button class="media-template-card" type="button" data-media-template="detail" data-template-size="详情页长图 1200×1800" data-template-count="4 张" data-template-type="只做详情页：卖点长图 + 参数图 + FAQ 图" data-template-scene="详情页说明版式" data-template-video="不生成视频" data-template-note="适合补详情页，先生成 4 张卖点、参数、尺寸和常见问题候选图。">
+                      <button class="media-template-card" type="button" data-media-template="detail" data-template-size="详情页长图 1216×1824" data-template-count="4 张" data-template-type="只做详情页：卖点长图 + 参数图 + FAQ 图" data-template-scene="详情页说明版式" data-template-video="不生成视频" data-template-note="适合补详情页，先生成 4 张卖点、参数、尺寸和常见问题候选图。">
                         <span>详情</span><strong>详情页说明</strong><small>卖点 / 参数 / FAQ</small>
                       </button>
                     </div>
@@ -2080,11 +2084,11 @@
                         <option>eBay 主图 1600×1600</option>
                         <option>高清方图 2000×2000</option>
                         <option>方图 1200×1200</option>
-                        <option>4:5 商品图 1200×1500</option>
-                        <option>16:9 横版场景 1600×900</option>
-                        <option>9:16 视频封面 1080×1920</option>
-                        <option>详情页长图 1200×1800</option>
-                        <option>视频封面 1080×1920</option>
+                        <option>4:5 商品图 1216×1520</option>
+                        <option>16:9 横版场景 1536×864</option>
+                        <option>9:16 视频封面 1152×2048</option>
+                        <option>详情页长图 1216×1824</option>
+                        <option>视频封面 1152×2048</option>
                       </select>
                       <small>主图、详情页、封面分别生成，不混在一张图里</small>
                     </label>
@@ -2156,10 +2160,10 @@
                       <span>视频规格</span>
                       <select id="mediaVideoPresetSelect">
                         <option selected>不生成视频</option>
-                        <option>6 秒产品展示视频</option>
-                        <option>10 秒产品展示视频</option>
+                        <option value="6 秒产品展示视频" disabled>6 秒产品展示视频 · 尚未开放</option>
+                        <option value="10 秒产品展示视频" disabled>10 秒产品展示视频 · 尚未开放</option>
                       </select>
-                      <small>图片模板不会自动开启视频；单独的脚本按钮只生成文字脚本与分镜</small>
+                      <small>视频生成尚未开放，入口保留；当前可使用图片生成。脚本按钮只生成文字脚本与分镜，不是视频文件。</small>
                     </label>
                     <label>
                       <span>脚本语言</span>
@@ -3188,6 +3192,6 @@
       })();
     </script>
     <script src="./assets/jiejing-first-party-analytics.js?v=20261009-ops-measurement-v105"></script>
-    <script src="./app.js?v=20261005-quality-699d704f43e1"></script>
+    <script src="./app.js?v=20261005-quality-fc39fbb61ddc"></script>
 </body>
 </html>
