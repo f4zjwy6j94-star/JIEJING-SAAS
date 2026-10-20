@@ -416,20 +416,16 @@ def main() -> int:
     if unsafe_draft_result.get("status") != "buyer_copy_fact_boundary_blocked" or calls:
         return fail(f"draft adapter must block unverified compatibility before credential or eBay HTTP: {unsafe_draft_result}, calls={calls}")
 
+    from test_jiejing_ebay_execution_authority import claimed_legacy_adapter_case
+    request,connection,permit = claimed_legacy_adapter_case(OUT,'normal-publish',request)
+    preflight = ExecutionService(demo_mode=False).preflight(request)
     result = EbayWriteHttpAdapter(settings, transport=transport).publish_listing(
         request=request,
         preflight=preflight,
-        connections=[
-            {
-                "platform": "ebay",
-                "connection_type": "oauth",
-                "status": "publish_authorized",
-                "scopes": ["https://api.ebay.com/oauth/api_scope/sell.inventory"],
-                "secret_ref": "secret_ref_publish",
-            }
-        ],
-        secret_refs=[{"provider": "ebay", "purpose": "ebay_refresh_token", "secret_ref": "secret_ref_publish"}],
+        connections=[connection],
+        secret_refs=[],
         marketplace_id="EBAY_US",
+        execution_permit=permit,
     )
     if result.get("status") != "published_to_ebay":
         return fail(f"publish adapter should return published_to_ebay: {result}")
@@ -482,20 +478,15 @@ def main() -> int:
             )
         return 500, {"content-type": "application/json"}, b"{}"
 
+    request,connection,permit = claimed_legacy_adapter_case(OUT,'limited-publish',request)
+    preflight = ExecutionService(demo_mode=False).preflight(request)
     limit_result = EbayWriteHttpAdapter(settings, transport=publish_limit_transport).publish_listing(
         request=request,
         preflight=preflight,
-        connections=[
-            {
-                "platform": "ebay",
-                "connection_type": "oauth",
-                "status": "publish_authorized",
-                "scopes": ["https://api.ebay.com/oauth/api_scope/sell.inventory"],
-                "secret_ref": "secret_ref_publish",
-            }
-        ],
-        secret_refs=[{"provider": "ebay", "purpose": "ebay_refresh_token", "secret_ref": "secret_ref_publish"}],
+        connections=[connection],
+        secret_refs=[],
         marketplace_id="EBAY_US",
+        execution_permit=permit,
     )
     last_step = limit_result.get("steps", [{}])[-1]
     if limit_result.get("status") != "blocked_platform_error" or last_step.get("platform_error", {}).get("error_id") != 25002:
@@ -611,6 +602,7 @@ def main() -> int:
         decision="approve",
         decided_by=user["user_id"],
         note="unit datetime",
+        expected_access_epochs=repo.access_session_epochs(user_id=user["user_id"],company_id=user["default_company_id"]),
     )
     stored_execution = repo.save_execution_result(
         confirmation=confirmation,

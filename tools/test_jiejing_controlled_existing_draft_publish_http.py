@@ -25,6 +25,8 @@ from jiejing_saas.api_server import SaaSBackendHandler  # noqa: E402
 from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.repository import SaaSRepository, now_iso  # noqa: E402
 from jiejing_saas.security import SessionManager  # noqa: E402
+from jiejing_saas.ebay_execution_authority import scoped_credential, segment
+from test_jiejing_new_ebay_account_publish_http_chain import _seed_exact_draft_callback
 
 
 OFFER_ID = "245675556011"
@@ -136,14 +138,19 @@ class FakeExactPublishAdapter:
         credential_boundary: dict[str, Any],
         expected_offer_id: str,
         marketplace_id: str,
+        execution_permit: Any,
     ) -> dict[str, Any]:
         type(self).exact_call_count += 1
         type(self).last_request = json.loads(json.dumps(request.payload))
         if type(self).fail_before_provider_once:
             type(self).fail_before_provider_once = False
             raise TypeError("simulated_pre_provider_adapter_contract_failure")
+        execution_permit.admit(operation_index=0,method='POST',
+            path='/sell/inventory/v1/offer/'+segment(expected_offer_id)+'/publish',body={},
+            marketplace_id=marketplace_id,credential=scoped_credential(credential_boundary))
         if type(self).return_blocked_platform_once:
             type(self).return_blocked_platform_once = False
+            execution_permit.record(operation_index=0,result={'status':'http_error','http_status':400,'json':{}})
             return {
                 "status": "blocked_platform_error",
                 "action_type": "publish_listing",
@@ -179,6 +186,8 @@ class FakeExactPublishAdapter:
             raise AssertionError("exact publish adapter requires the backend credential boundary")
         if expected_offer_id != OFFER_ID or marketplace_id != "EBAY_US":
             raise AssertionError("exact publish adapter lost the Offer or marketplace binding")
+        execution_permit.record(operation_index=0,result={'status':'ok','http_status':200,
+            'json':{'listingId':'listing-controlled-http-001'}})
         return {
             "status": "published_to_ebay",
             "action_type": "publish_listing",
@@ -270,10 +279,6 @@ def main() -> int:
         TestHandler.settings = settings
         TestHandler.sessions = sessions
         TestHandler.ebay_write_adapter_factory = FakeExactPublishAdapter
-        repository.unpublished_draft_execution_credential_boundary = lambda **_kwargs: {  # type: ignore[method-assign]
-            "ready": True,
-            "secret_exposed": False,
-        }
         original_health_builder = api_server.build_account_health_snapshot
         api_server.build_account_health_snapshot = lambda *_args, **kwargs: {
             "contract_version": "controlled-publish-http-health-v1",
@@ -296,10 +301,12 @@ def main() -> int:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
-        token = sessions.create_token(user_id=user["user_id"], company_id=company_id, email=user["email"])
+        token = sessions.create_token(user_id=user["user_id"], company_id=company_id, email=user["email"],
+            access_epochs=repository.access_session_epochs(user_id=user['user_id'],company_id=company_id))
         intake_path = f"/stores/{store['store_id']}/existing-draft-publish-confirmation"
         intake_body = {"offer_id": OFFER_ID, "sku": SKU, "execution_id": SOURCE_EXECUTION_ID}
-        try:
+        def seed_saved_draft(store, source_execution_id):
+            _seed_exact_draft_callback(settings,repository,company_id=company_id,store_id=store['store_id'],user_id=user['user_id'])
             product_facts_status, product_facts = _post(
                 base_url,
                 f"/stores/{store['store_id']}/product-facts",
@@ -391,7 +398,7 @@ def main() -> int:
                     ) values (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        SOURCE_EXECUTION_ID,
+                        source_execution_id,
                         source_confirmation["confirmation_id"],
                         source_task_id,
                         "save_ebay_listing_draft",
@@ -400,6 +407,9 @@ def main() -> int:
                         json.dumps(result),
                     ),
                 )
+
+        try:
+            seed_saved_draft(store,SOURCE_EXECUTION_ID)
 
             with ThreadPoolExecutor(max_workers=2) as pool:
                 intake_results = list(pool.map(lambda _index: _post(base_url, intake_path, intake_body, token), range(2)))
@@ -457,8 +467,16 @@ def main() -> int:
                 {"platform": "ebay", "idempotency_key": "controlled-publish-http-001"},
                 token,
             )
-            if failed_status != 409 or failed_execution.get("error") != "external_execution_processing_manual_reconcile":
-                raise AssertionError(f"pre-provider exception must stop for read-only reconciliation: {failed_status} {failed_execution}")
+            if failed_status != 409 or failed_execution.get('execution_recovery',{}).get('zero_write_proven') is not True:
+                raise AssertionError(f"pre-provider failure must use durable zero-write recovery: {failed_status} {failed_execution}")
+            with repository._connect() as conn:
+                zero_row=dict(conn.execute('select * from confirmation_execution_authorities_v1 where confirmation_id=?',(confirmation_id,)).fetchone())
+            zero_graph=json.loads(zero_row['operation_state_json'])
+            if zero_row['admitted_at'] is not None or not all(op['status']=='planned' for op in zero_graph['operations']):
+                raise AssertionError('pre-provider recovery cannot rely on an exception label')
+            zero_confirmation=repository.get_confirmation(company_id=company_id,confirmation_id=confirmation_id)
+            for field in ('item','decided_at','decided_by','decision_note'):
+                if zero_confirmation[field]!=approval['confirmation'][field]: raise AssertionError('zero retirement changed approval history')
             recovery_status, recovery = _post(
                 base_url,
                 f"/confirmations/{confirmation_id}/publish-recovery",
@@ -474,10 +492,10 @@ def main() -> int:
                 and recovery.get("publish_readiness", {}).get("ready_for_confirmation") is True
                 and FakeExactPublishAdapter.recovery_call_count == 1
             ):
-                raise AssertionError(f"verified exact unpublished Offer must retire the uncertain confirmation: {recovery_status} {recovery}")
+                raise AssertionError(f"read-only recovery must project the already retired durable zero: {recovery_status} {recovery}")
             if _task_status(base_url, token, confirmation["task_id"]) != "needs_revision":
                 raise AssertionError("verified no-op recovery must retire the controlled publish task for revision")
-            replacement_status, replacement = _post(base_url, intake_path, intake_body, token)
+            replacement_status, replacement = _post(base_url, intake_path,{**intake_body,'replaces_confirmation_id':confirmation_id}, token)
             replacement_confirmation = replacement.get("confirmation") or {}
             replacement_id = str(replacement_confirmation.get("confirmation_id") or "")
             if not (
@@ -521,18 +539,18 @@ def main() -> int:
             )
             if not (
                 recorded_recovery_status == 201
-                and recorded_recovery.get("fresh_confirmation_required") is True
-                and recorded_recovery.get("publish_recovery", {}).get("safe_to_request_fresh_confirmation") is True
-                and recorded_recovery.get("confirmation", {}).get("status") == "needs_revision"
-                and recorded_recovery.get("publish_readiness", {}).get("status") == "ready_for_confirmation"
-                and recorded_recovery.get("publish_readiness", {}).get("ready_for_confirmation") is True
+                and recorded_recovery.get("fresh_confirmation_required") is False
+                and recorded_recovery.get("publish_recovery", {}).get("safe_to_request_fresh_confirmation") is False
+                and recorded_recovery.get("confirmation", {}).get("status") == "external_execution_processing_manual_reconcile"
+                and recorded_recovery.get('execution_recovery',{}).get('zero_write_proven') is False
+                and recorded_recovery.get('execution_recovery',{}).get('automatic_retry_allowed') is False
             ):
                 raise AssertionError(
-                    "official proof that a rejected publish created no Listing must retire the consumed confirmation: "
+                    "a GET showing UNPUBLISHED must not retire or replay an admitted HTTP400 outcome: "
                     f"{recorded_recovery_status} {recorded_recovery}"
                 )
-            if _task_status(base_url, token, replacement_confirmation["task_id"]) != "needs_revision":
-                raise AssertionError("recorded provider rejection must leave the controlled publish task ready for revision")
+            if _task_status(base_url, token, replacement_confirmation["task_id"]) != "manual_reconcile_required":
+                raise AssertionError("admitted provider uncertainty must leave the controlled task in reconciliation")
             with sqlite3.connect(root / "saas.sqlite") as conn:
                 conn.execute(
                     "update tasks set status = 'queued' where task_id = ?",
@@ -550,15 +568,23 @@ def main() -> int:
                 ),
                 None,
             )
-            if not failed_publish_change or failed_publish_change.get("to_status") != "needs_revision":
+            if not failed_publish_change or failed_publish_change.get("to_status") != "manual_reconcile_required":
                 raise AssertionError(
                     "reconciliation must not mistake a recorded provider rejection for a completed publish: "
                     f"{stale_failed_publish}"
                 )
             repository.reconcile_confirmation_managed_tasks(apply=True, company_id=company_id)
-            if _task_status(base_url, token, replacement_confirmation["task_id"]) != "needs_revision":
-                raise AssertionError("reconciliation must restore failed controlled publish tasks for revision")
-            final_intake_status, final_intake = _post(base_url, intake_path, intake_body, token)
+            if _task_status(base_url, token, replacement_confirmation["task_id"]) != "manual_reconcile_required":
+                raise AssertionError("task reconciliation must not unlock the unknown provider outcome")
+            blocked_retry_status,_=_post(base_url,intake_path,{**intake_body,'replaces_confirmation_id':replacement_id},token)
+            if blocked_retry_status!=409 or FakeExactPublishAdapter.exact_call_count!=2:
+                raise AssertionError('a new confirmation ID cannot replay the unresolved same Offer')
+            control_store=repository.create_store(company_id=company_id,user_id=user['user_id'],
+                payload={'platform':'ebay','store_name':'Independent positive control','marketplace':'EBAY_US'})
+            seed_saved_draft(control_store,SOURCE_EXECUTION_ID+'-independent')
+            final_intake_status, final_intake = _post(base_url,
+                f"/stores/{control_store['store_id']}/existing-draft-publish-confirmation",
+                {**intake_body,'execution_id':SOURCE_EXECUTION_ID+'-independent'},token)
             final_confirmation = final_intake.get("confirmation") or {}
             final_confirmation_id = str(final_confirmation.get("confirmation_id") or "")
             if not (
@@ -567,7 +593,7 @@ def main() -> int:
                 and final_confirmation_id not in {confirmation_id, replacement_id}
                 and final_confirmation.get("status") == "pending"
             ):
-                raise AssertionError(f"recorded no-op recovery must require one fresh confirmation: {final_intake_status} {final_intake}")
+                raise AssertionError(f"independent valid resource must still get a new pending confirmation: {final_intake_status} {final_intake}")
             final_approval_status, final_approval = _post(
                 base_url,
                 f"/confirmations/{final_confirmation_id}/decision",

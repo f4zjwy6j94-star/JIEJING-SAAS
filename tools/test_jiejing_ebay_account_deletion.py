@@ -336,8 +336,11 @@ def main() -> int:
         public_connection = json.dumps(connection, ensure_ascii=False)
         if any(key in public_connection for key in ("ebay_user_id_hash", "ebay_username_hash", "ebay_eias_identity_hash")):
             return fail("public connection response should not expose internal identity selectors")
-        first = repository.accept_ebay_account_deletion_event(event=normalized)
-        duplicate = repository.accept_ebay_account_deletion_event(event=normalized)
+        # This synthetic normalized notification has completed the verifier
+        # contract tested above; queue flags alone must not confer authority.
+        verified_event = {"verified": True, "status": "verified"}
+        first = repository.accept_ebay_account_deletion_event(event=normalized, verification=verified_event)
+        duplicate = repository.accept_ebay_account_deletion_event(event=normalized, verification=verified_event)
         if first.get("status") != "queued" or first.get("connection_id") not in {
             connection["connection_id"], duplicate_connection["connection_id"]
         }:
@@ -371,7 +374,7 @@ def main() -> int:
         if not retry_job or retry_job.get("status") != "queued" or retry_job.get("attempts") != 1:
             return fail(f"account deletion retry should preserve attempt accounting: {retry_job}")
         tampered = {**normalized, "payload_sha256": "f" * 64}
-        conflict = repository.accept_ebay_account_deletion_event(event=tampered)
+        conflict = repository.accept_ebay_account_deletion_event(event=tampered, verification=verified_event)
         if conflict.get("status") != "idempotency_conflict":
             return fail("same notification id with a different payload should be quarantined")
 
@@ -451,7 +454,7 @@ def main() -> int:
             "username_hash": "c" * 64,
             "eias_identity_hash": "d" * 64,
         }
-        no_match = repository.accept_ebay_account_deletion_event(event=unknown)
+        no_match = repository.accept_ebay_account_deletion_event(event=unknown, verification=verified_event)
         if no_match.get("status") != "completed_no_matching_connection" or no_match.get("job_id"):
             return fail(f"unknown eBay identity should not enqueue a destructive task: {no_match}")
 

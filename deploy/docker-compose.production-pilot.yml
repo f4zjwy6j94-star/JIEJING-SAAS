@@ -282,6 +282,18 @@ services:
       JIEJING_ACME_EMAIL: "${JIEJING_ACME_EMAIL:?set the production ACME contact}"
     volumes:
       - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - type: bind
+        source: /opt/pindd/shared-ingress
+        target: /etc/pindd-ingress
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/pindd/staging/notify-socket
+        target: /run/pindd-notify
+        read_only: true
+        bind:
+          create_host_path: false
       - jiejing_caddy_data:/data
       - jiejing_caddy_config:/config
     logging: *jiejing-logging

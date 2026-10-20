@@ -32,6 +32,7 @@ TABLE_ORDER = (
     "user_refresh_token_history",
     "user_sessions",
     "team_members",
+    "access_revocation_epochs",
     "team_invitations",
     "stores",
     "ai_ceo_chat_turns",
@@ -48,6 +49,9 @@ TABLE_ORDER = (
     "listing_draft_edit_heads",
     "listing_draft_edit_revisions",
     "confirmations",
+    "confirmation_approval_authorities_v1",
+    "confirmation_execution_authorities_v1",
+    "external_execution_claims",
     "execution_results",
     "audit_logs",
     "platform_analytics_events",
@@ -75,6 +79,7 @@ JSON_COLUMNS = {
     "report_json",
     "receipt_json",
     "item_json",
+    "binding_json",
     "result_json",
     "audit_json",
     "analytics_json",
@@ -131,18 +136,43 @@ def generate_rehearsal(
 
     with sqlite3.connect(sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
+        # All epochs, pointers and receipts must describe one source snapshot.
+        conn.execute('begin')
         existing_tables = _table_names(conn)
         export_tables = [table for table in TABLE_ORDER if table in existing_tables]
         missing_tables = [table for table in TABLE_ORDER if table not in existing_tables]
         table_counts: dict[str, int] = {}
         json_column_count = 0
         lines = _sql_header(sqlite_path=sqlite_path, schema_path=schema_path)
+        pointer_rows = []
         for table in export_tables:
             columns = _table_columns(conn, table)
             json_column_count += len([column for column in columns if column in JSON_COLUMNS])
             rows = _table_rows(conn, table=table, columns=columns)
             table_counts[table] = len(rows)
+            if table == 'confirmations' and 'approval_authority_id' in columns:
+                pointer_rows = [dict(row) for row in rows]
+                # Break only the current-pointer cycle; immutable history is
+                # imported unchanged next, then the exact projection restored.
+                rows = [{**row,'approval_authority_id':None} for row in pointer_rows]
             lines.extend(_table_insert_sql(table=table, columns=columns, rows=rows))
+            if table in {'access_revocation_epochs','confirmation_approval_authorities_v1',
+                         'confirmation_execution_authorities_v1','external_execution_claims'}:
+                # ON CONFLICT is not permission to merge different histories.
+                # A mismatch raises division-by-zero inside this transaction.
+                lines.extend(_exact_row_guards(table,columns,rows))
+        lines.append('-- Restore current approval pointers after immutable receipts.')
+        for row in pointer_rows:
+            columns = list(row)
+            # Guard the existing parent before updating any current projection.
+            lines.extend(_exact_row_guards('confirmations',[c for c in columns if c!='approval_authority_id'],[row]))
+            pointer = _pg_literal(row['approval_authority_id'],column='approval_authority_id')
+            company = _pg_literal(row['company_id'],column='company_id')
+            confirmation = _pg_literal(row['confirmation_id'],column='confirmation_id')
+            lines.append('update "confirmations" set "approval_authority_id"='+pointer+
+                ' where "company_id"='+company+' and "confirmation_id"='+confirmation+
+                ' and ("approval_authority_id" is null or "approval_authority_id" is not distinct from '+pointer+');')
+            lines.extend(_exact_row_guards('confirmations',columns,[row]))
         lines.append("commit;")
         lines.append("")
 
@@ -165,6 +195,7 @@ def generate_rehearsal(
         "missing_tables": missing_tables,
         "json_column_count": json_column_count,
         "import_mode": "append_with_on_conflict_do_nothing",
+        "authority_import_contract": "exact_history_and_epochs_then_current_pointer_v1",
         "raw_rows_printed": False,
         "secret_exposed": False,
         "real_platform_writes_enabled": False,
@@ -200,7 +231,7 @@ def _table_rows(conn: sqlite3.Connection, *, table: str, columns: list[str]) -> 
     ).fetchall()
 
 
-def _table_insert_sql(*, table: str, columns: list[str], rows: list[sqlite3.Row]) -> list[str]:
+def _table_insert_sql(*, table: str, columns: list[str], rows: list[Any]) -> list[str]:
     if not rows:
         return [f"-- {table}: 0 rows"]
     column_sql = ", ".join(_quote_pg_identifier(column) for column in columns)
@@ -209,6 +240,15 @@ def _table_insert_sql(*, table: str, columns: list[str], rows: list[sqlite3.Row]
         value_sql = ", ".join(_pg_literal(row[column], column=column) for column in columns)
         lines.append(f"insert into {_quote_pg_identifier(table)} ({column_sql}) values ({value_sql}) on conflict do nothing;")
     return lines
+
+
+def _exact_row_guards(table: str, columns: list[str], rows: list[Any]) -> list[str]:
+    # Do not put merchant strings inside a dollar-quoted DO body. Ordinary
+    # escaped literals and typed column comparisons keep this offline export
+    # safe even when a stored value itself contains $$ or SQL-looking text.
+    return ['select 1 / count(*) from '+_quote_pg_identifier(table)+' where '+
+        ' and '.join(_quote_pg_identifier(column)+' is not distinct from '+_pg_literal(row[column],column=column)
+                     for column in columns)+';' for row in rows]
 
 
 def _sql_header(*, sqlite_path: Path, schema_path: Path) -> list[str]:

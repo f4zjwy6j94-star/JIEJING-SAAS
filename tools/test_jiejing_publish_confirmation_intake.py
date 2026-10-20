@@ -633,7 +633,7 @@ def wait_for_health(base_url: str) -> int:
 
 def fetch_json(url: str, *, token: str | None = None) -> dict[str, Any]:
     request = urllib.request.Request(url, headers=_headers(token))
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read().decode("utf-8"))
 
 

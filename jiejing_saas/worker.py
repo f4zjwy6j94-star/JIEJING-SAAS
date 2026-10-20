@@ -415,6 +415,19 @@ class LocalQueueWorker:
         connection_id = str(job_body.get("connection_id") or "")
         if job_body.get("signature_verified") is not True or not event_key or not connection_id:
             raise ValueError("eBay account deletion job is missing verified identity")
+        permit = self.repository.claim_ebay_account_deletion_processing(
+            event_key=event_key, company_id=task['company_id'], store_id=task['store_id'],
+            connection_id=connection_id, task_id=task['task_id'], job_id=job['job_id'])
+        if permit['phase'] == 'completed':
+            return {'status':'completed','account_deletion':permit['result'],'duplicate':True,
+                    'real_platform_writes_enabled':False,'secret_exposed':False}
+        token = permit['processing_token']
+        def advance(before, after):
+            self.repository.advance_ebay_account_deletion_processing(event_key=event_key,
+                company_id=task['company_id'],processing_token=token,expected_phase=before,phase=after)
+        # The external phases are not replayed after an uncertain crash. A
+        # completed asset phase may resume the remaining database transaction.
+        resume_database_only = permit['phase'] == 'assets_purged'
         connections = self.repository.list_connections(company_id=task["company_id"], store_id=task["store_id"])
         connection = next((item for item in connections if item.get("connection_id") == connection_id), None)
         if not connection:
@@ -422,7 +435,9 @@ class LocalQueueWorker:
         ebay_connections = [item for item in connections if str(item.get("platform") or "").lower() == "ebay"]
         secret_ref_ids = sorted({str(item.get("secret_ref") or "") for item in ebay_connections if item.get("secret_ref")})
         revocations: list[dict[str, Any]] = []
-        for secret_ref_id in secret_ref_ids:
+        if not resume_database_only:
+            advance('claimed','revocation_started')
+        for secret_ref_id in ([] if resume_database_only else secret_ref_ids):
             secret_ref = self.repository.get_secret_ref(
                 company_id=task["company_id"],
                 store_id=task["store_id"],
@@ -438,15 +453,18 @@ class LocalQueueWorker:
             if revocation.get("status") != "revoked":
                 raise RuntimeError("eBay credential revocation did not complete")
             revocations.append(revocation)
-        media_purge = (
-            self.media_source_asset_store.purge_store(company_id=task["company_id"], store_id=task["store_id"])
-            if self.media_source_asset_store is not None
-            else {"status": "not_configured", "secret_exposed": False}
-        )
+        media_purge = {'status':'previously_completed' if resume_database_only else 'not_configured','secret_exposed':False}
+        if not resume_database_only:
+            advance('revocation_started','credentials_revoked')
+            advance('credentials_revoked','purge_started')
+            if self.media_source_asset_store is not None:
+                media_purge = self.media_source_asset_store.purge_store(company_id=task['company_id'],store_id=task['store_id'])
+            advance('purge_started','assets_purged')
         result = self.repository.process_ebay_account_deletion_event(
             event_key=event_key,
             company_id=task["company_id"],
             connection_id=connection_id,
+            processing_token=token,
         )
         self.repository.write_audit(
             company_id=task["company_id"],

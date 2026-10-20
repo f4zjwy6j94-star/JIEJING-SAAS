@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import json
 import re
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -397,6 +398,8 @@ def build_owner_launch_control(
             backup=backup, operational=operational, edge=edge, readiness=readiness,
             release_evidence=fixed_progress_release_evidence,
             frontend_version=_current_frontend_asset_version(),
+            runtime_build=_read_ops_release_file(Path(__file__).resolve().parents[1] / "JIEJING_RUNTIME_BUILD.safe.json"),
+            deployment_receipt=_read_ops_release_file(Path("/run/jiejing-production-evidence/deployment.safe.json")),
         ),
         "safety": {
             "owner_admin_only": True,
@@ -417,9 +420,34 @@ def build_owner_launch_control(
     }
 
 
+def _read_ops_release_file(path: Path) -> dict[str, Any]:
+    """Read a small deployment-owned file; never expose paths or raw errors."""
+    try:
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 4096:
+            return {}
+        if os.name != "nt" and (metadata.st_uid != 0 or metadata.st_mode & 0o022):
+            return {}
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            opened = os.fstat(stream.fileno())
+            if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
+                return {}
+            if not stat.S_ISREG(opened.st_mode) or opened.st_size > 4096 or (os.name != "nt" and (opened.st_uid != 0 or opened.st_mode & 0o022)):
+                return {}
+            raw = stream.read(4097)
+            if len(raw) > 4096:
+                return {}
+            value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, UnicodeError):
+        return {}
+
+
 def build_ops_console_evidence(
     *, backup: dict[str, Any], operational: dict[str, Any], edge: dict[str, Any],
     readiness: dict[str, Any], release_evidence: dict[str, Any], frontend_version: str,
+    runtime_build: dict[str, Any] | None = None, deployment_receipt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project existing probes only; never infer a live deployment from local artifacts.
 
@@ -452,6 +480,18 @@ def build_ops_console_evidence(
     worker, queue = obj(operational.get("worker_runtime")), obj(operational.get("queue_runtime"))
     backup_flag = flag(backup.get("backup_ready_for_paid_launch"))
     items = readiness.get("items") if isinstance(readiness.get("items"), list) else []
+    build, deployed = obj(runtime_build), obj(deployment_receipt)
+    source_commit = build.get("source_commit", "")
+    if build.get("contract_version") != "jiejing_runtime_build_v1" or not isinstance(source_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        source_commit = ""
+    verified_at = stamp(deployed.get("verified_at"))
+    applied_matches = bool(
+        source_commit and deployed.get("contract_version") == "jiejing_applied_release_v1"
+        and deployed.get("source_commit") == source_commit
+        and deployed.get("applied") is True and deployed.get("public_health_verified") is True
+        and deployed.get("secret_exposed") is False and verified_at
+        and datetime.fromisoformat(verified_at).timestamp() <= datetime.now(timezone.utc).timestamp() + 300
+    )
     return {
         "contract_version": "2026-10-09-ops-evidence-v1",
         "backup": {
@@ -487,7 +527,11 @@ def build_ops_console_evidence(
         "release": {
             "frontend_asset_version": code(frontend_version, ""),
             "version_bound_evidence": bool(frontend_version and obj(release_evidence).get("frontend_asset_version") == frontend_version and obj(release_evidence).get("browser_smoke_passed") is True),
-            "production_deployment_status": "not_connected",
+            "source_commit": source_commit,
+            "production_deployment_status": "ready" if applied_matches else "not_connected",
+            "deployment_verified_at": verified_at if applied_matches else "",
+            "runtime_build_identity_connected": bool(source_commit),
+            "receipt_matches_running_build": applied_matches,
             "scope": "current_code_identity_and_version_bound_historical_evidence",
         },
         "secret_exposed": False,

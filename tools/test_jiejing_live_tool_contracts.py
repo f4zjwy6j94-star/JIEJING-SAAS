@@ -73,7 +73,9 @@ class FakeFalMediaAdapter(MediaGenerationAdapter):
             raise AssertionError(f"FAL provider should build current gpt-image-2 endpoint, got {endpoint}")
         if authorization != "Key unit-id:unit-secret":
             raise AssertionError("FAL provider should use Key authorization in memory only")
-        if not (1 <= payload.get("num_images", 0) <= 4) or payload.get("image_size") != "square_hd" or payload.get("quality") != "low":
+        # The default request is 1600x1600: accepting square_hd here used to
+        # conceal the 1024px downgrade. Require those exact requested pixels.
+        if not (1 <= payload.get("num_images", 0) <= 4) or payload.get("image_size") != {"width": 1600, "height": 1600} or payload.get("quality") != "low":
             raise AssertionError(f"FAL provider should send gpt-image-2 payload shape, got {payload}")
         self.calls.append(payload)
         return {

@@ -47,6 +47,8 @@ class SaaSSettings:
     db_path: Path
     runtime_db_path: Path
     output_root: Path
+    support_cache_workspace_enabled: bool = False
+    support_message_read_enabled: bool = False
 
     @classmethod
     def from_env(
@@ -102,6 +104,8 @@ class SaaSSettings:
             db_path=db_path,
             runtime_db_path=runtime_db_path,
             output_root=output_root,
+            support_cache_workspace_enabled=_env_bool("JIEJING_SUPPORT_CACHE_WORKSPACE_ENABLED", default=False),
+            support_message_read_enabled=_env_bool("JIEJING_SUPPORT_MESSAGE_READ_ENABLED", default=False),
         )
 
     @property
@@ -197,6 +201,9 @@ class SaaSSettings:
             "ebay_draft_save_live_enabled": self.ebay_draft_save_live_enabled,
             "ebay_controlled_publish_live_enabled": self.ebay_controlled_publish_live_enabled,
             "allow_hermes_adapters": self.allow_hermes_adapters,
+            # Cache/draft access is not live message-read or send permission.
+            "support_cache_workspace_enabled": self.support_cache_workspace_enabled,
+            "support_message_read_enabled": self.support_message_read_enabled,
             "internal_admin_allowlist_configured": bool(self.internal_admin_emails),
             "cors_origin_configured": bool(self.cors_origin),
             "cors_allows_wildcard": self.cors_allows_wildcard,

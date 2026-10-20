@@ -98,7 +98,8 @@ from .ebay_read_contract import build_field_contract_catalog
 from .ebay_read_normalizers import normalizer_catalog
 from .ebay_read_adapter import EbayReadOnlyAdapter
 from .ebay_token_refresh_adapter import EbayVaultTokenRefreshAdapter, public_token_refresh_result
-from .ebay_write_adapter import EbayWriteHttpAdapter, build_ebay_write_adapter_contract, build_publish_readiness
+from .ebay_write_adapter import EbayWriteHttpAdapter, build_ebay_write_adapter_contract, build_publish_readiness, build_ebay_execution_plan
+from .ebay_execution_authority import EbayExecutionDenied, EXECUTION_DENIAL_CODES
 from .independence import build_independence_status
 from .infrastructure_drivers import build_infrastructure_driver_status
 from .media_asset_pipeline import (
@@ -201,6 +202,7 @@ from .readiness import (
     build_product_readiness_or_degraded,
 )
 from .repository import (
+    SessionAccessRevoked,
     ACTIVE_SECRET_REF_STATUSES,
     CONTROLLED_MEDIA_CREDIT_SOURCE,
     OWNER_MEDIA_TESTING_SOURCE,
@@ -221,6 +223,7 @@ from .repository import (
 )
 from .runtime_bridge import RuntimeBridge
 from .security import SessionManager
+from .support_application import SupportActorContext, SupportApplication
 from .secret_store import SecretStoreBoundary
 from .staging_security_gate import build_controlled_staging_security_gate
 from .task_secret_grants import build_task_secret_grant_plan
@@ -301,6 +304,25 @@ PLATFORM_MODEL_TRIAL_DEFAULT_DURATION_DAYS = 7
 PLATFORM_TRIAL_ACTIVATION_WINDOW_SECONDS = 24 * 60 * 60
 PLATFORM_TRIAL_ACTIVATION_MAX_PER_IP_DEFAULT = 3
 PLATFORM_TRIAL_ACTIVATION_MAX_GLOBAL_DEFAULT = 200
+
+# Only these exact domain denials have a merchant recovery contract. In
+# particular, a similarly prefixed PermissionError from a dependency or a
+# programming fault must retain the existing exception handling path.
+_EBAY_RECOVERY_DENIAL_CODES = frozenset({
+    'approval_authority_missing_reapproval_required',
+    'approval_authority_binding_changed_reapproval_required',
+    'approval_authority_changed_reapproval_required',
+    'execution_request_authority_required', 'execution_request_authority_changed',
+    'execution_store_deletion_in_progress', 'execution_confirmation_scope_changed',
+    'ebay_execution_plan_required', 'ebay_execution_plan_binding_changed',
+    'ebay_execution_credential_changed', 'ebay_execution_permit_required',
+    'ebay_execution_preparation_expired', 'external_execution_confirmation_not_fresh',
+    'ebay_execution_attempt_already_recorded', 'ebay_execution_prior_outcome_unresolved',
+    'ebay_execution_target_invalid', 'ebay_execution_plan_action_unsupported',
+    'ebay_draft_preparation_plan_required', 'cleanup_plan_invalid', 'cleanup_plan_duplicate_operation',
+    'ebay_reapproval_backend_link_required', 'ebay_reapproval_confirmation_not_found',
+    'ebay_reapproval_scope_changed', 'ebay_reapproval_zero_write_required',
+})
 
 
 def _ai_ceo_chat_request_fingerprint(
@@ -1495,6 +1517,8 @@ class SaaSBackendServer:
             )
         )
         secret_store = SecretStoreBoundary(backend_settings)
+        support_workspace = SupportApplication(repo, enabled=backend_settings.support_cache_workspace_enabled,
+            sync_enabled=backend_settings.support_message_read_enabled, settings=backend_settings)
         ebay_oauth = EbayOAuthPlanner(backend_settings)
         ebay_read = EbayReadOnlyAdapter(backend_settings)
         ebay_live_read_plan = EbayLiveReadPlanBuilder(backend_settings)
@@ -1542,6 +1566,7 @@ class SaaSBackendServer:
             runtime_bridge = bridge
             queue_worker = worker_runtime
             secret_store_boundary = secret_store
+            support_application = support_workspace
             ebay_oauth_planner = ebay_oauth
             ebay_read_adapter = ebay_read
             ebay_live_read_plan_builder = ebay_live_read_plan
@@ -2524,6 +2549,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
     ebay_account_deletion_signature_verifier: EbayNotificationSignatureVerifier
     media_source_asset_store: MediaSourceAssetStore
     settings: SaaSSettings
+    support_application: SupportApplication
     ebay_write_adapter_factory = EbayWriteHttpAdapter
     repository_startup_error: Exception | None = None
     auth_rate_limit_lock = threading.Lock()
@@ -2702,6 +2728,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if identity is None:
             return
 
+        if len(parts) >= 3 and parts[0] == "stores" and parts[2] == "support":
+            self._handle_support_get(identity, parts, parse_qs(parsed.query, keep_blank_values=True))
+            return
+
         if path == "media/capabilities":
             self._send_json(
                 {
@@ -2713,6 +2743,65 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     }
                 }
             )
+            return
+
+        if (len(parts) == 5 and parts[0] == "stores" and parts[2] == "media-asset-jobs"
+                and parts[4] == "source"):
+            if not self._require_permission(identity, "create_task"):
+                return
+            store_id, job_id = parts[1], parts[3]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            job = self.repository.get_media_asset_job(company_id=identity["company_id"], media_job_id=job_id) if store else None
+            if not job or job.get("store_id") != store_id or job.get("created_by") != identity["user_id"]:
+                self._send_error(HTTPStatus.NOT_FOUND, "media job not found or not accessible")
+                return
+            # Stored/legacy job JSON is not trusted to be structurally valid.
+            # Recover only one exact backend-owned source, never a coerced id.
+            facts = job.get("job")
+            for key in ("job_spec", "inputs", "product_facts"):
+                facts = facts.get(key) if type(facts) is dict else None
+            source_id = facts.get("source_asset_id") if type(facts) is dict else None
+            if type(source_id) is not str or not source_id:
+                self._send_error(HTTPStatus.NOT_FOUND, "media job source not available")
+                return
+            try:
+                asset, source_url, upload_id = self.media_source_asset_store.recover_owned_asset(
+                    company_id=identity["company_id"], store_id=store_id, user_id=identity["user_id"],
+                    asset_id=source_id)
+            except MediaSourceAssetError as exc:
+                status = {"upload_not_found": HTTPStatus.NOT_FOUND, "asset_expired": HTTPStatus.GONE,
+                    "asset_integrity_failed": HTTPStatus.GONE, "asset_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+                    "signing_unavailable": HTTPStatus.SERVICE_UNAVAILABLE}.get(exc.code, HTTPStatus.BAD_REQUEST)
+                self._send_json({"error": str(exc), "code": exc.code, "secret_exposed": False}, status=status)
+                return
+            self._send_json({"media_job_id": job_id, "upload_id": upload_id, "upload_status": "completed",
+                "media_source_asset": asset.public_dict(source_url=source_url), "provider_reference_ready": True,
+                "requires_asset_review": True, "real_platform_writes_enabled": False, "secret_exposed": False})
+            return
+
+        if len(parts) == 4 and parts[0] == "stores" and parts[2] == "media-source-uploads":
+            if not self._require_permission(identity, "create_task"):
+                return
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            upload_id = parts[3]
+            try:
+                asset, source_url = self.media_source_asset_store.get_by_upload_id(
+                    company_id=identity["company_id"], store_id=store_id, user_id=identity["user_id"], upload_id=upload_id)
+            except MediaSourceAssetError as exc:
+                status = {"upload_not_found": HTTPStatus.NOT_FOUND, "asset_expired": HTTPStatus.GONE,
+                    "signing_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+                    "asset_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+                    "upload_receipt_incomplete": HTTPStatus.SERVICE_UNAVAILABLE,
+                    "asset_integrity_failed": HTTPStatus.GONE}.get(exc.code, HTTPStatus.BAD_REQUEST)
+                self._send_json({"error": str(exc), "code": exc.code, "secret_exposed": False}, status=status)
+                return
+            self._send_json({"upload_id": upload_id, "upload_status": "completed",
+                "media_source_asset": asset.public_dict(source_url=source_url), "provider_reference_ready": True,
+                "requires_asset_review": True, "real_platform_writes_enabled": False, "secret_exposed": False})
             return
 
         if path == "independence/status":
@@ -3712,11 +3801,105 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         self._send_error(HTTPStatus.NOT_FOUND, "endpoint not found")
 
+    def _handle_support_get(self, identity: dict[str, Any], parts: list[str], query: dict[str, list[str]]) -> None:
+        # Authentication/session maintenance above remains unchanged; only this
+        # new business GET uses the facade's no-DDL/no-network cache path.
+        context = SupportActorContext(identity["user_id"], identity["company_id"], parts[1])
+        try:
+            if parts[3:] == ["capability"] and not query:
+                result = self.support_application.capability(context)
+            elif parts[3:] == ["conversations"] and set(query) <= {"limit", "offset"}:
+                if any(len(values) != 1 or not re.fullmatch(r"[0-9]{1,5}", values[0]) for values in query.values()):
+                    raise ValueError("invalid_support_pagination")
+                result = self.support_application.list_conversations(context,
+                    limit=int(query.get("limit", ["25"])[0]), offset=int(query.get("offset", ["0"])[0]))
+            elif len(parts) == 5 and parts[3] == "conversations" and set(query) <= {"limit", "offset"}:
+                if any(len(values) != 1 or not re.fullmatch(r"[0-9]{1,10}", values[0]) for values in query.values()):
+                    raise ValueError("invalid_support_pagination")
+                result = self.support_application.get_conversation(context, parts[4],
+                    limit=int(query.get("limit", ["50"])[0]), offset=int(query.get("offset", ["0"])[0]))
+            elif query:
+                raise ValueError("support_query_not_allowed")
+            else:
+                self._send_error(HTTPStatus.NOT_FOUND, "support endpoint not found")
+                return
+            kind = "conversations" if parts[3:] == ["conversations"] else "conversation" if len(parts) == 5 else "capability"
+            self._send_support_json(result, kind=kind)
+        except Exception as exc:
+            self._send_support_exception(exc)
+
+    def _send_support_exception(self, exc: Exception) -> None:
+        # Never echo provider/SQLite exception text or raw request fields.
+        if isinstance(exc, PermissionError):
+            self._send_error(HTTPStatus.FORBIDDEN, "support access not authorized")
+        elif isinstance(exc, KeyError):
+            self._send_error(HTTPStatus.NOT_FOUND, "support record not found")
+        elif isinstance(exc, ValueError) and str(exc) in {
+            "draft_revision_conflict", "source_message_already_claimed", "attempted_draft_is_immutable",
+            "complete_current_snapshot_required", "source_message_not_in_current_snapshot", "incoming_source_message_required",
+        }:
+            self._send_error(HTTPStatus.CONFLICT, "support state conflict; refresh before retrying")
+        elif isinstance(exc, ValueError):
+            self._send_error(HTTPStatus.BAD_REQUEST, "invalid support request")
+        else:
+            self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "support workspace unavailable")
+
+    def _send_support_json(self, result: Any, *, kind: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+        # This is a positive, typed DTO, not an exemption for arbitrary backend
+        # data. Original message/identifier bytes must match the canonical draft
+        # and its confirmation hash. Credential-like text fails closed instead
+        # of silently displaying a different body under the canonical hash.
+        try:
+            projected = _support_http_public_dto(result, kind)
+        except (TypeError, ValueError, KeyError, UnicodeError):
+            raise RuntimeError("support_public_projection_invalid") from None
+        self._write_json({"support": projected}, status=status)
+
+    def _handle_support_post(self, identity: dict[str, Any], parts: list[str], query: dict[str, list[str]]) -> None:
+        # The existing mutation Origin check and authentication have already run.
+        # Workspace enablement never injects a live resolver or enables sync/send.
+        context = SupportActorContext(identity["user_id"], identity["company_id"], parts[1])
+        if query:
+            self._send_error(HTTPStatus.BAD_REQUEST, "support query not allowed")
+            return
+        content_type = str(self.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "support request must be application/json")
+            return
+        body = self._read_json_body()
+        try:
+            status = HTTPStatus.OK
+            if parts[3:] == ["drafts"]:
+                result = self.support_application.create_draft(context, body)
+                status = HTTPStatus.CREATED
+            elif len(parts) == 6 and parts[3] == "drafts" and parts[5] == "edit":
+                result = self.support_application.edit_draft(context, parts[4], body)
+            elif len(parts) == 6 and parts[3] == "drafts" and parts[5] == "confirmation-preview":
+                if body:
+                    raise ValueError("support_preview_body_not_allowed")
+                result = self.support_application.preview_confirmation(context, parts[4])
+            elif parts[3:] == ["sync"]:
+                result = self.support_application.sync(context, body)
+            elif parts[3:] == ["discover"]:
+                result = self.support_application.discover(context, body)
+            else:
+                self._send_error(HTTPStatus.NOT_FOUND, "support endpoint not found")
+                return
+            if result.get("status") == "blocked":
+                status = HTTPStatus.CONFLICT
+            kind = ("preview" if parts[-1] == "confirmation-preview" else "conversation" if parts[3:] == ["sync"]
+                    else "discovery" if parts[3:] == ["discover"] else "draft")
+            self._send_support_json(result, kind=kind, status=status)
+        except Exception as exc:
+            self._send_support_exception(exc)
+
     def do_POST(self) -> None:  # noqa: N802
         try:
             self._handle_post()
         except RequestBodyError as exc:
             self._send_error(exc.status, exc.message)
+        except SessionAccessRevoked:
+            self._send_error(HTTPStatus.UNAUTHORIZED, "session_access_revoked")
         except Exception as exc:
             recover_ai_ceo_attempt = getattr(self, "_active_ai_ceo_attempt_recovery", None)
             if callable(recover_ai_ceo_attempt):
@@ -3794,8 +3977,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not self._check_auth_rate_limit(path, {"email": email}):
                 return
             created = False
+            authentication_epochs = {"user_epoch": 0, "member_epoch": 0}
             try:
-                user = self.repository.authenticate_user(email=email, password=password)
+                user, authentication_epochs = self.repository.authenticate_user_for_session(email=email, password=password)
                 company = self.repository.get_company(user["default_company_id"])
             except ValueError:
                 try:
@@ -3810,6 +3994,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 user_id=user["user_id"],
                 company_id=user["default_company_id"],
                 email=user["email"],
+                expected_access_epochs=authentication_epochs,
             )
             self._send_json(
                 {
@@ -3840,6 +4025,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     user_id=user["user_id"],
                     company_id=user["default_company_id"],
                     email=user["email"],
+                    expected_access_epochs={"user_epoch": 0, "member_epoch": 0},
                 )
                 requested_plan = str(body.get("plan_key") or "free").strip().lower()
                 if requested_plan == "free":
@@ -3907,6 +4093,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             except sqlite_unique_error() as exc:
                 self._send_error(HTTPStatus.CONFLICT, "account registration could not be completed")
                 return
+            except SessionAccessRevoked:
+                raise
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
@@ -3931,7 +4119,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not self._check_auth_rate_limit("auth/login", body):
                 return
             try:
-                user = self.repository.authenticate_user(
+                user, authentication_epochs = self.repository.authenticate_user_for_session(
                     email=str(body.get("email") or ""),
                     password=str(body.get("password") or ""),
                 )
@@ -3949,6 +4137,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 user_id=user["user_id"],
                 company_id=user["default_company_id"],
                 email=user["email"],
+                expected_access_epochs=authentication_epochs,
             )
             self._send_json(
                 {
@@ -3966,11 +4155,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not self._check_auth_rate_limit(path, body):
                 return
             try:
-                user = self.repository.authenticate_user(email=str(body.get("email") or ""), password=str(body.get("password") or ""))
+                user, authentication_epochs = self.repository.authenticate_user_for_session(
+                    email=str(body.get("email") or ""), password=str(body.get("password") or ""))
                 token, refresh_token, _browser_session = self._issue_browser_session(
                     user_id=user["user_id"],
                     company_id=user["default_company_id"],
                     email=user["email"],
+                    expected_access_epochs=authentication_epochs,
                 )
             except ValueError as exc:
                 self._send_error(HTTPStatus.UNAUTHORIZED, str(exc))
@@ -4003,6 +4194,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     company_id=str(refresh_identity.get("company_id") or ""),
                     email=str(refresh_identity.get("email") or ""),
                     refresh_session_id=session_ref,
+                    access_epochs=refresh_identity["access_epochs"],
                 )
                 access_identity = self.sessions.verify_token(token)
                 rotated = self.repository.rotate_browser_refresh_session(
@@ -4137,6 +4329,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 user_id=user["user_id"],
                 company_id=company_id,
                 email=user["email"],
+                authorizing_identity=identity,
             )
             previous_refresh_session_id = str(identity.get("sid") or "")
             if previous_refresh_session_id:
@@ -4286,7 +4479,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 status = HTTPStatus.SERVICE_UNAVAILABLE if verification.get("retryable") else HTTPStatus.PRECONDITION_FAILED
                 self._send_error(status, "account deletion notification could not be verified")
                 return
-            accepted = self.repository.accept_ebay_account_deletion_event(event=event)
+            accepted = self.repository.accept_ebay_account_deletion_event(event=event, verification=verification)
             if accepted.get("status") == "idempotency_conflict":
                 self._send_error(HTTPStatus.CONFLICT, "account deletion notification conflicts with a prior delivery")
                 return
@@ -4334,6 +4527,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         identity = self._require_auth()
         if identity is None:
+            return
+
+        if len(parts) >= 3 and parts[0] == "stores" and parts[2] == "support":
+            self._handle_support_post(identity, parts, parse_qs(parsed.query, keep_blank_values=True))
             return
 
         if len(parts) == 6 and parts[:4] == ["owner", "billing", "domestic", "refunds"] and parts[5] in {"review", "execute", "query"}:
@@ -4662,6 +4859,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
             content = self._read_media_source_body()
+            upload_id = str(self.headers.get("x-jiejing-upload-id") or "")
             try:
                 asset, source_url = self.media_source_asset_store.create(
                     company_id=identity["company_id"],
@@ -4670,16 +4868,29 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     content_type=str(self.headers.get("content-type") or ""),
                     filename=unquote(str(self.headers.get("x-jiejing-file-name") or "source-image")),
                     content=content,
+                    upload_id=upload_id,
                 )
             except MediaSourceAssetError as exc:
                 status = {
                     "file_too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                     "tenant_upload_quota_exceeded": HTTPStatus.TOO_MANY_REQUESTS,
+                    "upload_id_conflict": HTTPStatus.CONFLICT,
+                    "upload_in_progress": HTTPStatus.CONFLICT,
+                    "upload_receipt_incomplete": HTTPStatus.SERVICE_UNAVAILABLE,
+                    "asset_expired": HTTPStatus.GONE,
+                    "signing_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+                    "asset_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+                    "asset_integrity_failed": HTTPStatus.GONE,
                 }.get(exc.code, HTTPStatus.BAD_REQUEST)
-                self._send_error(status, str(exc))
+                self._send_json({"error": str(exc), "code": exc.code, "secret_exposed": False}, status=status)
+                return
+            except OSError:
+                self._send_json({"error": "upload storage is unavailable; query this attempt before resubmitting",
+                    "code": "upload_storage_unavailable", "secret_exposed": False}, status=HTTPStatus.SERVICE_UNAVAILABLE)
                 return
             self._send_json(
                 {
+                    "upload_id": upload_id,
                     "media_source_asset": asset.public_dict(source_url=source_url),
                     "provider_reference_ready": True,
                     "requires_asset_review": True,
@@ -5353,6 +5564,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 or ("Fresh eBay draft save confirmation" if draft_save_intake else "Fresh eBay publish confirmation"),
                 limit=120,
             )
+            replaces_confirmation_id = str(body.get('replaces_confirmation_id') or '').strip()
+            if replaces_confirmation_id:
+                try:
+                    self.repository.validate_ebay_replacement(company_id=identity['company_id'], store_id=parts[1],
+                        action_type=action_type, item={'publish_payload':publish_payload,'listing_project_identity':listing_project_identity},
+                        replaces_confirmation_id=replaces_confirmation_id)
+                except PermissionError as exc:
+                    if str(exc) not in _EBAY_RECOVERY_DENIAL_CODES:
+                        raise
+                    self._send_json({'error':str(exc),'execution_recovery':self.repository.ebay_execution_recovery(
+                        company_id=identity['company_id'],confirmation_id=replaces_confirmation_id,reason_code=str(exc))},status=HTTPStatus.CONFLICT)
+                    return
             controlled_confirmation_matches: list[dict[str, Any]] = []
             controlled_task_id: str | None = None
             controlled_confirmation_id: str | None = None
@@ -5371,6 +5594,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     for item in controlled_confirmation_matches
                     if str(item.get("status") or "")
                     in {"approved", EXTERNAL_EXECUTION_PROCESSING_STATUS, "executed"}
+                    and item.get('confirmation_id') != replaces_confirmation_id
                 ]
                 if len(pending_matches) > 1:
                     self._send_error(HTTPStatus.CONFLICT, "controlled_publish_confirmation_not_unique")
@@ -5652,7 +5876,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     created_by=identity["user_id"],
                     confirmation_id=controlled_confirmation_id,
                     default_action="hold",
+                    replaces_confirmation_id=replaces_confirmation_id or None,
                 )
+            except PermissionError as exc:
+                if str(exc) not in _EBAY_RECOVERY_DENIAL_CODES:
+                    raise
+                self._send_json({'error':str(exc),'execution_recovery':self.repository.ebay_execution_recovery(
+                    company_id=identity['company_id'],confirmation_id=replaces_confirmation_id,reason_code=str(exc))},status=HTTPStatus.CONFLICT)
+                return
             except ConfirmationDecisionConflict:
                 if not existing_draft_publish_intake or not controlled_confirmation_id:
                     raise
@@ -6043,7 +6274,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     user_id=identity["user_id"],
                     location_payload=location_payload,
                     payload_sha256=_draft_publish_payload_sha256(location_payload),
+                    replaces_confirmation_id=str(body.get('replaces_confirmation_id') or '').strip() or None,
                 )
+            except PermissionError as exc:
+                if str(exc) not in _EBAY_RECOVERY_DENIAL_CODES:
+                    raise
+                self._send_json({'error':str(exc),'execution_recovery':self.repository.ebay_execution_recovery(
+                    company_id=identity['company_id'],confirmation_id=str(body.get('replaces_confirmation_id') or ''),reason_code=str(exc))},status=HTTPStatus.CONFLICT)
+                return
             except ConfirmationDecisionConflict:
                 self._send_error(HTTPStatus.CONFLICT, "ebay_inventory_location_confirmation_already_active")
                 return
@@ -6152,16 +6390,38 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     expected_payload_sha256=expected_payload_sha256,
                     expected_claim_binding=claim_binding,
                     marketplace_id=str(store.get("marketplace") or "EBAY_US"),
+                    expected_access_epochs={"user_epoch": identity.get("user_epoch"), "member_epoch": identity.get("member_epoch")},
+                    operation_plan=prepared.execution_plan(),
                 )
+            except PermissionError as exc:
+                inventory_location_adapter.discard_inventory_location_preparation(prepared)
+                if str(exc) not in _EBAY_RECOVERY_DENIAL_CODES:
+                    raise
+                recovery = (self.repository._record_ebay_preclaim_denial(
+                    company_id=identity['company_id'], store_id=store_id, confirmation_id=confirmation_id,
+                    expected_confirmation=confirmation, reason_code=str(exc)) if str(exc) in EXECUTION_DENIAL_CODES else
+                    self.repository.ebay_execution_recovery(company_id=identity['company_id'],
+                        confirmation_id=confirmation_id, reason_code=str(exc)))
+                self._send_json({"error": str(exc), "execution_recovery": recovery}, status=HTTPStatus.CONFLICT)
+                return
             except ConfirmationDecisionConflict:
                 inventory_location_adapter.discard_inventory_location_preparation(prepared)
                 self._send_error(HTTPStatus.CONFLICT, "ebay_inventory_location_approval_required")
                 return
-            result = inventory_location_adapter.execute_prepared_inventory_location(
-                confirmation=claimed,
-                prepared=prepared,
-                marketplace_id=str(store.get("marketplace") or "EBAY_US"),
-            )
+            execution_permit = claimed.pop('_execution_permit')
+            try:
+                result = inventory_location_adapter.execute_prepared_inventory_location(
+                    confirmation=claimed, prepared=prepared, execution_permit=execution_permit,
+                    marketplace_id=str(store.get("marketplace") or "EBAY_US"))
+            except EbayExecutionDenied as exc:
+                self._send_ebay_execution_recovery(identity, claimed, str(exc), finish_owner=True)
+                return
+            except Exception as exc:
+                if self._handle_service_dependency_exception(exc):
+                    return
+                self._log_ebay_inventory_location_execution_error('write', exc)
+                self._send_ebay_execution_recovery(identity, claimed, 'ebay_inventory_location_adapter_exception', finish_owner=True, status=HTTPStatus.BAD_GATEWAY)
+                return
             if not (
                 isinstance(result, dict)
                 and result.get("status") == "inventory_location_created"
@@ -6178,6 +6438,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "public_listing_created": False,
                             "secret_exposed": False,
                         }
+                        , "execution_recovery": self.repository.finish_ebay_prewrite_failure(
+                            company_id=identity['company_id'], confirmation_id=confirmation_id, reason_code='inventory_location_execution_not_completed')
                     },
                     status=HTTPStatus.BAD_GATEWAY,
                 )
@@ -10808,12 +11070,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     decision=decision_value,
                     decided_by=identity["user_id"],
                     note=body.get("note") if isinstance(body.get("note"), str) else None,
+                    expected_access_epochs={"user_epoch": identity.get("user_epoch"), "member_epoch": identity.get("member_epoch")},
                 )
             except KeyError:
                 self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
                 return
             except ConfirmationDecisionConflict:
                 self._send_error(HTTPStatus.CONFLICT, "confirmation_decision_conflict")
+                return
+            except PermissionError as exc:
+                self._send_error(HTTPStatus.FORBIDDEN, str(exc))
                 return
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
@@ -10949,8 +11215,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not confirmation:
                 self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
                 return
-            if confirmation.get("action_type") != "publish_listing":
-                self._send_error(HTTPStatus.BAD_REQUEST, "publish recovery only supports publish_listing confirmations")
+            if confirmation.get("action_type") not in {"publish_listing", "save_ebay_listing_draft"}:
+                self._send_error(HTTPStatus.BAD_REQUEST, "publish recovery requires an exact listing confirmation")
                 return
             payload = _execution_payload_from_context(
                 repository=self.repository,
@@ -10994,6 +11260,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 secret_refs=self.repository.list_secret_refs(company_id=identity["company_id"], store_id=confirmation["store_id"]),
                 marketplace_id=str(store.get("marketplace") or "EBAY_US"),
             )
+            durable_recovery = self.repository.ebay_execution_recovery(company_id=identity['company_id'],confirmation_id=confirmation['confirmation_id'])
+            if not durable_recovery['zero_write_proven']:
+                publish_recovery['safe_to_retry_publish'] = False
+                publish_recovery['safe_to_request_fresh_confirmation'] = False
+                publish_recovery['recommended_action'] = 'reconcile_read_only'
             self.repository.write_audit(
                 company_id=identity["company_id"],
                 store_id=confirmation["store_id"],
@@ -11011,46 +11282,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_exposed": False,
                 },
             )
-            fresh_confirmation_required = False
-            controlled_item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
-            controlled_draft = (
-                controlled_item.get("existing_ebay_draft")
-                if isinstance(controlled_item.get("existing_ebay_draft"), dict)
-                else {}
-            )
-            exact_unpublished = (
-                publish_recovery.get("exact_unpublished_offer")
-                if isinstance(publish_recovery.get("exact_unpublished_offer"), dict)
-                else {}
-            )
-            if (
-                controlled_existing_draft_publish
-                and str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
-                and publish_recovery.get("safe_to_request_fresh_confirmation") is True
-                and publish_recovery.get("safe_to_retry_publish") is False
-                and str(publish_recovery.get("recommended_action") or "")
-                == "request_fresh_exact_offer_confirmation"
-                and not (publish_recovery.get("published_offer") or {})
-                and str(exact_unpublished.get("offer_id") or "")
-                == str(controlled_draft.get("offer_id") or "")
-                and str(publish_recovery.get("sku") or "") == str(controlled_draft.get("sku") or "")
-                and publish_recovery.get("secret_exposed") is False
-            ):
-                confirmation = self.repository.retire_external_execution_after_verified_noop(
-                    company_id=identity["company_id"],
-                    confirmation_id=confirmation["confirmation_id"],
-                    user_id=identity["user_id"],
-                    action_type="publish_listing",
-                    evidence={
-                        "provider_read_only": True,
-                        "external_state_unchanged": True,
-                        "automatic_retry_allowed": False,
-                        "offer_id": exact_unpublished.get("offer_id"),
-                        "sku": publish_recovery.get("sku"),
-                        "secret_exposed": False,
-                    },
-                )
-                fresh_confirmation_required = True
+            # This endpoint only projects durable facts. Retirement belongs
+            # exclusively to the explicit linked-new-pending transaction.
+            fresh_confirmation_required = bool(durable_recovery['zero_write_proven']
+                and durable_recovery['next_action'] == 'prepare_reapproval')
             recent_confirmations = [
                 item
                 for item in self.repository.list_confirmations(company_id=identity["company_id"], limit=100)
@@ -11059,6 +11294,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "publish_recovery": publish_recovery,
+                    "execution_recovery": durable_recovery,
                     "publish_readiness": (
                         _controlled_existing_draft_publish_readiness(
                             preflight=preflight,
@@ -11121,7 +11357,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=confirmation["store_id"]) or {}
-            publish_recovery = EbayWriteHttpAdapter(self.settings).inspect_publish_state(
+            publish_recovery = self.ebay_write_adapter_factory(self.settings).inspect_publish_state(
                 request=execution_request,
                 connections=self.repository.list_connections(company_id=identity["company_id"], store_id=confirmation["store_id"]),
                 secret_refs=self.repository.list_secret_refs(company_id=identity["company_id"], store_id=confirmation["store_id"]),
@@ -11152,25 +11388,41 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     status=HTTPStatus.CREATED,
                 )
                 return
-            cleanup_confirmation = self.repository.create_confirmation(
+            replaces_cleanup = str(body.get('replaces_confirmation_id') or '').strip()
+            cleanup_item = _cleanup_confirmation_item(publish_confirmation=confirmation,publish_recovery=publish_recovery,cleanup_plan=cleanup_plan)
+            if replaces_cleanup:
+                try:
+                    self.repository.validate_ebay_replacement(company_id=identity['company_id'], store_id=confirmation['store_id'],
+                        action_type='cleanup_test_listing', item=cleanup_item, replaces_confirmation_id=replaces_cleanup)
+                except PermissionError as exc:
+                    if str(exc) not in _EBAY_RECOVERY_DENIAL_CODES:
+                        raise
+                    self._send_json({'error':str(exc),'execution_recovery':self.repository.ebay_execution_recovery(
+                        company_id=identity['company_id'],confirmation_id=replaces_cleanup,reason_code=str(exc))},status=HTTPStatus.CONFLICT)
+                    return
+            try:
+                cleanup_confirmation = self.repository.create_confirmation(
                 company_id=identity["company_id"],
                 store_id=confirmation["store_id"],
                 task_id=confirmation["task_id"],
                 runtime_run_id=confirmation.get("runtime_run_id") or "publish_cleanup_plan",
                 action_type="cleanup_test_listing",
                 title=_cleanup_confirmation_title(publish_recovery),
-                item=_cleanup_confirmation_item(
-                    publish_confirmation=confirmation,
-                    publish_recovery=publish_recovery,
-                    cleanup_plan=cleanup_plan,
-                ),
+                item=cleanup_item,
                 created_by=identity["user_id"],
-                confirmation_id=_cleanup_confirmation_id(
+                confirmation_id=None if replaces_cleanup else _cleanup_confirmation_id(
                     publish_confirmation_id=confirmation["confirmation_id"],
                     publish_recovery=publish_recovery,
                 ),
                 default_action="hold",
+                replaces_confirmation_id=replaces_cleanup or None,
             )
+            except PermissionError as exc:
+                if str(exc) not in _EBAY_RECOVERY_DENIAL_CODES:
+                    raise
+                self._send_json({'error':str(exc),'execution_recovery':self.repository.ebay_execution_recovery(
+                    company_id=identity['company_id'],confirmation_id=replaces_cleanup,reason_code=str(exc))},status=HTTPStatus.CONFLICT)
+                return
             self.repository.write_audit(
                 company_id=identity["company_id"],
                 store_id=confirmation["store_id"],
@@ -11246,6 +11498,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if confirmation["status"] in {EXTERNAL_EXECUTION_PROCESSING_STATUS, "executed"}:
                     self._send_error(HTTPStatus.CONFLICT, EXTERNAL_EXECUTION_PROCESSING_STATUS)
                     return
+                if confirmation.get('action_type') in {'publish_listing','save_ebay_listing_draft','cleanup_test_listing'}:
+                    if confirmation['status'] in {'needs_revision','expired'}:
+                        self._send_ebay_execution_recovery(identity, confirmation, 'external_execution_reapproval_required')
+                        return
+                    if (confirmation.get('item') or {}).get('replaces_confirmation_id'):
+                        self._send_error(HTTPStatus.CONFLICT, 'external_execution_reapproval_required')
+                        return
                 self._send_error(HTTPStatus.BAD_REQUEST, "confirmation must be approved before execution service handoff")
                 return
             if confirmation.get("action_type") in {"publish_listing", "save_ebay_listing_draft"}:
@@ -11303,7 +11562,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 platform=str(confirmation_store.get("platform") or "ebay"),
                 payload=payload,
                 confirmation_id=confirmation["confirmation_id"],
-                confirmed_by=confirmation["decided_by"] or identity["user_id"],
+                confirmed_by=confirmation["decided_by"],
                 confirmed_at=confirmation["decided_at"],
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
@@ -11433,20 +11692,42 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                     confirmation_id=confirmation["confirmation_id"],
                                     user_id=identity["user_id"],
                                     expected_binding=expected_binding,
+                                    expected_access_epochs={"user_epoch": identity.get("user_epoch"), "member_epoch": identity.get("member_epoch")},
+                                    operation_plan=prepared_draft.execution_plan(),
                                 )
                             else:
+                                plan_connections = self.repository.ebay_execution_connections(
+                                    company_id=identity['company_id'], store_id=confirmation['store_id'])
+                                operation_plan = build_ebay_execution_plan(request=execution_request,
+                                    marketplace_id=str(confirmation_store.get('marketplace') or 'EBAY_US'),
+                                    connections=plan_connections,
+                                    credential_boundary=controlled_publish_credential or None)
                                 confirmation = self.repository.claim_external_execution(
                                     company_id=identity["company_id"],
                                     confirmation_id=confirmation["confirmation_id"],
                                     user_id=identity["user_id"],
+                                    expected_access_epochs={"user_epoch": identity.get("user_epoch"), "member_epoch": identity.get("member_epoch")},
+                                    operation_plan=operation_plan,
                                 )
+                                execution_permit = confirmation.pop('_execution_permit')
+                        except PermissionError as exc:
+                            if str(exc) not in _EBAY_RECOVERY_DENIAL_CODES:
+                                raise
+                            recovery = (self.repository._record_ebay_preclaim_denial(
+                                company_id=identity['company_id'], store_id=confirmation['store_id'],
+                                confirmation_id=confirmation['confirmation_id'], expected_confirmation=confirmation, reason_code=str(exc))
+                                if str(exc) in EXECUTION_DENIAL_CODES else self.repository.ebay_execution_recovery(
+                                    company_id=identity['company_id'], confirmation_id=confirmation['confirmation_id'], reason_code=str(exc)))
+                            self._send_json({'error': str(exc), 'status': 409, 'execution_recovery': recovery},
+                                status=HTTPStatus.CONFLICT)
+                            return
                         except ConfirmationDecisionConflict as exc:
                             public_error = (
                                 "external_execution_confirmation_not_fresh"
                                 if str(exc) == "external_execution_confirmation_not_fresh"
                                 else EXTERNAL_EXECUTION_PROCESSING_STATUS
                             )
-                            self._send_error(HTTPStatus.CONFLICT, public_error)
+                            self._send_ebay_execution_recovery(identity, confirmation, public_error)
                             return
                     store = confirmation_store
                     if (
@@ -11461,22 +11742,30 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "preflight": boundary_result.get("audit", {}).get("preflight") if isinstance(boundary_result.get("audit"), dict) else {},
                         "marketplace_id": str(store.get("marketplace") or "EBAY_US"),
                     }
+                    if confirmation['action_type'] != 'save_ebay_listing_draft':
+                        adapter_kwargs['execution_permit'] = execution_permit
                     if (
                         confirmation["action_type"] != "save_ebay_listing_draft"
                         and not controlled_existing_draft_publish_live
                     ):
-                        adapter_kwargs.update(
-                            {
-                                "connections": self.repository.list_connections(
-                                    company_id=identity["company_id"],
-                                    store_id=confirmation["store_id"],
-                                ),
-                                "secret_refs": self.repository.list_secret_refs(
-                                    company_id=identity["company_id"],
-                                    store_id=confirmation["store_id"],
-                                ),
-                            }
-                        )
+                        try:
+                            adapter_kwargs.update(
+                                {
+                                    "connections": self.repository.ebay_execution_connections(
+                                        company_id=identity["company_id"],
+                                        store_id=confirmation["store_id"],
+                                    ),
+                                    "secret_refs": self.repository.list_secret_refs(
+                                        company_id=identity["company_id"],
+                                        store_id=confirmation["store_id"],
+                                    ),
+                                }
+                            )
+                        except PermissionError as exc:
+                            if str(exc) != 'ebay_execution_credential_changed':
+                                raise
+                            self._send_ebay_execution_recovery(identity, confirmation, str(exc), finish_owner=True)
+                            return
                     # Close the claim-to-write window with one last
                     # authoritative read after this handler owns the claim and
                     # immediately before the adapter can make its first eBay
@@ -11519,6 +11808,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                     "external_execution_claimed": not claim_restored,
                                     "external_execution_claim_restored": claim_restored,
                                     "real_platform_write_attempted": False,
+                                    "execution_recovery": self.repository.ebay_execution_recovery(company_id=identity['company_id'],
+                                        confirmation_id=confirmation['confirmation_id'],reason_code=exc.code),
                                     "secret_exposed": False,
                                 },
                                 status=_publish_evidence_error_status(exc, revalidation=True),
@@ -11579,13 +11870,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                         # let an audit sink failure replace the
                                         # fixed public manual-reconcile result.
                                         pass
-                                    self._send_error(HTTPStatus.CONFLICT, EXTERNAL_EXECUTION_PROCESSING_STATUS)
+                                    self._send_ebay_execution_recovery(identity, confirmation, str(write_result.get('status') or 'draft_result_unknown'), finish_owner=True)
                                     return
                                 if str(current.get("status") or "") in {"approved", "needs_revision"}:
-                                    self._send_error(
-                                        HTTPStatus.CONFLICT,
-                                        str(write_result.get("status") or "ebay_unpublished_draft_prewrite_blocked"),
-                                    )
+                                    self._send_ebay_execution_recovery(identity, confirmation, str(write_result.get('status') or 'ebay_unpublished_draft_prewrite_blocked'), finish_owner=True)
                                     return
                         elif confirmation["action_type"] == "cleanup_test_listing":
                             write_result = adapter.execute_cleanup_plan(**adapter_kwargs)
@@ -11607,6 +11895,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             )
                         else:
                             write_result = adapter.publish_listing(**adapter_kwargs)
+                    except EbayExecutionDenied as exc:
+                        self._send_ebay_execution_recovery(identity, confirmation, str(exc), finish_owner=True)
+                        return
+                    except PermissionError:
+                        # Unknown permission/dependency errors are not evidence
+                        # of a revoked merchant authority or safe replay.
+                        raise
                     except Exception:
                         if confirmation["action_type"] == "save_ebay_listing_draft":
                             current = self.repository.get_confirmation(
@@ -11636,14 +11931,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                     )
                                 except Exception:
                                     pass
-                                self._send_error(HTTPStatus.CONFLICT, EXTERNAL_EXECUTION_PROCESSING_STATUS)
+                                self._send_ebay_execution_recovery(identity, confirmation, 'ebay_execution_adapter_exception', finish_owner=True)
                                 return
                             try:
                                 aborted = draft_claim_capability.abort(reason_code="adapter_prewrite_exception")
                             except Exception:
                                 aborted = {}
                             if str(aborted.get("status") or "") in {"approved", "needs_revision"}:
-                                self._send_error(HTTPStatus.CONFLICT, "ebay_unpublished_draft_prewrite_blocked")
+                                self._send_ebay_execution_recovery(identity, confirmation, 'ebay_unpublished_draft_prewrite_blocked', finish_owner=True)
                                 return
                         if confirmation.get("external_execution_claimed") is not True:
                             raise
@@ -11663,8 +11958,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                 "secret_exposed": False,
                             },
                         )
-                        self._send_error(HTTPStatus.CONFLICT, EXTERNAL_EXECUTION_PROCESSING_STATUS)
+                        self._send_ebay_execution_recovery(identity, confirmation, 'ebay_execution_adapter_exception', finish_owner=True)
                         return
+                    if write_result.get('status') not in {'published_to_ebay','saved_to_ebay_draft','cleanup_completed'}:
+                        write_result['execution_recovery'] = self.repository.finish_ebay_prewrite_failure(company_id=identity['company_id'],
+                            confirmation_id=confirmation['confirmation_id'],reason_code=str(write_result.get('status') or 'ebay_execution_not_completed'))
                     write_result.setdefault("created_at", boundary_result.get("created_at"))
                     write_audit = write_result.get("audit") if isinstance(write_result.get("audit"), dict) else {}
                     boundary_audit = boundary_result.get("audit") if isinstance(boundary_result.get("audit"), dict) else {}
@@ -11690,6 +11988,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "execution": stored,
+                    **({'execution_recovery':result['execution_recovery']} if isinstance(result.get('execution_recovery'),dict) else {}),
                     "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
                     "ebay_draft_save_enabled": self.settings.effective_ebay_draft_save_enabled,
                     "controlled_existing_draft_publish_enabled": self.settings.effective_ebay_controlled_publish_enabled,
@@ -11699,6 +11998,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         self._send_error(HTTPStatus.NOT_FOUND, "endpoint not found")
+
+    def _send_ebay_execution_recovery(self, identity, confirmation, reason_code, *, finish_owner=False, status=HTTPStatus.CONFLICT):
+        method = self.repository.finish_ebay_prewrite_failure if finish_owner else self.repository.ebay_execution_recovery
+        summary = method(company_id=identity['company_id'],confirmation_id=confirmation['confirmation_id'],reason_code=reason_code)
+        public_error = (EXTERNAL_EXECUTION_PROCESSING_STATUS
+            if reason_code == 'ebay_execution_adapter_exception' and not summary['zero_write_proven'] else reason_code)
+        self._send_json({'error':public_error,'execution_recovery':summary,'automatic_retry_allowed':False,'secret_exposed':False},status=status)
 
     def log_message(self, format: str, *args: Any) -> None:
         if not self._safe_access_log_enabled():
@@ -11830,13 +12136,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         user_id: str,
         company_id: str,
         email: str,
+        expected_access_epochs: dict[str, int] | None = None,
+        authorizing_identity: dict[str, Any] | None = None,
     ) -> tuple[str, str, dict[str, Any]]:
-        issued = self.repository.create_browser_refresh_session(
-            user_id=user_id,
-            company_id=company_id,
-            device_class=self._browser_device_class_from_request(),
-            ttl_seconds=self._refresh_ttl_seconds(),
-        )
+        try:
+            issued = self.repository.create_browser_refresh_session(
+                user_id=user_id,
+                company_id=company_id,
+                device_class=self._browser_device_class_from_request(),
+                ttl_seconds=self._refresh_ttl_seconds(),
+                expected_access_epochs=expected_access_epochs,
+                authorizing_identity=authorizing_identity,
+            )
+        except ValueError as exc:
+            raise SessionAccessRevoked("session_access_revoked") from exc
         public_session = issued.get("session") if isinstance(issued.get("session"), dict) else {}
         refresh_token = str(issued.get("refresh_token") or "")
         session_ref = str(public_session.get("session_ref") or "")
@@ -11848,6 +12161,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 company_id=company_id,
                 email=email,
                 refresh_session_id=session_ref,
+                access_epochs=issued["access_epochs"],
             )
         except Exception:
             try:
@@ -11868,17 +12182,21 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         company_id: str,
         email: str,
         refresh_session_id: str = "",
+        access_epochs: dict[str, int] | None = None,
     ) -> str:
+        if access_epochs is None:
+            access_epochs = self.repository.access_session_epochs(user_id=user_id, company_id=company_id)
         token = self.sessions.create_token(
             user_id=user_id,
             company_id=company_id,
             email=email,
             refresh_session_id=refresh_session_id,
+            access_epochs=access_epochs,
         )
         identity = self.sessions.verify_token(token)
         state = self.repository.ensure_user_session(identity)
         if state.get("active") is not True:
-            raise RuntimeError("new session could not be persisted")
+            raise SessionAccessRevoked("session_access_revoked")
         return token
 
     def _validated_session_identity(self, token: str) -> dict[str, Any]:
@@ -12828,7 +13146,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
     def _require_permission(self, identity: dict[str, Any], permission: str) -> bool:
         member = self.repository.get_team_member(company_id=identity["company_id"], user_id=identity["user_id"])
-        if member and has_permission(str(member.get("role") or ""), permission):
+        if member and member.get("status") == "active" and has_permission(str(member.get("role") or ""), permission):
             return True
         self._send_error(HTTPStatus.FORBIDDEN, f"missing permission: {permission}")
         return False
@@ -12841,7 +13159,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if email not in allowlist:
             return False
         member = self.repository.get_team_member(company_id=identity["company_id"], user_id=identity["user_id"])
-        role = str(member.get("role") or "").lower() if member else ""
+        role = str(member.get("role") or "").lower() if member and member.get("status") == "active" else ""
         return role in {"owner", "admin"}
 
     def _require_platform_internal_admin(self, identity: dict[str, Any], label: str) -> bool:
@@ -15672,6 +15990,109 @@ def _merchant_next_step_for_ebay_sync_blockers(blocked_by: list[str]) -> str:
     if "JIEJING_EBAY_TOKEN_REFRESH_LIVE" in blockers:
         return "先确认后端允许用 refresh token 换短期 access token。"
     return "先补齐 eBay 只读授权、后端密钥配置和店铺连接状态，再重新同步。"
+
+
+def _support_http_public_dto(value: Any, kind: str) -> dict[str, Any]:
+    """Only admitted support fields survive; never expose arbitrary metadata."""
+    common = {
+        "status": "code", "blocked_by": "codes", "send_enabled": "false",
+        "automatic_send_allowed": "false", "live_end_to_end_verified": "false",
+        "external_request_performed": "nullable_bool", "schema_write_performed": "false",
+        "secret_exposed": "false", "buyer_message_http_attempted": "bool",
+        "credential_verification_attempted": "bool",
+    }
+    schemas = {
+        "blocked": {},
+        "capability": {"cache_available": "bool", "credentials_verified": "false", "requires_live_owner_check": "bool"},
+        "conversations": {"conversations": "conversation_items", "has_more": "bool"},
+        "discovery": {"conversation_ids": "ids", "has_more": "bool", "next_offset": "nullable_offset"},
+        "conversation": {"conversation_id": "id", "sync_status": "code", "last_success_at": "time",
+            "truncated": "bool", "messages": "message_items", "message_offset": "offset",
+            "message_limit": "page_limit", "has_more": "bool", "next_offset": "nullable_offset"},
+        "draft": {"draft_id": "id", "revision": "revision", "conversation_id": "id", "source_message_id": "id",
+            "body": "body", "fact_refs": "refs", "created_at": "time", "generation_kind": "code", "facts_verified": "false"},
+        "preview": {"confirmation_created": "false", "approved": "false", "message_body": "body",
+            "risk_flags": "codes", "facts_verified": "false", "fact_reference_status": "code",
+            "default_action": "code", "integration_pending": "code"},
+        "conversation_item": {"conversation_id": "id", "sync_status": "code", "attempted_at": "time",
+            "last_success_at": "time", "truncated": "db_bool"},
+        "message_item": {"message_id": "id", "body": "body", "created_at": "time", "direction": "direction"},
+    }
+    required = {
+        "blocked": {"status", "blocked_by", "send_enabled"},
+        "capability": {"status", "cache_available", "send_enabled"},
+        "conversations": {"conversations", "has_more", "send_enabled"},
+        "discovery": {"status", "conversation_ids", "has_more", "next_offset", "send_enabled"},
+        "conversation": {"conversation_id", "sync_status", "messages", "send_enabled"},
+        "draft": {"draft_id", "revision", "conversation_id", "source_message_id", "body", "fact_refs", "send_enabled"},
+        "preview": {"status", "message_body", "confirmation_created", "approved", "send_enabled"},
+        "conversation_item": set(schemas["conversation_item"]),
+        "message_item": set(schemas["message_item"]),
+    }
+
+    def text(item: Any, maximum: int) -> str:
+        if type(item) is not str or not item.strip() or len(item) > maximum:
+            raise ValueError("invalid_support_public_text")
+        item.encode("utf-8", "strict")
+        if _redact_secret_text(item) != item:
+            raise ValueError("credential_like_support_public_text")
+        return item
+
+    def project(record: Any, record_kind: str) -> dict[str, Any]:
+        if type(record) is not dict or record_kind not in schemas:
+            raise ValueError("invalid_support_public_record")
+        if record_kind not in {"conversation_item", "message_item"} and record.get("status") == "blocked":
+            record_kind = "blocked"
+        if not required[record_kind] <= set(record):
+            raise ValueError("incomplete_support_public_record")
+        schema = schemas[record_kind] if record_kind.endswith("_item") else {**common, **schemas[record_kind]}
+        safe = {}
+        for key, rule in schema.items():
+            if key not in record:
+                continue
+            item = record[key]
+            if rule in {"bool", "false", "nullable_bool"}:
+                if not (type(item) is bool or (rule == "nullable_bool" and item is None)) or (rule == "false" and item is not False):
+                    raise ValueError("invalid_support_public_boolean")
+            elif rule == "db_bool":
+                # Existing cached list rows expose SQLite's INTEGER boolean.
+                if not (type(item) is bool or (type(item) is int and item in {0, 1})):
+                    raise ValueError("invalid_support_public_database_boolean")
+                item = bool(item)
+            elif rule == "revision":
+                if type(item) is not int or not 1 <= item <= 2147483647:
+                    raise ValueError("invalid_support_public_revision")
+            elif rule in {"offset", "page_limit", "nullable_offset"}:
+                if not (rule == "nullable_offset" and item is None):
+                    minimum, maximum = (1, 100) if rule == "page_limit" else (0, 2147483647)
+                    if type(item) is not int or not minimum <= item <= maximum:
+                        raise ValueError("invalid_support_public_pagination")
+            elif rule in {"message_items", "conversation_items"}:
+                if type(item) is not list or len(item) > 1000:
+                    raise ValueError("invalid_support_public_collection")
+                item = [project(entry, "message_item" if rule == "message_items" else "conversation_item") for entry in item]
+            elif rule in {"codes", "refs", "ids"}:
+                if type(item) is not list or len(item) > (150 if rule == "ids" else 30):
+                    raise ValueError("invalid_support_public_labels")
+                item = [text(entry, 200) for entry in item]
+                if rule == "codes" and any(not re.fullmatch(r"[a-z0-9_]{1,200}", entry) for entry in item):
+                    raise ValueError("invalid_support_public_code")
+                if rule == "ids" and any(not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", entry) for entry in item):
+                    raise ValueError("invalid_support_public_id")
+            elif rule == "time" and item is None:
+                pass
+            else:
+                item = text(item, 2000 if rule == "body" else 200)
+                if rule == "id" and not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", item):
+                    raise ValueError("invalid_support_public_id")
+                if rule == "code" and not re.fullmatch(r"[a-z0-9_]{1,200}", item):
+                    raise ValueError("invalid_support_public_code")
+                if rule == "direction" and item not in {"incoming", "outgoing"}:
+                    raise ValueError("invalid_support_public_direction")
+            safe[key] = item
+        return safe
+
+    return project(value, kind)
 
 
 def _redact_secret_like(value: Any) -> Any:

@@ -44,6 +44,14 @@ PLATFORM_MODEL_TRIAL_RESERVATION_MIGRATION = (
 LISTING_CHECKPOINT_MIGRATION = ROOT / "jiejing_saas" / "migrations" / "005_listing_draft_edit_checkpoints_postgres.sql"
 LISTING_CHECKPOINT_MIGRATION_ID = "20260906_005_listing_draft_edit_checkpoints_postgres"
 LISTING_CHECKPOINT_MIGRATION_CHECKSUM = "jiejing-listing-draft-edit-checkpoints-postgres-v20260906"
+SUPPORT_MIGRATION_ID = "20261012_006_support_conversations_postgres"
+SUPPORT_MIGRATION_CHECKSUM = "jiejing-support-conversations-postgres-v20261012"
+SUPPORT_TABLES = {"support_messages_v1", "support_sync_v1", "support_drafts_v1", "support_send_intents_v1"}
+EPOCH_MIGRATION_ID = "20261014_007_access_revocation_epochs_postgres"
+EPOCH_MIGRATION_CHECKSUM = "jiejing-access-revocation-epochs-postgres-v20261014"
+AUTHORITY_MIGRATION_ID = "20261014_008_confirmation_authorities_postgres"
+AUTHORITY_MIGRATION_CHECKSUM = "jiejing-confirmation-authorities-postgres-v20261014"
+AUTHORITY_TABLES = {'confirmation_approval_authorities_v1','confirmation_execution_authorities_v1'}
 INITIAL_MIGRATION_CANONICAL_SHA256 = "d76293f426d20cdcc0a2667284900c8cb91606f26e464ff1a4e1b96e409444f6"
 BUCKET_MIGRATION_ID = "20260823_002_media_credit_buckets_postgres"
 BUCKET_MIGRATION_CHECKSUM = "jiejing-media-credit-buckets-postgres-v20260823"
@@ -181,6 +189,18 @@ def _fake_index_matches_migration_contract(
 
 def _expected_constraint_definitions() -> dict[str, _FakeConstraintDefinition]:
     return {
+        'approval.authority_pk': _FakeConstraintDefinition('p','confirmation_approval_authorities_v1',('authority_id',)),
+        'approval.scope_unique': _FakeConstraintDefinition('u','confirmation_approval_authorities_v1',('company_id','confirmation_id','authority_id')),
+        'approval.confirmation_scope_fk': _FakeConstraintDefinition('f','confirmation_approval_authorities_v1',('company_id','confirmation_id','store_id'),'confirmations',('company_id','confirmation_id','store_id')),
+        'approval.store_scope_fk': _FakeConstraintDefinition('f','confirmation_approval_authorities_v1',('company_id','store_id'),'stores',('company_id','store_id')),
+        'approval.user_fk': _FakeConstraintDefinition('f','confirmation_approval_authorities_v1',('approver_user_id',),'users',('user_id',)),
+        'execution.attempt_pk': _FakeConstraintDefinition('p','confirmation_execution_authorities_v1',('attempt_id',)),
+        'execution.approval_scope_fk': _FakeConstraintDefinition('f','confirmation_execution_authorities_v1',('company_id','confirmation_id','approval_authority_id'),'confirmation_approval_authorities_v1',('company_id','confirmation_id','authority_id')),
+        'execution.confirmation_scope_fk': _FakeConstraintDefinition('f','confirmation_execution_authorities_v1',('company_id','confirmation_id','store_id'),'confirmations',('company_id','confirmation_id','store_id')),
+        'execution.user_fk': _FakeConstraintDefinition('f','confirmation_execution_authorities_v1',('executor_user_id',),'users',('user_id',)),
+        'confirmation_current_approval_scope': _FakeConstraintDefinition('f','confirmations',('company_id','confirmation_id','approval_authority_id'),'confirmation_approval_authorities_v1',('company_id','confirmation_id','authority_id')),
+        "access_revocation_epochs.scope_pk": _FakeConstraintDefinition(
+            "p", "access_revocation_epochs", ("user_id", "company_id")),
         **{key: _FakeConstraintDefinition(*value) for key, value in LISTING_CHECKPOINT_CONSTRAINTS.items()},
         MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID: _FakeConstraintDefinition(
             "f",
@@ -219,6 +239,21 @@ def _expected_constraint_definitions() -> dict[str, _FakeConstraintDefinition]:
 def _expected_column_definitions() -> dict[str, dict[str, _FakeColumnDefinition]]:
     required = _FakeColumnDefinition
     return {
+        'confirmation_approval_authorities_v1': {
+            **{key:required('text',False) for key in ('authority_id','company_id','confirmation_id','action_type','approver_user_id','required_permission','approved_role','approved_at','approved_item_sha256')},
+            'store_id':required('text',True), 'approver_user_epoch':required('bigint',False),
+            'approver_member_epoch':required('bigint',False), 'binding_version':required('integer',False)},
+        'confirmation_execution_authorities_v1': {
+            **{key:required('text',False) for key in ('attempt_id','company_id','confirmation_id','approval_authority_id','executor_user_id','required_permissions','business_binding_sha256','operation_plan_sha256','operation_state_json','phase','created_at')},
+            **{key:required('text',True) for key in ('store_id','admitted_at','terminal_reason')},
+            'executor_user_epoch':required('bigint',False),'executor_member_epoch':required('bigint',False),
+            'operation_count':required('integer',False)},
+        'confirmations': {'approval_authority_id':required('text',True)},
+        'ebay_account_deletion_events': {'verification_json':required('text',False),'processing_json':required('text',False)},
+        "access_revocation_epochs": {
+            "user_id": required("text", False), "company_id": required("text", False),
+            "generation": required("bigint", False),
+        },
         "listing_draft_edit_heads": {
             **{key: required("text", False) for key in ("company_id", "store_id", "project_key", "source_report_id", "candidate_id", "checkpoint_id")},
             "revision": required("integer", False),
@@ -245,6 +280,7 @@ def _expected_column_definitions() -> dict[str, dict[str, _FakeColumnDefinition]
             "bucket_json": required("jsonb", False),
         },
         "external_execution_claims": {
+            'authority_json':required('text',True),
             "claim_id": required("text", False),
             "company_id": required("text", False),
             "store_id": required("text", False),
@@ -355,6 +391,14 @@ class _FakePostgresState:
             self.relation_columns.setdefault(str(relation), set()).update(definitions)
         self.indexes = dict(indexes or {})
         self.constraints = dict(constraints or {})
+        authority_sql=(ROOT/'jiejing_saas/migrations/008_confirmation_authorities_postgres.sql').read_text(encoding='utf-8')
+        bodies=dict(re.findall(r'create or replace function (\w+)\(\) returns trigger language plpgsql as \$\$(.*?)\$\$;',authority_sql,re.S))
+        self.authority_guards=[(table,trigger,23,'O',None,'',function,bodies[function],True,True,True,True,
+            "CREATE UNIQUE INDEX confirmation_one_active_attempt ON public.confirmation_execution_authorities_v1 USING btree (confirmation_id) WHERE (phase = ANY (ARRAY['prewrite'::text, 'admitted'::text, 'reconciliation_required'::text]))")
+            for table,trigger,function in (
+                ('confirmation_approval_authorities_v1','approval_receipt_guard','jiejing_approval_receipt_guard'),
+                ('confirmations','current_approval_scope_guard','jiejing_current_approval_scope_guard'),
+                ('confirmation_execution_authorities_v1','execution_receipt_scope_guard','jiejing_execution_receipt_scope_guard'))]
         self.simulate_migration_work = simulate_migration_work
         self.session_advisory_locks: dict[AdvisoryLockKey, threading.Lock] = {}
         self.state_lock = threading.Lock()
@@ -542,6 +586,10 @@ class _FakeCursor:
                 self._rows = [(name,) for name, _definition in definitions]
             return self
 
+        if normalized.startswith("select") and 'from pg_trigger' in normalized:
+            self._rows=list(self.state.authority_guards)
+            return self
+
         if normalized.startswith("select") and "pg_constraint" in normalized:
             requested_names = _requested_catalog_names(safe_params)
             definitions = [
@@ -621,7 +669,7 @@ class _FakeCursor:
         relations: set[str] = set()
         created_column_definitions: dict[str, dict[str, _FakeColumnDefinition]] = {}
         for match in re.finditer(
-            r"create\s+table\s+if\s+not\s+exists\s+([a-z_]+)\s*\((.*?)\)\s*;",
+            r"create\s+table\s+if\s+not\s+exists\s+([a-z_][a-z0-9_]*)\s*\((.*?)\)\s*;",
             str(sql),
             flags=re.IGNORECASE | re.DOTALL,
         ):
@@ -641,7 +689,7 @@ class _FakeCursor:
         indexes: dict[str, _FakeIndexDefinition] = {}
         for match in re.finditer(
             r"create\s+(?:unique\s+)?index\s+if\s+not\s+exists\s+([a-z_]+)\s+"
-            r"on\s+([a-z_]+)\s*\(([^)]+)\)",
+            r"on\s+([a-z_][a-z0-9_]*)\s*\(([^)]+)\)",
             str(sql),
             flags=re.IGNORECASE,
         ):
@@ -702,7 +750,7 @@ class _FakeCursor:
                     expected_constraints[PLATFORM_MODEL_TRIAL_SLOT_UNIQUE_CONTRACT_ID],
                 )
             for key, definition in _expected_constraint_definitions().items():
-                if key in LISTING_CHECKPOINT_CONSTRAINTS and definition.table_name in new_relations:
+                if (key in LISTING_CHECKPOINT_CONSTRAINTS or key == "access_revocation_epochs.scope_pk" or definition.table_name in AUTHORITY_TABLES) and definition.table_name in new_relations:
                     self.state.constraints.setdefault(key, definition)
 
     def _enforce_inline_schema_postconditions(self, sql: str) -> None:
@@ -776,6 +824,10 @@ class _FakeCursor:
             required_columns = {table: expected_columns[table] for table in ("listing_draft_edit_heads", "listing_draft_edit_revisions")}
             required_indexes = {}
             required_constraints = {key: expected_constraints[key] for key in LISTING_CHECKPOINT_CONSTRAINTS}
+        elif migration_id == EPOCH_MIGRATION_ID:
+            required_columns = {"access_revocation_epochs": expected_columns["access_revocation_epochs"]}
+            required_indexes = {}
+            required_constraints = {"access_revocation_epochs.scope_pk": expected_constraints["access_revocation_epochs.scope_pk"]}
         else:
             return
 
@@ -935,6 +987,12 @@ def _intended_schema_state(
     relations, migrations = _initial_relations_and_migrations()
     relations.update({"listing_draft_edit_heads", "listing_draft_edit_revisions"})
     migrations[LISTING_CHECKPOINT_MIGRATION_ID] = LISTING_CHECKPOINT_MIGRATION_CHECKSUM
+    relations.update(SUPPORT_TABLES)
+    migrations[SUPPORT_MIGRATION_ID] = SUPPORT_MIGRATION_CHECKSUM
+    relations.add("access_revocation_epochs")
+    migrations[EPOCH_MIGRATION_ID] = EPOCH_MIGRATION_CHECKSUM
+    relations.update(AUTHORITY_TABLES)
+    migrations[AUTHORITY_MIGRATION_ID] = AUTHORITY_MIGRATION_CHECKSUM
     relations.add("media_credit_buckets")
     migrations[BUCKET_MIGRATION_ID] = BUCKET_MIGRATION_CHECKSUM
     if include_runtime_reconciliation_marker:
@@ -1078,6 +1136,56 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
         self.assertEqual([LISTING_CHECKPOINT_MIGRATION_ID], first.get("applied_migration_ids"))
         self.assertEqual([], second.get("applied_migration_ids"))
         self.assertIn(LISTING_CHECKPOINT_MIGRATION_ID, second.get("skipped_migration_ids", []))
+
+    def test_006_support_upgrade_uses_normal_manifest_and_probes_all_four_tables(self) -> None:
+        relations, migrations, columns, indexes, constraints = _intended_schema_state()
+        relations.difference_update(SUPPORT_TABLES)
+        migrations.pop(SUPPORT_MIGRATION_ID)
+        state = _FakePostgresState(relations=relations, migration_checksums=migrations,
+            relation_columns=columns, indexes=indexes, constraints=constraints)
+        with _fake_psycopg(state):
+            first = run_postgres_migration(database_url=DATABASE_URL)
+            second = run_postgres_migration(database_url=DATABASE_URL)
+        self.assertEqual("ok", first.get("status"), first)
+        self.assertEqual([SUPPORT_MIGRATION_ID], first.get("applied_migration_ids"))
+        self.assertIn(SUPPORT_MIGRATION_ID, second.get("skipped_migration_ids", []))
+        self.assertEqual(1, state.migration_execution_count)
+        for table in SUPPORT_TABLES:
+            state.relations.remove(table)
+            with _postgres_settings() as settings, _fake_psycopg(state):
+                probe = run_postgres_live_probe(settings)
+            self.assertIn(table, probe["schema_contract"]["missing_relations"])
+            state.relations.add(table)
+
+    def test_007_epoch_upgrade_is_additive_idempotent_and_schema_probe_checks_tombstones(self):
+        relations, migrations, columns, indexes, constraints = _intended_schema_state()
+        relations.remove("access_revocation_epochs")
+        migrations.pop(EPOCH_MIGRATION_ID)
+        constraints.pop("access_revocation_epochs.scope_pk")
+        state = _FakePostgresState(relations=relations, migration_checksums=migrations,
+            relation_columns=columns, indexes=indexes, constraints=constraints)
+        with _fake_psycopg(state):
+            first = run_postgres_migration(database_url=DATABASE_URL)
+            second = run_postgres_migration(database_url=DATABASE_URL)
+        self.assertEqual("ok", first.get("status"), first)
+        self.assertEqual([EPOCH_MIGRATION_ID], first.get("applied_migration_ids"))
+        self.assertEqual([], second.get("applied_migration_ids"))
+        self.assertEqual(1, state.migration_execution_count)
+        state.constraints.pop("access_revocation_epochs.scope_pk")
+        with _postgres_settings() as settings, _fake_psycopg(state):
+            probe = run_postgres_live_probe(settings)
+        self.assertEqual("blocked", probe["status"])
+        self.assertIn("access_revocation_epochs.scope_pk", probe["schema_contract"]["missing_constraints"])
+
+    def test_008_probe_rejects_absent_immutable_and_scope_guards(self):
+        relations,migrations,columns,indexes,constraints=_intended_schema_state()
+        state=_FakePostgresState(relations=relations,migration_checksums=migrations,
+            relation_columns=columns,indexes=indexes,constraints=constraints)
+        state.authority_guards=[]
+        with _postgres_settings() as settings,_fake_psycopg(state):
+            result=run_postgres_live_probe(settings)
+        self.assertEqual(result['status'],'blocked',result)
+        self.assertIn('approval_receipt_guard',result['schema_contract']['missing_authority_guards'])
 
     def test_005_checkpoint_migration_preserves_scope_and_operation_uniqueness(self) -> None:
         self.assertTrue(LISTING_CHECKPOINT_MIGRATION.is_file(), "Listing checkpoints require an additive migration")
@@ -1733,9 +1841,11 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
             result = run_postgres_live_probe(settings)
 
         self.assertEqual("ok", result.get("status"), result)
+        # One additional bulk query verifies all three authority triggers and
+        # the active-attempt partial index; no per-relation queries are added.
         self.assertLessEqual(
             len(state.executed_sql),
-            6,
+            7,
             f"live schema probe must use bounded bulk catalog queries, got: {state.executed_sql}",
         )
         self.assertFalse(

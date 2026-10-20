@@ -64,3 +64,15 @@ test("independent approval records do not override current production readiness"
   assert.match(workflow, /is-critical/);
   assert.doesNotMatch(workflow, /<strong>总体门禁<\/strong>/);
 });
+
+test("applied source identity needs an exact runtime match and preserves history", () => {
+  const release = {source_commit: "a".repeat(40), production_deployment_status: "ready", receipt_matches_running_build: true, deployment_verified_at: "2026-10-10T00:00:00Z"};
+  const html = panels.renderLaunchAlignment({ops_console_evidence: {release}});
+  assert.match(html, /运行中的源码版本/);
+  assert.match(html, /a{40}/);
+  assert.match(html, /已应用回执与运行镜像源码一致/);
+  assert.match(html, /版本绑定历史证据/);
+  const mismatch = panels.renderLaunchAlignment({ops_console_evidence: {release: {...release, receipt_matches_running_build: false}}});
+  assert.doesNotMatch(mismatch, /已应用回执与运行镜像源码一致/);
+  assert.match(mismatch, /尚未接入与运行镜像一致/);
+});

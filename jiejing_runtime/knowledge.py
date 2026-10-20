@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -78,10 +79,29 @@ class KnowledgeBase:
         self.pack_meta = pack_meta or {}
 
     @classmethod
-    def load(cls, pack_path: Path = DEFAULT_KNOWLEDGE_PACK) -> "KnowledgeBase":
-        if not pack_path.exists():
+    def load(cls, pack_path: Path = DEFAULT_KNOWLEDGE_PACK, *, strict: bool = False) -> "KnowledgeBase":
+        if not strict and not pack_path.exists():
             return cls([], pack_path=pack_path)
         data = json.loads(pack_path.read_text(encoding="utf-8"))
+        if strict and (
+            not isinstance(data, dict)
+            or not isinstance(data.get("items"), list)
+            or not all(isinstance(data.get(key), str) and data[key].strip() for key in ("version", "generated_at"))
+            or not isinstance(data.get("redaction_report", {}), dict)
+        ):
+            raise ValueError("Invalid explicit knowledge pack schema")
+        if strict:
+            for item in data["items"]:
+                if (
+                    not isinstance(item, dict)
+                    or not all(isinstance(item.get(key), str) and item[key].strip()
+                               for key in ("item_id", "title", "role", "source_ref", "content"))
+                    or not all(isinstance(item.get(key), list) and all(isinstance(value, str) for value in item[key])
+                               for key in ("task_types", "tags"))
+                    or type(item.get("priority", 50)) is not int
+                    or not isinstance(item.get("source_type", "curated_note"), str)
+                ):
+                    raise ValueError("Invalid explicit knowledge item schema")
         items = [
             KnowledgeItem(
                 item_id=str(item.get("item_id", "")),
@@ -187,7 +207,16 @@ def write_knowledge_pack(pack: KnowledgePack, path: Path = DEFAULT_KNOWLEDGE_PAC
     return path
 
 
-def load_default_knowledge_base() -> KnowledgeBase:
+def load_default_knowledge_base(pack_path: str | None = None) -> KnowledgeBase:
+    """Explicit backend argument wins over environment; unset keeps legacy defaults."""
+    selected = pack_path if pack_path is not None else os.environ.get("JIEJING_RUNTIME_KNOWLEDGE_PACK")
+    if selected is not None:
+        if not selected.strip():
+            raise ValueError("Explicit runtime knowledge path must be non-blank")
+        selected_path = Path(selected)
+        if not selected_path.is_absolute() or selected.replace("\\", "/").startswith("//"):
+            raise ValueError("Explicit runtime knowledge path must be absolute local")
+        return KnowledgeBase.load(selected_path, strict=True)
     return KnowledgeBase.load(DEFAULT_KNOWLEDGE_PACK)
 
 

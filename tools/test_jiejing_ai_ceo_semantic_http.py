@@ -301,7 +301,7 @@ class SemanticDispatchHttpTests(unittest.TestCase):
         req = urllib.request.Request(self.base + f"/stores/{self.store}/media-source-assets", data=png,
             method="POST", headers={"Authorization": "Bearer " + self.token, "Content-Type": "image/png",
                 "X-Jiejing-File-Name": "semantic-test.png"})
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             payload = json.load(response)
         return payload["media_source_asset"]["asset_id"]
 

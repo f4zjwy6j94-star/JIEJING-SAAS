@@ -22,6 +22,7 @@ test("Listing renders only the selected wizard step instead of stacking facts, c
   const record = { key: "fixture-project", step: 2, busy: false, message: "" };
   const context = {
     state: { saasListingComposerDraft: { fields: { description: "Saved buyer copy" } } },
+    saasListingCloudContext: () => null,
     escapeHtml: value => String(value ?? ""),
     saasListingSyncedProductRows: () => [],
     latestSaasAiCeoMarketResearchTurn: () => null,
@@ -39,6 +40,7 @@ test("Listing renders only the selected wizard step instead of stacking facts, c
   };
   for (const [name, label] of Object.entries(sections)) context[name] = () => `<section id="fixture-${label}"></section>`;
   vm.createContext(context);
+  vm.runInContext(extract("renderSaasListingRecoveredCheckpointBody"), context);
   vm.runInContext(extract("renderSaasListingWizard"), context);
   vm.runInContext(extract("renderSaasListingComposerWorkspace"), context);
   const render = () => context.renderSaasListingComposerWorkspace({ pendingConfirmations: [], ctx: {} });

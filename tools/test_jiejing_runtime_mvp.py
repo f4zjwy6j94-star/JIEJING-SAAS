@@ -402,14 +402,14 @@ def validate_api_server() -> int:
 
 
 def fetch_json(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=10) as response:
+    with urllib.request.urlopen(url, timeout=30) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
 def post_json(url: str, payload: dict) -> dict:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="POST", headers={"content-type": "application/json"})
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -423,7 +423,7 @@ def options_headers(url: str) -> dict:
             "Access-Control-Request-Headers": "content-type",
         },
     )
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with urllib.request.urlopen(request, timeout=30) as response:
         headers = {key.lower(): value for key, value in response.headers.items()}
         headers["status"] = response.status
         return headers

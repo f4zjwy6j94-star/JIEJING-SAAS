@@ -484,6 +484,7 @@ const baseFunctionNames = [
   "saasMerchantProductFactReviewSummary",
   "saasMerchantProductFactSavedMessage",
   "renderSaasMerchantProductFactField",
+  "renderSaasListingRecoveredCheckpointBody",
   "renderSaasMerchantProductFactsModule",
   "renderSaasListingGapAndRiskPanel",
   "markSaasMerchantProductFactUnknown",
@@ -529,7 +530,7 @@ const baseFunctions = baseFunctionNames.map((name) => {
 }).join("\n") + `\n${extractOptionalFunction("markSaasMerchantProductFactEdited")}\n${extractOptionalFunction("confirmSaasMerchantProductFactSuggestion")}`;
 // These legacy fact forms have no wizard instance. Keep the real pending
 // predicate above so pending generation still prevents a premature unlock.
-const generationContextHelpers = "const saasListingWizardRecord = () => null;\n" + source.slice(
+const generationContextHelpers = "const saasListingWizardRecord = () => null;\nconst saasListingCloudContext = () => null;\n" + source.slice(
   source.indexOf("let saasListingAiGenerationEpoch ="),
   source.indexOf("async function generateSaasListingDraftFromCurrentProject("),
 );

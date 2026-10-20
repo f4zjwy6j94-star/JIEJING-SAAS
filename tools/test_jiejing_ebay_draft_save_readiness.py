@@ -8,8 +8,12 @@ import json
 import os
 import sys
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
+from unittest.mock import patch
+from urllib.request import Request
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -22,6 +26,7 @@ from jiejing_saas.readiness import build_product_readiness  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 from jiejing_saas.secret_store import SecretStoreBoundary  # noqa: E402
 from jiejing_runtime.execution import ExecutionRequest, ExecutionService  # noqa: E402
+from jiejing_saas.ebay_write_adapter import build_ebay_execution_plan
 
 
 def fail(message: str) -> int:
@@ -188,6 +193,7 @@ def _seed_exact_draft_callback(
         decision="approve",
         decided_by=context["user_id"],
         note="Exact readiness callback fixture.",
+        expected_access_epochs=repo.access_session_epochs(user_id=context["user_id"],company_id=context["company_id"]),
     )
     plan = planner.unpublished_draft_authorization_plan(
         company_id=context["company_id"],
@@ -337,6 +343,7 @@ def _seed_draft_execution(
         decision="approve",
         decided_by=context["user_id"],
         note="Approve exact unpublished draft readiness fixture.",
+        expected_access_epochs=repo.access_session_epochs(user_id=context["user_id"],company_id=context["company_id"]),
     )
     binding = {
         "confirmation_id": confirmation["confirmation_id"],
@@ -376,6 +383,11 @@ def _seed_draft_execution(
         confirmation_id=confirmation["confirmation_id"],
         user_id=context["user_id"],
         expected_binding=claim_binding,
+        expected_access_epochs=repo.access_session_epochs(user_id=context['user_id'],company_id=context['company_id']),
+        operation_plan=build_ebay_execution_plan(request=SimpleNamespace(**context,
+            confirmation_id=confirmation['confirmation_id'],task_id=task['task_id'],
+            action_type='save_ebay_listing_draft',payload=publish_payload),
+            marketplace_id='EBAY_US',credential_boundary=boundary,draft_offer_id=''),
     )
     consumed = repo.consume_unpublished_draft_execution_claim(capability=capability)
     claimed = {
@@ -434,7 +446,46 @@ def _seed_draft_execution(
 
 
 def _execution_item(settings: SaaSSettings, repo: SaaSRepository) -> dict[str, Any]:
-    readiness = build_product_readiness(settings, repo)
+    # Keep real readiness/operational-health logic, but isolate its HTTP boundary.
+    expected = (
+        (
+            "health",
+            "https://vault.example.test/v1/sys/health",
+            {},
+            {"initialized": True, "sealed": False},
+        ),
+        (
+            "lookup",
+            "https://vault.example.test/v1/auth/token/lookup-self",
+            {"x-vault-token": "READINESS-VAULT-TOKEN-DO-NOT-LEAK"},
+            {"data": {"id": "READINESS-SYNTHETIC-LOOKUP", "renewable": True, "period": 3600}},
+        ),
+    )
+    observed: list[str] = []
+
+    def synthetic_vault_urlopen(*args: Any, **kwargs: Any) -> BytesIO:
+        attempt = len(observed)
+        # Record before validation: readiness may catch the resulting exception.
+        # Store only fixed labels, never unknown URLs, headers or request bodies.
+        observed.append("unexpected")
+        if (len(args) != 1 or set(kwargs) != {"timeout"}
+                or type(kwargs["timeout"]) is not int or kwargs["timeout"] != 3
+                or attempt >= len(expected)):
+            raise AssertionError("unexpected readiness HTTP call contract")
+        request = args[0]
+        label, url, headers, payload = expected[attempt]
+        if (not isinstance(request, Request) or request.full_url != url
+                or request.get_method() != "GET" or request.data is not None
+                or sorted((key.lower(), value) for key, value in request.header_items())
+                != sorted(headers.items())):
+            raise AssertionError("unexpected readiness Vault request contract")
+        observed[attempt] = label
+        return BytesIO(json.dumps(payload).encode("utf-8"))
+
+    with patch("jiejing_saas.operational_health.urllib.request.urlopen", side_effect=synthetic_vault_urlopen):
+        readiness = build_product_readiness(settings, repo)
+    if observed != ["health", "lookup"]:
+        raise AssertionError("readiness must use only the two exact synthetic Vault GETs")
     return next(item for item in readiness["items"] if item["key"] == "execution_service")
 
 

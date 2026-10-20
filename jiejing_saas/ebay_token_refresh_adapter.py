@@ -64,9 +64,13 @@ def build_ebay_token_refresh_adapter_status(settings: SaaSSettings) -> dict[str,
 
 
 class EbayVaultTokenRefreshAdapter:
-    def __init__(self, settings: SaaSSettings, *, transport: TokenRefreshTransport | None = None) -> None:
+    def __init__(self, settings: SaaSSettings, *, transport: TokenRefreshTransport | None = None,
+                 managed_provider_only: str = "") -> None:
+        if managed_provider_only not in {"", "vault"}:
+            raise ValueError("unsupported_managed_provider")
         self.settings = settings
         self.transport = transport or _urlopen_transport
+        self.managed_provider_only = managed_provider_only
 
     def refresh_access_token_from_secret_ref(
         self,
@@ -87,11 +91,13 @@ class EbayVaultTokenRefreshAdapter:
         if blockers:
             return _blocked(blockers)
 
+        resolver_options = {"managed_provider_only": self.managed_provider_only} if self.managed_provider_only else {}
         resolved = VaultSecretResolver(self.settings, transport=self.transport).resolve_secret(
             secret_ref=secret_ref,
             requested_by="oauth_refresh_service",
             task_scope=task_scope,
             allowed_purposes=["ebay_refresh_token"],
+            **resolver_options,
         )
         if not resolved.get("ok"):
             return _blocked(resolved.get("blocked_by") or ["secret_ref_resolution_failed"])

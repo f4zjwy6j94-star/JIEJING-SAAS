@@ -355,7 +355,23 @@ if (!isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, 
     visibility_start = app_js.index(visibility_marker)
     visibility_end = app_js.index("function renderSaasConfirmPanel", visibility_start)
     visibility_source = app_js[visibility_start:visibility_end]
+    recovery_card_start = app_js.index("function saasEbayRecoveryCard(")
+    recovery_card_end = app_js.index("function saasEbayRecoveryContext(", recovery_card_start)
+    recovery_card_source = app_js[recovery_card_start:recovery_card_end]
+    submitted_start = app_js.index("function saasEbaySubmittedOutcome(")
+    submitted_end = app_js.index("function rememberSaasEbaySubmittedOutcome(", submitted_start)
+    submitted_source = app_js[submitted_start:submitted_end]
     visibility_script = f"""
+globalThis.state = {{
+  saasCompany: {{ company_id: "company-current" }},
+  saasIdentity: {{ company_id: "company-current", user_id: "user-current" }},
+  saasConfirmations: [],
+  saasEbaySubmittedOutcomes: [],
+}};
+let selectedStoreId = "store-current";
+function activeSaasStore() {{ return {{ store_id: selectedStoreId }}; }}
+{recovery_card_source}
+{submitted_source}
 function isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card) {{
   return card?.status === "external_execution_processing_manual_reconcile";
 }}
@@ -368,6 +384,7 @@ const recovery = {{
   confirmation_id: "confirm-controlled-reconcile",
   status: "external_execution_processing_manual_reconcile",
 }};
+state.saasConfirmations = [...pending, recovery];
 const visible = saasDecisionCenterVisibleConfirmations([...pending, recovery], [...pending, recovery]);
 if (visible.length !== 8) throw new Error("decision center visibility limit changed");
 if (visible[0]?.confirmation_id !== "confirm-controlled-reconcile") {{
@@ -375,6 +392,49 @@ if (visible[0]?.confirmation_id !== "confirm-controlled-reconcile") {{
 }}
 if (visible.filter((card) => card.confirmation_id === "confirm-controlled-reconcile").length !== 1) {{
   throw new Error("manual publish reconciliation must appear exactly once");
+}}
+const submitted = {{
+  confirmation_id: "confirm-submitted",
+  company_id: "company-current",
+  store_id: "store-current",
+  action_type: "publish_listing",
+  status: "pending",
+}};
+const outcome = {{
+  userId: "user-current",
+  companyId: "company-current",
+  storeId: "store-current",
+  confirmationId: "confirm-submitted",
+  actionType: "publish_listing",
+}};
+state.saasConfirmations = [...pending, submitted];
+state.saasEbaySubmittedOutcomes = [outcome];
+if (saasEbaySubmittedOutcome(submitted) !== outcome) {{
+  throw new Error("current submitted bookkeeping did not bind the real current card");
+}}
+let submittedVisible = saasDecisionCenterVisibleConfirmations(state.saasConfirmations);
+if (submittedVisible.length !== 8 || submittedVisible.filter((card) => card === submitted).length !== 1) {{
+  throw new Error("submitted pending card must remain visible exactly once");
+}}
+submitted.status = "approved";
+submittedVisible = saasDecisionCenterVisibleConfirmations(state.saasConfirmations);
+if (submittedVisible.filter((card) => card === submitted).length !== 1) {{
+  throw new Error("non-pending submitted result was hidden behind ordinary pending cards");
+}}
+state.saasIdentity.user_id = "user-other";
+if (saasEbaySubmittedOutcome(submitted) !== null ||
+    saasDecisionCenterVisibleConfirmations(state.saasConfirmations).includes(submitted)) {{
+  throw new Error("submitted bookkeeping crossed the current user boundary");
+}}
+state.saasIdentity.user_id = "user-current";
+selectedStoreId = "store-other";
+if (saasEbaySubmittedOutcome(submitted) !== null ||
+    saasDecisionCenterVisibleConfirmations(state.saasConfirmations).includes(submitted)) {{
+  throw new Error("submitted bookkeeping crossed the active store boundary");
+}}
+selectedStoreId = "store-current";
+if (saasEbaySubmittedOutcome(submitted) !== outcome) {{
+  throw new Error("restoring the original scope lost its exact submitted bookkeeping");
 }}
 """
     visibility_result = subprocess.run(

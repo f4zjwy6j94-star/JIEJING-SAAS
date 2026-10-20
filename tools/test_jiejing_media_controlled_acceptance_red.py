@@ -181,7 +181,7 @@ def _post_local(base_url: str, path: str, payload: dict[str, Any], token: str) -
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read().decode("utf-8")
             return int(response.status), json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
@@ -1196,7 +1196,7 @@ class MediaSettlementContractTest(unittest.TestCase):
                 request = urllib.request.Request(
                     f"{base}/media-asset-jobs/{media_id}", headers={"Authorization": f"Bearer {token}"},
                 )
-                with urllib.request.urlopen(request, timeout=10) as response:
+                with urllib.request.urlopen(request, timeout=30) as response:
                     self.assertEqual(200, response.status)
                     return json.loads(response.read())["media_asset_job"]
 

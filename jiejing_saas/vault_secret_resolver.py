@@ -245,6 +245,7 @@ class VaultSecretResolver:
         requested_by: str,
         task_scope: str,
         allowed_purposes: list[str] | None = None,
+        managed_provider_only: str = "",
     ) -> dict[str, Any]:
         blockers = self._resolution_blockers(
             secret_ref=secret_ref,
@@ -261,6 +262,14 @@ class VaultSecretResolver:
                 "raw_secret_returned_to_public_response": False,
                 "secret_exposed": False,
             }
+        if managed_provider_only:
+            # A sensitive integration can require one managed provider. Never
+            # silently read a local fallback if runtime configuration changes.
+            if (managed_provider_only != "vault" or self.settings.vault_provider != "vault"
+                    or not _hashicorp_vault_live_ready(self.settings) or _local_resolver_enabled(self.settings)):
+                return {"ok": False, "status": "resolve_blocked", "blocked_by": ["managed_provider_required"],
+                        "raw_secret_returned_to_public_response": False, "secret_exposed": False}
+            return self._resolve_hashicorp_vault_secret(secret_ref=secret_ref)
         if _hashicorp_vault_live_ready(self.settings) and not _local_resolver_enabled(self.settings):
             return self._resolve_hashicorp_vault_secret(secret_ref=secret_ref)
         if _tencent_ssm_live_ready(self.settings) and not _local_resolver_enabled(self.settings):

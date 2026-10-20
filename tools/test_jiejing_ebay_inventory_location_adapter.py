@@ -8,6 +8,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -192,6 +193,14 @@ class ExistingLocationTransport:
 
 
 def main() -> int:
+    from test_jiejing_ebay_execution_authority import scoped_case
+    from jiejing_saas.confirmation_authority import item_digest
+    repo,scope,_,_ = scoped_case(Path(tempfile.mkdtemp(prefix='b1-location-adapter-')),'location-adapter')
+    epochs=repo.access_session_epochs(user_id=scope['user_id'],company_id=scope['company_id'])
+    created=repo.create_ebay_inventory_location_confirmation(**scope,location_payload=_payload(),payload_sha256=item_digest(_payload()))
+    confirmation=repo.decide_confirmation(company_id=scope['company_id'],confirmation_id=created['confirmation']['confirmation_id'],
+        decided_by=scope['user_id'],decision='approve',note='Original inventory adapter contract.',expected_access_epochs=epochs)
+    boundary=repo.unpublished_draft_execution_credential_boundary(company_id=scope['company_id'],store_id=scope['store_id'])
     transport = LocationTransport()
     adapter = EbayWriteHttpAdapter(_settings(), transport=transport)
     adapter._resolve_access_token = lambda **_: {  # type: ignore[method-assign]
@@ -200,9 +209,9 @@ def main() -> int:
         "access_token": "INVENTORY-LOCATION-TOKEN-DO-NOT-LEAK",
     }
     prepared = adapter.prepare_inventory_location(
-        confirmation=_confirmation("approved"),
+        confirmation=confirmation,
         location_payload=_payload(),
-        credential_boundary=_credential_boundary(),
+        credential_boundary=boundary,
         marketplace_id="EBAY_US",
     )
     if not hasattr(prepared, "claim_binding") or [method for method, _ in transport.calls] != ["GET"]:
@@ -212,10 +221,15 @@ def main() -> int:
             f"calls={[method for method, _ in transport.calls]}"
         )
 
+    claimed=repo.claim_ebay_inventory_location_execution(**scope,confirmation_id=confirmation['confirmation_id'],
+        expected_payload_sha256=item_digest(_payload()),expected_claim_binding=prepared.claim_binding(),marketplace_id='EBAY_US',
+        expected_access_epochs=epochs,operation_plan=prepared.execution_plan())
+    permit=claimed.pop('_execution_permit')
     result = adapter.execute_prepared_inventory_location(
-        confirmation=_confirmation("external_execution_processing_manual_reconcile"),
+        confirmation=claimed,
         prepared=prepared,
         marketplace_id="EBAY_US",
+        execution_permit=permit,
     )
     if not (
         result.get("status") == "inventory_location_created"
@@ -229,9 +243,10 @@ def main() -> int:
         raise AssertionError("claimed execution must create exactly one non-public inventory location")
 
     replay = adapter.execute_prepared_inventory_location(
-        confirmation=_confirmation("external_execution_processing_manual_reconcile"),
+        confirmation=claimed,
         prepared=prepared,
         marketplace_id="EBAY_US",
+        execution_permit=permit,
     )
     if replay.get("status") != "inventory_location_preparation_invalid" or len(transport.calls) != 2:
         raise AssertionError("the opaque inventory-location preparation must be one-shot")

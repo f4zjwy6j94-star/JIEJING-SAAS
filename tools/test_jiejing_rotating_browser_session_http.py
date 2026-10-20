@@ -28,6 +28,39 @@ from jiejing_saas.api_server import SaaSBackendHandler
 OUT = ROOT / "output" / "jiejing-rotating-browser-session-http-test"
 
 
+def refresh_same_browser_session(
+    base_url: str, refresh_token: str, *, current_session_ref: str, expected_count: int
+) -> tuple[str, str]:
+    """Renew the three-second fixture without creating or replacing a device family."""
+    status, body, headers = request_json(
+        f"{base_url}/auth/refresh",
+        cookies={"jiejing_saas_refresh": refresh_token},
+        forwarded_https=True,
+        payload={},
+    )
+    if status != 200 or body != {"ok": True, "session_refreshed": True, "secret_exposed": False}:
+        raise AssertionError("current device refresh must succeed with the fixed value-free response")
+    cookies = response_cookies(headers)
+    access = str((cookies.get("jiejing_saas_session") or {}).value or "")
+    next_refresh = str((cookies.get("jiejing_saas_refresh") or {}).value or "")
+    if not access or not next_refresh or next_refresh == refresh_token:
+        raise AssertionError("current device refresh must rotate both usable browser cookies")
+    inventory_status, inventory, _ = request_json(
+        f"{base_url}/auth/sessions", cookies={"jiejing_saas_session": access}
+    )
+    sessions = inventory.get("sessions") if isinstance(inventory.get("sessions"), list) else []
+    current = [item for item in sessions if item.get("current") is True]
+    if (
+        inventory_status != 200
+        or len(sessions) != expected_count
+        or len(current) != 1
+        or not current_session_ref
+        or current[0].get("session_ref") != current_session_ref
+    ):
+        raise AssertionError("refresh must preserve the exact current device family and inventory count")
+    return access, next_refresh
+
+
 def main() -> int:
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -152,6 +185,7 @@ def main() -> int:
         cookies_a = response_cookies(login_a_headers)
         cookies_b = response_cookies(login_b_headers)
         access_a = str((cookies_a.get("jiejing_saas_session") or {}).value or "")
+        refresh_a = str((cookies_a.get("jiejing_saas_refresh") or {}).value or "")
         access_b = str((cookies_b.get("jiejing_saas_session") or {}).value or "")
         refresh_b = str((cookies_b.get("jiejing_saas_refresh") or {}).value or "")
         sessions_status, sessions_body, _ = request_json(
@@ -188,6 +222,12 @@ def main() -> int:
         )
         if other_status != 201 or cross_status != 404 or cross_body.get("error") != "session_revoke_not_allowed":
             return fail(f"cross-tenant session revocation must fail without existence disclosure: {cross_status}, {cross_body}")
+        # Account setup is unrelated to this exact-device revoke assertion and
+        # can consume the deliberately short access lifetime on a loaded host.
+        access_a, refresh_a = refresh_same_browser_session(
+            base_url, refresh_a,
+            current_session_ref=str(current_sessions[0].get("session_ref") or ""), expected_count=2,
+        )
         revoke_status, revoke_body, _ = request_json(
             f"{base_url}/auth/sessions/{edge_sessions[0].get('session_ref')}/revoke",
             cookies={"jiejing_saas_session": access_a},
@@ -204,6 +244,12 @@ def main() -> int:
             cookies={"jiejing_saas_refresh": refresh_b},
             forwarded_https=True,
             payload={},
+        )
+        # A successful refresh of A's same family also proves B's revocation
+        # did not revoke A; do not substitute a fresh login for this check.
+        access_a, refresh_a = refresh_same_browser_session(
+            base_url, refresh_a,
+            current_session_ref=str(current_sessions[0].get("session_ref") or ""), expected_count=1,
         )
         a_access_status, _a_access, _ = request_json(
             f"{base_url}/me",

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import time
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
@@ -307,6 +308,16 @@ def build_reliability_alert_summary(reliability_analytics: dict[str, Any]) -> di
         timeout_count = min(request_count, max(0, _safe_int(source.get("timeout_count"))))
         sample_count = max(0, _safe_int(source.get("sample_count")))
         p75_duration_ms = max(0, _safe_int(source.get("p75_duration_ms"))) or None
+        first_output = max(0, _safe_int(source.get("p75_first_output_ms"))) or None
+        latest_sample_at = ""
+        try:
+            raw_stamp = source.get("latest_sample_at")
+            if isinstance(raw_stamp, str) and len(raw_stamp) <= 40:
+                parsed_stamp = datetime.fromisoformat(raw_stamp.replace("Z", "+00:00"))
+                if parsed_stamp.tzinfo:
+                    latest_sample_at = parsed_stamp.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            pass
         failure_rate = round((failure_count / request_count) * 100, 2) if request_count else 0.0
         timeout_rate = round((timeout_count / request_count) * 100, 2) if request_count else 0.0
         status = "insufficient_data"
@@ -345,6 +356,9 @@ def build_reliability_alert_summary(reliability_analytics: dict[str, Any]) -> di
                 "request_count": request_count,
                 "sample_count": sample_count,
                 "p75_duration_ms": p75_duration_ms,
+                "p75_first_output_ms": first_output,
+                "first_output_sample_count": max(0, _safe_int(source.get("streamed_request_count"))),
+                "latest_sample_at": latest_sample_at,
                 "failure_count": failure_count,
                 "timeout_count": timeout_count,
                 "failure_rate_percent": failure_rate,

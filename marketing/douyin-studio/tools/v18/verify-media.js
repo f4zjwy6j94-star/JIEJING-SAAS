@@ -1,0 +1,31 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+const studio=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
+const [file,out]=process.argv.slice(2);
+if(!file||!out||!path.isAbsolute(out)||fs.existsSync(out))throw new Error('Exact media and fresh QA directory required');
+fs.mkdirSync(out,{recursive:true});
+const probe=spawnSync(path.join(studio,'node_modules/@remotion/compositor-win32-x64-msvc/ffprobe.exe'),['-v','error','-show_streams','-show_format','-of','json',file],{encoding:'utf8',windowsHide:true});
+if(probe.status!==0)throw new Error('ffprobe failed');
+const info=JSON.parse(probe.stdout),video=info.streams.find(s=>s.codec_type==='video'),audio=info.streams.find(s=>s.codec_type==='audio');
+const linux=p=>`/mnt/${p[0].toLowerCase()}${p.slice(2).replaceAll('\\','/')}`;
+const ff=args=>spawnSync('wsl.exe',['-d','Ubuntu','--exec','/usr/bin/ffmpeg',...args],{encoding:'utf8',windowsHide:true,maxBuffer:6*1024*1024});
+const decode=ff(['-v','error','-xerror','-i',linux(file),'-f','null','-']);
+const loudness=ff(['-hide_banner','-i',linux(file),'-af','loudnorm=I=-16:TP=-1.5:LRA=7:print_format=json','-f','null','-']);
+const stats=JSON.parse(loudness.stderr.slice(loudness.stderr.lastIndexOf('{'),loudness.stderr.lastIndexOf('}')+1));
+const detect=ff(['-hide_banner','-i',linux(file),'-vf','blackdetect=d=0.15:pix_th=0.05','-an','-f','null','-']);
+const black=detect.stderr.split('\n').filter(x=>x.includes('black_start:'));
+const checks={vertical_1080p:video?.width===1080&&video?.height===1920,h264:video?.codec_name==='h264',fps_30:video?.r_frame_rate==='30/1',frame_count_1021:Number(video?.nb_frames)===1021,pixel_format:video?.pix_fmt==='yuv420p',duration:Math.abs(Number(info.format.duration)-1021/30)<.05,audio_aac:audio?.codec_name==='aac',audio_48k_stereo:Number(audio?.sample_rate)===48000&&audio?.channels===2,complete_decode:decode.status===0,no_black_intervals:detect.status===0&&black.length===0,loudness:Number(stats.input_i)>=-18&&Number(stats.input_i)<=-14,true_peak:Number(stats.input_tp)<=-1};
+const frames=[];
+for(const second of [0,2,5.7,10.8,16.5,20.7,25.6,30.8,33.8]){
+ const image=path.join(out,`final-${String(second).replace('.','-')}.png`);
+ const r=ff(['-v','error','-ss',String(second),'-i',linux(file),'-frames:v','1','-n',linux(image)]);
+ if(r.status!==0)throw new Error('Final frame extraction failed');
+ frames.push({second,file:image});
+}
+const result={file,sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),bytes:fs.statSync(file).size,streams:info.streams,format:info.format,loudness:stats,black_intervals:black,frames,checks,technical_passed:Object.values(checks).every(Boolean),human_listening:false,ready_to_publish:false};
+fs.writeFileSync(path.join(out,'MEDIA_QA.safe.json'),JSON.stringify(result,null,2)+'\n',{flag:'wx'});
+console.log(JSON.stringify({file,sha256:result.sha256,checks,loudness:stats,technical_passed:result.technical_passed},null,2));
+if(!result.technical_passed)process.exitCode=1;

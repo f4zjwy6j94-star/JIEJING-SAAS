@@ -23,6 +23,9 @@ SCANNER = "tools/jiejing_secret_scan.py"
 REF = "refs/heads/" + BRANCH
 TRACKING = "refs/remotes/origin/" + BRANCH
 MAX_TEXT_BYTES = 2_500_000  # Existing scanner skips larger/binary files.
+# Owner-approved 2026-10-12. Only tracked app.js gets the larger limit;
+# scan() supplements the unchanged canonical scanner over its complete text.
+REVIEWED_TRACKED_LARGE_SOURCE_LIMITS = {"app.js": 3_000_000}
 SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".html", ".md",
                    ".rst", ".txt", ".json", ".yaml", ".yml", ".toml", ".sh",
@@ -37,6 +40,26 @@ BLOCKED_DIRS = {"assets", "media", "materials", "artifacts", "output", "outputs"
 REVIEWED_TRACKED_ASSET_SOURCES = frozenset({
     "assets/jiejing-first-party-analytics.js",
     "assets/jiejing-ops-panels.js",
+})
+# Owner-approved 2026-10-12: exact tracked config sources, not deploy suffixes.
+REVIEWED_TRACKED_DEPLOY_SOURCES = frozenset({
+    "deploy/Caddyfile.production",
+    "deploy/nginx.ops.production.conf",
+})
+# Exact new source files, not token/credential folders or a wildcard exception.
+REVIEWED_SUPPORT_SOURCES = frozenset({
+    "jiejing_saas/support_token_resolver.py",
+    "tools/test_jiejing_support_token_resolver.py",
+    "jiejing_saas/support_credential_adapters.py",
+    "tools/test_jiejing_support_credential_adapters.py",
+})
+# Owner-approved 2026-10-12: the existing session regression only.
+REVIEWED_TRACKED_TEST_SOURCES = frozenset({
+    "tools/test_jiejing_rotating_browser_session_http.py",
+})
+# Source-save permission only: this never executes SQL or expands migration manifests.
+REVIEWED_MIGRATION_SOURCES = frozenset({
+    "jiejing_saas/migrations/006_support_conversations_postgres.sql",
 })
 SENSITIVE_WORDS = {"env", "secret", "secrets", "credential", "credentials", "token",
                    "tokens", "password", "passwords", "cookie", "cookies", "session",
@@ -214,13 +237,22 @@ def safe_path(git, relative):
         raise Stop("UNSAFE_PATH", "paths", relative_path=relative)
     lower = [part.lower() for part in parts]
     words = {word for part in lower for word in re.split(r"[._-]", part)}
-    reviewed_asset = (relative in REVIEWED_TRACKED_ASSET_SOURCES
+    reviewed_source = (relative in (REVIEWED_TRACKED_ASSET_SOURCES | REVIEWED_TRACKED_DEPLOY_SOURCES)
+                       and git.run(["ls-files", "--error-unmatch", "--", relative],
+                                   "paths", allowed=(0, 1)).returncode == 0)
+    reviewed_support = relative in REVIEWED_SUPPORT_SOURCES
+    reviewed_migration = relative in REVIEWED_MIGRATION_SOURCES
+    reviewed_test = (relative in REVIEWED_TRACKED_TEST_SOURCES
+                     and git.run(["ls-files", "--error-unmatch", "--", relative],
+                                 "paths", allowed=(0, 1)).returncode == 0)
+    reviewed_large = (relative in REVIEWED_TRACKED_LARGE_SOURCE_LIMITS
                       and git.run(["ls-files", "--error-unmatch", "--", relative],
                                   "paths", allowed=(0, 1)).returncode == 0)
-    if (relative == SCANNER or (set(lower) & BLOCKED_DIRS and not reviewed_asset)
-            or words & SENSITIVE_WORDS
+    if (relative == SCANNER or (set(lower) & BLOCKED_DIRS and not reviewed_source)
+            or (words & SENSITIVE_WORDS and not (reviewed_support or reviewed_test))
             or (Path(relative).suffix.lower() not in SOURCE_SUFFIXES
-                and parts[-1] not in {"README", "LICENSE", "Makefile", "Dockerfile"})):
+                and parts[-1] not in {"README", "LICENSE", "Makefile", "Dockerfile"}
+                and not (reviewed_source or reviewed_migration))):
         raise Stop("SENSITIVE_OR_NON_SOURCE_PATH", "paths", relative_path=relative)
     path = git.repo
     for part in parts:
@@ -232,12 +264,13 @@ def safe_path(git, relative):
     if not path.exists():
         if relative == INDEX:
             raise Stop("INDEX_MISSING", "progress_index")
-        if reviewed_asset:
+        if reviewed_source or reviewed_support or reviewed_test or reviewed_migration or reviewed_large:
             raise Stop("PATH_MISSING", "paths", relative_path=relative)
         if git.run(["ls-files", "--error-unmatch", "--", relative], "paths", allowed=(0, 1)).returncode:
             raise Stop("PATH_MISSING", "paths", relative_path=relative)
         return None  # Explicit deletion of a previously tracked source file.
-    if not stat.S_ISREG(path.stat().st_mode) or path.stat().st_size > MAX_TEXT_BYTES:
+    limit = REVIEWED_TRACKED_LARGE_SOURCE_LIMITS[relative] if reviewed_large else MAX_TEXT_BYTES
+    if not stat.S_ISREG(path.stat().st_mode) or path.stat().st_size > limit:
         raise Stop("NON_TEXT_OR_OVERSIZE", "paths", relative_path=relative)
     content = path.read_bytes()
     try:
@@ -280,8 +313,17 @@ def scan(git):
         raise Stop("SECRET_SCANNER_UNTRACKED", "secret_scan")
     if git.run(["diff", "--quiet", "HEAD", "--", SCANNER], "secret_scan", allowed=(0, 1)).returncode:
         raise Stop("SECRET_SCANNER_CHANGED", "secret_scan")
+    # Pin execution and supplemental rules to the immutable Git object, not a
+    # second read/execute of a mutable working file after the guard above.
+    scanner_source = git.run(["show", "HEAD:" + SCANNER], "secret_scan").stdout
+    scanner_command = (
+        "import sys; scope={'__name__':'_work_sync_scanner','__file__':sys.argv[1]}; "
+        "exec(compile(sys.stdin.buffer.read(),sys.argv[1],'exec'),scope); "
+        "raise SystemExit(scope['main']())"
+    )
     try:
-        result = subprocess.run([sys.executable, str(scanner)], cwd=str(git.repo), env=git_env(),
+        result = subprocess.run([sys.executable, "-c", scanner_command, str(scanner)],
+                                input=scanner_source, cwd=str(git.repo), env=git_env(),
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
     except subprocess.TimeoutExpired:
         raise Stop("COMMAND_TIMEOUT", "secret_scan")
@@ -290,6 +332,42 @@ def scan(git):
     git.report["steps"].append({"step": "secret_scan", "exit_code": result.returncode})
     if result.returncode:
         raise Stop("SECRET_SCAN_FAILED", "secret_scan", exit_code=result.returncode)
+    # The canonical scanner is tracked and unchanged above. Reuse its exact
+    # matching and allowlist semantics, without its large-file read skip.
+    # Never print a matched value or execute the scanner's __main__ a second time.
+    for relative in REVIEWED_TRACKED_LARGE_SOURCE_LIMITS:
+        path = git.repo / relative
+        if not path.exists() and not path.is_symlink():
+            continue
+        safe_path(git, relative)
+        if git.run(["ls-files", "--error-unmatch", "--", relative],
+                   "secret_scan", allowed=(0, 1)).returncode:
+            raise Stop("REVIEWED_LARGE_SOURCE_UNTRACKED", "secret_scan", relative_path=relative)
+        try:
+            policy = {"__name__": "_work_sync_reviewed_scanner", "__file__": str(scanner)}
+            exec(compile(scanner_source, str(scanner), "exec"), policy)
+            text = path.read_bytes().decode("utf-8")
+            scan_assignments = policy["_should_scan_assignment_rules"](path)
+            findings = []
+            for line_no, line in enumerate(text.splitlines(), 1):
+                if any(fragment in line.lower() for fragment in policy["ALLOWLIST_FRAGMENTS"]):
+                    continue
+                for label, pattern in policy["RULES"]:
+                    if label in policy["ASSIGNMENT_RULES"] and not scan_assignments:
+                        continue
+                    if label == "secret_assignment" and policy["_assignment_is_path_metadata"](line):
+                        continue
+                    if pattern.search(line):
+                        findings.append({"line": line_no, "rule": label})
+                        break
+        except (OSError, UnicodeError, KeyError, TypeError, ValueError, SyntaxError):
+            raise Stop("SECRET_SCANNER_CONTRACT_INVALID", "secret_scan") from None
+        git.report["steps"].append({"step": "reviewed_large_source_secret_scan",
+                                    "relative_path": relative, "exit_code": int(bool(findings)),
+                                    "complete_text_scanned": True})
+        if findings:
+            raise Stop("SECRET_SCAN_FAILED", "secret_scan", relative_path=relative,
+                       findings=findings[:80], finding_count=len(findings))
 
 
 def receive(git, report):

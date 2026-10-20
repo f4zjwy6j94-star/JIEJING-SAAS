@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -15,7 +16,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread
 from typing import Any
 
 
@@ -71,14 +72,22 @@ def fail(message: str) -> int:
     return 1
 
 
+def available_loopback_port() -> int:
+    # This is only a candidate; the owned child's bind receipt is required below.
+    # Never stop an unrelated preview just to claim a fixed fixture port.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     for path in (SAAS_DB, RUNTIME_DB):
         if path.exists():
             path.unlink()
-    port = 8794
-    provider_port = 8795
-    provider_server = ThreadingHTTPServer(("127.0.0.1", provider_port), FakeMediaProviderHandler)
+    provider_server = ThreadingHTTPServer(("127.0.0.1", 0), FakeMediaProviderHandler)
+    provider_port = int(provider_server.server_address[1])
+    port = available_loopback_port()
     provider_thread = Thread(target=provider_server.serve_forever, daemon=True)
     provider_thread.start()
     process_env = os.environ.copy()
@@ -100,6 +109,7 @@ def main() -> int:
     process = subprocess.Popen(
         [
             sys.executable,
+            "-u",
             str(ROOT / "tools" / "jiejing_saas_backend_cli.py"),
             "serve",
             "--db",
@@ -115,14 +125,18 @@ def main() -> int:
         ],
         cwd=str(ROOT),
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
         env=process_env,
     )
     try:
         base_url = f"http://127.0.0.1:{port}"
+        if wait_for_owned_backend(process, base_url):
+            return fail("owned saas backend did not confirm its listening address")
         if wait_for_health(base_url):
             return fail("saas backend did not become healthy")
+        if process.poll() is not None:
+            return fail("owned saas backend exited before the first business request")
         registered = post_json(
             f"{base_url}/auth/register",
             {
@@ -615,8 +629,32 @@ def main() -> int:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=5)
         provider_server.shutdown()
         provider_server.server_close()
+
+
+def wait_for_owned_backend(process: subprocess.Popen[str], base_url: str, timeout: float = 15) -> int:
+    ready = Event()
+    expected = f"Jiejing SaaS Backend MVP listening on {base_url} env=test"
+
+    def drain_output() -> None:
+        if process.stdout is not None:
+            with process.stdout:
+                for line in process.stdout:
+                    if line.rstrip("\r\n") == expected:
+                        ready.set()
+
+    # Keep draining after the receipt, including stderr, so the child cannot
+    # block on a full pipe during the business regression.
+    Thread(target=drain_output, daemon=True).start()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return 1
+        if ready.wait(timeout=0.05):
+            return 0 if process.poll() is None else 1
+    return 1
 
 
 def wait_for_health(base_url: str) -> int:

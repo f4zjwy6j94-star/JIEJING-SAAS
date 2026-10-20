@@ -626,7 +626,8 @@ media_generation_ready = (
             "configured": True,
             "live_generation_enabled": True,
             "live_image_generation_enabled": True,
-            "live_video_generation_enabled": True,
+            # Approved release scope: images available, video explicitly deferred.
+            "live_video_generation_enabled": False,
             "live_provider_calls_allowed": True,
             "asset_manifest_required": True,
             "asset_review_required": True,

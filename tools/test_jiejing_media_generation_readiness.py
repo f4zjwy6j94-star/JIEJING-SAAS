@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from jiejing_saas.readiness import _public_media_generation_status
+from jiejing_saas.readiness import _public_media_generation_status, build_media_generation_capability_status
 
 
 @contextmanager
@@ -99,10 +99,57 @@ def main() -> int:
         raise AssertionError(f"live media readiness should still wait for review: {live_ready}")
     if live_ready.get("live_image_generation_enabled") is not True:
         raise AssertionError("live image generation should be enabled when driver and backend gate are ready")
-    if live_ready.get("live_video_generation_enabled") is not True:
-        raise AssertionError("live video generation should be enabled only when the video gate is also ready")
+    if live_ready.get("live_video_generation_enabled") is not False:
+        raise AssertionError("configured video driver and live switches must not bypass unapproved video pricing")
+    if live_ready.get("video_pricing_approved") is not False:
+        raise AssertionError("unapproved video pricing must be projected separately from provider configuration")
+    if live_ready.get("video_generation_blocked_by") != ["video_media_points_pricing_not_approved"]:
+        raise AssertionError("video capability must explain the same pricing block enforced before queueing")
+    if "视频生成暂未开放" not in live_ready.get("customer_visible_summary", ""):
+        raise AssertionError("the merchant summary must not imply that configured video is available")
     if "unit-test-secret" in json.dumps(live_ready, ensure_ascii=False):
         raise AssertionError("live media readiness leaked the credential")
+
+    # Public capability projection must preserve image behavior in every switch
+    # combination without turning configured-but-unpriced video into readiness.
+    for configured in (False, True):
+        for live_enabled in (False, True):
+            for video_enabled in (False, True):
+                with patched_env(
+                    **{
+                        **base_env,
+                        "FAL_KEY": "unit-test-secret" if configured else None,
+                        "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED": str(live_enabled),
+                        "JIEJING_MEDIA_LIVE_VIDEO_ENABLED": str(video_enabled),
+                    }
+                ):
+                    capability = build_media_generation_capability_status()
+                    legacy_projection = _public_media_generation_status()
+                assert_common_guardrails(capability)
+                if capability != legacy_projection:
+                    raise AssertionError("legacy readiness and merchant capability projections must agree")
+                if capability.get("live_image_generation_enabled") is not (configured and live_enabled):
+                    raise AssertionError("video pricing correction must not change image-generation behavior")
+                if capability.get("live_provider_calls_allowed") is not (configured and live_enabled):
+                    raise AssertionError("existing image/provider gates must remain unchanged")
+                if capability.get("live_video_generation_enabled") is not False:
+                    raise AssertionError("no switch combination may make unpriced video generation available")
+                if capability.get("video_pricing_approved") is not False:
+                    raise AssertionError("provider configuration is not a pricing approval")
+                expected_blockers = []
+                if not configured:
+                    expected_blockers.append("media_provider_not_configured")
+                if not live_enabled:
+                    expected_blockers.append("live_media_generation_disabled")
+                if not video_enabled:
+                    expected_blockers.append("video_provider_disabled")
+                expected_blockers.append("video_media_points_pricing_not_approved")
+                if capability.get("video_generation_blocked_by") != expected_blockers:
+                    raise AssertionError("video projection must preserve each independent admission blocker")
+                if capability.get("contract_version") != "2026-07-05-media-generation-readiness":
+                    raise AssertionError("existing capability consumers must retain the versioned projection")
+                if "unit-test-secret" in json.dumps(capability, ensure_ascii=False):
+                    raise AssertionError("capability matrix leaked the test credential")
 
     print("PASS jiejing_media_generation_readiness")
     return 0

@@ -21,21 +21,46 @@ test("browser smoke owned backend releases its temporary directory before stop r
 });
 
 async function holdWindowsFile(filePath, durationMs) {
+  const began = Date.now();
+  const lifecycle = { events: [], stderr: "" };
   const child = spawn("powershell.exe", ["-NoProfile", "-Command",
     "$stream = [IO.File]::Open($env:JIEJING_TEST_LOCK_PATH, 'Open', 'Read', 'None'); " +
     "[Console]::WriteLine('locked'); [Console]::Out.Flush(); " +
-    `Start-Sleep -Milliseconds ${durationMs}; $stream.Dispose()`], {
+    `try { Start-Sleep -Milliseconds ${durationMs} } finally { $stream.Dispose() }; ` +
+    "[Console]::WriteLine('released'); [Console]::Out.Flush()"], {
     env: { ...process.env, JIEJING_TEST_LOCK_PATH: filePath }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stderr.resume();
+  child.fixtureLifecycle = lifecycle;
+  child.fixtureExited = new Promise(resolve => child.once("exit", (code, signal) => {
+    lifecycle.events.push({ event: "exit", ms: Date.now() - began, code, signal });
+    resolve();
+  }));
+  child.stderr.on("data", data => { lifecycle.stderr = (lifecycle.stderr + String(data)).slice(-2048); });
+  let stdout = "";
+  let ready = false;
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => { child.kill(); reject(new Error("file lock fixture did not start")); }, 5000);
-    child.stdout.once("data", data => {
-      clearTimeout(timer);
-      if (!String(data).includes("locked")) return reject(new Error("file lock fixture was not ready"));
-      resolve();
+    child.stdout.on("data", data => {
+      stdout += String(data);
+      let newline;
+      while ((newline = stdout.indexOf("\n")) >= 0) {
+        const line = stdout.slice(0, newline).trim();
+        stdout = stdout.slice(newline + 1);
+        if (line === "locked" || line === "released") {
+          lifecycle.events.push({ event: line, ms: Date.now() - began });
+        }
+        if (line === "locked" && !ready) {
+          ready = true;
+          clearTimeout(timer);
+          resolve();
+        }
+      }
     });
     child.once("error", error => { clearTimeout(timer); reject(error); });
+    child.once("exit", () => {
+      clearTimeout(timer);
+      if (!ready) reject(new Error(`file lock fixture exited before ready: ${JSON.stringify(lifecycle)}`));
+    });
   });
   return child;
 }
@@ -49,8 +74,12 @@ test("browser smoke cleanup waits for a briefly locked Windows fixture file", { 
   try {
     await stopOwnedBackend({ child: { exitCode: 0 }, tempRoot, tempParent });
     assert.equal(fs.existsSync(tempRoot), false);
+  } catch (error) {
+    error.message += `; synthetic lock lifecycle: ${JSON.stringify(lock.fixtureLifecycle)}`;
+    throw error;
   } finally {
     if (lock.exitCode === null && lock.signalCode === null) lock.kill();
+    await lock.fixtureExited;
   }
 });
 

@@ -12,6 +12,7 @@ import hashlib
 import base64
 import json
 import os
+import re
 import struct
 import subprocess
 import time
@@ -284,9 +285,38 @@ class MediaGenerationAdapter:
 
     def _image_payload(self, config: MediaGenerationConfig, *, provider: str = "", model: str = "") -> dict[str, Any]:
         normalized_provider = self._provider(provider)
+        prompt = config.image_prompt or f"Generate eBay-safe product images for {config.product}."
+        if config.reference_image_url:
+            prompt += (
+                " Use the reference as product-identity evidence, not a fixed camera frame. "
+                "Create a new photographic composition; do not merely cut out the original photo or replace its background. "
+                "Recompose the product with deliberate camera distance, framing, placement and lighting. "
+                "Use only viewing angles and visible construction supported by the reference; do not fabricate unseen faces. "
+                "Keep the recognizable shape, proportions, color, component count, printed artwork and legible lettering "
+                "consistent with the actual item. Do not reinterpret the product as a new design. "
+                "An uncertain marking must not be replaced with a guessed word, number or year. "
+            )
+            if int(config.image_count or 1) > 1:
+                prompt += (
+                    " Across this requested image set, use different camera distances and coherent compositions "
+                    "(contextual view, medium product view, supported detail view and alternate framing), "
+                    "not identical cutouts on different backgrounds. Each output is one photograph, not a collage. "
+                )
+        scenes = [str(scene).strip() for scene in config.scene_types if str(scene).strip()]
+        if scenes:
+            # FAL/OpenAI do not consume our scene_types field. Compile the
+            # merchant's presentation choices into the actual wire prompt.
+            # These choices must not override the grounded product facts.
+            prompt += (
+                " Requested photographic scene and output direction: "
+                + json.dumps(scenes, ensure_ascii=False)
+                + ". Apply this to composition, environment and lighting only; preserve all locked product facts. "
+                "Do not invent hidden geometry, product markings, accessories, dimensions or performance. "
+                "Environmental props, if requested, are not included product parts."
+            )
         if normalized_provider == "fal":
             payload: dict[str, Any] = {
-                "prompt": config.image_prompt or f"Generate eBay-safe product images for {config.product}.",
+                "prompt": prompt,
                 "image_size": _fal_image_size(config.image_sizes[0] if config.image_sizes else ""),
                 "quality": config.image_quality or os.environ.get("JIEJING_FAL_IMAGE_QUALITY") or "low",
                 "num_images": max(1, min(int(config.image_count or 1), 4)),
@@ -298,7 +328,7 @@ class MediaGenerationAdapter:
         if normalized_provider == "openai":
             payload: dict[str, Any] = {
                 "model": os.environ.get("JIEJING_OPENAI_IMAGE_MODEL") or config.image_model or "gpt-image-1",
-                "prompt": config.image_prompt or f"Generate eBay-safe product images for {config.product}.",
+                "prompt": prompt,
                 "size": _openai_image_size(config.image_sizes[0] if config.image_sizes else ""),
                 "n": max(1, min(int(config.image_count or 1), 4)),
             }
@@ -308,7 +338,7 @@ class MediaGenerationAdapter:
             return payload
         return {
             "product": config.product,
-            "prompt": config.image_prompt or f"Generate eBay-safe product images for {config.product}.",
+            "prompt": prompt,
             "detail_page_prompt": config.detail_page_prompt,
             "count": config.image_count,
             "sizes": config.image_sizes,
@@ -761,29 +791,32 @@ def _mp4_duration_seconds(data: bytes) -> float | None:
 
 def _fal_image_size(value: str) -> str | dict[str, int]:
     text = str(value or "").strip().lower()
+    # Browser option values include a human label and the multiplication sign.
+    # Parse that actual wire value, not just synthetic "1600x1600" fixtures.
+    pixels = re.search(r"(?:^|\s)(\d+)\s*[x×]\s*(\d+)\s*$", text)
+    if pixels:
+        text = f"{int(pixels.group(1))}x{int(pixels.group(2))}"
+    # Keep only aliases with the same pixel dimensions. Larger explicit
+    # requests must use FAL's width/height form, not silently become 1024px.
     presets = {
-        "1600x1600": "square_hd",
-        "1200x1200": "square_hd",
         "1024x1024": "square_hd",
         "512x512": "square",
-        "1200x1600": "portrait_4_3",
         "768x1024": "portrait_4_3",
-        "1600x1200": "landscape_4_3",
         "1024x768": "landscape_4_3",
         "1024x576": "landscape_16_9",
         "576x1024": "portrait_16_9",
     }
     if text in presets:
         return presets[text]
-    if "x" in text:
-        left, right = text.split("x", 1)
-        try:
-            width = int(left.strip())
-            height = int(right.strip())
-        except ValueError:
-            return "square_hd"
-        if width > 0 and height > 0 and width % 16 == 0 and height % 16 == 0:
-            return {"width": width, "height": height}
+    if pixels:
+        width, height = int(pixels.group(1)), int(pixels.group(2))
+        if (width <= 0 or height <= 0 or width % 16 or height % 16
+                or max(width, height) > 3840 or max(width, height) > 3 * min(width, height)
+                or not 655360 <= width * height <= 8294400):
+            raise ValueError("Requested image dimensions are unsupported; select a supported pixel size.")
+        return {"width": width, "height": height}
+    if re.search(r"(?:\d\s*[x×]|[x×]\s*[-+]?\d)", text):
+        raise ValueError("Requested image dimensions are invalid; select a supported pixel size.")
     return "square_hd"
 
 

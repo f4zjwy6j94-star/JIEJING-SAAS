@@ -97,7 +97,7 @@ def _get_json(base_url: str, path: str, token: str = "") -> tuple[int, dict[str,
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     request = urllib.request.Request(f"{base_url}{path}", headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:
             return int(response.status), json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8")

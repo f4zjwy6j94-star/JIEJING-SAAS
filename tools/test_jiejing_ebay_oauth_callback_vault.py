@@ -485,6 +485,7 @@ def _run_local_secret_resolver_callback(*, local_secret_path: Path) -> str:
         decision="approve",
         decided_by=request["created_by"],
         note="Regression only: a real strong boundary must win before approval consumption.",
+        expected_access_epochs=repo.access_session_epochs(user_id=request["created_by"],company_id=store["company_id"]),
     )
     oauth_request_count_before_duplicate = len(
         repo.list_oauth_authorization_requests(company_id=store["company_id"], store_id=store["store_id"])
@@ -1311,6 +1312,7 @@ def _seed_unpublished_draft_oauth_request(
         decided_by=store["user_id"],
         decision="approve",
         note="Focused exact draft OAuth callback fixture.",
+        expected_access_epochs=repo.access_session_epochs(user_id=store["user_id"],company_id=store["company_id"]),
     )
     plan["confirmation_id"] = confirmation["confirmation_id"]
     request = repo.create_approved_unpublished_draft_oauth_authorization_request(

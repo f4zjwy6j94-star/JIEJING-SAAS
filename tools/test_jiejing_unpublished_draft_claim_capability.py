@@ -9,6 +9,8 @@ import os
 import pickle
 import sys
 import tempfile
+import copy
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +30,7 @@ from jiejing_saas.repository import (  # noqa: E402
     UnpublishedDraftClaimCapability,
 )
 from jiejing_saas.secret_store import SecretStoreBoundary  # noqa: E402
+from jiejing_saas.ebay_write_adapter import build_ebay_execution_plan
 
 
 HASH_KEYS = (
@@ -121,6 +124,7 @@ def _new_case(root: Path, case_key: str) -> tuple[SaaSRepository, dict[str, str]
         decision="approve",
         decided_by=context["user_id"],
         note="Approve exact draft claim capability fixture.",
+        expected_access_epochs=repo.access_session_epochs(user_id=context["user_id"],company_id=context["company_id"]),
     )
     oauth_plan = planner.unpublished_draft_authorization_plan(
         company_id=context["company_id"],
@@ -201,6 +205,7 @@ def _new_case(root: Path, case_key: str) -> tuple[SaaSRepository, dict[str, str]
         decision="approve",
         decided_by=context["user_id"],
         note="Approve one exact unpublished draft claim.",
+        expected_access_epochs=repo.access_session_epochs(user_id=context["user_id"],company_id=context["company_id"]),
     )
     binding = {
         "confirmation_id": str(confirmation["confirmation_id"]),
@@ -258,7 +263,34 @@ def _claim(
         confirmation_id=str(confirmation["confirmation_id"]),
         user_id=context["user_id"],
         expected_binding=binding,
+        **_plan_args(repo, context, confirmation),
     )
+
+
+def _plan_args(repo, context, confirmation):
+    request=SimpleNamespace(**context,confirmation_id=confirmation['confirmation_id'],task_id=confirmation['task_id'],
+        action_type='save_ebay_listing_draft',payload=confirmation['item']['publish_payload'])
+    boundary=repo.unpublished_draft_execution_credential_boundary(company_id=context['company_id'],store_id=context['store_id'])
+    return dict(expected_access_epochs=repo.access_session_epochs(user_id=context['user_id'],company_id=context['company_id']),
+        operation_plan=build_ebay_execution_plan(request=request,marketplace_id='EBAY_US',credential_boundary=boundary,draft_offer_id=''))
+
+
+def _new_approved_replacement(repo,context,confirmation,binding):
+    old=repo.get_confirmation(company_id=context['company_id'],confirmation_id=confirmation['confirmation_id'])
+    replacement=repo.create_confirmation(company_id=context['company_id'],store_id=context['store_id'],task_id=old['task_id'],
+        runtime_run_id=old['runtime_run_id'],action_type=old['action_type'],title=old['title'],item=copy.deepcopy(old['item']),
+        created_by=context['user_id'],replaces_confirmation_id=old['confirmation_id'])
+    assert replacement['status']=='pending' and not replacement['decided_by'] and not replacement['decided_at']
+    for key in ('item','decided_by','decided_at','decision_note'):
+        assert repo.get_confirmation(company_id=context['company_id'],confirmation_id=old['confirmation_id'])[key]==old[key]
+    new_binding={**binding,'confirmation_id':replacement['confirmation_id'],'idempotency_key':binding['idempotency_key']+'-replacement'}
+    try: _claim(repo,context,replacement,new_binding)
+    except ConfirmationDecisionConflict: pass
+    else: raise AssertionError('A new pending must not execute before its own approval')
+    replacement=repo.decide_confirmation(company_id=context['company_id'],confirmation_id=replacement['confirmation_id'],
+        decision='approve',decided_by=context['user_id'],note='Independent new approval after exact zero-write retirement.',
+        expected_access_epochs=repo.access_session_epochs(user_id=context['user_id'],company_id=context['company_id']))
+    return _claim(repo,context,replacement,new_binding)
 
 
 def _case_legacy_claim_rejected(root: Path) -> None:
@@ -300,6 +332,7 @@ def _case_wrong_claim_bindings(root: Path) -> None:
                 confirmation_id=str(confirmation["confirmation_id"]),
                 user_id=context["user_id"],
                 expected_binding=invalid_binding,
+                **_plan_args(repo,context,confirmation),
             ),
         )
 
@@ -413,9 +446,11 @@ def _case_abort_restores_once_without_write_audit(root: Path) -> None:
     if not callable(getattr(capability, "abort", None)):
         raise AssertionError("repository must expose one-shot abort_unpublished_draft_execution_claim")
     aborted = capability.abort()
-    if aborted.get("status") != "approved" or aborted.get("writes_to_ebay") is not False:
-        raise AssertionError(f"prewrite abort must restore approved without a write: {aborted}")
-    _assert_approved(repo, context["company_id"], str(confirmation["confirmation_id"]))
+    if aborted.get("status") != "needs_revision" or aborted.get("writes_to_ebay") is not False:
+        raise AssertionError(f"prewrite abort must retire old authority without a write: {aborted}")
+    stored=repo.get_confirmation(company_id=context['company_id'],confirmation_id=confirmation['confirmation_id'])
+    assert stored['status']=='needs_revision'
+    for key in ('item','decided_by','decided_at','decision_note'): assert stored[key]==confirmation[key]
     try:
         capability.abort()
     except ConfirmationDecisionConflict:
@@ -441,10 +476,13 @@ def _case_abort_restores_once_without_write_audit(root: Path) -> None:
         ).fetchone()
     if not row or row["status"] != "aborted" or row["consumed_at"]:
         raise AssertionError("prewrite abort must terminate the claim without recording consumption")
-    _renewed, renewed_capability = _claim(repo, context, confirmation, binding)
+    try: _claim(repo,context,confirmation,binding)
+    except ConfirmationDecisionConflict: pass
+    else: raise AssertionError('The retired old confirmation cannot be reclaimed')
+    _renewed, renewed_capability = _new_approved_replacement(repo, context, confirmation, binding)
     renewed = renewed_capability.consume()
     if renewed.get("external_execution_claimed") is not True or not renewed_capability.was_consumed():
-        raise AssertionError("a safe abort must allow one new independently minted claim")
+        raise AssertionError("a safe abort must allow one separately approved linked new claim")
 
 
 def _case_expired_prewrite_claim_recovers_safely(root: Path) -> None:
@@ -460,15 +498,15 @@ def _case_expired_prewrite_claim_recovers_safely(root: Path) -> None:
         confirmation_id=str(confirmation["confirmation_id"]),
         user_id=context["user_id"],
     )
-    if recovered.get("status") != "approved" or recovered.get("writes_to_ebay") is not False:
-        raise AssertionError(f"an expired unchanged prewrite claim must restore approval: {recovered}")
+    if recovered.get("status") != "needs_revision" or recovered.get("writes_to_ebay") is not False:
+        raise AssertionError(f"an expired unchanged prewrite claim must retire old approval: {recovered}")
     try:
         expired_capability.consume()
     except ConfirmationDecisionConflict:
         pass
     else:
         raise AssertionError("the capability from an expired recovered claim must stay permanently invalid")
-    _renewed, renewed_capability = _claim(repo, context, confirmation, binding)
+    _renewed, renewed_capability = _new_approved_replacement(repo, context, confirmation, binding)
     if renewed_capability.consume().get("external_execution_claimed") is not True:
         raise AssertionError("expired safe recovery must permit one fresh independently minted claim")
 
@@ -496,12 +534,12 @@ def _case_expired_prewrite_claim_recovers_safely(root: Path) -> None:
         company_id=context["company_id"], confirmation_id=str(confirmation["confirmation_id"])
     ) or {}
     if (
-        reapproval.get("status") != "pending"
-        or stored.get("status") != "pending"
-        or stored.get("decided_by")
-        or stored.get("decided_at")
+        reapproval.get("status") != "needs_revision"
+        or stored.get("status") != "needs_revision"
+        or not stored.get("decided_by")
+        or not stored.get("decided_at")
     ):
-        raise AssertionError(f"an expired stale approval must require a fresh merchant decision: {reapproval}")
+        raise AssertionError(f"an expired stale approval must preserve history and require a new confirmation: {reapproval}")
 
 
 def _case_capability_is_opaque(root: Path) -> None:
@@ -569,7 +607,7 @@ def main() -> int:
                 ("fake replay and concurrent consume", _case_fake_replay_and_concurrent_consume),
                 ("post-claim payload drift rejected", _case_post_claim_payload_drift),
                 ("post-claim credential drift rejected", _case_post_claim_credential_drift),
-                ("prewrite abort restores approved", _case_abort_restores_once_without_write_audit),
+                ("prewrite abort retires old and separately approves linked new", _case_abort_restores_once_without_write_audit),
                 ("expired prewrite claim recovers safely", _case_expired_prewrite_claim_recovers_safely),
                 ("capability remains opaque", _case_capability_is_opaque),
             )

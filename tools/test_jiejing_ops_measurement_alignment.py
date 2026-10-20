@@ -74,6 +74,21 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(traffic["visitors"], 1)
         self.assertEqual(traffic["source_breakdown"][0]["source"], "unknown")
 
+    def test_model_sample_time_and_denominators_use_actual_telemetry_in_window(self):
+        account = self.repo.create_user_with_company(email="timing@jiejing-shop.cn", password="synthetic-only-password", company_name="Timing fixture")
+        for index, timestamp in enumerate(("2026-10-09T01:00:00+08:00", "2026-10-08T17:15:00+00:00", "2026-10-08T18:00:00+00:00")):
+            row = self.repo.record_model_usage(company_id=account["company"]["company_id"], user_id=account["user"]["user_id"], task_id=None,
+                usage_owner="platform", model_family="synthetic", model_label="synthetic", request_count=2,
+                input_tokens=1, output_tokens=1, total_tokens=2, cost_minor=0, currency="CNY", cost_status="synthetic", idempotency_key=f"timing-{index}",
+                details={"reliability": {"request_count": 2, "success_count": 2, "duration_samples_ms": [100, 200], "first_output_samples_ms": [30]}})
+            with self.repo._connect() as conn:
+                conn.execute("update model_usage_ledger set created_at = ? where usage_id = ?", (timestamp, row["usage_id"]))
+        model = self.repo.platform_operations_overview(period_days=1, now_utc=self.now)["provider_reliability_analytics"]["model"]
+        self.assertEqual(model["latest_sample_at"], "2026-10-08T17:15:00+00:00")
+        self.assertEqual(model["request_count"], 4)
+        self.assertEqual(model["sample_count"], 4)
+        self.assertEqual(model["streamed_request_count"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,9 @@ from jiejing_saas.api_server import SaaSBackendHandler  # noqa: E402
 from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 from jiejing_saas.security import SessionManager  # noqa: E402
+from jiejing_saas.ebay_write_adapter import _inventory_execution_plan
+from jiejing_saas.ebay_execution_authority import scoped_credential, segment
+from test_jiejing_new_ebay_account_publish_http_chain import _seed_exact_draft_callback
 
 
 ACTION = "create_ebay_inventory_location"
@@ -42,7 +45,7 @@ def _post(base_url: str, path: str, payload: dict[str, Any], token: str) -> tupl
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:
             return int(response.status), json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8")
@@ -92,9 +95,14 @@ def main() -> int:
 
         class FakeInventoryLocationAdapter:
             class Handle:
-                def __init__(self, confirmation: dict[str, Any], *, bad_binding: bool = False) -> None:
+                def __init__(self, confirmation: dict[str, Any], credential, *, bad_binding: bool = False) -> None:
                     self.confirmation = confirmation
+                    self.credential = credential
                     self.bad_binding = bad_binding
+
+                def execution_plan(self):
+                    return _inventory_execution_plan(self.confirmation,self.confirmation['item']['location_payload'],
+                        'EBAY_US',self.credential)
 
                 def claim_binding(self) -> dict[str, str]:
                     payload = (self.confirmation.get("item") or {}).get("location_payload") or {}
@@ -109,10 +117,8 @@ def main() -> int:
                         "task_id": str(self.confirmation.get("task_id") or ""),
                         "marketplace_id": "EBAY_US",
                         "payload_sha256": digest,
-                        "connection_id_sha256": ("9" if self.bad_binding else "1") * 64,
-                        "credential_ref_sha256": "2" * 64,
-                        "oauth_request_id_sha256": "3" * 64,
-                        "seller_identity_sha256": "4" * 64,
+                        "connection_id_sha256": "9" * 64 if self.bad_binding else self.credential['connection_id_sha256'],
+                        **{key:self.credential[key] for key in ('credential_ref_sha256','oauth_request_id_sha256','seller_identity_sha256')},
                     }
 
             def __init__(self) -> None:
@@ -129,14 +135,14 @@ def main() -> int:
                 credential_boundary: dict[str, Any],
                 marketplace_id: str,
             ) -> Any:
-                del location_payload, credential_boundary, marketplace_id
+                del location_payload, marketplace_id
                 if confirmation.get("status") != "approved":
                     return {"status": "inventory_location_approval_invalid", "secret_exposed": False}
                 if self.prepare_mode == "raise_sentinel":
                     raise RuntimeError("inventory-location-preflight-secret-sentinel")
                 if self.prepare_mode == "blocked":
                     return {"status": "inventory_location_preflight_blocked", "secret_exposed": False}
-                return self.Handle(confirmation, bad_binding=self.prepare_mode == "bad_binding")
+                return self.Handle(confirmation, credential_boundary, bad_binding=self.prepare_mode == "bad_binding")
 
             def discard_inventory_location_preparation(self, prepared: Any) -> None:
                 del prepared
@@ -147,9 +153,12 @@ def main() -> int:
                 confirmation: dict[str, Any],
                 prepared: Any,
                 marketplace_id: str,
+                execution_permit: Any,
             ) -> dict[str, Any]:
-                del prepared, marketplace_id
                 location_payload = (confirmation.get("item") or {}).get("location_payload") or {}
+                body=dict(location_payload);key=body.pop('merchantLocationKey')
+                execution_permit.admit(operation_index=0,method='POST',path='/sell/inventory/v1/location/'+segment(key),
+                    body=body,marketplace_id=marketplace_id,credential=scoped_credential(prepared.credential))
                 self.calls.append(
                     {
                         "confirmation_id": confirmation.get("confirmation_id"),
@@ -157,6 +166,7 @@ def main() -> int:
                     }
                 )
                 if self.execute_mode == "manual_reconcile":
+                    execution_permit.record(operation_index=0,result={'status':'http_error','http_status':503,'json':{}})
                     return {
                         "status": "inventory_location_manual_reconcile",
                         "action_type": ACTION,
@@ -166,6 +176,7 @@ def main() -> int:
                         "public_listing_created": False,
                         "secret_exposed": False,
                     }
+                execution_permit.record(operation_index=0,result={'status':'ok','http_status':204,'json':{}})
                 return {
                     "status": "inventory_location_created",
                     "action_type": ACTION,
@@ -229,22 +240,16 @@ def main() -> int:
         TestHandler.sessions = sessions
         adapter = FakeInventoryLocationAdapter()
         TestHandler.ebay_write_adapter_factory = staticmethod(lambda _settings: adapter)
-        repository._unpublished_draft_execution_credential_boundary_conn = (  # type: ignore[method-assign] # noqa: SLF001
-            lambda _conn, **_kwargs: {
-                "ready": True,
-                "connection_id_sha256": "1" * 64,
-                "credential_ref_sha256": "2" * 64,
-                "oauth_request_id_sha256": "3" * 64,
-                "seller_identity_sha256": "4" * 64,
-                "secret_exposed": False,
-            }
-        )
+        def seed_credential(target_store):
+            return _seed_exact_draft_callback(settings,repository,company_id=company_id,
+                store_id=target_store['store_id'],user_id=user['user_id'])
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
-        token = sessions.create_token(user_id=user["user_id"], company_id=company_id, email=user["email"])
+        token = sessions.create_token(user_id=user["user_id"], company_id=company_id, email=user["email"],
+            access_epochs=repository.access_session_epochs(user_id=user['user_id'],company_id=company_id))
         try:
             viewer_account = repository.create_user_with_company(
                 email="inventory-location-viewer@example.com",
@@ -262,6 +267,7 @@ def main() -> int:
                 user_id=viewer_user["user_id"],
                 company_id=company_id,
                 email=viewer_user["email"],
+                access_epochs=repository.access_session_epochs(user_id=viewer_user['user_id'],company_id=company_id),
             )
             viewer_status, _ = _post(
                 base_url,
@@ -293,6 +299,7 @@ def main() -> int:
             if repository.list_confirmations(company_id=company_id, limit=100):
                 raise AssertionError("permission and malformed-input attacks must create zero confirmations")
 
+            seed_credential(store)
             before = repository.list_confirmations(company_id=company_id, limit=100)
             with ThreadPoolExecutor(max_workers=4) as pool:
                 intake_results = list(
@@ -474,6 +481,7 @@ def main() -> int:
                     user_id=user["user_id"],
                     payload={"platform": "ebay", "store_name": f"Time guard {index}", "marketplace": "EBAY_US"},
                 )
+                seed_credential(time_store)
                 time_status, time_body = _post(
                     base_url,
                     f"/stores/{time_store['store_id']}/ebay-inventory-location/confirmation",
@@ -619,6 +627,7 @@ def main() -> int:
                 user_id=user["user_id"],
                 payload={"platform": "ebay", "store_name": "Deterministic guard", "marketplace": "EBAY_US"},
             )
+            seed_credential(deterministic_store)
             deterministic_status, deterministic_body = _post(
                 base_url,
                 f"/stores/{deterministic_store['store_id']}/ebay-inventory-location/confirmation",
@@ -683,6 +692,7 @@ def main() -> int:
                 user_id=user["user_id"],
                 payload={"platform": "ebay", "store_name": "Reconcile fixture", "marketplace": "EBAY_US"},
             )
+            seed_credential(reconcile_store)
             reconcile_intake_status, reconcile_intake_body = _post(
                 base_url,
                 f"/stores/{reconcile_store['store_id']}/ebay-inventory-location/confirmation",

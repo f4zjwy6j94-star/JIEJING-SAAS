@@ -29,6 +29,7 @@ ROLLBACK_WORKER_HOLD_REF="jiejing-production-rollback-worker:previous"
 ROLLBACK_API_HOLD_BACKUP_REF="jiejing-production-rollback-api:capture-backup"
 ROLLBACK_WORKER_HOLD_BACKUP_REF="jiejing-production-rollback-worker:capture-backup"
 mutation_started=0
+runtime_mutation_started=0
 active_switched=0
 current_stage="preflight"
 deploy_lock_held=0
@@ -49,6 +50,47 @@ previous_ops_supported=0
 refuse() {
   printf '%s\n' "$1" >&2
   exit "${2:-1}"
+}
+
+
+# Preserve the independently approved Pindd notification ingress in candidate
+# AND rollback templates. This reads public routing metadata only.
+verify_pindd_notification_templates() {
+  local candidate="$1" previous="$2"
+  # These fixed read-only imports/mounts are required by this release. Missing
+  # host dependencies must fail before any image build or runtime replacement.
+  local source
+  for source in /opt/pindd/shared-ingress /var/lib/pindd/staging/notify-socket; do
+    [[ -d "$source" && ! -L "$source" ]] || {
+      printf '%s\n' 'REFUSE_PINDD_NOTIFICATION_DEPENDENCY_MISSING=1' >&2
+      return 1
+    }
+  done
+  for source in /opt/pindd/shared-ingress/enabled.json /opt/pindd/shared-ingress/Caddyfile.notify; do
+    [[ -f "$source" && ! -L "$source" ]] || {
+      printf '%s\n' 'REFUSE_PINDD_NOTIFICATION_DEPENDENCY_MISSING=1' >&2
+      return 1
+    }
+  done
+  python3 - "$candidate" "$previous" <<'PINDD_NOTIFY_GUARD'
+import pathlib,re,stat,sys
+root=pathlib.Path('/opt/pindd/shared-ingress')
+for path in (root,root/'enabled.json',root/'Caddyfile.notify'):
+    value=path.lstat()
+    if stat.S_ISLNK(value.st_mode) or value.st_uid!=0 or value.st_mode&0o022:
+        raise SystemExit('REFUSE_PINDD_SHARED_ROUTE_METADATA=1')
+for app in sys.argv[1:]:
+    base=pathlib.Path(app)/'deploy'
+    caddy=(base/'Caddyfile.production').read_text()
+    compose=(base/'docker-compose.production-pilot.yml').read_text()
+    edge=re.search(r'(?ms)^  jiejing-edge:\n(.*?)(?=^  [^ \n]|^\S|\Z)',compose)
+    if caddy.splitlines().count('import /etc/pindd-ingress/Caddyfile.notify')!=1 or not edge:
+        raise SystemExit('REFUSE_PINDD_NOTIFICATION_ROUTE_LOSS=1')
+    for source,target in [('/opt/pindd/shared-ingress','/etc/pindd-ingress'),('/var/lib/pindd/staging/notify-socket','/run/pindd-notify')]:
+        block='      - type: bind\n        source: '+source+'\n        target: '+target+'\n        read_only: true\n        bind:\n          create_host_path: false'
+        if edge.group(1).count(block)!=1 or compose.count('target: '+target)!=1:
+            raise SystemExit('REFUSE_PINDD_NOTIFICATION_MOUNT_LOSS=1')
+PINDD_NOTIFY_GUARD
 }
 
 verify_ops_stored_certificates() {
@@ -532,6 +574,7 @@ case "$active_app" in
   *) refuse "REFUSE_ACTIVE_RELEASE_OUTSIDE_ROOT=$active_app" 24 ;;
 esac
 previous_release="$(dirname -- "$active_app")"
+verify_pindd_notification_templates "$resolved_patch_dir" "$active_app" || refuse "REFUSE_PINDD_NOTIFICATION_PERSISTENCE=1" 41
 
 environment_file="$(docker inspect deploy-jiejing-saas-1 --format '{{ index .Config.Labels "com.docker.compose.project.environment_file" }}' 2>/dev/null || true)"
 resolve_manifest_private_dir "$previous_release" "$environment_file" \
@@ -580,6 +623,7 @@ rsync -a --delete \
   --exclude '*.env' \
   --exclude '*.pem' \
   --exclude '*.key' \
+  --exclude 'JIEJING_RUNTIME_BUILD.safe.json' \
   "$active_app/" "$candidate_app/"
 rsync -a \
   --exclude '.git/' \
@@ -595,6 +639,7 @@ rsync -a \
   --exclude '*.env' \
   --exclude '*.pem' \
   --exclude '*.key' \
+  --exclude 'JIEJING_RUNTIME_BUILD.safe.json' \
   "$resolved_patch_dir/" "$candidate_app/"
 
 chown -R root:root "$release_dir"
@@ -602,6 +647,11 @@ find "$release_dir" -type d -exec chmod 0755 {} +
 chmod 0750 "$release_dir"
 find "$release_dir" -type f -exec chmod 0644 {} +
 chmod -R go-w "$release_dir"
+
+# Bind the candidate image to the already validated source, not a frontend tag.
+# rsync excludes inherited build metadata; the previous release stays intact.
+python3 "$candidate_app/tools/jiejing_production_release_evidence.py" build \
+  --output "$candidate_app/JIEJING_RUNTIME_BUILD.safe.json" --source-sha "$SOURCE_SHA"
 
 (
   cd "$candidate_app"
@@ -962,7 +1012,8 @@ verify_previous_runtime_restored() {
 }
 
 rollback_application_release() {
-  local rollback_rc=0 current_active
+  local rollback_rc=0 current_active phase="${1:-runtime}"
+  [[ "$phase" == "runtime" || "$phase" == "tags_only" ]] || return 1
   [[ "$rollback_image_holds_ready" == "1" ]] || rollback_rc=1
   [[ "$(image_ref_id "$ROLLBACK_API_HOLD_REF")" == "$previous_api_image_id" ]] || rollback_rc=1
   [[ "$(image_ref_id "$ROLLBACK_WORKER_HOLD_REF")" == "$previous_worker_image_id" ]] || rollback_rc=1
@@ -973,6 +1024,7 @@ rollback_application_release() {
   [[ "$(image_ref_id "$previous_api_image_ref")" == "$previous_api_image_id" ]] || rollback_rc=1
   [[ "$(image_ref_id "$previous_worker_image_ref")" == "$previous_worker_image_id" ]] || rollback_rc=1
   [[ "$rollback_rc" == "0" ]] || return 1
+  [[ "$phase" != "tags_only" ]] || return 0
   "${previous_compose[@]}" up -d --no-build --no-deps --force-recreate jiejing-saas || rollback_rc=1
   wait_container_healthy deploy-jiejing-saas-1 60 || rollback_rc=1
   "${previous_compose[@]}" up -d --no-build --no-deps --force-recreate jiejing-worker || rollback_rc=1
@@ -1350,7 +1402,7 @@ rollback_on_error() {
   disarm_unit_transaction_traps
   set +e
   printf 'JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=%s\n' "$current_stage" >&2
-  if [[ "$mutation_started" == "1" ]]; then
+  if [[ "$runtime_mutation_started" == "1" ]]; then
     if acquire_maintenance_lock_for_rollback; then
       rollback_application_release || rollback_rc=1
     else
@@ -1360,6 +1412,15 @@ rollback_on_error() {
       printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1" >&2
     else
       printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_INCOMPLETE=1" >&2
+    fi
+  elif [[ "$mutation_started" == "1" ]]; then
+    # Building can replace image tags without replacing any running service.
+    # A rejected cold-start preflight must not cold-start the old API either.
+    if rollback_application_release tags_only; then
+      printf '%s\n' "JIEJING_PRODUCTION_IMAGE_TAGS_RESTORED=1" >&2
+      printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_NOT_REQUIRED=1" >&2
+    else
+      printf '%s\n' "JIEJING_PRODUCTION_IMAGE_TAG_RESTORE_INCOMPLETE=1" >&2
     fi
   else
     printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_NOT_REQUIRED=1" >&2
@@ -1387,7 +1448,16 @@ current_stage="capture_candidate_runtime_images"
 capture_candidate_runtime_images
 current_stage="initialize_runtime_evidence_snapshot"
 initialize_runtime_evidence_snapshot
+current_stage="backup_cold_start_preflight"
+# No network or database access; refuse stale paid-launch evidence before
+# replacing the running API. Never change dates, thresholds or money flags.
+docker run --rm --network none \
+  --env-file "$private_dir/jiejing-saas.production.env" \
+  -e JIEJING_RUNTIME_EVIDENCE_FILE=/run/jiejing-production-evidence/current.json \
+  --mount "type=bind,src=/opt/jiejing-production/runtime-evidence,dst=/run/jiejing-production-evidence,readonly" \
+  -w /app "$candidate_api_image_id" python tools/jiejing_production_release_evidence.py preflight
 current_stage="start_candidate_api"
+runtime_mutation_started=1
 "${candidate_compose[@]}" up -d --no-deps jiejing-saas
 wait_container_healthy deploy-jiejing-saas-1 60
 current_stage="start_candidate_worker"
@@ -1443,6 +1513,14 @@ if [[ "$finalization_rc" != "0" ]]; then
   fail_unit_transaction "$finalization_rc"
 fi
 printf '%s\n' "TIMER_INSTALL_APPLIED=1"
+current_stage="record_verified_applied_release"
+unit_rc=0
+python3 "$candidate_app/tools/jiejing_production_release_evidence.py" applied \
+  --output /opt/jiejing-production/runtime-evidence/deployment.safe.json \
+  --source-sha "$SOURCE_SHA" || unit_rc=$?
+if [[ "$unit_rc" != "0" ]]; then
+  fail_unit_transaction "$unit_rc"
+fi
 disarm_unit_transaction_traps
 mutation_started=0
 trap - ERR

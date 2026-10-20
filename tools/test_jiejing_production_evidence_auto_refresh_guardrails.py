@@ -385,7 +385,7 @@ def current_public_readiness_payload() -> dict[str, object]:
                     "status": "live_generation_ready_waiting_asset_review",
                     "live_generation_enabled": True,
                     "live_image_generation_enabled": True,
-                    "live_video_generation_enabled": True,
+                    "live_video_generation_enabled": False,
                     "live_provider_calls_allowed": True,
                     "asset_manifest_required": True,
                     "asset_review_required": True,
@@ -458,6 +458,63 @@ def backup_blocked_readiness_payload() -> dict[str, object]:
         }],
     )
     return payload
+
+
+def validate_current_image_only_media_contract(bash: str) -> list[str]:
+    """Exercise the real capability AND public projection, never a hand-made media DTO."""
+    import os
+    import socket
+    import sys
+    from unittest.mock import patch
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from jiejing_saas.api_server import SaaSBackendHandler
+    from jiejing_saas.readiness import build_media_generation_capability_status
+
+    # No inherited credentials or WSL secret lookup; provider status only.
+    with patch.dict(os.environ, {
+        "JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP": "false",
+        "JIEJING_MEDIA_GENERATION_PROVIDER": "fal",
+        "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED": "true",
+        "JIEJING_MEDIA_LIVE_VIDEO_ENABLED": "false",
+        "FAL_KEY": "synthetic-image-only-contract-never-sent",
+    }, clear=True), patch.object(socket.socket, "connect", side_effect=AssertionError("no provider network")):
+        raw = build_media_generation_capability_status()
+        summary = SaaSBackendHandler._public_readiness_summary(
+            {"provider_status": {"media_generation": raw}}, authenticated=False)
+    media = summary["provider_status"]["media_generation"]
+    failures = []
+    if raw.get("video_pricing_approved") is not False or media.get("live_video_generation_enabled") is not False:
+        return ["real image-only capability must preserve the unapproved video price/availability boundary"]
+    missing = object()
+    for label, factory in (
+        ("private_beta", current_public_readiness_payload),
+        ("paid_launch", public_launch_readiness_payload),
+        ("backup_hold", backup_blocked_readiness_payload),
+    ):
+        payload = factory()
+        payload["readiness"]["provider_status"]["media_generation"] = copy.deepcopy(media)
+        result = run_public_readiness_fixture(bash, payload)
+        if result.returncode != 0:
+            failures.append(f"{label}: real image-only media public projection must pass: exit_{result.returncode}")
+        for key, invalid in (
+            ("live_video_generation_enabled", True), ("live_video_generation_enabled", missing),
+            ("live_video_generation_enabled", "false"), ("live_video_generation_enabled", None),
+            ("live_video_generation_enabled", 0), ("live_image_generation_enabled", False),
+            ("configured", False), ("live_generation_enabled", False), ("live_provider_calls_allowed", False),
+            ("asset_review_required", False), ("cost_guard_required", False), ("spend_now_allowed", True),
+            ("secret_exposed", True),
+        ):
+            negative = copy.deepcopy(payload)
+            selected = negative["readiness"]["provider_status"]["media_generation"]
+            if invalid is missing:
+                selected.pop(key)
+            else:
+                selected[key] = invalid
+            if run_public_readiness_fixture(bash, negative).returncode == 0:
+                failures.append(f"{label}: invalid image-only media marker was accepted: {key}/{type(invalid).__name__}")
+    return failures
 
 
 def validate_backup_blocked_classification(bash: str) -> list[str]:
@@ -1327,7 +1384,8 @@ def main() -> int:
 
     bash = shutil.which("bash")
     if bash:
-        classification_failures = (validate_backup_blocked_classification(bash)
+        classification_failures = (validate_current_image_only_media_contract(bash)
+                                   + validate_backup_blocked_classification(bash)
                                    + validate_readiness_error_convergence(bash)
                                    + validate_readiness_items_types(bash))
         if classification_failures:

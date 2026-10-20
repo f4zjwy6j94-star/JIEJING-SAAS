@@ -210,7 +210,8 @@ def issuance_failure_revokes_refresh_family() -> bool:
             self.revocations: list[dict[str, str]] = []
 
         def create_browser_refresh_session(self, **_kwargs):
-            return {"session": {"session_ref": "session-orphan-guard"}, "refresh_token": "r" * 48}
+            return {"session": {"session_ref": "session-orphan-guard"}, "refresh_token": "r" * 48,
+                    "access_epochs": {"user_epoch": 0, "member_epoch": 0}}
 
         def revoke_browser_session(self, **kwargs):
             self.revocations.append({key: str(value) for key, value in kwargs.items()})

@@ -112,6 +112,7 @@ function harness() {
     "isSaasUnrecoverableSessionError",
     "shouldReadSaasAccountScopedLocalCache", "loadSaasAiCeoThread", "shouldDeferSaasProtectedAppReveal",
     "clearSaasSessionFromStorage", "resetSaasProtectedWorkbenchState",
+    "resolveSaasEbaySubmittedOutcomes",
     "resetSaasAccountShellState", "startSaasAccountSwitch", "refreshSaasState",
   ];
   const optional = ["invalidateSaasProtectedSessionContext", "assertSaasAccountSessionCurrent", "assertSaasLiveIdentityScope"];
@@ -412,8 +413,9 @@ test("authenticated refresh completes extended hydration with and without a matc
       assert.equal(run(context, "shouldDeferSaasProtectedAppReveal()"), false);
       return true;
     };
-    for (const name of ["syncSaasOnboardingCompletionFromBackend", "verifySaasUnpublishedDraftSaveConfirmations",
-      "verifySaasInventoryLocationConfirmations", "updateSaasAiCeoHistoryPagination", "syncSaasAiCeoCloudDomState",
+    context.verifySaasUnpublishedDraftSaveConfirmations = async () => ({ draftSave: new WeakSet(), controlledPublish: new WeakSet() });
+    context.verifySaasInventoryLocationConfirmations = async () => new WeakSet();
+    for (const name of ["syncSaasOnboardingCompletionFromBackend", "updateSaasAiCeoHistoryPagination", "syncSaasAiCeoCloudDomState",
       "persistSaasAiCeoThread", "scheduleSaasAiCeoThreadBackendSync", "markSaasProductFeedbackLiveIdentity",
       "prepareSaasProductFeedbackScopeAfterIdentity", "hydrateSaasCeoCommandFromBackend", "saveSaasSessionToStorage",
       "markSaasMediaJobsAsCurrentSessionBackendEvidence", "pruneSaasDetachedListingProjectDraftsAgainstBackend",
@@ -621,8 +623,9 @@ for (const identityChange of ["user", "company"]) {
     context.syncSaasAiCeoLatestTurnFromThread = () => null;
     context.consumeSaasStartupRequestedView = () => "product";
     context.fetchSaasMerchantBillingUsage = async () => ({ billing_usage: null });
+    context.verifySaasUnpublishedDraftSaveConfirmations = async () => ({ draftSave: new WeakSet(), controlledPublish: new WeakSet() });
+    context.verifySaasInventoryLocationConfirmations = async () => new WeakSet();
     for (const name of ["syncSaasProjectRoute", "syncSaasOnboardingCompletionFromBackend",
-      "verifySaasUnpublishedDraftSaveConfirmations", "verifySaasInventoryLocationConfirmations",
       "updateSaasAiCeoHistoryPagination", "syncSaasAiCeoCloudDomState", "persistSaasAiCeoThread",
       "scheduleSaasAiCeoThreadBackendSync", "markSaasProductFeedbackLiveIdentity",
       "saveSaasProtectedStateSnapshot", "prepareSaasProductFeedbackScopeAfterIdentity",

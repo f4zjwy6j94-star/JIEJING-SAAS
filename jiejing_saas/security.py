@@ -79,7 +79,8 @@ class SessionManager:
         )
         self.ttl_seconds = ttl_seconds if ttl_seconds is not None else _session_ttl_from_env()
 
-    def create_token(self, *, user_id: str, company_id: str, email: str, refresh_session_id: str = "") -> str:
+    def create_token(self, *, user_id: str, company_id: str, email: str, refresh_session_id: str = "",
+                     access_epochs: dict[str, int] | None = None) -> str:
         issued_at = int(time.time())
         payload = SessionPayload(
             user_id=user_id,
@@ -91,7 +92,14 @@ class SessionManager:
             sid=str(refresh_session_id or ""),
             token_type="access",
         )
-        payload_b64 = _b64(json.dumps(payload.to_dict(), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        values = payload.to_dict()
+        if access_epochs is not None:
+            for key in ("user_epoch", "member_epoch"):
+                value = access_epochs.get(key)
+                if type(value) is not int or value < 0:
+                    raise ValueError("invalid access epoch")
+                values[key] = value
+        payload_b64 = _b64(json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         signature = _b64(hmac.new(self.secret, payload_b64.encode("ascii"), hashlib.sha256).digest())
         return f"{payload_b64}.{signature}"
 

@@ -23,7 +23,7 @@ def main() -> int:
         "function saasBackendPublishDecisionGate",
         "function renderSaasPublishCommandSummaryPanel",
         "影响范围",
-        "确认门禁",
+        "确认要求",
         "安全边界",
         "no_direct_write",
         "fix_action_can_trigger_real_write=false",

@@ -177,8 +177,9 @@ test("step 2 generation captures one normalized packet for both wire signature c
 });
 
 test("step 2 cannot start generation while its initial product save is pending", () => {
-  const context = load(["renderSaasListingWizard"], {
+  const context = load(["renderSaasListingRecoveredCheckpointBody", "renderSaasListingWizard"], {
     state: { saasListingProductFactSaveStatus: "saving", saasListingComposerDraft: {} },
+    saasListingCloudContext: () => null,
     saasListingWizardRecord: () => ({ key: "scope", step: 2 }),
     saasListingWizardGenerationPending: () => false,
     saasSettingsDataSnapshotView: () => ({ accountTone: "green" }),

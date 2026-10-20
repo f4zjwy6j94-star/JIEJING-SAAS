@@ -279,7 +279,7 @@ class ProviderJobRunner:
         creative_job_spec["output_safety_mode"] = "concept_reference_only" if concept_only else "reference_grounded_listing_draft"
         fidelity_instruction = {
             "fidelity_first": "Preserve the exact product structure, color, material, included parts, proportions and physical brand marks from the reference image. Restrict edits to requested photographic presentation changes; never change the product itself.",
-            "balanced": "Preserve the product structure, color, material, included parts and visible brand marks while allowing restrained lighting and background improvements.",
+            "balanced": "Preserve the product structure, color, material, included parts and visible brand marks while allowing a fresh photographic composition, supported viewing angle, framing, scene and lighting.",
             "creative_exploration": "Create a clearly labeled concept direction. Keep the recognizable product subject, but treat the result as non-listing reference art.",
         }[quality_mode]
         fact_lock_instruction = f"Locked facts that must not be changed or invented: {', '.join(fact_locks)}."
@@ -308,17 +308,18 @@ class ProviderJobRunner:
                 "For a set, retain every included piece exactly once with its original shape and relative size; "
                 "arrange the complete set as one coherent product photo, not repeated views or a collage. "
                 "If an overlay obscures an uncertain product detail, do not invent that detail. "
-                "Use a clean plain background and restrained shadows; the result remains a draft for visual review."
+                "Use restrained shadows; the result remains a draft for visual review."
             )
-        primary_image_intent = " ".join(
-            [
-                str(creative_job_spec.get("output_type") or ""),
-                *(str(scene) for scene in scene_types),
-            ]
-        ).casefold()
+        # The UI sends [selected scene, output package]. A package containing
+        # the word "main image" must not cancel an explicit lifestyle choice.
+        selected_scene = str(scene_types[0] if scene_types else "").strip().casefold()
+        primary_image_intent = selected_scene
+        if selected_scene in {"", "auto", "按商品用途自动选择"}:
+            output_type = str(creative_job_spec.get("output_type") or "").casefold()
+            primary_image_intent = output_type if "场景" not in output_type else ""
         if image_count == 1 and any(
             marker in primary_image_intent
-            for marker in ("主图", "white_background", "white background", "main image")
+            for marker in ("主图", "白底", "浅灰", "main_white_bg", "white_background", "white background", "main image")
         ):
             image_prompt = (
                 f"{image_prompt} Return exactly one coherent single-view product composition in this image: one centered product, "

@@ -115,3 +115,6 @@ ops.jiejing.shop {
 		}
 	}
 }
+
+# Independently owned notification route; retained across releases.
+import /etc/pindd-ingress/Caddyfile.notify

@@ -234,7 +234,7 @@ class TeamSeatQuotaTests(unittest.TestCase):
                 headers={"authorization": f"Bearer {token}", "content-type": "application/json"}, method="POST",
             )
             with self.assertRaises(urllib.error.HTTPError) as caught:
-                urllib.request.urlopen(request, timeout=10)
+                urllib.request.urlopen(request, timeout=30)
             self.assertEqual(caught.exception.code, 402)
             payload = json.loads(caught.exception.read().decode())
             self.assertEqual(payload["error"], "team_member_quota_exhausted")

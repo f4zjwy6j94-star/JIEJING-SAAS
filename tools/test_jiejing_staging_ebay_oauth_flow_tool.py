@@ -214,6 +214,7 @@ def main() -> int:
             decision="approve",
             decided_by=identity["user_id"],
             note="Local regression approval for this exact current-store read-only OAuth plan.",
+            expected_access_epochs=approval_repo.access_session_epochs(user_id=identity["user_id"],company_id=identity["company_id"]),
         )
         prepare = _run_tool(
             port=port,

@@ -1,5 +1,6 @@
 """Offline OPS projection contracts; no network, runtime credentials or business data."""
 import sys
+from datetime import datetime, timezone
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,30 @@ class OpsEvidenceTests(unittest.TestCase):
         self.assertTrue(packet["release"]["version_bound_evidence"])
         self.assertEqual(packet["release"]["production_deployment_status"], "not_connected")
         self.assertEqual(self.project(release_evidence={"frontend_asset_version": "old", "browser_smoke_passed": True})["release"]["version_bound_evidence"], False)
+
+    def test_runtime_receipt_requires_matching_build_and_verified_apply(self):
+        build = {"contract_version": "jiejing_runtime_build_v1", "source_commit": "a" * 40}
+        applied = {"contract_version": "jiejing_applied_release_v1", "source_commit": "a" * 40,
+                   "verified_at": datetime.now(timezone.utc).isoformat(),
+                   "applied": True, "public_health_verified": True, "secret_exposed": False}
+        release = self.project(runtime_build=build, deployment_receipt=applied)["release"]
+        self.assertEqual(release["production_deployment_status"], "ready")
+        self.assertEqual(release["source_commit"], "a" * 40)
+        for change in ({"source_commit": "b" * 40}, {"applied": False}, {"applied": "true"},
+                       {"public_health_verified": False}, {"secret_exposed": True},
+                       {"verified_at": "2099-01-01T00:00:00Z"}, {"verified_at": "not-a-date"}):
+            with self.subTest(change=change):
+                rejected = self.project(runtime_build=build, deployment_receipt=applied | change)["release"]
+                self.assertNotEqual(rejected["production_deployment_status"], "ready")
+                self.assertEqual(rejected["source_commit"], "a" * 40)
+        self.assertNotEqual(self.project(deployment_receipt=applied)["release"]["production_deployment_status"], "ready")
+
+    def test_deployment_projection_never_returns_raw_paths_or_extra_fields(self):
+        packet = self.project(runtime_build={"contract_version": "jiejing_runtime_build_v1", "source_commit": "unsafe/path"},
+                              deployment_receipt={"raw": "private-value", "path": "/private/sensitive"})
+        self.assertEqual(packet["release"]["source_commit"], "")
+        self.assertNotIn("private-value", str(packet))
+        self.assertNotIn("/private", str(packet))
 
 
 if __name__ == "__main__":
